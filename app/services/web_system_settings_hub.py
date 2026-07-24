@@ -110,9 +110,9 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Available customer payment methods and entry points",
             },
             {
-                "name": "Payment Providers",
-                "url": "/admin/billing/payment-providers",
-                "description": "Gateway integrations and failover",
+                "name": "Online Payment Gateways",
+                "url": "/admin/integrations/marketplace",
+                "description": "Install, validate, and order gateway connectors",
             },
             {
                 "name": "Payment Channels",

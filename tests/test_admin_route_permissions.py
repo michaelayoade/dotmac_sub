@@ -713,17 +713,19 @@ def test_system_config_writes_require_settings_write():
 
 
 def test_integrations_connector_lifecycle_require_permissions():
-    assert _route_has_permission(
-        admin_integrations.router,
-        "/integrations/providers",
-        "POST",
-        "billing:provider:write",
-    )
     for path in (
         "/integrations/connectors",
         "/integrations/installed/{connector_id}/uninstall",
         "/integrations/targets",
         "/integrations/jobs",
+    ):
+        assert _route_has_permission(
+            admin_integrations.router, path, "POST", "system:settings:write"
+        ), path
+    for path in (
+        "/integrations/payment-gateways/{provider_type}",
+        "/integrations/payment-gateways/{provider_type}/enable",
+        "/integrations/payment-gateways/{provider_type}/disable",
     ):
         assert _route_has_permission(
             admin_integrations.router, path, "POST", "system:settings:write"

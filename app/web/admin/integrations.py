@@ -8,8 +8,12 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import connector as connector_service
 from app.services import integration as integration_service
+from app.services import web_connector_runtime as web_connector_runtime_service
 from app.services import web_integration_syncs as web_integration_syncs_service
 from app.services import web_integrations as web_integrations_service
+from app.services import (
+    web_integrations_payment_gateways as web_integrations_payment_gateways_service,
+)
 from app.services import web_integrations_webhooks as webhooks_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
@@ -60,6 +64,25 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         "admin/integrations/connectors/index.html", context
     )
+
+
+# ==================== Runtime posture ====================
+
+
+@router.get(
+    "/runtime",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def integrations_runtime_posture(request: Request, db: Session = Depends(get_db)):
+    """Read-only view of each connector's runtime tier and confinement."""
+    context = _base_context(request, db, active_page="runtime")
+    context.update(web_connector_runtime_service.build_runtime_posture(db))
+    context["page_title"] = "Connector runtime"
+    context["page_subtitle"] = (
+        "Runtime tier, confinement, and executability for every registered connector"
+    )
+    return templates.TemplateResponse("admin/integrations/runtime.html", context)
 
 
 # ==================== Syncs ====================
@@ -933,102 +956,178 @@ def webhook_detail(request: Request, endpoint_id: str, db: Session = Depends(get
     )
 
 
-# ==================== Payment Providers ====================
+# ==================== Payment Gateways ====================
 
 
-@router.get("/providers", response_class=HTMLResponse)
-def providers_list(request: Request, db: Session = Depends(get_db)):
-    """List all payment providers."""
-    state = web_integrations_service.build_providers_list_data(db)
-
-    context = _base_context(request, db, active_page="providers")
+def _payment_gateway_config_response(
+    request: Request,
+    db: Session,
+    *,
+    provider_type: str,
+    error: str | None = None,
+    status_code: int = 200,
+):
+    state = web_integrations_payment_gateways_service.build_config_state(
+        db, provider_type
+    )
+    context = _base_context(request, db, active_page="payment-gateways")
     context.update(
         {
             **state,
-            "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
+            "error": error,
+            "recent_activities": recent_activity_for_paths(
+                db, [f"/admin/integrations/payment-gateways/{provider_type}"]
+            ),
         }
     )
     return templates.TemplateResponse(
-        "admin/integrations/providers/index.html", context
+        "admin/integrations/payment_gateways/config.html",
+        context,
+        status_code=status_code,
     )
 
 
-@router.get("/providers/new", response_class=HTMLResponse)
-def provider_new(request: Request, db: Session = Depends(get_db)):
-    """New payment provider form."""
-    context = _base_context(request, db, active_page="providers")
-    context.update(web_integrations_service.provider_form_options(db))
-    return templates.TemplateResponse("admin/integrations/providers/new.html", context)
-
-
-@router.post(
-    "/providers",
+@router.get(
+    "/payment-gateways/{provider_type}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:provider:write"))],
+    dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def provider_create(
+def payment_gateway_config_page(
     request: Request,
-    name: str = Form(...),
-    provider_type: str = Form("custom"),
-    notes: str | None = Form(None),
-    is_active: bool = Form(False),
+    provider_type: str,
     db: Session = Depends(get_db),
 ):
     try:
-        provider = web_integrations_service.create_provider(
+        return _payment_gateway_config_response(
+            request, db, provider_type=provider_type
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/payment-gateways/{provider_type}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def payment_gateway_config_save(
+    request: Request,
+    provider_type: str,
+    presentment_priority: int = Form(0),
+    gateway_credentials: str = Form(""),
+    public_key: str = Form(""),
+    webhook_signing_secret: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    try:
+        installations.execute_command(
             db,
-            name=name,
-            provider_type=provider_type,
-            notes=notes,
-            is_active=is_active,
+            lambda: web_integrations_payment_gateways_service.save_config(
+                db,
+                provider_type_value=provider_type,
+                presentment_priority=presentment_priority,
+                gateway_credentials=gateway_credentials,
+                public_key=public_key,
+                webhook_signing_secret=webhook_signing_secret,
+            ),
         )
     except Exception as exc:
-        context = _base_context(request, db, active_page="providers")
-        context.update(
-            {
-                **web_integrations_service.provider_error_state(
-                    db,
-                    name=name,
-                    provider_type=provider_type,
-                    notes=notes,
-                    is_active=is_active,
-                ),
-                "error": str(exc),
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/integrations/providers/new.html", context, status_code=400
+        return _payment_gateway_config_response(
+            request,
+            db,
+            provider_type=provider_type,
+            error=str(exc),
+            status_code=400,
         )
     return RedirectResponse(
-        url=f"/admin/integrations/providers/{provider.id}", status_code=303
+        url=(f"/admin/integrations/payment-gateways/{provider_type}?saved=1"),
+        status_code=303,
     )
 
 
-@router.get("/providers/{provider_id}", response_class=HTMLResponse)
-def provider_detail(request: Request, provider_id: str, db: Session = Depends(get_db)):
-    """Payment provider detail view."""
-    try:
-        state = web_integrations_service.build_provider_detail_data(
+@router.post(
+    "/payment-gateways/{provider_type}/enable",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def payment_gateway_enable(
+    request: Request,
+    provider_type: str,
+    confirm_enable: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    if not confirm_enable:
+        return _payment_gateway_config_response(
+            request,
             db,
-            provider_id=provider_id,
+            provider_type=provider_type,
+            error=(
+                "Confirm that successful validation may expose this gateway "
+                "for new customer and reseller checkouts."
+            ),
+            status_code=400,
         )
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            raise
-        context = _base_context(request, db, active_page="providers")
-        context["message"] = "The payment provider you are looking for does not exist."
-        return templates.TemplateResponse(
-            "admin/errors/404.html", context, status_code=404
+    try:
+        installations.execute_command(
+            db,
+            lambda: web_integrations_payment_gateways_service.validate_and_enable(
+                db, provider_type_value=provider_type
+            ),
         )
-
-    context = _base_context(request, db, active_page="providers")
-    context.update(state)
-    return templates.TemplateResponse(
-        "admin/integrations/providers/detail.html", context
+    except Exception as exc:
+        return _payment_gateway_config_response(
+            request,
+            db,
+            provider_type=provider_type,
+            error=str(exc),
+            status_code=400,
+        )
+    return RedirectResponse(
+        url=(f"/admin/integrations/payment-gateways/{provider_type}?enabled=1"),
+        status_code=303,
     )
 
 
-# ==================== WhatsApp Config ====================
+@router.post(
+    "/payment-gateways/{provider_type}/disable",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def payment_gateway_disable(
+    request: Request,
+    provider_type: str,
+    confirm_disable: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    if not confirm_disable:
+        return _payment_gateway_config_response(
+            request,
+            db,
+            provider_type=provider_type,
+            error=(
+                "Confirm that this gateway should stop accepting new checkouts. "
+                "Webhook, reconciliation, and refund processing will remain enabled."
+            ),
+            status_code=400,
+        )
+    try:
+        installations.execute_command(
+            db,
+            lambda: web_integrations_payment_gateways_service.disable(
+                db, provider_type_value=provider_type
+            ),
+        )
+    except Exception as exc:
+        return _payment_gateway_config_response(
+            request,
+            db,
+            provider_type=provider_type,
+            error=str(exc),
+            status_code=400,
+        )
+    return RedirectResponse(
+        url=(f"/admin/integrations/payment-gateways/{provider_type}?disabled=1"),
+        status_code=303,
+    )
 
 
 @router.get("/whatsapp/config", response_class=HTMLResponse)

@@ -852,6 +852,27 @@ def password_min_length(db: Session | None = None) -> int:
     return _setting_int(db, "password_min_length", 8)
 
 
+# Privileged (staff/admin) accounts carry a higher password floor than the
+# general minimum. Configurable via the ``system_user_password_min_length``
+# auth setting; defaults to 12.
+SYSTEM_USER_PASSWORD_MIN_LENGTH = 12
+
+
+def password_min_length_for(db: Session | None, principal_type: str | None) -> int:
+    """Minimum password length for a principal type.
+
+    ``system_user`` (staff/admin) principals get ``max(global minimum,
+    system_user floor)``; everyone else gets the global minimum.
+    """
+    base = password_min_length(db)
+    if principal_type == "system_user":
+        floor = _setting_int(
+            db, "system_user_password_min_length", SYSTEM_USER_PASSWORD_MIN_LENGTH
+        )
+        return max(base, floor)
+    return base
+
+
 def ensure_mfa_not_locked(method: MFAMethod) -> None:
     locked_until = _as_utc(method.locked_until)
     if locked_until and locked_until > _now():

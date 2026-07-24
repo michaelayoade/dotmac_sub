@@ -15,7 +15,7 @@
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                     <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ m.name }}</td>
                     <td class="px-4 py-3">{% if m.is_active %}{{ status_badge("Active", "active", size="sm") }}{% else %}{{ status_badge("Inactive", "neutral", size="sm") }}{% endif %}</td>
-                    <td class="px-4 py-3 text-sm"><a href="/admin/billing/payment-providers" class="text-emerald-600 hover:text-emerald-800 dark:text-emerald-400">Open billing setup</a></td>
+                    <td class="px-4 py-3 text-sm"><a href="/admin/integrations/marketplace" class="text-emerald-600 hover:text-emerald-800 dark:text-emerald-400">Open gateway setup</a></td>
                 </tr>
                 {% endfor %}
             </tbody>

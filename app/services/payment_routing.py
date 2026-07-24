@@ -1,17 +1,21 @@
-"""Canonical payment-provider routing and checkout provenance."""
+"""Canonical online-payment gateway presentment and checkout provenance."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from enum import StrEnum
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import PaymentProvider, PaymentProviderType, TopupIntent
-from app.models.domain_settings import SettingDomain
-from app.schemas.billing import PaymentProviderCreate, PaymentProviderUpdate
-from app.services import settings_spec
+from app.models.integration_platform import (
+    IntegrationBindingState,
+    IntegrationCapabilityBinding,
+    IntegrationInstallation,
+    IntegrationInstallationState,
+)
 from app.services.integrations import installations
 from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_INTENT_CAPABILITY,
@@ -24,69 +28,50 @@ SUPPORTED_PROVIDER_TYPES: tuple[PaymentProviderType, ...] = (
     PaymentProviderType.paystack,
     PaymentProviderType.flutterwave,
 )
-_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
-
-
-def create_configured_provider(
-    db: Session,
-    command: PaymentProviderCreate,
-) -> PaymentProvider:
-    """Persist one provider configuration for the legacy routing owner."""
-
-    provider = PaymentProvider(
-        name=command.name,
-        provider_type=command.provider_type,
-        is_active=command.is_active,
-        notes=command.notes,
-    )
-    db.add(provider)
-    db.commit()
-    db.refresh(provider)
-    return provider
-
-
-def update_configured_provider(
-    db: Session,
-    provider: PaymentProvider,
-    command: PaymentProviderUpdate,
-) -> PaymentProvider:
-    """Apply the explicit provider configuration fields supplied by an adapter."""
-
-    fields = command.model_fields_set
-    if "name" in fields:
-        assert command.name is not None
-        provider.name = command.name
-    if "provider_type" in fields:
-        assert command.provider_type is not None
-        provider.provider_type = command.provider_type
-    if "is_active" in fields:
-        assert command.is_active is not None
-        provider.is_active = command.is_active
-    if "notes" in fields:
-        provider.notes = command.notes
-    db.commit()
-    db.refresh(provider)
-    return provider
-
-
-def deactivate_configured_provider(db: Session, provider: PaymentProvider) -> None:
-    """Soft-deactivate one configured provider."""
-
-    provider.is_active = False
-    db.commit()
 
 
 @dataclass(frozen=True)
-class ProviderRoute:
+class GatewayOption:
     provider_type: PaymentProviderType
-    provider_id: str
+    provider_id: UUID
+    installation_id: UUID
+    capability_binding_id: UUID
+    presentment_priority: int
+
+
+class GatewayHealthState(StrEnum):
+    """Closed operator-facing gateway availability states."""
+
+    healthy = "healthy"
+    ambiguous = "ambiguous"
+    not_configured = "not_configured"
+    not_installed = "not_installed"
+    checkout_disabled = "checkout_disabled"
+    disabled = "disabled"
+    misconfigured = "misconfigured"
+    manifest_unavailable = "manifest_unavailable"
 
 
 @dataclass(frozen=True)
-class PaymentRoutingPolicy:
-    primary: PaymentProviderType
-    secondary: PaymentProviderType
-    failover_enabled: bool
+class GatewayHealth:
+    """Typed gateway setup and checkout-health projection."""
+
+    provider_type: PaymentProviderType
+    provider_name: str
+    provider_id: UUID | None
+    configured: bool
+    active: bool
+    capability_ready: bool
+    lifecycle_ready: bool
+    manifest_ready: bool
+    manifest_current: bool
+    manifest_pin_state: installations.ManifestPinState | None
+    missing_capabilities: tuple[str, ...]
+    installation_id: UUID | None
+    capability_binding_id: UUID | None
+    presentment_priority: int
+    health: GatewayHealthState
+    health_label: str
 
 
 def supported_provider_type_values() -> list[str]:
@@ -104,45 +89,6 @@ def parse_supported_provider_type(raw_value: str) -> PaymentProviderType:
     )
 
 
-def _setting(db: Session, key: str) -> Any:
-    return settings_spec.resolve_value(db, SettingDomain.billing, key)
-
-
-def _string_setting(db: Session, key: str, default: str) -> str:
-    raw = _setting(db, key)
-    value = str(raw or "").strip()
-    return value or default
-
-
-def _bool_setting(db: Session, key: str, default: bool) -> bool:
-    raw = _setting(db, key)
-    if raw is None:
-        return default
-    if isinstance(raw, bool):
-        return raw
-    return str(raw).strip().lower() in _BOOL_TRUE_VALUES
-
-
-def get_routing_policy(db: Session) -> PaymentRoutingPolicy:
-    primary = parse_supported_provider_type(
-        _string_setting(db, "payment_gateway_primary_provider", "paystack")
-    )
-    secondary = parse_supported_provider_type(
-        _string_setting(db, "payment_gateway_secondary_provider", "flutterwave")
-    )
-    if primary == secondary:
-        secondary = (
-            PaymentProviderType.flutterwave
-            if primary == PaymentProviderType.paystack
-            else PaymentProviderType.paystack
-        )
-    return PaymentRoutingPolicy(
-        primary=primary,
-        secondary=secondary,
-        failover_enabled=_bool_setting(db, "payment_gateway_failover_enabled", True),
-    )
-
-
 _REQUIRED_PROVIDER_CAPABILITIES = (
     PAYMENT_INTENT_CAPABILITY,
     PAYMENT_WEBHOOK_CAPABILITY,
@@ -151,22 +97,55 @@ _REQUIRED_PROVIDER_CAPABILITIES = (
 )
 
 
-def _missing_capabilities(db: Session, provider_type: PaymentProviderType) -> list[str]:
-    missing: list[str] = []
-    for capability_id in _REQUIRED_PROVIDER_CAPABILITIES:
-        try:
-            installations.require_enabled_capability_binding(
-                db,
-                connector_key=provider_type.value,
-                capability_id=capability_id,
+def _intent_binding(
+    db: Session, provider_type: PaymentProviderType
+) -> IntegrationCapabilityBinding | None:
+    try:
+        return installations.require_enabled_capability_binding(
+            db,
+            connector_key=provider_type.value,
+            capability_id=PAYMENT_INTENT_CAPABILITY,
+        )
+    except installations.InstallationError:
+        return None
+
+
+def _missing_capabilities(
+    db: Session,
+    installation: IntegrationInstallation | None,
+) -> list[str]:
+    if installation is None:
+        return list(_REQUIRED_PROVIDER_CAPABILITIES)
+    enabled = set(
+        db.scalars(
+            select(IntegrationCapabilityBinding.capability_id).where(
+                IntegrationCapabilityBinding.installation_id == installation.id,
+                IntegrationCapabilityBinding.state
+                == IntegrationBindingState.enabled.value,
             )
-        except installations.InstallationError:
-            missing.append(capability_id)
-    return missing
+        ).all()
+    )
+    return [
+        capability_id
+        for capability_id in _REQUIRED_PROVIDER_CAPABILITIES
+        if capability_id not in enabled
+    ]
 
 
-def provider_health(db: Session) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _presentment_priority(binding: IntegrationCapabilityBinding | None) -> int:
+    if binding is None:
+        return 0
+    raw = (binding.policy_json or {}).get("presentment_priority", 0)
+    if isinstance(raw, bool):
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def provider_health(db: Session) -> list[GatewayHealth]:
+    rows: list[GatewayHealth] = []
     for provider_type in SUPPORTED_PROVIDER_TYPES:
         providers = list(
             db.scalars(
@@ -175,65 +154,137 @@ def provider_health(db: Session) -> list[dict[str, Any]]:
                 .order_by(PaymentProvider.created_at.asc(), PaymentProvider.id.asc())
             ).all()
         )
-        active = [provider for provider in providers if provider.is_active]
-        missing_capabilities = _missing_capabilities(db, provider_type)
-        capability_ready = not missing_capabilities
-        if len(active) > 1:
-            health = "ambiguous"
-            health_label = "Multiple Active Providers"
-        elif not providers:
-            health = "not_configured"
-            health_label = "Not Configured"
-        elif not active:
-            health = "inactive"
-            health_label = "Inactive"
-        elif not capability_ready:
-            health = "misconfigured"
-            health_label = "Integration Not Ready"
-        else:
-            health = "healthy"
-            health_label = "Healthy"
-        provider = (
-            active[0] if len(active) == 1 else providers[0] if providers else None
+        intent_binding = _intent_binding(db, provider_type)
+        installation = intent_binding.installation if intent_binding else None
+        if installation is None:
+            installation_rows = [
+                row
+                for row in installations.list_installations(
+                    db,
+                    connector_key=provider_type.value,
+                    limit=200,
+                )
+                if row.state != IntegrationInstallationState.retired.value
+            ]
+            if len(installation_rows) == 1:
+                installation = installation_rows[0]
+        missing_capabilities = _missing_capabilities(db, installation)
+        pin_check = (
+            installations.manifest_pin_check(installation)
+            if installation is not None
+            else None
         )
+        manifest_ready = bool(
+            pin_check
+            and pin_check.state is not installations.ManifestPinState.unavailable
+        )
+        manifest_current = bool(
+            pin_check and pin_check.state is installations.ManifestPinState.current
+        )
+        capability_ready = not missing_capabilities
+        lifecycle_missing = [
+            capability_id
+            for capability_id in missing_capabilities
+            if capability_id != PAYMENT_INTENT_CAPABILITY
+        ]
+        lifecycle_ready = bool(
+            installation
+            and installation.state == IntegrationInstallationState.enabled.value
+            and manifest_ready
+            and not lifecycle_missing
+        )
+        if len(providers) > 1:
+            health = GatewayHealthState.ambiguous
+            health_label = "Multiple finance identities"
+        elif not providers:
+            health = GatewayHealthState.not_configured
+            health_label = "Finance identity missing"
+        elif installation is None:
+            health = GatewayHealthState.not_installed
+            health_label = "Gateway not installed"
+        elif (
+            installation.state == IntegrationInstallationState.enabled.value
+            and not manifest_ready
+        ):
+            health = GatewayHealthState.manifest_unavailable
+            health_label = "Connector manifest unavailable"
+        elif (
+            installation.state == IntegrationInstallationState.enabled.value
+            and intent_binding is None
+            and lifecycle_ready
+        ):
+            health = GatewayHealthState.checkout_disabled
+            health_label = "New checkout disabled"
+        elif installation.state != IntegrationInstallationState.enabled.value:
+            health = GatewayHealthState.disabled
+            health_label = "Gateway not enabled"
+        elif not capability_ready:
+            health = GatewayHealthState.misconfigured
+            health_label = "Capability bundle incomplete"
+        else:
+            health = GatewayHealthState.healthy
+            health_label = (
+                "Healthy — connector update available"
+                if not manifest_current
+                else "Healthy"
+            )
+        provider = providers[0] if providers else None
         rows.append(
-            {
-                "provider_type": provider_type.value,
-                "provider_name": provider.name
-                if provider
-                else provider_type.value.title(),
-                "provider_id": str(provider.id) if provider else None,
-                "configured": bool(providers),
-                "active": len(active) == 1,
-                "capability_ready": capability_ready,
-                "missing_capabilities": missing_capabilities,
-                "health": health,
-                "health_label": health_label,
-            }
+            GatewayHealth(
+                provider_type=provider_type,
+                provider_name=(
+                    provider.name if provider else provider_type.value.title()
+                ),
+                provider_id=provider.id if provider else None,
+                configured=bool(providers),
+                active=bool(
+                    installation
+                    and installation.state == IntegrationInstallationState.enabled.value
+                ),
+                capability_ready=capability_ready,
+                lifecycle_ready=lifecycle_ready,
+                manifest_ready=manifest_ready,
+                manifest_current=manifest_current,
+                manifest_pin_state=pin_check.state if pin_check else None,
+                missing_capabilities=tuple(missing_capabilities),
+                installation_id=installation.id if installation else None,
+                capability_binding_id=intent_binding.id if intent_binding else None,
+                presentment_priority=_presentment_priority(intent_binding),
+                health=health,
+                health_label=health_label,
+            )
         )
     return rows
 
 
-def eligible_routes(db: Session) -> list[ProviderRoute]:
-    health_by_type = {row["provider_type"]: row for row in provider_health(db)}
-    policy = get_routing_policy(db)
-    ordered = [policy.primary, policy.secondary]
-    routes: list[ProviderRoute] = []
-    for provider_type in ordered:
-        row = health_by_type[provider_type.value]
-        if row["health"] == "healthy" and row["provider_id"]:
+def gateway_options(db: Session) -> list[GatewayOption]:
+    routes: list[GatewayOption] = []
+    for row in provider_health(db):
+        if (
+            row.health is GatewayHealthState.healthy
+            and row.provider_id
+            and row.installation_id
+            and row.capability_binding_id
+        ):
             routes.append(
-                ProviderRoute(
-                    provider_type=provider_type, provider_id=row["provider_id"]
+                GatewayOption(
+                    provider_type=row.provider_type,
+                    provider_id=row.provider_id,
+                    installation_id=row.installation_id,
+                    capability_binding_id=row.capability_binding_id,
+                    presentment_priority=row.presentment_priority,
                 )
             )
-    return routes
+    return sorted(
+        routes,
+        key=lambda route: (-route.presentment_priority, route.provider_type.value),
+    )
 
 
 def select_checkout_provider(
     db: Session, requested: str | None = None
-) -> ProviderRoute:
-    routes = eligible_routes(db)
+) -> GatewayOption:
+    routes = gateway_options(db)
     if requested:
         requested_type = parse_supported_provider_type(requested)
         match = next(
@@ -244,18 +295,8 @@ def select_checkout_provider(
                 f"{requested_type.value.title()} is not available for new payments"
             )
         return match
-    policy = get_routing_policy(db)
-    primary = next(
-        (route for route in routes if route.provider_type == policy.primary), None
-    )
-    if primary is not None:
-        return primary
-    if policy.failover_enabled:
-        secondary = next(
-            (route for route in routes if route.provider_type == policy.secondary), None
-        )
-        if secondary is not None:
-            return secondary
+    if routes:
+        return routes[0]
     raise ValueError("No online payment provider is currently available")
 
 

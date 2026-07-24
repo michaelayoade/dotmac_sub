@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -133,9 +134,8 @@ class NetworkDeviceRead(NetworkDeviceBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
-    operational_status: str | None = None
+    operational_status: Literal["working", "not_working"] | None = None
     operational_reason: str | None = None
-    operational_retry_pending: bool = False
     status_presentation: StatusPresentation | None = None
 
 

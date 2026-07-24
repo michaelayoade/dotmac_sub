@@ -11,6 +11,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models.integration_platform import (
+    IntegrationBindingState,
+    IntegrationCapabilityBinding,
+    IntegrationInstallationState,
+)
+from app.services.common import coerce_uuid
 from app.services.integrations import installations
 from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_INTENT_CAPABILITY,
@@ -51,7 +57,47 @@ def _connector(provider_type: str) -> str:
     return provider
 
 
-def _binding(db: Session, provider_type: str, capability_id: str):
+def _binding(
+    db: Session,
+    provider_type: str,
+    capability_id: str,
+    *,
+    checkout_binding_id: str | uuid.UUID | None = None,
+):
+    if checkout_binding_id is not None:
+        source = db.get(
+            IntegrationCapabilityBinding,
+            coerce_uuid(str(checkout_binding_id)),
+        )
+        if source is None:
+            raise PaymentCapabilityError("checkout capability binding not found")
+        if source.capability_id != PAYMENT_INTENT_CAPABILITY:
+            raise PaymentCapabilityError(
+                "checkout capability binding is not a payment intent binding"
+            )
+        installation = source.installation
+        if installation.connector_key != _connector(provider_type):
+            raise PaymentCapabilityError(
+                "checkout capability binding provider mismatch"
+            )
+        sibling = (
+            db.query(IntegrationCapabilityBinding)
+            .filter(
+                IntegrationCapabilityBinding.installation_id == installation.id,
+                IntegrationCapabilityBinding.capability_id == capability_id,
+                IntegrationCapabilityBinding.state
+                == IntegrationBindingState.enabled.value,
+            )
+            .one_or_none()
+        )
+        if (
+            sibling is None
+            or installation.state != IntegrationInstallationState.enabled.value
+        ):
+            raise PaymentCapabilityError(
+                f"pinned installation has no enabled binding for {capability_id}"
+            )
+        return sibling
     return installations.require_enabled_capability_binding(
         db, connector_key=_connector(provider_type), capability_id=capability_id
     )
@@ -66,8 +112,14 @@ def _execute(
     params: dict[str, Any],
     trigger: OperationTrigger,
     correlation_id: str,
+    checkout_binding_id: str | uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    binding = _binding(db, provider_type, capability_id)
+    binding = _binding(
+        db,
+        provider_type,
+        capability_id,
+        checkout_binding_id=checkout_binding_id,
+    )
     context = build_execution_context(db, capability_binding_id=binding.id)
     result = make_operation_executor(
         context,
@@ -93,7 +145,12 @@ def kobo_to_naira(kobo: int | str | Decimal) -> Decimal:
     return Decimal(str(kobo)) / 100
 
 
-def get_public_key(db: Session, provider_type: str) -> str:
+def get_public_key(
+    db: Session,
+    provider_type: str,
+    *,
+    checkout_binding_id: str | uuid.UUID | None = None,
+) -> str:
     return str(
         _execute(
             db,
@@ -103,6 +160,7 @@ def get_public_key(db: Session, provider_type: str) -> str:
             params={},
             trigger=OperationTrigger.interactive,
             correlation_id=f"payment-public-key:{provider_type}",
+            checkout_binding_id=checkout_binding_id,
         ).get("value")
         or ""
     )
@@ -119,6 +177,7 @@ def initialize_transaction(
     amount_kobo: int | None = None,
     metadata: dict[str, Any] | None = None,
     currency: str | None = None,
+    checkout_binding_id: str | uuid.UUID | None = None,
 ) -> dict[str, Any]:
     return dict(
         _execute(
@@ -137,6 +196,7 @@ def initialize_transaction(
             },
             trigger=OperationTrigger.interactive,
             correlation_id=f"payment-initialize:{provider_type}:{reference}",
+            checkout_binding_id=checkout_binding_id,
         ).get("item")
         or {}
     )
@@ -150,6 +210,7 @@ def charge_authorization(
     amount_kobo: int,
     reference: str,
     metadata: dict[str, Any] | None = None,
+    checkout_binding_id: str | uuid.UUID | None = None,
 ) -> dict[str, Any]:
     return dict(
         _execute(
@@ -166,13 +227,18 @@ def charge_authorization(
             },
             trigger=OperationTrigger.event,
             correlation_id=f"payment-charge-authorization:{reference}",
+            checkout_binding_id=checkout_binding_id,
         ).get("item")
         or {}
     )
 
 
 def verify_transaction(
-    db: Session, *, provider_type: str, reference: str
+    db: Session,
+    *,
+    provider_type: str,
+    reference: str,
+    checkout_binding_id: str | uuid.UUID | None = None,
 ) -> dict[str, Any]:
     return dict(
         _execute(
@@ -183,6 +249,7 @@ def verify_transaction(
             params={"reference": reference},
             trigger=OperationTrigger.reconcile,
             correlation_id=f"payment-verify:{provider_type}:{reference}",
+            checkout_binding_id=checkout_binding_id,
         ).get("item")
         or {}
     )

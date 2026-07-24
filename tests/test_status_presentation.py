@@ -22,7 +22,6 @@ from app.schemas.status_presentation import StatusIcon, StatusTone
 from app.schemas.support import TicketRead
 from app.services.device_operational_status import (
     DeviceOperationalState,
-    OperationalStatus,
     annotate_operational_status,
 )
 from app.services.field.work_order_status import WorkOrderStatus
@@ -162,28 +161,16 @@ def test_system_job_presentation_covers_lifecycle(status: str) -> None:
     ("status", "label", "tone", "icon"),
     [
         (
-            DeviceOperationalState.up,
-            "Up",
+            DeviceOperationalState.working,
+            "Working",
             StatusTone.positive,
             StatusIcon.check,
         ),
         (
-            DeviceOperationalState.degraded,
-            "Degraded",
-            StatusTone.warning,
-            StatusIcon.alert,
-        ),
-        (
-            DeviceOperationalState.down,
-            "Down",
+            DeviceOperationalState.not_working,
+            "Not working",
             StatusTone.negative,
             StatusIcon.x,
-        ),
-        (
-            DeviceOperationalState.maintenance,
-            "Maintenance",
-            StatusTone.neutral,
-            StatusIcon.minus,
         ),
     ],
 )
@@ -261,23 +248,6 @@ def test_access_session_presentation_covers_admin_observation_vocabulary(
     assert presentation.icon == icon
 
 
-def test_retry_pending_down_is_warning_not_confirmed_failure() -> None:
-    operational = OperationalStatus(
-        status=DeviceOperationalState.down.value,
-        reason="not_warmed_retry_pending",
-        admin_status="online",
-        mismatch=True,
-        mismatch_reason="active_retry_pending",
-    )
-
-    assert operational.presentation.model_dump(mode="json") == {
-        "value": "down",
-        "label": "Down",
-        "tone": "warning",
-        "icon": "clock",
-    }
-
-
 def test_network_device_read_serializes_operational_presentation() -> None:
     now = datetime.now(UTC)
     device = NetworkDevice(
@@ -286,6 +256,7 @@ def test_network_device_read_serializes_operational_presentation() -> None:
         role=DeviceRole.edge,
         status=DeviceStatus.online,
         live_status="up",
+        live_status_at=now,
         ping_enabled=True,
         snmp_enabled=False,
         send_notifications=True,
@@ -298,12 +269,12 @@ def test_network_device_read_serializes_operational_presentation() -> None:
 
     payload = NetworkDeviceRead.model_validate(device).model_dump(mode="json")
 
-    assert payload["operational_status"] == "up"
-    assert payload["operational_reason"] == "observed_up"
-    assert payload["operational_retry_pending"] is False
+    assert payload["operational_status"] == "working"
+    assert payload["operational_reason"] == "observed_working"
+    assert "operational_retry_pending" not in payload
     assert payload["status_presentation"] == {
-        "value": "up",
-        "label": "Up",
+        "value": "working",
+        "label": "Working",
         "tone": "positive",
         "icon": "check",
     }

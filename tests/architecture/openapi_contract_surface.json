@@ -1125,18 +1125,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "DELETE /api/v1/payment-providers/{provider_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:provider_id!"
-   ],
-   "request": null,
-   "responses": {
-    "204": "cc5fd302f9c4",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "DELETE /api/v1/payments/{payment_id}": {
    "params": [
     "header:authorization",
@@ -2345,6 +2333,7 @@
     "header:x-api-key",
     "header:x-session-token",
     "query:action",
+    "query:actor",
     "query:actor_id",
     "query:actor_type",
     "query:entity_id",
@@ -5071,6 +5060,18 @@
    "request": null,
    "responses": {
     "200": "452422e866d9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integrations/installations/{installation_id}/manifest-adoption": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "c12ebc3f5fec",
     "422": "a11c9d9b2af8"
    }
   },
@@ -11938,18 +11939,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "PATCH /api/v1/payment-providers/{provider_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:provider_id!"
-   ],
-   "request": "482af71fe15d",
-   "responses": {
-    "200": "97eac4e07f27",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "PATCH /api/v1/payments/{payment_id}": {
    "params": [
     "header:authorization",
@@ -14600,6 +14589,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/integrations/installations/{installation_id}/manifest-adoption": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": "da3e7864f2eb",
+   "responses": {
+    "200": "98f5bf290cb2",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/integrations/installations/{installation_id}/quarantine": {
    "params": [
     "header:authorization",
@@ -16273,17 +16274,6 @@
    "request": "66ace691f89a",
    "responses": {
     "200": "3cb15b6d31fe",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "POST /api/v1/payment-providers": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": "58925d14c8a6",
-   "responses": {
-    "201": "97eac4e07f27",
     "422": "a11c9d9b2af8"
    }
   },
@@ -18318,7 +18308,7 @@
   "AssetCatalogSummary": "0b8db6079180",
   "AttachmentMeta": "de5420f7d9eb",
   "AuditActorType": "add968509176",
-  "AuditEventRead": "69d5c512cf71",
+  "AuditEventRead": "4db292edd781",
   "AuthProvider": "12388e0c7135",
   "AutopayEnableRequest": "3c99c04a008a",
   "AutopayStatusResponse": "f56a6f712555",
@@ -18733,6 +18723,10 @@
   "IntegrationJobType": "95fd3ca7c853",
   "IntegrationJobUpdate": "fbddf4f1e78d",
   "IntegrationLifecycleCommand": "5be315235dbd",
+  "IntegrationManifestAdoptionCommand": "76978728dfbe",
+  "IntegrationManifestAdoptionPreviewRead": "aa84df6679f4",
+  "IntegrationManifestAdoptionRead": "668d8111002b",
+  "IntegrationManifestPin": "e291777a5b96",
   "IntegrationRunRead": "0ac917af40e6",
   "IntegrationRunStatus": "cc0db9f1c430",
   "IntegrationScheduleType": "e4f9f44e67ad",
@@ -19022,7 +19016,7 @@
   "NasDeviceUpdate": "bcbc5d25f748",
   "NasVendor": "683b74e819e3",
   "NetworkDeviceCreate": "96c80059cedc",
-  "NetworkDeviceRead": "73ea3f286bf0",
+  "NetworkDeviceRead": "cf103ab2244a",
   "NetworkDeviceUpdate": "ff1bb7218474",
   "NetworkZoneCreate": "6b4ebfeb3c9b",
   "NetworkZoneRead": "b9ed9551d5f3",
@@ -19156,7 +19150,6 @@
   "PaymentMethodRead": "79a083174c04",
   "PaymentMethodType": "b0c210102540",
   "PaymentMethodUpdate": "43da40ecb872",
-  "PaymentProviderCreate": "4c387b9b5f73",
   "PaymentProviderEventFinancialEffect": "5f944c2c8bc5",
   "PaymentProviderEventIngest": "15804490e40b",
   "PaymentProviderEventRead": "dc960a3d10f6",
@@ -19165,7 +19158,6 @@
   "PaymentProviderOption": "d553802be4ab",
   "PaymentProviderRead": "eb01197f980e",
   "PaymentProviderType": "bae72c1da52e",
-  "PaymentProviderUpdate": "fa5ae1822098",
   "PaymentRead": "a39274695cd9",
   "PaymentRefundInvoiceEffectRead": "d0878d8fb0b6",
   "PaymentRefundOrigin": "62c638d95da1",

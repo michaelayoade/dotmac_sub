@@ -24,13 +24,16 @@ from app.models.notification import (
 )
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscription_engine import SettingValueType
 from app.schemas.campaigns import (
     CampaignCreate,
     CampaignSenderCreate,
     CampaignStepCreate,
+    CampaignUpdate,
 )
 from app.services import comms_campaigns
 from app.services import communication_eligibility as eligibility
+from app.services.domain_settings import comms_settings
 from app.tasks import notifications as notification_tasks
 
 
@@ -106,6 +109,16 @@ def _campaign(db_session, **overrides):
     }
     payload.update(overrides)
     return comms_campaigns.create_campaign(db_session, CampaignCreate(**payload))
+
+
+def _enable_periodic_campaign_admission(db_session) -> None:
+    comms_settings.ensure_by_key(
+        db_session,
+        key="campaign_processing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text="true",
+        value_json=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -657,8 +670,30 @@ def test_inactive_campaign_sender_fails_closed(db_session):
 # ---------------------------------------------------------------------------
 
 
+def test_periodic_campaign_admission_is_rejected_while_gate_is_closed(db_session):
+    from fastapi import HTTPException
+
+    scheduled_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+    with pytest.raises(HTTPException) as create_error:
+        _campaign(db_session, scheduled_at=scheduled_at)
+    assert create_error.value.status_code == 409
+
+    draft = _campaign(db_session)
+    with pytest.raises(HTTPException) as update_error:
+        comms_campaigns.update_campaign(
+            db_session,
+            draft.id,
+            CampaignUpdate(
+                status=CampaignStatus.scheduled.value,
+                scheduled_at=scheduled_at,
+            ),
+        )
+    assert update_error.value.status_code == 409
+
+
 def test_scheduled_campaign_is_picked_up_when_due(db_session, captured_email):
     _subscriber(db_session, email="target@example.com")
+    _enable_periodic_campaign_admission(db_session)
     scheduled_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
     campaign = _campaign(db_session, scheduled_at=scheduled_at)
     assert campaign.status == CampaignStatus.scheduled.value
@@ -681,6 +716,7 @@ def test_scheduled_campaign_is_picked_up_when_due(db_session, captured_email):
 
 def test_a_due_campaign_outside_its_send_window_is_deferred(db_session, captured_email):
     _subscriber(db_session, email="target@example.com")
+    _enable_periodic_campaign_admission(db_session)
     scheduled_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
     campaign = _campaign(
         db_session,
@@ -754,6 +790,7 @@ def test_send_window_requires_both_bounds_and_a_valid_timezone(db_session):
 def test_due_campaign_processing_continues_a_second_batch(db_session):
     for index in range(101):
         _subscriber(db_session, email=f"batch-{index}@example.com")
+    _enable_periodic_campaign_admission(db_session)
     scheduled_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
     campaign = _campaign(db_session, scheduled_at=scheduled_at)
 

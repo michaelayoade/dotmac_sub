@@ -33,7 +33,7 @@ def _projection(source_id: str) -> DeviceProjection:
     return DeviceProjection(
         device_type="test",
         source_id=source_id,
-        operational_status="unknown",
+        operational_status="not_working",
     )
 
 

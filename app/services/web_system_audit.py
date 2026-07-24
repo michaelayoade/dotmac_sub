@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditEvent
@@ -81,17 +80,19 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
     Reads filters, ordering and pagination from the validated ``ListQuery``
     (built via :func:`build_audit_list_query`); the caller is a thin adapter.
     """
-    actor_id = query.filter_value("actor_id")
+    # The Actor box searches the resolved label (person name / API-key label)
+    # and also matches an exact actor id, so staff can paste a uuid or type a
+    # name. It is no longer a uuid-only exact filter.
+    actor_term = (query.filter_value("actor_id") or "").strip() or None
     action = query.filter_value("action")
     entity_type = query.filter_value("entity_type")
     page = query.page
     per_page = query.per_page
     offset = query.offset
-    normalized_actor_id = _normalize_actor_id(actor_id)
 
     events = audit_service.audit_events.list(
         db=db,
-        actor_id=normalized_actor_id,
+        actor_search=actor_term,
         actor_type=None,
         action=action if action else None,
         entity_type=entity_type if entity_type else None,
@@ -143,8 +144,13 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
         .select_from(AuditEvent)
         .where(AuditEvent.is_active.is_(True))
     )
-    if normalized_actor_id:
-        total_stmt = total_stmt.where(AuditEvent.actor_id == UUID(normalized_actor_id))
+    if actor_term:
+        total_stmt = total_stmt.where(
+            or_(
+                AuditEvent.actor_label.ilike(f"%{actor_term}%"),
+                AuditEvent.actor_id == actor_term,
+            )
+        )
     if action:
         total_stmt = total_stmt.where(AuditEvent.action == action)
     if entity_type:
@@ -160,20 +166,6 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
         "total": total,
         "total_pages": total_pages,
     }
-
-
-def _normalize_actor_id(actor_id: str | None) -> str | None:
-    if not actor_id:
-        return None
-    value = actor_id.strip()
-    if not value:
-        return None
-    if value.lower() in {"none", "null", "undefined"}:
-        return None
-    try:
-        return str(UUID(value))
-    except ValueError:
-        return None
 
 
 def _resolve_actor_name(event, people: dict[str, object]) -> str:

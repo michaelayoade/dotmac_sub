@@ -28,16 +28,6 @@ class HandlerStage(enum.IntEnum):
 
 
 @dataclass(frozen=True)
-class SettingRef:
-    domain: SettingDomain
-    key: str
-
-    @property
-    def locator(self) -> str:
-        return f"{self.domain.value}.{self.key}"
-
-
-@dataclass(frozen=True)
 class ControlRelationship:
     name: str
     mode: RelationshipMode
@@ -89,15 +79,6 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
             "deployment.brand_config",
         ),
         rule="First non-empty field wins in declared tenant-to-platform order.",
-    ),
-    ControlRelationship(
-        name="payment_gateway_failover",
-        mode=RelationshipMode.exclusive,
-        members=(
-            "billing.payment_gateway_primary_provider",
-            "billing.payment_gateway_secondary_provider",
-        ),
-        rule="Primary and secondary providers must differ while failover is enabled.",
     ),
     ControlRelationship(
         name="team_email_sender_resolution",
@@ -231,11 +212,7 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     ),
 }
 
-RELATIONSHIP_SETTING_KEYS = {
-    (SettingDomain.billing, "payment_gateway_failover_enabled"),
-    (SettingDomain.billing, "payment_gateway_primary_provider"),
-    (SettingDomain.billing, "payment_gateway_secondary_provider"),
-}
+RELATIONSHIP_SETTING_KEYS: set[tuple[SettingDomain, str]] = set()
 
 CHAINED_EVENT_TYPES = {
     "account_credit.deposited",
@@ -580,64 +557,12 @@ def audit_event_relationships() -> list[ControlFinding]:
     return []
 
 
-def _value(
-    db: Session,
-    ref: SettingRef,
-    pending: tuple[SettingDomain, str, object] | None = None,
-) -> object:
-    if pending and pending[0] == ref.domain and pending[1] == ref.key:
-        return pending[2]
-    from app.services.settings_spec import resolve_value
-
-    return resolve_value(db, ref.domain, ref.key)
-
-
-def _enabled(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def audit_setting_relationships(
     db: Session,
     *,
     pending: tuple[SettingDomain, str, object] | None = None,
 ) -> list[ControlFinding]:
-    findings: list[ControlFinding] = []
-    failover = _enabled(
-        _value(
-            db,
-            SettingRef(SettingDomain.billing, "payment_gateway_failover_enabled"),
-            pending,
-        )
-    )
-    primary = str(
-        _value(
-            db,
-            SettingRef(SettingDomain.billing, "payment_gateway_primary_provider"),
-            pending,
-        )
-        or ""
-    )
-    secondary = str(
-        _value(
-            db,
-            SettingRef(SettingDomain.billing, "payment_gateway_secondary_provider"),
-            pending,
-        )
-        or ""
-    )
-    if failover and primary and primary == secondary:
-        findings.append(
-            ControlFinding(
-                code="payment_provider_not_exclusive",
-                severity="error",
-                message="Payment failover primary and secondary providers must differ.",
-                members=(primary, secondary),
-            )
-        )
-
-    return findings
+    return []
 
 
 def audit_feature_control_relationships(

@@ -37,14 +37,16 @@ document). Without this the ledger lists the same box 2–3×.
 
 **Derivers** (`app/services/device_operational_status.py`) — add
 `derive_nas_operational_status` and `derive_router_operational_status`, both emitting
-the existing 4-bucket `DeviceOperationalState` (up/degraded/down/maintenance):
-- Router: `RouterStatus` online→up, degraded→degraded, offline|unreachable→down,
-  maintenance→maintenance; optional `last_seen_at` freshness gate.
+the binary `DeviceOperationalState` (`working`/`not_working`):
+- Router: `RouterStatus` online|degraded→working,
+  offline|unreachable|maintenance→not_working; last-seen age makes verification
+  due and an expired confirmation resolves to not_working.
 - NAS: **delegate to the linked NetworkDevice** via `derive_operational_status` when
   `network_device_id` is set (real liveness); else map `status`
-  (active→up, maintenance/decommissioned→maintenance, offline→down) + `health_status`.
+  (maintenance/decommissioned/offline→not_working) + `health_status`; an
+  unlinked administrative `active` value alone does not prove operation.
   Document this as the one owner of the nas-derived field (SOT).
-- Presentation is already covered — the 4 buckets map in `_DEVICE_OPERATIONAL_PRESENTATIONS`;
+- Presentation is already covered — both values map in `_DEVICE_OPERATIONAL_PRESENTATIONS`;
   no nas/router-specific presentation needed.
 
 **class_facts per type** (set `device["class_facts"]` in each block):

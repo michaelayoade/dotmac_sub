@@ -48,10 +48,16 @@ from app.services.customer_portal_context import (
     get_invoice_billing_contact,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.integrations import payment_capability
+from app.services.integrations.runtime_execution import RuntimeExecutionError
 from app.services.owner_commands import CommandContext
-from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayContext,
+    payment_gateway_adapter,
+)
 from app.services.payment_routing import (
-    eligible_routes,
+    GatewayOption,
+    gateway_options,
     provider_for_intent,
     select_checkout_provider,
 )
@@ -141,17 +147,14 @@ def _payment_by_gateway_identity(
     return db.scalars(query).first()
 
 
-def online_gateway_payment_options(
-    db: Session,
-    _legacy_default_provider: str | None = None,
-) -> list[dict[str, str]]:
+def online_gateway_payment_options(db: Session) -> list[dict[str, str]]:
     """Return healthy gateways in canonical routing order."""
     return [
         {
             "provider_type": route.provider_type.value,
             "label": _ONLINE_PROVIDER_LABELS[route.provider_type.value],
         }
-        for route in eligible_routes(db)
+        for route in gateway_options(db)
     ]
 
 
@@ -162,9 +165,64 @@ def _default_online_route(db: Session):
         return None
 
 
+def _runtime_ready_gateway_contexts(
+    db: Session,
+    *,
+    invoice_number: str | None = None,
+) -> list[tuple[GatewayOption, PaymentGatewayContext]]:
+    """Map runtime-unavailable gateways to an honest UI availability state."""
+
+    contexts: list[tuple[GatewayOption, PaymentGatewayContext]] = []
+    for route in gateway_options(db):
+        try:
+            context = payment_gateway_adapter.build_context(
+                db,
+                provider_type=route.provider_type.value,
+                capability_binding_id=route.capability_binding_id,
+                invoice_number=invoice_number,
+            )
+        except (
+            RuntimeExecutionError,
+            payment_capability.PaymentCapabilityError,
+        ) as exc:
+            logger.warning(
+                "Payment gateway unavailable for customer presentment",
+                extra={
+                    "event": "payment_gateway_presentment_unavailable",
+                    "provider_type": route.provider_type.value,
+                    "capability_binding_id": str(route.capability_binding_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            continue
+        contexts.append((route, context))
+    return contexts
+
+
+def _payment_options_for_runtime_ready_routes(
+    routes: list[tuple[GatewayOption, PaymentGatewayContext]],
+    *,
+    direct_transfer_enabled: bool,
+) -> list[dict[str, str]]:
+    options = [
+        {
+            "provider_type": route.provider_type.value,
+            "label": _ONLINE_PROVIDER_LABELS[route.provider_type.value],
+        }
+        for route, _context in routes
+    ]
+    if direct_transfer_enabled:
+        options.append(
+            {
+                "provider_type": DIRECT_TRANSFER_PROVIDER,
+                "label": _DIRECT_TRANSFER_LABEL,
+            }
+        )
+    return options
+
+
 def _topup_payment_options(
     db: Session,
-    _legacy_default_provider: str | None = None,
     *,
     direct_transfer_enabled: bool | None = None,
 ) -> list[dict[str, str]]:
@@ -413,6 +471,9 @@ def _verify_and_record_legacy_topup(
         db,
         provider_type=provider_type,
         reference=reference,
+        capability_binding_id=(
+            str(intent.capability_binding_id) if intent.capability_binding_id else None
+        ),
     )
     amount = round_money(transaction.amount)
     metadata_intent_id = str((transaction.metadata or {}).get("topup_intent_id") or "")
@@ -643,14 +704,11 @@ def get_payment_page(
     # (``initiate_payment``) instead consumes a single pre-minted gateway
     # context, so keep ``provider_public_key``/``payment_reference`` for it.
     dbt_enabled = direct_bank_transfer_enabled(db)
-    default_route = _default_online_route(db)
-    gateway_context = None
-    if default_route:
-        gateway_context = payment_gateway_adapter.build_context(
-            db,
-            provider_type=default_route.provider_type.value,
-            invoice_number=getattr(invoice, "invoice_number", None),
-        )
+    runtime_ready_gateways = _runtime_ready_gateway_contexts(
+        db,
+        invoice_number=getattr(invoice, "invoice_number", None),
+    )
+    gateway_context = runtime_ready_gateways[0][1] if runtime_ready_gateways else None
     return {
         "invoice": invoice,
         "amount": amount_due,
@@ -666,8 +724,9 @@ def get_payment_page(
         if gateway_context and gateway_context.provider_type == "paystack"
         else None,
         "payment_reference": gateway_context.reference if gateway_context else None,
-        "payment_options": _topup_payment_options(
-            db, direct_transfer_enabled=dbt_enabled
+        "payment_options": _payment_options_for_runtime_ready_routes(
+            runtime_ready_gateways,
+            direct_transfer_enabled=dbt_enabled,
         ),
         "payment_methods": payment_methods,
         "direct_bank_transfer_enabled": dbt_enabled,
@@ -770,6 +829,7 @@ def _init_flutterwave_checkout(
     redirect_url: str | None,
     metadata: dict,
     default_callback_path: str,
+    capability_binding_id: uuid.UUID,
     currency: str | None = None,
 ) -> str:
     """Start a Flutterwave hosted checkout and return its link.
@@ -801,6 +861,7 @@ def _init_flutterwave_checkout(
             ),
             metadata=metadata,
             currency=currency,
+            checkout_binding_id=capability_binding_id,
         )
     except ValueError:
         raise
@@ -826,7 +887,8 @@ def _charge_saved_card_for_invoice(
     amount: Decimal,
     payment_method_id: str,
     checkout_metadata: dict,
-    provider_id: str,
+    provider_id: uuid.UUID,
+    capability_binding_id: uuid.UUID,
     idempotency_key: str | None,
 ) -> dict:
     """Charge a saved card server-side for an invoice (Paystack only).
@@ -847,6 +909,7 @@ def _charge_saved_card_for_invoice(
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type="paystack",
+        capability_binding_id=capability_binding_id,
         invoice_number=getattr(invoice, "invoice_number", None),
     )
     reference = gateway_context.reference
@@ -874,7 +937,8 @@ def _charge_saved_card_for_invoice(
         invoice_id=invoice.id,
         reference=reference,
         provider_type=gateway_context.provider_type,
-        provider_id=_coerce_uuid_or_none(provider_id),
+        provider_id=provider_id,
+        capability_binding_id=capability_binding_id,
         payment_method_id=method.id,
         created_by=created_by,
     )
@@ -900,6 +964,7 @@ def _charge_saved_card_for_invoice(
             amount_kobo=payment_capability.amount_to_kobo(amount),
             reference=reference,
             metadata=checkout_metadata,
+            checkout_binding_id=capability_binding_id,
         )
     except Exception:
         db_session_adapter.release_read_transaction(db)
@@ -994,7 +1059,11 @@ def create_invoice_payment_intent(
             idempotency_key=idempotency_key,
         )
 
-    route = select_checkout_provider(db, provider)
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    route = select_checkout_provider(
+        db,
+        "paystack" if selected_payment_method_id else provider,
+    )
     provider_type = route.provider_type.value
     customer_email = _resolve_customer_email(db, customer)
     _require_gateway_email(provider_type, customer_email)
@@ -1005,11 +1074,10 @@ def create_invoice_payment_intent(
         "invoice_id": str(invoice.id),
         "invoice_number": invoice_number or "",
         "account_id": str(invoice.account_id),
-        "provider_id": route.provider_id,
+        "provider_id": str(route.provider_id),
     }
 
     # Saved card -> server-to-server Paystack charge.
-    selected_payment_method_id = str(payment_method_id or "").strip() or None
     if selected_payment_method_id:
         if provider_type != "paystack":
             raise ValueError("Saved cards can only be used with Paystack")
@@ -1021,6 +1089,7 @@ def create_invoice_payment_intent(
             payment_method_id=selected_payment_method_id,
             checkout_metadata=checkout_metadata,
             provider_id=route.provider_id,
+            capability_binding_id=route.capability_binding_id,
             idempotency_key=idempotency_key,
         )
 
@@ -1029,6 +1098,7 @@ def create_invoice_payment_intent(
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type=provider_type,
+        capability_binding_id=route.capability_binding_id,
         invoice_number=invoice_number,
     )
     # Durable, expirable trace of the started checkout, mirroring the TopupIntent
@@ -1044,7 +1114,8 @@ def create_invoice_payment_intent(
         invoice_id=invoice.id,
         reference=gateway_context.reference,
         provider_type=gateway_context.provider_type,
-        provider_id=_coerce_uuid_or_none(route.provider_id),
+        provider_id=route.provider_id,
+        capability_binding_id=route.capability_binding_id,
         created_by=created_by,
     )
     db_session_adapter.release_read_transaction(db)
@@ -1079,6 +1150,7 @@ def create_invoice_payment_intent(
             redirect_url=redirect_url,
             metadata=checkout_metadata,
             default_callback_path="/portal/billing/pay/verify",
+            capability_binding_id=route.capability_binding_id,
             currency=intent_result.currency,
         )
     return result
@@ -1146,6 +1218,9 @@ def verify_and_record_payment(
         db,
         provider_type=provider_type,
         reference=reference,
+        capability_binding_id=(
+            str(intent.capability_binding_id) if intent.capability_binding_id else None
+        ),
     )
     invoice_id = tx.metadata.get("invoice_id")
     expected_invoice_id = str((intent.metadata_ or {}).get("invoice_id") or "")
@@ -1240,12 +1315,14 @@ def get_topup_page(
 ) -> dict:
     """Build context for the customer top-up page."""
     account_id = optional_customer_account_id(db, customer)
-    default_route = _default_online_route(db)
+    direct_transfer_available = direct_bank_transfer_enabled(db)
+    runtime_ready_gateways = _runtime_ready_gateway_contexts(db)
+    gateway_context = runtime_ready_gateways[0][1] if runtime_ready_gateways else None
     provider_type = (
-        default_route.provider_type.value
-        if default_route
+        gateway_context.provider_type
+        if gateway_context
         else DIRECT_TRANSFER_PROVIDER
-        if direct_bank_transfer_enabled(db)
+        if direct_transfer_available
         else None
     )
 
@@ -1277,7 +1354,10 @@ def get_topup_page(
     payable_invoices = eligible_invoices(db, str(account_id)) if account_id else []
     context = {
         "provider_type": provider_type,
-        "payment_options": _topup_payment_options(db),
+        "payment_options": _payment_options_for_runtime_ready_routes(
+            runtime_ready_gateways,
+            direct_transfer_enabled=direct_transfer_available,
+        ),
         "customer_email": email,
         "prepaid_balance": prepaid_balance,
         "account_credit": prepaid_balance,
@@ -1318,11 +1398,7 @@ def get_topup_page(
             "currency": pending_direct.currency,
         }
 
-    if default_route:
-        gateway_context = payment_gateway_adapter.build_context(
-            db,
-            provider_type=default_route.provider_type.value,
-        )
+    if gateway_context:
         context["provider_public_key"] = gateway_context.public_key
         if gateway_context.provider_type == "paystack":
             context["paystack_public_key"] = gateway_context.public_key
@@ -1470,13 +1546,16 @@ def create_topup_intent(
             idempotency_key=idempotency_key,
         )
 
-    route = select_checkout_provider(db, provider)
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    route = select_checkout_provider(
+        db,
+        "paystack" if selected_payment_method_id else provider,
+    )
     provider_type = route.provider_type.value
 
     customer_email = _resolve_customer_email(db, customer)
     _require_gateway_email(provider_type, customer_email)
 
-    selected_payment_method_id = str(payment_method_id or "").strip() or None
     selected_payment_method = None
     selected_payment_token = None
     if selected_payment_method_id:
@@ -1495,6 +1574,7 @@ def create_topup_intent(
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type=provider_type,
+        capability_binding_id=route.capability_binding_id,
     )
 
     # Saved-card charges hit the card server-side, so they need double-submit
@@ -1522,7 +1602,8 @@ def create_topup_intent(
         requested_amount=requested_amount,
         reference=gateway_context.reference,
         provider_type=gateway_context.provider_type,
-        provider_id=_coerce_uuid_or_none(route.provider_id),
+        provider_id=route.provider_id,
+        capability_binding_id=route.capability_binding_id,
         payment_method_id=(
             selected_payment_method.id if selected_payment_method is not None else None
         ),
@@ -1558,6 +1639,7 @@ def create_topup_intent(
                 ),
                 reference=intent_result.reference,
                 metadata=checkout_metadata,
+                checkout_binding_id=route.capability_binding_id,
             )
         except Exception:
             db_session_adapter.release_read_transaction(db)
@@ -1590,6 +1672,7 @@ def create_topup_intent(
             redirect_url=redirect_url,
             metadata=checkout_metadata,
             default_callback_path="/portal/billing/topup/verify",
+            capability_binding_id=route.capability_binding_id,
         )
 
     return {
@@ -1773,6 +1856,9 @@ def verify_and_record_topup(
         db,
         provider_type=provider_type,
         reference=reference,
+        capability_binding_id=(
+            str(intent.capability_binding_id) if intent.capability_binding_id else None
+        ),
     )
     metadata = dict(tx.metadata or {})
     metadata_intent_id = str(metadata.get("topup_intent_id") or "")

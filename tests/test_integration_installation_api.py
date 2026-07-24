@@ -9,7 +9,10 @@ from app.api.deps import get_current_user
 from app.api.integrations import router
 from app.db import get_db
 from app.services.integrations import inbox as integration_inbox
-from tests.integration_platform_helpers import enable_capability
+from tests.integration_platform_helpers import (
+    enable_capability,
+    enable_payment_provider,
+)
 
 
 def _client(db_session) -> TestClient:
@@ -105,6 +108,43 @@ def test_operator_api_rejects_catalogue_only_installation(db_session) -> None:
 
     assert response.status_code == 400
     assert "no approved executable runtime" in response.json()["detail"]
+
+
+def test_operator_api_previews_and_adopts_manifest_pin(db_session) -> None:
+    bindings = enable_payment_provider(db_session, "paystack")
+    installation = bindings["payments.intent.v1"].installation
+    installation.connector_version = "1.0.0"
+    installation.manifest_digest = (
+        "53791d3e2e06fe1ca128a0e3e8ced86549392af7b6131f61bd21044d71aafc6e"
+    )
+    installation_id = installation.id
+    db_session.commit()
+    client = _client(db_session)
+
+    preview_response = client.get(
+        f"/api/v1/integrations/installations/{installation_id}/manifest-adoption"
+    )
+    assert preview_response.status_code == 200, preview_response.text
+    preview = preview_response.json()
+    assert preview["pin_state"] == "supported_historical"
+    assert preview["adoption_required"] is True
+    assert preview["ready"] is True
+    assert preview["target_pin"]["connector_version"] == "1.0.1"
+    db_session.commit()
+
+    adopted = client.post(
+        f"/api/v1/integrations/installations/{installation_id}/manifest-adoption",
+        json={
+            "expected_installed_pin": preview["installed_pin"],
+            "target_pin": preview["target_pin"],
+            "reason": "Adopt reviewed Paystack manifest",
+            "idempotency_key": "api-paystack-adoption-1",
+        },
+    )
+
+    assert adopted.status_code == 200, adopted.text
+    assert adopted.json()["replayed"] is False
+    assert adopted.json()["adopted_pin"] == preview["target_pin"]
 
 
 def test_operator_api_lists_and_authorizes_inbox_replay(db_session) -> None:
