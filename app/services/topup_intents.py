@@ -981,6 +981,7 @@ def stage_invoice_direct_transfer_intent(
     expires_at: datetime,
     idempotency_key: str,
     created_by: str,
+    metadata: dict[str, object] | None = None,
     context: CommandContext,
 ) -> StagedDirectTransferIntent:
     """Stage one invoice transfer intent and explicitly retire older attempts."""
@@ -1041,6 +1042,7 @@ def stage_invoice_direct_transfer_intent(
             "payment_method": "bank_transfer",
             "payment_flow": "invoice_payment",
             "invoice_id": str(invoice_id),
+            **dict(metadata or {}),
         },
     )
     db.add(intent)
