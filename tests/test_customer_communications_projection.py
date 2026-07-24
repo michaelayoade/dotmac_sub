@@ -11,8 +11,37 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+import pytest
+
+from app.models.subscriber import Subscriber
 from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import team_inbox_read
+
+
+def _subscriber(db_session) -> uuid.UUID:
+    """inbox_conversations.subscriber_id is a real FK — bare UUIDs will not do."""
+    from app.services.subscriber import _default_reseller_id
+
+    row = Subscriber(
+        first_name="Inbox",
+        last_name="Customer",
+        email=f"inbox-{uuid.uuid4().hex}@example.com",
+        reseller_id=_default_reseller_id(db_session),
+    )
+    db_session.add(row)
+    db_session.commit()
+    db_session.refresh(row)
+    return row.id
+
+
+@pytest.fixture()
+def subscriber_a(db_session):
+    return _subscriber(db_session)
+
+
+@pytest.fixture()
+def subscriber_b(db_session):
+    return _subscriber(db_session)
 
 
 def _conversation(db_session, *, subscriber_id, subject: str, channel="whatsapp"):
@@ -29,33 +58,32 @@ def _conversation(db_session, *, subscriber_id, subject: str, channel="whatsapp"
     return conversation.id
 
 
-def test_list_conversations_scopes_to_subscriber(db_session):
-    mine = uuid.uuid4()
-    theirs = uuid.uuid4()
-    kept = _conversation(db_session, subscriber_id=mine, subject="Mine")
-    _conversation(db_session, subscriber_id=theirs, subject="Theirs")
+def test_list_conversations_scopes_to_subscriber(
+    db_session, subscriber_a, subscriber_b
+):
+    kept = _conversation(db_session, subscriber_id=subscriber_a, subject="Mine")
+    _conversation(db_session, subscriber_id=subscriber_b, subject="Theirs")
 
-    result = team_inbox_read.list_conversations(db_session, subscriber_id=mine)
+    result = team_inbox_read.list_conversations(db_session, subscriber_id=subscriber_a)
 
     assert [row.id for row in result.rows] == [str(kept)]
     assert result.count == 1
 
 
-def test_unscoped_read_is_unchanged(db_session):
+def test_unscoped_read_is_unchanged(db_session, subscriber_a, subscriber_b):
     """The filter is additive — omitting it must not narrow the queue."""
-    _conversation(db_session, subscriber_id=uuid.uuid4(), subject="A")
-    _conversation(db_session, subscriber_id=uuid.uuid4(), subject="B")
+    _conversation(db_session, subscriber_id=subscriber_a, subject="A")
+    _conversation(db_session, subscriber_id=subscriber_b, subject="B")
 
     assert team_inbox_read.list_conversations(db_session).count == 2
 
 
-def test_subscriber_filter_ignores_unlinked_conversations(db_session):
+def test_subscriber_filter_ignores_unlinked_conversations(db_session, subscriber_a):
     """An unresolved conversation has no subscriber and must not leak."""
     _conversation(db_session, subscriber_id=None, subject="Unresolved")
-    mine = uuid.uuid4()
-    _conversation(db_session, subscriber_id=mine, subject="Mine")
+    _conversation(db_session, subscriber_id=subscriber_a, subject="Mine")
 
-    result = team_inbox_read.list_conversations(db_session, subscriber_id=mine)
+    result = team_inbox_read.list_conversations(db_session, subscriber_id=subscriber_a)
     assert result.count == 1
     assert result.rows[0].subject == "Mine"
 
