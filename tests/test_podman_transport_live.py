@@ -83,9 +83,9 @@ def _execute_request(action: str, *, deadline_seconds: int = 30) -> RunnerReques
 
 
 def _transport() -> PodmanTransport:
-    # No network: the echo connector needs none, and this keeps the test
-    # exercising the tightest confinement.
-    return PodmanTransport(network="none")
+    # Default egress is deny-all, so the echo connector runs with no network —
+    # the tightest confinement, which is also what it needs.
+    return PodmanTransport()
 
 
 def _deadline(seconds: int) -> datetime:
@@ -105,6 +105,23 @@ def test_execute_round_trips_through_a_real_container(echo_image):
     assert response.operation is not None
     assert response.operation.operation_id == request.envelope.operation_id
     assert response.operation.output["echo"]["action"] == "echo_me"
+
+
+def test_a_default_deny_container_has_no_network(echo_image):
+    """The connector runs with --network=none, so it can reach nothing.
+
+    The echo image reports whether it can open a socket to a public host; with
+    default-deny egress that must fail.
+    """
+    request = _execute_request("probe_network")
+    response = _transport().exchange(
+        request=request,
+        image_ref=echo_image,
+        secret_material={},
+        deadline_at=request.envelope.deadline_at,
+    )
+    assert response.operation is not None
+    assert response.operation.output["network_reachable"] is False
 
 
 def test_secret_is_delivered_by_name_and_its_value_never_appears(echo_image):

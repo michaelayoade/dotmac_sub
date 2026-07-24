@@ -89,5 +89,5 @@ def test_secret_env_prefix_is_stable():
 
 def test_a_custom_podman_path_replaces_the_binary():
     transport = PodmanTransport(podman_path="/usr/bin/podman")
-    argv = list(transport._argv(IMAGE, 30, "/run/user/1000/s.env"))
+    argv = list(transport._argv(IMAGE, 30, "/run/user/1000/s.env", "none"))
     assert argv[0] == "/usr/bin/podman"

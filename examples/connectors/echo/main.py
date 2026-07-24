@@ -18,6 +18,7 @@ Test-only behaviour, driven by the request payload so tests can steer it:
 
 import json
 import os
+import socket
 import sys
 import time
 
@@ -29,6 +30,18 @@ def _secret_names() -> list[str]:
     return sorted(
         key[len(prefix) :].lower() for key in os.environ if key.startswith(prefix)
     )
+
+
+def _network_reachable() -> bool:
+    """Whether the container can open an outbound connection at all.
+
+    Used to prove default-deny egress: with --network=none this returns False.
+    """
+    try:
+        with socket.create_connection(("1.1.1.1", 443), timeout=2):
+            return True
+    except OSError:
+        return False
 
 
 def main() -> int:
@@ -56,10 +69,13 @@ def main() -> int:
             "details": {"secrets_seen": _secret_names()},
         }
     elif verb == "execute":
+        output = {"echo": payload, "secrets_seen": _secret_names()}
+        if action == "probe_network":
+            output["network_reachable"] = _network_reachable()
         response["operation"] = {
             "operation_id": request["envelope"]["operation_id"],
             "status": "succeeded",
-            "output": {"echo": payload, "secrets_seen": _secret_names()},
+            "output": output,
             "external_receipt": {},
             "error_code": None,
             "retry_after_seconds": None,

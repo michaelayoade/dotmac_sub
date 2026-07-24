@@ -11,9 +11,14 @@ no host mounts, and bounded memory, CPU, and pids. Rootless execution maps
 container-root to an unprivileged host uid, so an escape lands unprivileged.
 Secret material is written to a tmpfs env file readable only by this user,
 passed with ``--env-file`` (never on argv, where ``ps`` would expose it), and
-deleted in a ``finally``. Egress restriction is deliberately deferred to Phase
-4; ``network`` is a parameter so that phase can tighten it without touching
-callers.
+deleted in a ``finally``.
+
+Egress is default-deny (Phase 4). The transport takes an ``EgressPolicy`` derived
+from the connector's manifest: a connector with no declared hosts runs with
+``--network=none``; one that declares hosts requires an allowlist gateway that
+confines outbound traffic to exactly those hosts, and until such a gateway
+exists (Phase 4b) the transport refuses to run it rather than grant an open
+network.
 
 ``_build_argv`` is a pure function so the exact command — the security flags in
 particular — is unit-tested without invoking Podman. The live exchange is
@@ -32,6 +37,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.services.integrations.egress_policy import EgressPolicy
 from app.services.integrations.external_runner import (
     RunnerTimeout,
     RunnerTransportError,
@@ -114,14 +120,17 @@ class PodmanTransport:
     def __init__(
         self,
         *,
-        network: str | None = None,
+        egress: EgressPolicy = EgressPolicy(),
         memory: str = _DEFAULT_MEMORY,
         cpus: str | None = _DEFAULT_CPUS,
         pids_limit: int = _DEFAULT_PIDS_LIMIT,
         runtime_dir: str | None = None,
         podman_path: str = "podman",
     ) -> None:
-        self._network = network
+        # Egress is default-deny. A connector with no declared hosts runs with
+        # no network; one that declares hosts needs an allowlist gateway
+        # (Phase 4b) and is refused until one exists, never run open.
+        self._egress = egress
         self._memory = memory
         self._cpus = cpus
         self._pids_limit = pids_limit
@@ -129,6 +138,23 @@ class PodmanTransport:
         # user-private on a rootless host; fall back only if it is unset.
         self._runtime_dir = runtime_dir or os.environ.get("XDG_RUNTIME_DIR")
         self._podman_path = podman_path
+
+    def _network_arg(self) -> str | None:
+        """Resolve the container network from the egress policy, or fail closed.
+
+        A connector that needs no egress runs with ``--network=none``. One that
+        declares egress hosts requires an allowlist gateway that confines
+        outbound traffic to exactly those hosts; until that gateway exists the
+        transport refuses rather than grant unrestricted network.
+        """
+        if not self._egress.requires_network:
+            return "none"
+        raise RunnerTransportError(
+            "connector declares egress hosts "
+            f"({', '.join(self._egress.hosts) or 'installation host'}) but no "
+            "allowlist egress gateway is configured; refusing to run with "
+            "unrestricted network (ADR 0004 Phase 4b)"
+        )
 
     def _write_secret_env_file(self, secret_material: Mapping[str, str]) -> str:
         fd, path = tempfile.mkstemp(
@@ -179,6 +205,9 @@ class PodmanTransport:
         secret_material: Mapping[str, str],
         deadline_at: datetime,
     ) -> RunnerResponse:
+        # Resolve egress before materializing a secret: a connector we refuse
+        # to run on egress grounds must never have its credentials written out.
+        network = self._network_arg()
         deadline_seconds = self._deadline_seconds(deadline_at)
         env_file = self._write_secret_env_file(secret_material)
         # The subprocess deadline is authoritative: it raises TimeoutExpired
@@ -187,7 +216,10 @@ class PodmanTransport:
         # longer, purely to reap the container if the podman process we killed
         # left conmon holding it.
         argv = self._argv(
-            image_ref, deadline_seconds + _CONTAINER_REAP_GRACE_SECONDS, env_file
+            image_ref,
+            deadline_seconds + _CONTAINER_REAP_GRACE_SECONDS,
+            env_file,
+            network,
         )
         try:
             completed = subprocess.run(
@@ -220,13 +252,13 @@ class PodmanTransport:
         return self._parse_response(completed.stdout, request=request)
 
     def _argv(
-        self, image_ref: str, deadline_seconds: int, env_file: str
+        self, image_ref: str, deadline_seconds: int, env_file: str, network: str | None
     ) -> Sequence[str]:
         argv = _build_argv(
             image_ref,
             deadline_seconds=deadline_seconds,
             env_file=env_file,
-            network=self._network,
+            network=network,
             memory=self._memory,
             cpus=self._cpus,
             pids_limit=self._pids_limit,
@@ -236,4 +268,4 @@ class PodmanTransport:
         return argv
 
 
-__all__ = ["SECRET_ENV_PREFIX", "PodmanTransport"]
+__all__ = ["SECRET_ENV_PREFIX", "EgressPolicy", "PodmanTransport"]

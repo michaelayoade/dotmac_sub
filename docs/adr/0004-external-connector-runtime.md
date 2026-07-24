@@ -90,8 +90,12 @@ Each phase lands independently and leaves the system releasable.
   verification, signature verification, container lifecycle, resource bounds,
   deadline enforcement, and in-memory secret delivery.
 - **Phase 4 — egress enforcement.** `EgressManifest` hosts are declared today
-  and enforced nowhere, including for built-in connectors. Enforce at the
-  boundary.
+  and enforced nowhere at runtime. Splits in two. **4a (done):** default-deny —
+  a connector with no declared hosts runs with `--network=none`; one that
+  declares hosts is refused rather than run on an open network. **4b:** the
+  allowlist egress gateway that lets a declaring connector reach exactly its
+  hosts. 4b needs a rootless network layer this class of host does not provide
+  by default (see the deployment note), so it is deferred, not skipped.
 - **Phase 5 — operator surface.** Extend the installation admin screens with
   runtime tier, image digest, signature status, resource limits, and
   install/upgrade by digest.
@@ -259,9 +263,26 @@ setting `--cpus` where the controller is absent fails every operation. A
 production host that wants CPU bounds must delegate the controller
 (`Delegate=cpu cpuset io memory pids` under `user@.service.d`, then re-login) and
 opt in; otherwise memory, pids, and the wall-clock deadline are the enforced
-bounds. Egress restriction is Phase 4.
+bounds.
 
-**Phase 4 onward.** Each audit must show the runner does not become a parallel
+**Phase 4a — egress default-deny.** `EgressPolicy` is a manifest-derived
+allowlist and the transport enforces it default-deny: a connector with no
+declared hosts runs `--network=none` (verified on a real container — it can
+reach nothing); a connector that declares hosts is refused before its secret is
+even written, rather than run on an open network. The policy owns no decision —
+it projects the manifest — and no ownership boundary moved. Clean.
+
+**Deployment note (Phase 4b, discovered on seabone).** The allowlist gateway
+that lets a declaring connector reach exactly its hosts needs a rootless network
+layer that Podman 3.4.4 on Ubuntu 22.04 does not provide: rootless custom and
+`--internal` networks fail there because the CNI bridge plugins are not
+installed, and slirp4netns does not do host-name allowlisting. 4b therefore
+requires one of: Podman 4.x with netavark; the CNI plugins installed; or a
+host-provided egress proxy the connector is forced through with no direct route
+out. Until then the Phase 4a refusal keeps a declaring connector from running at
+all rather than running unconfined — which is the safe failure.
+
+**Phase 4b onward.** Each audit must show the runner does not become a parallel
 authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and
 `app/services/sot_relationships.py` where a phase changes an ownership boundary,
 and must add or adjust an architecture guard test that prevents a parallel path
