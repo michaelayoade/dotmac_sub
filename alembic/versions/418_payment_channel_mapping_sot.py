@@ -21,6 +21,13 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    # The squashed schema is generated from the current models, which no longer
+    # declare the retired pointer. On a fresh database the column never exists,
+    # so there is nothing to migrate or drop — only a real upgrade from a
+    # pre-retirement schema carries it.
+    columns = {c["name"] for c in sa.inspect(bind).get_columns("payment_channels")}
+    if "default_collection_account_id" not in columns:
+        return
     rows = bind.execute(
         sa.text(
             "SELECT id, default_collection_account_id FROM payment_channels "
