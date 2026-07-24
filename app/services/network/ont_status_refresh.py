@@ -103,7 +103,10 @@ def request_stale_ont_status_refreshes(
             skipped_inactive_ont += 1
             continue
         operational = derive_ont_operational_status(ont, now=current)
-        if not operational.retry_pending:
+        if operational.reason not in {
+            "verification_not_started",
+            "verification_expired",
+        }:
             continue
         stale_onts += 1
 

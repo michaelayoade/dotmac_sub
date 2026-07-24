@@ -18,7 +18,16 @@ from app.services import web_network_core_devices_inventory as inventory
 from app.web.admin import network as network_routes
 
 
-def _proj(db, source_id, *, name, device_type="core", status="up", vendor="acme", **kw):
+def _proj(
+    db,
+    source_id,
+    *,
+    name,
+    device_type="core",
+    status="working",
+    vendor="acme",
+    **kw,
+):
     row = DeviceProjection(
         device_type=device_type,
         source_id=source_id,
@@ -82,9 +91,9 @@ def test_network_devices_route_binds_list_handler_without_required_filters():
 
 
 def test_query_filters_sorts_and_paginates(db_session):
-    _proj(db_session, "1", name="alpha", device_type="core", status="up")
-    _proj(db_session, "2", name="bravo", device_type="olt", status="down")
-    _proj(db_session, "3", name="charlie", device_type="core", status="up")
+    _proj(db_session, "1", name="alpha", device_type="core", status="working")
+    _proj(db_session, "2", name="bravo", device_type="olt", status="not_working")
+    _proj(db_session, "3", name="charlie", device_type="core", status="working")
 
     # type filter
     rows, total = device_projection_views.query_device_projections(
@@ -107,7 +116,7 @@ def test_query_filters_sorts_and_paginates(db_session):
 
     # status filter + search
     rows, total = device_projection_views.query_device_projections(
-        db_session, status="down"
+        db_session, status="not_working"
     )
     assert total == 1 and rows[0]["name"] == "bravo"
     rows, total = device_projection_views.query_device_projections(
@@ -116,23 +125,28 @@ def test_query_filters_sorts_and_paginates(db_session):
     assert total == 1 and rows[0]["name"] == "charlie"
 
     # each row carries a projected status presentation (tone from the owner)
-    assert rows[0]["status_presentation"].value == "up"
+    assert rows[0]["status_presentation"].value == "working"
 
 
-def test_stats_and_freshness(db_session):
+def test_stats_and_repair_evidence(db_session):
     early = datetime.now(UTC) - timedelta(minutes=5)
-    _proj(db_session, "1", name="a", device_type="core", status="up")
+    _proj(db_session, "1", name="a", device_type="core", status="working")
     _proj(
-        db_session, "2", name="b", device_type="olt", status="down", refreshed_at=early
+        db_session,
+        "2",
+        name="b",
+        device_type="olt",
+        status="not_working",
+        refreshed_at=early,
     )
-    _proj(db_session, "3", name="c", device_type="ont", status="up")
+    _proj(db_session, "3", name="c", device_type="ont", status="working")
 
     stats = device_projection_views.device_projection_stats(db_session)
     assert stats["total"] == 3
     assert stats["core"] == 1 and stats["olt"] == 1 and stats["ont"] == 1
-    assert stats["up"] == 2 and stats["down"] == 1
+    assert stats["working"] == 2 and stats["not_working"] == 1
 
-    # freshness = most recent reconcile stamp
+    # Repair evidence remains available for diagnostics, not as a UI state.
     latest = device_projection_views.latest_refreshed_at(db_session)
     assert latest is not None
 
@@ -148,7 +162,7 @@ def test_devices_list_page_data_reads_projection_with_pagination(db_session):
     assert len(payload["devices"]) == 25  # one page
     assert payload["pagination"] is True  # >1 page → controls render
     assert payload["stats"]["total"] == 30
-    assert payload["devices_refreshed_at"] is not None
+    assert "devices_refreshed_at" not in payload
     assert payload["htmx_url"] == "/admin/network/devices/filter"
 
 

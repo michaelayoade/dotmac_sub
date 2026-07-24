@@ -85,7 +85,7 @@ collector failures. Installed Integrations shows the last observed runtime
 result and the CRM capability contract instead of generic health badges.
 Templates do not calculate freshness, classify failures, or decide retries.
 
-The older fleet-wide `network.device_state` badge vocabulary remains a separate
-migration boundary. It must be reviewed and migrated consumer-by-consumer
-before its `up/degraded/down/maintenance` contract is changed; this slice does
-not silently reinterpret those existing pages.
+The fleet-wide `network.device_state` owner now exposes only
+`working`/`not_working`. Collector freshness and retry evidence remain internal
+verification inputs; templates consume the owner result and reason without
+creating another state.

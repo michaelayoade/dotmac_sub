@@ -323,10 +323,8 @@ _OUTAGE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
 }
 
 _DEVICE_OPERATIONAL_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
-    "up": ("Up", StatusTone.positive, StatusIcon.check),
-    "degraded": ("Degraded", StatusTone.warning, StatusIcon.alert),
-    "down": ("Down", StatusTone.negative, StatusIcon.x),
-    "maintenance": ("Maintenance", StatusTone.neutral, StatusIcon.minus),
+    "working": ("Working", StatusTone.positive, StatusIcon.check),
+    "not_working": ("Not working", StatusTone.negative, StatusIcon.x),
 }
 
 _CONNECTION_HEALTH_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
@@ -676,25 +674,10 @@ def outage_status_presentation(
 
 def device_operational_status_presentation(
     status: object | str | None,
-    *,
-    retry_pending: bool | None = None,
 ) -> StatusPresentation:
-    """Project derived NOC state while preserving retry/alarm semantics.
+    """Project the owner-resolved binary device-operation outcome."""
 
-    A retry-pending ``down`` remains visibly down under the checked-in binary
-    operational model, but uses a warning/clock treatment so a monitoring gap
-    cannot be mistaken for negative device evidence.
-    """
     value = _status_value(getattr(status, "status", status))
-    if retry_pending is None:
-        retry_pending = bool(getattr(status, "retry_pending", False))
-    if value == "down" and retry_pending:
-        return StatusPresentation(
-            value=value,
-            label="Down",
-            tone=StatusTone.warning,
-            icon=StatusIcon.clock,
-        )
     return _presentation(value, _DEVICE_OPERATIONAL_PRESENTATIONS)
 
 

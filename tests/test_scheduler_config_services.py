@@ -1,13 +1,14 @@
 """Tests for scheduler config services."""
 
-import os
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.models.subscription_engine import SettingValueType
-from app.services import control_registry, scheduler_config
+from app.services import control_registry, scheduler_config, settings_spec
 
 
 def _control_overrides(values: dict[str, bool]):
@@ -20,143 +21,14 @@ def _control_overrides(values: dict[str, bool]):
     )
 
 
-# =============================================================================
-# Environment Variable Helper Tests
-# =============================================================================
-
-
-class TestEnvValue:
-    """Tests for _env_value helper."""
-
-    def test_returns_value_when_set(self, monkeypatch):
-        """Test returns value when env var is set."""
-        monkeypatch.setenv("TEST_VAR", "test_value")
-        result = scheduler_config._env_value("TEST_VAR")
-        assert result == "test_value"
-
-    def test_returns_none_when_not_set(self):
-        """Test returns None when env var not set."""
-        # Make sure it's not set
-        os.environ.pop("NONEXISTENT_VAR", None)
-        result = scheduler_config._env_value("NONEXISTENT_VAR")
-        assert result is None
-
-    def test_returns_none_for_empty_string(self, monkeypatch):
-        """Test returns None for empty string."""
-        monkeypatch.setenv("EMPTY_VAR", "")
-        result = scheduler_config._env_value("EMPTY_VAR")
-        assert result is None
-
-
-class TestEnvBool:
-    """Tests for _env_bool helper."""
-
-    def test_returns_true_for_true_values(self, monkeypatch):
-        """Test returns True for various true values."""
-        for value in ["1", "true", "True", "TRUE", "yes", "Yes", "on", "ON"]:
-            monkeypatch.setenv("BOOL_VAR", value)
-            result = scheduler_config._env_bool("BOOL_VAR")
-            assert result is True, f"Expected True for '{value}'"
-
-    def test_returns_false_for_false_values(self, monkeypatch):
-        """Test returns False for non-true values."""
-        monkeypatch.setenv("BOOL_VAR", "false")
-        result = scheduler_config._env_bool("BOOL_VAR")
-        assert result is False
-
-    def test_returns_none_when_not_set(self):
-        """Test returns None when env var not set."""
-        os.environ.pop("NONEXISTENT_BOOL", None)
-        result = scheduler_config._env_bool("NONEXISTENT_BOOL")
-        assert result is None
-
-
-class TestEnvInt:
-    """Tests for _env_int helper."""
-
-    def test_returns_int_when_valid(self, monkeypatch):
-        """Test returns int when value is valid."""
-        monkeypatch.setenv("INT_VAR", "42")
-        result = scheduler_config._env_int("INT_VAR")
-        assert result == 42
-
-    def test_returns_none_when_not_set(self):
-        """Test returns None when env var not set."""
-        os.environ.pop("NONEXISTENT_INT", None)
-        result = scheduler_config._env_int("NONEXISTENT_INT")
-        assert result is None
-
-    def test_returns_none_for_invalid_int(self, monkeypatch):
-        """Test returns None when value is not a valid int."""
-        monkeypatch.setenv("INT_VAR", "not_a_number")
-        result = scheduler_config._env_int("INT_VAR")
-        assert result is None
-
-
-# =============================================================================
-# Database Setting Helper Tests
-# =============================================================================
-
-
-class TestGetSettingValue:
-    """Tests for _get_setting_value helper."""
-
-    def test_returns_none_when_not_found(self, db_session):
-        """Test returns None when setting not found."""
-        result = scheduler_config._get_setting_value(
-            db_session, SettingDomain.scheduler, "nonexistent"
-        )
-        assert result is None
-
-    def test_returns_value_text(self, db_session):
-        """Test returns value_text when set."""
-        setting = DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="broker_url",
-            value_text="redis://localhost:6379/0",
-            is_active=True,
-        )
-        db_session.add(setting)
-        db_session.commit()
-
-        result = scheduler_config._get_setting_value(
-            db_session, SettingDomain.scheduler, "broker_url"
-        )
-        assert result == "redis://localhost:6379/0"
-
-    def test_returns_value_json_as_string(self, db_session):
-        """Test returns value_json as string."""
-        setting = DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="json_setting",
-            value_type=SettingValueType.json,
-            value_text=None,
-            value_json={"config": "value"},
-            is_active=True,
-        )
-        db_session.add(setting)
-        db_session.commit()
-
-        result = scheduler_config._get_setting_value(
-            db_session, SettingDomain.scheduler, "json_setting"
-        )
-        assert "config" in result
-
-    def test_ignores_inactive_settings(self, db_session):
-        """Test ignores inactive settings."""
-        setting = DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="inactive_key",
-            value_text="inactive_value",
-            is_active=False,
-        )
-        db_session.add(setting)
-        db_session.commit()
-
-        result = scheduler_config._get_setting_value(
-            db_session, SettingDomain.scheduler, "inactive_key"
-        )
-        assert result is None
+def _integer_overrides(values: dict[str, int]):
+    """Patch selected registered tuning values while preserving other specs."""
+    original = scheduler_config.resolve_integer
+    return patch.object(
+        scheduler_config,
+        "resolve_integer",
+        side_effect=lambda db, domain, key: values.get(key, original(db, domain, key)),
+    )
 
 
 # =============================================================================
@@ -164,173 +36,132 @@ class TestGetSettingValue:
 # =============================================================================
 
 
-class TestEffectiveBool:
-    """Tests for _effective_bool helper."""
+class TestSchedulerSettingEnabled:
+    """Tests for the registered scheduler-boolean resolver."""
 
-    def test_env_takes_precedence(self, db_session, monkeypatch):
-        """Test env var takes precedence over db setting."""
-        monkeypatch.setenv("TEST_BOOL_ENV", "true")
+    def test_uses_registered_database_value(self, db_session):
         db_session.add(
             DomainSetting(
-                domain=SettingDomain.scheduler,
-                key="test_bool",
-                value_text="false",
-                is_active=True,
-            )
-        )
-        db_session.commit()
-
-        result = scheduler_config._effective_bool(
-            db_session, SettingDomain.scheduler, "test_bool", "TEST_BOOL_ENV", False
-        )
-        assert result is True
-
-    def test_db_value_when_no_env(self, db_session):
-        """Test uses db value when no env var."""
-        os.environ.pop("TEST_BOOL_ENV2", None)
-        db_session.add(
-            DomainSetting(
-                domain=SettingDomain.scheduler,
-                key="test_bool2",
+                domain=SettingDomain.notification,
+                key="ncc_report_email_enabled",
                 value_text="true",
                 is_active=True,
             )
         )
         db_session.commit()
 
-        result = scheduler_config._effective_bool(
-            db_session, SettingDomain.scheduler, "test_bool2", "TEST_BOOL_ENV2", False
+        assert (
+            scheduler_config._scheduler_setting_enabled(
+                db_session,
+                SettingDomain.notification,
+                "ncc_report_email_enabled",
+            )
+            is True
         )
-        assert result is True
 
-    def test_default_when_neither_set(self, db_session):
-        """Test uses default when neither env nor db set."""
-        os.environ.pop("TEST_BOOL_ENV3", None)
-
-        result = scheduler_config._effective_bool(
-            db_session, SettingDomain.scheduler, "nonexistent", "TEST_BOOL_ENV3", True
-        )
-        assert result is True
-
-
-class TestEffectiveInt:
-    """Tests for _effective_int helper."""
-
-    def test_env_takes_precedence(self, db_session, monkeypatch):
-        """Test env var takes precedence over db setting."""
-        monkeypatch.setenv("TEST_INT_ENV", "100")
+    def test_runtime_environment_does_not_override_database(
+        self, db_session, monkeypatch
+    ):
+        monkeypatch.setenv("NCC_REPORT_EMAIL_ENABLED", "true")
         db_session.add(
             DomainSetting(
-                domain=SettingDomain.scheduler,
-                key="test_int",
-                value_text="50",
+                domain=SettingDomain.notification,
+                key="ncc_report_email_enabled",
+                value_text="false",
                 is_active=True,
             )
         )
         db_session.commit()
 
-        result = scheduler_config._effective_int(
-            db_session, SettingDomain.scheduler, "test_int", "TEST_INT_ENV", 25
+        assert (
+            scheduler_config._scheduler_setting_enabled(
+                db_session,
+                SettingDomain.notification,
+                "ncc_report_email_enabled",
+            )
+            is False
         )
-        assert result == 100
 
-    def test_db_value_when_no_env(self, db_session):
-        """Test uses db value when no env var."""
-        os.environ.pop("TEST_INT_ENV2", None)
+    def test_rejects_unregistered_boolean(self, db_session):
+        with pytest.raises(RuntimeError, match="Scheduler boolean must be registered"):
+            scheduler_config._scheduler_setting_enabled(
+                db_session,
+                SettingDomain.scheduler,
+                "not_registered",
+            )
+
+    def test_rejects_registered_non_boolean(self, db_session):
+        with pytest.raises(RuntimeError, match="Scheduler boolean must be registered"):
+            scheduler_config._scheduler_setting_enabled(
+                db_session,
+                SettingDomain.scheduler,
+                "timezone",
+            )
+
+
+class TestRegisteredScalarSettings:
+    def test_database_integer_is_authoritative_at_runtime(
+        self, db_session, monkeypatch
+    ):
+        monkeypatch.setenv("FUP_EVALUATION_INTERVAL_SECONDS", "15")
         db_session.add(
             DomainSetting(
-                domain=SettingDomain.scheduler,
-                key="test_int2",
-                value_text="75",
+                domain=SettingDomain.usage,
+                key="fup_evaluation_interval_seconds",
+                value_type=SettingValueType.integer,
+                value_text="120",
                 is_active=True,
             )
         )
         db_session.commit()
 
-        result = scheduler_config._effective_int(
-            db_session, SettingDomain.scheduler, "test_int2", "TEST_INT_ENV2", 25
+        assert (
+            settings_spec.resolve_integer(
+                db_session,
+                SettingDomain.usage,
+                "fup_evaluation_interval_seconds",
+            )
+            == 120
         )
-        assert result == 75
 
-    def test_default_when_neither_set(self, db_session):
-        """Test uses default when neither env nor db set."""
-        os.environ.pop("TEST_INT_ENV3", None)
-
-        result = scheduler_config._effective_int(
-            db_session, SettingDomain.scheduler, "nonexistent", "TEST_INT_ENV3", 42
+    def test_registered_integer_default_is_authoritative(self, db_session):
+        assert (
+            settings_spec.resolve_integer(
+                db_session,
+                SettingDomain.usage,
+                "fup_evaluation_interval_seconds",
+            )
+            == 60
         )
-        assert result == 42
 
-    def test_default_for_invalid_db_value(self, db_session):
-        """Test uses default when db value is invalid."""
-        os.environ.pop("TEST_INT_ENV4", None)
+    def test_registered_string_uses_database_value(self, db_session):
         db_session.add(
             DomainSetting(
                 domain=SettingDomain.scheduler,
-                key="invalid_int",
-                value_text="not_a_number",
+                key="timezone",
+                value_type=SettingValueType.string,
+                value_text="UTC",
                 is_active=True,
             )
         )
         db_session.commit()
 
-        result = scheduler_config._effective_int(
-            db_session, SettingDomain.scheduler, "invalid_int", "TEST_INT_ENV4", 99
-        )
-        assert result == 99
-
-
-class TestEffectiveStr:
-    """Tests for _effective_str helper."""
-
-    def test_env_takes_precedence(self, db_session, monkeypatch):
-        """Test env var takes precedence over db setting."""
-        monkeypatch.setenv("TEST_STR_ENV", "env_value")
-        db_session.add(
-            DomainSetting(
-                domain=SettingDomain.scheduler,
-                key="test_str",
-                value_text="db_value",
-                is_active=True,
+        assert (
+            settings_spec.resolve_string(
+                db_session,
+                SettingDomain.scheduler,
+                "timezone",
             )
+            == "UTC"
         )
-        db_session.commit()
 
-        result = scheduler_config._effective_str(
-            db_session, SettingDomain.scheduler, "test_str", "TEST_STR_ENV", "default"
-        )
-        assert result == "env_value"
-
-    def test_db_value_when_no_env(self, db_session):
-        """Test uses db value when no env var."""
-        os.environ.pop("TEST_STR_ENV2", None)
-        db_session.add(
-            DomainSetting(
-                domain=SettingDomain.scheduler,
-                key="test_str2",
-                value_text="db_value",
-                is_active=True,
+    def test_unregistered_integer_is_rejected(self, db_session):
+        with pytest.raises(RuntimeError, match="Integer setting must be registered"):
+            settings_spec.resolve_integer(
+                db_session,
+                SettingDomain.scheduler,
+                "not_registered",
             )
-        )
-        db_session.commit()
-
-        result = scheduler_config._effective_str(
-            db_session, SettingDomain.scheduler, "test_str2", "TEST_STR_ENV2", "default"
-        )
-        assert result == "db_value"
-
-    def test_default_when_neither_set(self, db_session):
-        """Test uses default when neither env nor db set."""
-        os.environ.pop("TEST_STR_ENV3", None)
-
-        result = scheduler_config._effective_str(
-            db_session,
-            SettingDomain.scheduler,
-            "nonexistent",
-            "TEST_STR_ENV3",
-            "fallback",
-        )
-        assert result == "fallback"
 
 
 # =============================================================================
@@ -529,6 +360,7 @@ class TestGetCeleryConfig:
 
         # Mock SessionLocal to return a mock session
         mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.first.return_value = None
         mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
@@ -538,10 +370,9 @@ class TestGetCeleryConfig:
         assert config["result_backend"] == "redis://localhost:6379/1"
         assert config["timezone"] == "Africa/Lagos"
         assert config["beat_max_loop_interval"] == 5
-        assert config["beat_refresh_seconds"] == 30
+        assert config["beat_refresh_seconds"] == 300
 
-    def test_uses_env_vars(self, monkeypatch):
-        """Test uses environment variables."""
+    def test_only_transport_endpoints_use_runtime_environment(self, monkeypatch):
         monkeypatch.setenv("CELERY_BROKER_URL", "redis://broker:6379/0")
         monkeypatch.setenv("CELERY_RESULT_BACKEND", "redis://backend:6379/1")
         monkeypatch.setenv("CELERY_TIMEZONE", "America/New_York")
@@ -550,6 +381,7 @@ class TestGetCeleryConfig:
 
         # Mock SessionLocal
         mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.first.return_value = None
         mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
@@ -557,9 +389,9 @@ class TestGetCeleryConfig:
 
         assert config["broker_url"] == "redis://broker:6379/0"
         assert config["result_backend"] == "redis://backend:6379/1"
-        assert config["timezone"] == "America/New_York"
-        assert config["beat_max_loop_interval"] == 10
-        assert config["beat_refresh_seconds"] == 60
+        assert config["timezone"] == "Africa/Lagos"
+        assert config["beat_max_loop_interval"] == 5
+        assert config["beat_refresh_seconds"] == 300
 
     def test_uses_redis_url_fallback(self, monkeypatch):
         """Test uses REDIS_URL as fallback for broker/backend."""
@@ -568,6 +400,7 @@ class TestGetCeleryConfig:
         monkeypatch.setenv("REDIS_URL", "redis://fallback:6379/0")
 
         mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.first.return_value = None
         mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
@@ -600,7 +433,10 @@ class TestBuildBeatSchedule:
         # Mock order_by for _sync_scheduled_task
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _integer_overrides({"sync_interval_minutes": 30}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -864,7 +700,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _integer_overrides({"sync_interval_minutes": 0}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -910,17 +749,19 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        original_resolve_int = scheduler_config._resolve_int
+        original_resolve_integer = scheduler_config.resolve_integer
 
-        def resolve_int(db, domain, key, default):
+        def resolve_integer(db, domain, key):
             if key == "prepaid_balance_sweep_interval_seconds":
                 return 1800
-            return original_resolve_int(db, domain, key, default)
+            return original_resolve_integer(db, domain, key)
 
         with (
             _control_overrides({"gis.sync": False}),
             patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
-            patch.object(scheduler_config, "_resolve_int", side_effect=resolve_int),
+            patch.object(
+                scheduler_config, "resolve_integer", side_effect=resolve_integer
+            ),
             patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -975,10 +816,8 @@ class TestBuildBeatSchedule:
         assert schedule == {}
 
     def test_builds_compensation_retry_watchdog_schedule(self, monkeypatch):
-        """Test compensation retry watchdog scheduled task is synced."""
+        """Durable compensation failures always retain their retry watchdog."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
-        monkeypatch.setenv("COMPENSATION_RETRY_ENABLED", "true")
-        monkeypatch.setenv("COMPENSATION_RETRY_INTERVAL_SECONDS", "120")
         monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
         monkeypatch.delenv("DUNNING_ENABLED", raising=False)
 
@@ -989,6 +828,7 @@ class TestBuildBeatSchedule:
 
         with (
             _control_overrides({"gis.sync": False}),
+            _integer_overrides({"compensation_retry_interval_seconds": 120}),
             patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
         ):
             with patch.object(
@@ -1004,6 +844,7 @@ class TestBuildBeatSchedule:
             getattr(call.args[0], "task_name", None)
             == "app.tasks.provisioning.retry_pending_compensation_failures"
             and getattr(call.args[0], "interval_seconds", None) == 120
+            and getattr(call.args[0], "enabled", None) is True
             for call in scheduled_calls
         )
 
@@ -1020,7 +861,12 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _integer_overrides(
+                {"operational_escalation_delivery_interval_seconds": 45}
+            ),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -1053,6 +899,7 @@ class TestBuildBeatSchedule:
 
         with (
             _control_overrides({"gis.sync": False, "network.olt_profile_sync": True}),
+            _integer_overrides({"olt_profile_sync_interval_seconds": 45}),
             patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
         ):
             with patch.object(

@@ -7982,13 +7982,151 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="network.device_state",
                 module="app.services.device_operational_status",
                 owns=(
-                    "NOC-facing device operational status",
-                    "device operational status vocabulary",
-                    "device retry-pending and alarm classification",
+                    "binary NOC-facing device operational outcome",
+                    "device operational status vocabulary and reason classification",
+                    "device verification-due, impairment, and alarm classification",
                 ),
                 depends_on=(
+                    "network.monitoring_inventory",
                     "runtime.infrastructure_polling",
                     "network.ont_runtime_status",
+                ),
+                notes=(
+                    "Returns exactly working or not_working. Observation age is "
+                    "an internal verification-due input; reason distinguishes "
+                    "confirmed failure, administrative lifecycle, impairment, "
+                    "and inability to verify without adding a public freshness "
+                    "state. Required verification collectors are permanent."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="binary NOC-facing device operational outcome",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "device administrative lifecycle",
+                                "native reachability observations",
+                                "ONT runtime observations",
+                                "monitoring path observations",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "device operational status vocabulary and reason "
+                                "classification"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "device administrative lifecycle",
+                                "native reachability observations",
+                                "ONT runtime observations",
+                                "monitoring path observations",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "device verification-due, impairment, and alarm "
+                                "classification"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "device administrative lifecycle",
+                                "native reachability observations",
+                                "ONT runtime observations",
+                                "monitoring path observations",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="device administrative lifecycle",
+                            owner="network.monitoring_inventory",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "NetworkDevice, OLTDevice, OntUnit, NAS, router, "
+                                "and CPE administrative lifecycle fields"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native reachability observations",
+                            owner="runtime.infrastructure_polling",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "timestamped ping, poll, live-status, and health "
+                                "observations"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ONT runtime observations",
+                            owner="network.ont_runtime_status",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "timestamped OLT status and ACS inform observations"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="monitoring path observations",
+                            owner="external:wireguard",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "timestamped WireGuard handshake and allowed-IP "
+                                "routing facts normalized by monitoring_coverage"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Callers supply already-visible observation models; "
+                            "the resolver performs no writes or transaction completion."
+                        ),
+                        locking=(
+                            "No row locks; one resolution reflects one caller-visible "
+                            "observation snapshot."
+                        ),
+                        idempotency=(
+                            "The same lifecycle, observations, path coverage, and "
+                            "evaluation time produce the same typed outcome."
+                        ),
+                        retries=(
+                            "The resolver has no side effects; permanent collectors "
+                            "retry verification and later projections repair drift."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="web, API, projection, and task adapters",
+                        fail_closed_on=(
+                            "missing verification",
+                            "expired verification",
+                            "unavailable verification path",
+                            "inconclusive verification",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="device UI/API read services",
+                        new_owner="network.device_state",
+                        verification=(
+                            "architecture and behavior tests enforce the binary "
+                            "vocabulary and permanent verifier tasks"
+                        ),
+                        cutover_gate="migration 412 backfills and constrains projections",
+                        fallback_retirement=(
+                            "retry-pending, freshness, degraded, maintenance, and "
+                            "unknown public operational branches removed"
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/DEVICE_OPERATIONAL_STATUS.md",
+                        "docs/designs/SCHEDULER_CONTROL_LIFECYCLE.md",
+                    ),
+                    test_refs=(
+                        "tests/test_device_operational_status.py",
+                        "tests/test_operational_status_per_type.py",
+                        "tests/architecture/test_binary_device_operational_lifecycle.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -8017,7 +8155,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "device_projections materialised table",
                     "unified cross-type device row (OLT/core/ONT/CPE)",
-                    "projected operational status and freshness",
+                    "projected binary operational status and repair evidence",
                     "device projection orphan pruning",
                 ),
                 depends_on=(
@@ -8032,8 +8170,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "list can search/filter/sort/paginate in SQL. The table is a "
                     "rebuildable cache: reconcile is idempotent, stamps "
                     "refreshed_at, and prunes rows whose source device is gone. "
-                    "Readers never write it; they request a reconcile rather than "
-                    "maintaining a parallel derivation path."
+                    "Its scheduled repair is permanent: settings and feature "
+                    "controls may tune cadence but cannot disable convergence. "
+                    "Readers never write it; they request a reconcile rather "
+                    "than maintaining a parallel derivation path."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -8057,7 +8197,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             canonical_writer="network.device_projection",
                         ),
                         ConcernContract(
-                            name="projected operational status and freshness",
+                            name="projected binary operational status and repair evidence",
                             role=OwnerRole.PROJECTION_WRITER,
                             input_names=(
                                 "resolved operational device state",
@@ -8171,9 +8311,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "every row carries reconciled refreshed_at."
                             ),
                             stale_behavior=(
-                                "Readers may show the last committed projection and "
-                                "its refreshed_at; they never synthesize or write a "
-                                "replacement row."
+                                "Readers keep the owner-resolved binary outcome. "
+                                "Projection age may trigger repair or diagnostics "
+                                "but never becomes a public device state."
                             ),
                             drift_signal=(
                                 "Reconcile logs inserted, updated, and pruned counts; "
@@ -8194,12 +8334,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SCHEDULER_CONTROL_LIFECYCLE.md",
                     ),
                     test_refs=(
                         "tests/test_owner_commands.py",
                         "tests/test_device_projection_reconcile.py",
                         "tests/test_device_projection_task.py",
                         "tests/architecture/test_owner_command_boundary.py",
+                        "tests/architecture/test_scheduler_boolean_control_boundary.py",
                     ),
                 ),
             ),
@@ -9601,6 +9743,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.comms_campaigns",
                 owns=(
                     "native communication campaign lifecycle",
+                    "periodic campaign admission decision",
                     "campaign sender and sequence lifecycle",
                     "campaign audience and recipient delivery state",
                 ),
@@ -9612,7 +9755,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "Owns Sub outbound communication campaigns, not external "
                     "advertising campaigns. External provider campaign IDs are "
-                    "lead-origin provenance owned by sales.lead_lifecycle."
+                    "lead-origin provenance owned by sales.lead_lifecycle. The "
+                    "campaign-processing setting gates new periodic campaign "
+                    "admission only; admitted campaign and sequence work drains "
+                    "without a scheduler enablement control."
                 ),
             ),
             SOTService(
@@ -16247,13 +16393,32 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.scheduler_config",
                 owns=(
                     "effective scheduled-task registration",
+                    "registered scheduler boolean control enforcement",
+                    "registered scheduler cadence and tuning resolution",
                     "permanent customer-financial lifecycle task registration",
                     "mandatory account-access reconciliation registration",
+                    "permanent device-projection repair registration",
+                    "permanent accepted-work drainage registration",
                     "event-driven transport exclusion from periodic registration",
                     "optional capability task synchronization",
                     "Celery runtime schedule config",
                 ),
-                depends_on=("control.feature_registry", "runtime.db_sessions"),
+                depends_on=(
+                    "control.feature_registry",
+                    "control.settings_spec",
+                    "runtime.db_sessions",
+                ),
+                notes=(
+                    "Scheduler booleans resolve only through canonical feature "
+                    "controls or registered boolean SettingSpecs. Cadence and "
+                    "tuning resolve through registered typed SettingSpecs; their "
+                    "environment variables are bootstrap inputs, not runtime "
+                    "overrides. Permanent lifecycle, accepted-work drainage, and "
+                    "projection-repair tasks have no mutable enablement control. "
+                    "Broker and result-backend URLs remain deployment transport "
+                    "configuration rather than mutable domain settings. See "
+                    "docs/designs/SCHEDULER_CONTROL_LIFECYCLE.md."
+                ),
             ),
             SOTService(
                 name="scheduler.operations",
@@ -16277,8 +16442,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         rule=(
             "Core lifecycle tasks are always registered and cannot be disabled, "
             "renamed, or deleted. This includes customer-financial lifecycle work "
-            "and durable command dispatch/drainage after acceptance. Optional "
-            "capability scheduling composes through the feature control plane. "
+            "durable command dispatch/drainage after acceptance, and canonical "
+            "projection repair. Optional capability scheduling composes through "
+            "the feature control plane; other mutable scheduler booleans must "
+            "have a registered database-authoritative SettingSpec. Ad-hoc "
+            "environment/database/default fallback is forbidden for every "
+            "registered scheduler scalar. Controls may reject new admission but "
+            "cannot freeze accepted work, expiry cleanup, security/session "
+            "reconciliation, or canonical projection repair. "
             "Event-driven transports remain requestable but cannot register as "
             "independent periodic repair owners; task bodies remain thin adapters."
         ),
@@ -19546,9 +19717,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device_projection_views (SQL search/filter/sort/paginate), the "
                     "rebuildable read model owned by network.device_projection, "
                     "instead of aggregating every device in memory. Projected "
-                    "operational_status is last-known state as of the projection's "
-                    "refreshed_at, surfaced as freshness (not live truth); live "
-                    "status stays on the monitoring/detail views. collect_devices is "
+                    "operational_status is the binary network.device_state outcome; "
+                    "refreshed_at is internal repair evidence and never a client "
+                    "device state. Raw timestamped observations remain available at "
+                    "diagnostic depth. collect_devices is "
                     "retired from the request path and remains the reconciler's "
                     "derivation input. Gated by the existing granular "
                     "network:device:read. Read-only list: no bulk command declared."

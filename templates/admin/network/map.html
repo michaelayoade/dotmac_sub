@@ -411,38 +411,24 @@
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.network_devices }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>Device Up</span>
-                        <span class="status-foreground status-tone-positive font-medium">{{ stats.network_devices_online }}</span>
+                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>Device Working</span>
+                        <span class="status-foreground status-tone-positive font-medium">{{ stats.network_devices_working }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>Device Down</span>
-                        <span class="status-foreground status-tone-negative font-medium">{{ stats.network_devices_offline }}</span>
+                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>Device Not Working</span>
+                        <span class="status-foreground status-tone-negative font-medium">{{ stats.network_devices_not_working }}</span>
                     </div>
-                    <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-warning flex items-center gap-1"><span class="status-tone-dot status-tone-dot-warning h-2 w-2 rounded-full"></span>Device Degraded</span>
-                        <span class="status-foreground status-tone-warning font-medium">{{ stats.network_devices_degraded }}</span>
-                    </div>
-                    <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-neutral flex items-center gap-1"><span class="status-tone-dot status-tone-dot-neutral h-2 w-2 rounded-full"></span>Maintenance</span>
-                        <span class="status-foreground status-tone-neutral font-medium">{{ stats.network_devices_maintenance }}</span>
-                    </div>
-                    {% if stats.network_devices_retry_pending %}
-                    <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-warning">Refresh pending</span>
-                        <span class="status-foreground status-tone-warning font-medium">{{ stats.network_devices_retry_pending }}</span>
-                    </div>
-                    {% endif %}
                     <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">ONT Units (GPS)</span>
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.onts }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>ONT Online</span>
-                        <span class="status-foreground status-tone-positive font-medium">{{ stats.onts_online }}</span>
+                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>ONT Working</span>
+                        <span class="status-foreground status-tone-positive font-medium">{{ stats.onts_working }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>ONT Offline</span>
-                        <span class="status-foreground status-tone-negative font-medium">{{ stats.onts_offline }}</span>
+                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>ONT Not Working</span>
+                        <span class="status-foreground status-tone-negative font-medium">{{ stats.onts_not_working }}</span>
                     </div>
                     {% if stats.onts_warning %}
                     <div class="flex justify-between pl-3">
@@ -762,14 +748,14 @@
             iconAnchor: [9, 9],
             popupAnchor: [0, -9]
         }),
-        network_device_online: L.divIcon({
+        network_device_working: L.divIcon({
             html: '<div style="background:var(--color-semantic-positive-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
-        network_device_offline: L.divIcon({
+        network_device_not_working: L.divIcon({
             html: '<div style="background:var(--color-semantic-negative-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
@@ -797,14 +783,14 @@
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
-        ont_online: L.divIcon({
+        ont_working: L.divIcon({
             html: '<div style="background:var(--color-accent-600);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
             className: '',
             iconSize: [16, 16],
             iconAnchor: [8, 8],
             popupAnchor: [0, -8]
         }),
-        ont_offline: L.divIcon({
+        ont_not_working: L.divIcon({
             html: '<div style="background:var(--color-semantic-negative-600);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
             className: '',
             iconSize: [16, 16],
@@ -926,12 +912,12 @@
                         ? themeColor('semantic-negative-600')
                         : themeColor('semantic-warning-600');
                     typeLabel = `ONT (Signal ${p.signal_quality})`;
-                } else if (p.status === 'online') {
+                } else if (p.status === 'working') {
                     iconBg = themeColor('accent-600');
-                    typeLabel = 'ONT (Online)';
+                    typeLabel = 'ONT (Working)';
                 } else {
                     iconBg = themeColor('semantic-negative-600');
-                    typeLabel = 'ONT (Offline)';
+                    typeLabel = 'ONT (Not Working)';
                 }
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg>';
                 detailUrl = `/admin/network/onts/${p.id}`;
@@ -1063,17 +1049,17 @@
                 } else if (p.type === 'ont') {
                     if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
                         icon = icons.ont_warning;
-                    } else if (p.status === 'online') {
-                        icon = icons.ont_online;
+                    } else if (p.status === 'working') {
+                        icon = icons.ont_working;
                     } else {
-                        icon = icons.ont_offline;
+                        icon = icons.ont_not_working;
                     }
                 } else if (p.type === 'network_device') {
                     const tone = p.status_presentation?.tone || 'neutral';
                     if (tone === 'positive') {
-                        icon = icons.network_device_online;
+                        icon = icons.network_device_working;
                     } else if (tone === 'negative') {
-                        icon = icons.network_device_offline;
+                        icon = icons.network_device_not_working;
                     } else if (tone === 'warning') {
                         icon = icons.network_device_degraded;
                     } else {

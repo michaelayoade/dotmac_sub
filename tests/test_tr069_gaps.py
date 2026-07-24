@@ -728,7 +728,7 @@ class TestAutoLinkOnts:
                 pon_port_id=None,
                 pon_hint=None,
                 zone_id=None,
-                online_status=None,
+                operational_status=None,
                 authorization="authorized",
                 signal_quality=None,
                 vendor=None,

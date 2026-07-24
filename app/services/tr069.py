@@ -4,7 +4,7 @@ from typing import Any
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from fastapi import HTTPException
-from sqlalchemy import and_, false, func, or_, select, text
+from sqlalchemy import and_, case, false, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -648,6 +648,59 @@ def refresh_ont_status_snapshot(
     apply_status_snapshot(ont, snapshot)
 
 
+def _refresh_synced_ont_acs_observations(
+    db: Session,
+    *,
+    acs_server_id: str,
+) -> int:
+    """Project the latest synced ACS observation onto each linked ONT.
+
+    Build the statement with SQLAlchemy so null-safe change detection compiles
+    for both PostgreSQL (``IS DISTINCT FROM``) and SQLite (``IS NOT``). The
+    latter is the canonical unit-test database and must exercise the same
+    transaction boundary instead of rolling back the completed sync.
+    """
+    latest = (
+        select(
+            Tr069CpeDevice.ont_unit_id.label("ont_unit_id"),
+            func.max(Tr069CpeDevice.last_inform_at).label("last_inform_at"),
+        )
+        .where(
+            Tr069CpeDevice.acs_server_id == acs_server_id,
+            Tr069CpeDevice.is_active.is_(True),
+            Tr069CpeDevice.ont_unit_id.is_not(None),
+            Tr069CpeDevice.last_inform_at.is_not(None),
+        )
+        .group_by(Tr069CpeDevice.ont_unit_id)
+        .cte("latest")
+    )
+    statement = (
+        update(OntUnit)
+        .where(
+            OntUnit.id == latest.c.ont_unit_id,
+            OntUnit.acs_last_inform_at.is_distinct_from(latest.c.last_inform_at),
+        )
+        .values(
+            acs_last_inform_at=latest.c.last_inform_at,
+            last_seen_at=case(
+                (
+                    or_(
+                        OntUnit.last_seen_at.is_(None),
+                        OntUnit.last_seen_at < latest.c.last_inform_at,
+                    ),
+                    latest.c.last_inform_at,
+                ),
+                else_=OntUnit.last_seen_at,
+            ),
+            updated_at=func.current_timestamp(),
+        )
+    )
+    result = db.execute(statement)
+    # SQLAlchemy `Result` is the generic supertype; UPDATE statements return a
+    # `CursorResult`, which carries `.rowcount`.
+    return result.rowcount or 0  # type: ignore[attr-defined]
+
+
 def link_tr069_device_to_ont(
     db: Session,
     device: Tr069CpeDevice,
@@ -1218,41 +1271,10 @@ class CpeDevices(ListResponseMixin):
 
         synced_ont_status = 0
         try:
-            result = db.execute(
-                text(
-                    """
-                    WITH latest AS (
-                        SELECT
-                            ont_unit_id,
-                            max(last_inform_at) AS last_inform_at
-                        FROM tr069_cpe_devices
-                        WHERE acs_server_id = :acs_server_id
-                          AND is_active = true
-                          AND ont_unit_id IS NOT NULL
-                          AND last_inform_at IS NOT NULL
-                        GROUP BY ont_unit_id
-                    )
-                    UPDATE ont_units AS ont
-                    SET
-                        acs_last_inform_at = latest.last_inform_at,
-                        last_seen_at = CASE
-                            WHEN ont.last_seen_at IS NULL
-                              OR ont.last_seen_at < latest.last_inform_at
-                            THEN latest.last_inform_at
-                            ELSE ont.last_seen_at
-                        END,
-                        updated_at = CURRENT_TIMESTAMP
-                    FROM latest
-                    WHERE ont.id = latest.ont_unit_id
-                      AND ont.acs_last_inform_at IS DISTINCT FROM latest.last_inform_at
-                    """
-                ),
-                {"acs_server_id": str(server.id)},
+            synced_ont_status = _refresh_synced_ont_acs_observations(
+                db,
+                acs_server_id=str(server.id),
             )
-            # SQLAlchemy `Result` is the generic supertype; UPDATE statements
-            # always return a `CursorResult` which carries `.rowcount`. mypy
-            # only sees the supertype on `db.execute`.
-            synced_ont_status = result.rowcount or 0  # type: ignore[attr-defined]
             db.commit()
         except SoftTimeLimitExceeded:
             # Time budget exhausted mid-refresh — don't swallow it as a generic

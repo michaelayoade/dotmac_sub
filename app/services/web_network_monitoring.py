@@ -9,7 +9,7 @@ import subprocess  # nosec
 import time
 from datetime import UTC, datetime, timedelta
 from html import escape
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from sqlalchemy import func
@@ -65,13 +65,11 @@ def monitoring_page_data(
 
     # ONT status summaries and PON outage detection (Sprint 2)
     from app.services.network_monitoring import (
-        get_onu_olt_status_summary,
         get_onu_status_summary,
         get_pon_outage_summary,
     )
 
     data["ont_service_summary"] = get_onu_status_summary(db)
-    data["ont_olt_link_summary"] = get_onu_olt_status_summary(db)
     data["pon_outages"] = get_pon_outage_summary(db)
 
     # ONT status trend chart (24-hour time series)
@@ -172,7 +170,6 @@ def monitoring_kpi_context(
     """Build context for the auto-refreshing monitoring KPI partial."""
     from app.services.network_monitoring import (
         NetworkDevices,
-        get_onu_olt_status_summary,
         get_onu_status_summary,
         get_pon_outage_summary,
     )
@@ -184,7 +181,6 @@ def monitoring_kpi_context(
     return {
         "stats": stats.get("stats", {}),
         "ont_service_summary": get_onu_status_summary(db),
-        "ont_olt_link_summary": get_onu_olt_status_summary(db),
         "pon_outages": get_pon_outage_summary(db),
         "alarms": alarms_data.get("alarms", []),
         "vpn_tunnels": get_vpn_tunnel_status(),
@@ -393,21 +389,19 @@ def _vm_range_query(
 
 
 def _get_onu_status_trend(db: Session, hours: int = 24) -> dict[str, Any]:
-    """Return the current ONT status rollup in the chart-compatible shape."""
+    """Return the current binary ONT rollup in chart-compatible shape."""
     from app.services.network_monitoring import get_onu_status_summary
 
     now = datetime.now(UTC)
     summary = get_onu_status_summary(db)
     timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    online = float(summary["online"])
-    offline = float(summary["offline"])
+    working = float(summary["working"])
+    not_working = float(summary["not_working"])
 
     return {
         "timestamps": [timestamp],
-        "online": [online],
-        "offline": [offline],
-        "olt_online": [online],
-        "olt_offline": [offline],
+        "working": [working],
+        "not_working": [not_working],
         "low_signal": [float(summary["low_signal"])],
         "has_data": bool(summary["total"]),
         "source": "inventory",
@@ -616,16 +610,18 @@ _ACTION_DISPLAY: dict[str, str] = {
 
 
 def get_site_reachability(db: Session) -> list[dict[str, Any]]:
-    """Group monitored devices by management subnet and compute reachability."""
+    """Group owner-resolved device operation by management subnet."""
     from sqlalchemy import select as sa_select
 
     from app.models.network_monitoring import NetworkDevice
+    from app.services.device_operational_status import annotate_operational_status
 
     devices = list(
         db.scalars(
             sa_select(NetworkDevice).where(NetworkDevice.is_active.is_(True))
         ).all()
     )
+    annotate_operational_status(devices)
 
     sites: dict[str, dict[str, Any]] = {}
     for d in devices:
@@ -640,19 +636,19 @@ def get_site_reachability(db: Session) -> list[dict[str, Any]]:
                 "subnet": subnet,
                 "name": "",
                 "total": 0,
-                "online": 0,
-                "degraded": 0,
-                "offline": 0,
+                "working": 0,
+                "not_working": 0,
+                "impaired": 0,
             }
         s = sites[subnet]
         s["total"] += 1
-        status = d.status.value if d.status else "offline"
-        if status == "online":
-            s["online"] += 1
-        elif status == "degraded":
-            s["degraded"] += 1
+        operational = cast(Any, d).operational
+        if operational.status == "working":
+            s["working"] += 1
+            if operational.impaired:
+                s["impaired"] += 1
         else:
-            s["offline"] += 1
+            s["not_working"] += 1
 
     subnet_names = {
         "172.16.0.0/16": "Abuja Management",
@@ -666,12 +662,8 @@ def get_site_reachability(db: Session) -> list[dict[str, Any]]:
         sites.items(), key=lambda x: x[1]["total"], reverse=True
     ):
         data["name"] = subnet_names.get(subnet, subnet)
-        pct = (
-            round(((data["online"] + data["degraded"]) / data["total"]) * 100)
-            if data["total"] > 0
-            else 0
-        )
-        data["reachable_pct"] = pct
+        pct = round((data["working"] / data["total"]) * 100) if data["total"] > 0 else 0
+        data["working_pct"] = pct
         result.append(data)
     return result
 
@@ -815,7 +807,6 @@ def _get_device_health_page(
             "status": operational.status,
             "status_reason": operational.reason,
             "status_presentation": operational.presentation,
-            "retry_pending": operational.retry_pending,
             "vendor": str(device.vendor or ""),
             "health_status": None,
             "max_concurrent_subscribers": getattr(

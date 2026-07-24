@@ -18,8 +18,8 @@ call sites should use. A
 feature is enabled only if BOTH its module and its own flag are on. Resolution
 order per control: explicit canonical DB row → registry default, with a
 per-control fail direction (``on_missing``). Historical environment and
-database aliases are retained below only as caller-routing metadata for legacy
-scheduler call sites; they never supply an effective value.
+database aliases are retained below only as completed-cutover inventory; they
+never supply an effective value or route runtime callers.
 
 The customer financial lifecycle completed its permanent cutover in 2026-07.
 Billing, catalog, customer, notification, renewal, collection, reconciliation,
@@ -56,10 +56,10 @@ class Layer(str, Enum):
 
 @dataclass(frozen=True)
 class LegacyAlias:
-    """Retired setting identity used only to route callers to a control.
+    """Retired setting identity kept only as completed-cutover inventory.
 
-    ``env`` is retained as cutover inventory. Runtime resolution must never read
-    it or the legacy domain-setting row.
+    Runtime resolution and scheduler callers must never read or route through
+    this identity.
     """
 
     domain: SettingDomain
@@ -108,11 +108,10 @@ def _truthy(value: object) -> bool:
 # ---------------------------------------------------------------------------
 # Registry. Modules come from module_manager.MODULE_KEY_MAP (Layer 1). Here we
 # add the capability features that own scheduler/task behavior. ``legacy``
-# entries are retired caller bindings only: they route existing scheduler call
-# sites to the canonical control and are never value sources.
+# entries document completed cutovers only and are never runtime bindings or
+# value sources.
 # ---------------------------------------------------------------------------
 
-_P = SettingDomain.provisioning
 _NET = SettingDomain.network
 _R = SettingDomain.radius
 _SCH = SettingDomain.scheduler
@@ -250,17 +249,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
             ),
         ),
         description="MikroTik address-list based blocking.",
-    ),
-    Control(
-        key="provisioning.compensation_retry",
-        layer=Layer.feature,
-        owner_module="provisioning",
-        default=True,
-        on_missing=True,
-        legacy=(
-            LegacyAlias(_P, "compensation_retry_enabled", "COMPENSATION_RETRY_ENABLED"),
-        ),
-        description="Retry pending provisioning compensations.",
     ),
     Control(
         key="network.olt_profile_sync",
@@ -486,19 +474,6 @@ for _m in module_manager.MODULE_KEY_MAP:
 # Layer 2: capability features with scheduler/task ownership.
 for _c in _FEATURE_CONTROLS:
     _CONTROLS[_c.key] = _c
-
-# Reverse index: retired caller (domain, key) -> canonical control key. Lets the
-# scheduler chokepoint and task bodies delegate to the canonical resolver while
-# their call-site migration remains mechanical; no legacy value is read.
-_LEGACY_INDEX: dict[tuple[SettingDomain, str], str] = {}
-for _c in _FEATURE_CONTROLS:
-    for _a in _c.legacy:
-        _LEGACY_INDEX[(_a.domain, _a.key)] = _c.key
-
-
-def control_for_legacy(domain: SettingDomain, key: str) -> str | None:
-    """Canonical control for a retired caller identity, or None if unmapped."""
-    return _LEGACY_INDEX.get((domain, key))
 
 
 def owner_module_for(canonical_key: str) -> str | None:

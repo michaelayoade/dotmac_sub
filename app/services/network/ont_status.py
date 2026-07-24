@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from math import ceil
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, not_, or_
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -302,6 +302,26 @@ def effective_ont_online_clause(*, now: datetime | None = None):
         OntUnit.acs_last_inform_at >= cutoff,
         OntUnit.last_seen_at >= cutoff,
     )
+
+
+def operational_ont_working_clause(*, now: datetime | None = None):
+    """SQL equivalent of a currently confirmed ``working`` ONT outcome."""
+
+    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=ONT_STATUS_FRESH_SECONDS)
+    return or_(
+        and_(
+            OntUnit.olt_status == OnuOnlineStatus.online,
+            OntUnit.olt_status_seen_at >= cutoff,
+        ),
+        OntUnit.acs_last_inform_at >= cutoff,
+        OntUnit.last_seen_at >= cutoff,
+    )
+
+
+def operational_ont_not_working_clause(*, now: datetime | None = None):
+    """Null-safe SQL complement of the confirmed-working ONT outcome."""
+
+    return not_(func.coalesce(operational_ont_working_clause(now=now), False))
 
 
 def _normalize_offline_reason(value: OnuOfflineReason | str | None) -> str:
@@ -747,19 +767,18 @@ def refresh_ont_status(
 def ont_status_summary(
     db: Session, *, low_signal_threshold_dbm: float = -25
 ) -> dict[str, int]:
-    """Fleet ONT status counts from locally persisted monitoring fields.
+    """Fleet ONT operational counts from locally persisted observations.
 
-    Canonical owner of the overview's ONT online/offline/low-signal counts:
-    applies the effective-online vocabulary this module owns, without polling
-    monitoring synchronously. The signal threshold is configuration supplied by
-    the caller's settings resolution.
+    Canonical owner of the overview's working/not-working/low-signal counts.
+    Observation age is evaluated inside ``operational_ont_working_clause``;
+    consumers do not retain or relabel an expired online observation.
     """
     counts = (
         db.query(
             func.count(OntUnit.id).label("total"),
             func.count(OntUnit.id)
-            .filter(effective_ont_online_clause())
-            .label("online"),
+            .filter(operational_ont_working_clause())
+            .label("working"),
             func.count(OntUnit.id)
             .filter(OntUnit.olt_rx_signal_dbm.is_not(None))
             .filter(OntUnit.olt_rx_signal_dbm < low_signal_threshold_dbm)
@@ -769,10 +788,10 @@ def ont_status_summary(
         .one()
     )
     total = counts.total or 0
-    online = counts.online or 0
+    working = counts.working or 0
     return {
         "total": total,
-        "online": online,
-        "offline": max(total - online, 0),
+        "working": working,
+        "not_working": max(total - working, 0),
         "low_signal": counts.low_signal or 0,
     }

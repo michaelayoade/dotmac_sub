@@ -8,8 +8,9 @@ layer never loads every device and filters in memory.
 Kept separate from ``device_projection_reconcile`` (which imports the device
 derivation) so the read path carries no dependency on ``collect_devices``.
 
-The projected ``operational_status`` is last-known state as of ``refreshed_at``;
-callers surface that freshness rather than presenting it as live truth.
+The projected ``operational_status`` is the binary outcome owned by
+``network.device_state``. Observation age is consumed by that owner when it
+decides whether verification is due; callers never turn age into a third state.
 """
 
 from __future__ import annotations
@@ -148,23 +149,20 @@ def device_projection_stats(
         "cpe": 0,
         "nas": 0,
         "router": 0,
-        "up": 0,
-        "down": 0,
-        "degraded": 0,
-        "maintenance": 0,
-        "unknown": 0,
+        "working": 0,
+        "not_working": 0,
     }
     for dtype, dstatus, count in db.execute(filtered).all():
         count = int(count or 0)
         stats["total"] += count
         if dtype in stats:
             stats[dtype] += count
-        key = str(dstatus or "unknown").lower()
+        key = str(dstatus or "not_working").lower()
         if key in stats:
             stats[key] += count
     return stats
 
 
 def latest_refreshed_at(db: Session) -> datetime | None:
-    """Freshness of the projection — the most recent reconcile stamp."""
+    """Most recent projection-repair stamp for audit and drift diagnostics."""
     return db.scalar(select(func.max(DeviceProjection.refreshed_at)))

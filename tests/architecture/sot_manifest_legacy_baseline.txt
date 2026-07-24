@@ -76,7 +76,6 @@ network.access_path
 network.connection_health
 network.control_plane_intent
 network.device_groups
-network.device_state
 network.fiber_access_attachments
 network.fiber_asset_changes
 network.fiber_connectivity_coverage

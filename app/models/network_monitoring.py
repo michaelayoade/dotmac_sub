@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -1077,14 +1078,18 @@ class DeviceProjection(Base):
     ``network.device_projection`` (the reconciler) is the sole canonical
     writer. It rebuilds this table idempotently from the authoritative device
     tables, so a row here is a rebuildable cache — never the only copy of
-    truth. ``refreshed_at`` carries the freshness of each row; stale rows are
-    repaired and orphans pruned on the next reconcile.
+    truth. ``refreshed_at`` is repair evidence, not a public device state;
+    divergent rows are repaired and orphans pruned on the next reconcile.
     """
 
     __tablename__ = "device_projections"
     __table_args__ = (
         UniqueConstraint(
             "device_type", "source_id", name="uq_device_projection_source"
+        ),
+        CheckConstraint(
+            "operational_status IN ('working', 'not_working')",
+            name="ck_device_projection_binary_operational_status",
         ),
         Index("ix_device_projection_type_status", "device_type", "operational_status"),
     )
@@ -1106,7 +1111,11 @@ class DeviceProjection(Base):
 
     # Pre-derived operational status (the whole point of materialising).
     operational_status: Mapped[str] = mapped_column(
-        String(40), nullable=False, default="unknown", index=True
+        String(40),
+        nullable=False,
+        default="not_working",
+        server_default="not_working",
+        index=True,
     )
     operational_reason: Mapped[str | None] = mapped_column(String(160))
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

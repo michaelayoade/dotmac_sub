@@ -24,7 +24,7 @@ from app.services.device_projection_reconcile import (
 from app.services.owner_commands import CommandContext
 
 
-def _device(device_id, device_type, *, status="up", **overrides):
+def _device(device_id, device_type, *, status="working", **overrides):
     device = {
         "id": device_id,
         "name": f"{device_type}-{device_id}",
@@ -76,7 +76,7 @@ def test_reconcile_inserts_one_row_per_derived_device(db_session, monkeypatch):
             _device("1", "olt"),
             _device("2", "core"),
             _device("3", "ont"),
-            _device("4", "cpe", status="unknown"),
+            _device("4", "cpe", status="not_working"),
         ],
     )
 
@@ -87,7 +87,7 @@ def test_reconcile_inserts_one_row_per_derived_device(db_session, monkeypatch):
     assert result.pruned == 0
     rows = _rows(db_session)
     assert set(rows) == {("olt", "1"), ("core", "2"), ("ont", "3"), ("cpe", "4")}
-    assert rows[("cpe", "4")].operational_status == "unknown"
+    assert rows[("cpe", "4")].operational_status == "not_working"
     assert rows[("olt", "1")].vendor == "acme"
 
 
@@ -105,9 +105,9 @@ def test_reconcile_is_idempotent(db_session, monkeypatch):
     assert len(_rows(db_session)) == 2
 
 
-def test_reconcile_updates_changed_status_and_freshness(db_session, monkeypatch):
+def test_reconcile_updates_changed_status_and_repair_evidence(db_session, monkeypatch):
     early = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
-    _patch_collect(monkeypatch, [_device("1", "olt", status="up")])
+    _patch_collect(monkeypatch, [_device("1", "olt", status="working")])
     first = reconcile_device_projections(db_session, _command(now=early))
     assert first.reconciled_at == early
     assert _naive(_rows(db_session)[("olt", "1")].refreshed_at) == _naive(early)
@@ -116,12 +116,19 @@ def test_reconcile_updates_changed_status_and_freshness(db_session, monkeypatch)
     later = datetime(2026, 7, 16, 9, 0, tzinfo=UTC)
     _patch_collect(
         monkeypatch,
-        [_device("1", "olt", status="down", operational_reason="link_down")],
+        [
+            _device(
+                "1",
+                "olt",
+                status="not_working",
+                operational_reason="link_down",
+            )
+        ],
     )
     reconcile_device_projections(db_session, _command(now=later))
 
     row = _rows(db_session)[("olt", "1")]
-    assert row.operational_status == "down"
+    assert row.operational_status == "not_working"
     assert row.operational_reason == "link_down"
     assert _naive(row.refreshed_at) == _naive(later)
 

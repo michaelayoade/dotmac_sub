@@ -1,8 +1,7 @@
 {# Hero Header - SmartOLT-style ONT identity with status and actions #}
 
 {# Compute status variables #}
-{%- set is_online = signal_info and signal_info.online_status == 'online' -%}
-{%- set is_offline = signal_info and signal_info.online_status == 'offline' -%}
+{%- set is_working = signal_info and signal_info.operational_status == 'working' -%}
 {%- set authorization_status = ont.authorization_status.value if ont.authorization_status and ont.authorization_status.value is defined else (ont.authorization_status if ont.authorization_status else '') -%}
 {%- set provisioning_status = ont.provisioning_status.value if ont.provisioning_status and ont.provisioning_status.value is defined else (ont.provisioning_status if ont.provisioning_status else 'unprovisioned') -%}
 {%- set authorized_for_configuration = authorization_status == 'authorized' -%}
@@ -14,16 +13,14 @@
         {# Left: Status Icon + Identity #}
         <div class="flex items-start gap-5">
             {# Large Status Indicator #}
-            <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl {{ 'bg-emerald-100 dark:bg-emerald-900/30' if is_online else ('bg-rose-100 dark:bg-rose-900/30' if is_offline else 'bg-slate-100 dark:bg-slate-800') }}">
-                {% if is_online %}
+            <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl {{ 'bg-emerald-100 dark:bg-emerald-900/30' if is_working else 'bg-rose-100 dark:bg-rose-900/30' }}">
+                {% if is_working %}
                 <span class="relative flex h-5 w-5">
                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex h-5 w-5 rounded-full bg-emerald-500"></span>
                 </span>
-                {% elif is_offline %}
-                <span class="h-5 w-5 rounded-full bg-rose-500"></span>
                 {% else %}
-                <span class="h-5 w-5 rounded-full bg-slate-400"></span>
+                <span class="h-5 w-5 rounded-full bg-rose-500"></span>
                 {% endif %}
             </div>
 
@@ -106,22 +103,7 @@
         {# Right: Status + Actions #}
         <div class="flex flex-wrap items-center gap-3">
             {# Status pill #}
-            {% if is_online %}
-            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1.5 text-sm font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-                <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-                Online
-            </span>
-            {% elif is_offline %}
-            <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-1.5 text-sm font-semibold text-rose-800 dark:bg-rose-900/40 dark:text-rose-300">
-                <span class="h-2 w-2 rounded-full bg-rose-500"></span>
-                Offline
-            </span>
-            {% else %}
-            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">
-                <span class="h-2 w-2 rounded-full bg-slate-400"></span>
-                Unknown
-            </span>
-            {% endif %}
+            {{ status_presentation_badge(signal_info.status_presentation) }}
 
             {# Primary CTA: Configure or Authorize #}
             {% if show_provision_cta %}
