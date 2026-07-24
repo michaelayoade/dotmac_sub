@@ -20,6 +20,7 @@ from app.services.integrations.runtime import RunnerRegistry
 from app.services.integrations.runtime_execution import (
     RuntimeExecutionError,
     RuntimeTierUnavailableError,
+    external_runner_unavailable,
     resolve_runner,
 )
 
@@ -93,17 +94,29 @@ def test_external_oci_never_inherits_a_runner_registered_under_its_key():
     connector: running isolated code in-process would defeat the tier.
     """
     registry = _registry("in-process runner for 'example'")
-    with pytest.raises(RuntimeTierUnavailableError) as excinfo:
-        resolve_runner(EXTERNAL, registry=registry)
-    assert "external_oci" in str(excinfo.value)
+    runner = resolve_runner(EXTERNAL, registry=registry)
+    assert not isinstance(runner, StubRunner)
+    assert type(runner).__name__ == "ExternalOciRunner"
 
 
-def test_external_oci_fails_closed_without_a_factory():
+def test_external_oci_resolves_to_an_out_of_process_runner_by_default():
+    """Phase 6 made the tier executable; it no longer refuses by default.
+
+    A missing container runtime now surfaces at execution as a transport error
+    rather than as an unresolvable tier.
+    """
+    runner = resolve_runner(EXTERNAL, registry=_registry())
+    assert type(runner).__name__ == "ExternalOciRunner"
+
+
+def test_a_deployment_can_still_disable_the_external_tier_explicitly():
     with pytest.raises(RuntimeTierUnavailableError) as excinfo:
-        resolve_runner(EXTERNAL, registry=_registry())
-    message = str(excinfo.value)
-    assert "no executor in this deployment" in message
-    assert "example" in message
+        resolve_runner(
+            EXTERNAL,
+            registry=_registry(),
+            external_factory=external_runner_unavailable,
+        )
+    assert "no executor in this deployment" in str(excinfo.value)
 
 
 def test_external_oci_uses_an_injected_factory_when_one_is_supplied():

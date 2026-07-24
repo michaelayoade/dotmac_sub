@@ -103,7 +103,12 @@ Each phase lands independently and leaves the system releasable.
   status) wait until the external tier is executable; a control for something
   that cannot run would mislead, and image signature verification is not yet
   implemented so a "signed" column would be a claim we cannot make.
-- **Phase 6 — first external connector**, proving the path end to end.
+- **Phase 6 — tier made executable (done).** The default external factory now
+  builds `ExternalOciRunner` over `PodmanTransport`, with confinement derived
+  from the connector's own manifest. An end-to-end test drives the whole path —
+  installations owner, tier resolution, real container, typed result. A
+  deployment can still disable the tier explicitly via
+  `external_runner_unavailable`.
 
 ## Consequences
 
@@ -329,6 +334,27 @@ audit's point: a UI that computed executability itself would be a parallel
 authority and could drift from what the runtime actually does. Offering no
 mutating control while the tier fails closed is deliberate for the same reason.
 No ownership boundary moved. Clean.
+
+**Phase 6 — tier made executable.** The default factory builds the
+out-of-process runner rather than refusing. It introduces no authority: the
+factory reads the connector's own manifest for its egress policy, so
+confinement is derived from the declaration rather than chosen by the runtime,
+and a connector declaring no hosts gets neither network nor gateway. Resolution
+still dispatches on the declared tier, so a connector cannot obtain an executor
+its tier does not entitle it to. The end-to-end test drives the real owners —
+`installations` creates, configures, grants, validates and enables; execution
+goes through `build_execution_context` and `make_operation_executor` — rather
+than reaching past them, which is what makes it evidence about the system and
+not just about the transport. No ownership boundary moved. Clean.
+
+**Known gap at Phase 6: image signature verification is not implemented.** The
+design calls for "approved, signed, digest-pinned" workloads. Digest pinning is
+enforced (the manifest requires a sha256 digest and the transport runs the
+digest-addressed reference), but nothing verifies a signature. That is
+acceptable for the **first-party** scope this tier is sized for, where images
+are built by Dotmac, and is not acceptable for third-party connector code. Image
+signing must land before any connector Dotmac did not build is run, alongside
+the dedicated-host and microVM escalation.
 
 **Phase 5b onward.** Each audit must show the runner does not become a
 parallel authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and

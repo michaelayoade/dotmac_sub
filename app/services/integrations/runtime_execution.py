@@ -80,12 +80,11 @@ def default_runner_registry() -> RunnerRegistry:
 ExternalRunnerFactory = Callable[[ConnectorManifest], ConnectorRunner]
 
 
-def _external_runner_unavailable(manifest: ConnectorManifest) -> ConnectorRunner:
-    """Default `external_oci` factory until the OCI supervisor lands.
+def external_runner_unavailable(manifest: ConnectorManifest) -> ConnectorRunner:
+    """Factory that refuses every external connector.
 
-    Phase 3 of ADR 0004 replaces this with a real runner. Until then an
-    external connector is registrable and installable but not executable, and
-    says so precisely instead of degrading to in-process execution.
+    Not the default any more, but kept so a deployment that does not want the
+    out-of-process tier can disable it explicitly rather than by omission.
     """
 
     raise RuntimeTierUnavailableError(
@@ -94,7 +93,35 @@ def _external_runner_unavailable(manifest: ConnectorManifest) -> ConnectorRunner
     )
 
 
-_EXTERNAL_RUNNER_FACTORY: ExternalRunnerFactory = _external_runner_unavailable
+def _podman_external_runner(manifest: ConnectorManifest) -> ConnectorRunner:
+    """Build the out-of-process runner for one external connector.
+
+    Phase 6 of ADR 0004: the tier becomes executable. The connector's own
+    manifest supplies its confinement — the egress allowlist comes from
+    ``EgressPolicy``, and a connector declaring no hosts gets no network and no
+    gateway at all.
+
+    Imported lazily so the container transport is only loaded when an external
+    connector is actually resolved, and so a deployment without Podman fails at
+    execution with a clear transport error rather than at import.
+    """
+
+    from app.services.integrations.egress_gateway import PodmanEgressGateway
+    from app.services.integrations.egress_policy import EgressPolicy
+    from app.services.integrations.external_runner import ExternalOciRunner
+    from app.services.integrations.podman_transport import PodmanTransport
+
+    policy = EgressPolicy.from_manifest(manifest)
+    transport = PodmanTransport(
+        egress=policy,
+        # A connector needing no egress gets no gateway; one that needs egress
+        # is confined by it, and refused outright if it cannot be established.
+        egress_gateway=PodmanEgressGateway() if policy.requires_network else None,
+    )
+    return ExternalOciRunner(manifest, transport)
+
+
+_EXTERNAL_RUNNER_FACTORY: ExternalRunnerFactory = _podman_external_runner
 
 
 def resolve_runner(
