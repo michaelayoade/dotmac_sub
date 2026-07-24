@@ -23,6 +23,7 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 
 templates = Jinja2Templates(directory="templates")
@@ -204,7 +205,11 @@ def billing_withholding_tax_rate_update(
                 },
             )
     except Exception as exc:
-        db.rollback()
+        # The WHT-rate save validates before writing and its settings owner
+        # manages its own transaction, so the adapter only needs to release the
+        # read transaction (fails closed on any pending mutation) before
+        # re-rendering — it must not own a rollback.
+        db_session_adapter.release_read_transaction(db)
         state = web_billing_tax_rates_service.list_data(db)
         from app.web.admin import get_current_user, get_sidebar_stats
 

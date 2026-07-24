@@ -2208,6 +2208,10 @@ def update_person_customer(
     )
     from app.services import customer_tax_policies
 
+    # Leave the adapter read transaction opened by the subscriber write above
+    # before entering the WHT-policy owner boundary, which requires a
+    # transaction-free session at entry.
+    db_session_adapter.release_read_transaction(db)
     customer_tax_policies.set_customer_withholding_tax_policy(
         db,
         customer_tax_policies.SetCustomerWithholdingTaxPolicyCommand(
@@ -2319,6 +2323,10 @@ def update_business_customer(
     )
     from app.services import customer_tax_policies
 
+    # Leave the adapter read transaction opened by the subscriber write above
+    # before entering the WHT-policy owner boundary, which requires a
+    # transaction-free session at entry.
+    db_session_adapter.release_read_transaction(db)
     customer_tax_policies.set_customer_withholding_tax_policy(
         db,
         customer_tax_policies.SetCustomerWithholdingTaxPolicyCommand(
