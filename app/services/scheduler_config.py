@@ -1425,12 +1425,10 @@ def build_beat_schedule() -> dict:
         # all, instead of a task firing every few minutes only to no-op. Enable
         # outage_auto_notify_enabled in System > Config > Automated Outage
         # Notification and the runner starts on the next schedule rebuild.
-        outage_auto_notify_enabled = _effective_bool(
+        outage_auto_notify_enabled = resolve_boolean(
             session,
             SettingDomain.network_monitoring,
             "outage_auto_notify_enabled",
-            "OUTAGE_AUTO_NOTIFY_ENABLED",
-            False,
         )
         _sync_scheduled_task(
             session,
