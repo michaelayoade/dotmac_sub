@@ -1,0 +1,10 @@
+# Egress allowlist proxy for external connectors (ADR 0004 Phase 4b).
+FROM alpine:3.20
+
+RUN apk add --no-cache tinyproxy iproute2
+
+COPY tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

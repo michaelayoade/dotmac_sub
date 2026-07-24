@@ -92,10 +92,9 @@ Each phase lands independently and leaves the system releasable.
 - **Phase 4 — egress enforcement.** `EgressManifest` hosts are declared today
   and enforced nowhere at runtime. Splits in two. **4a (done):** default-deny —
   a connector with no declared hosts runs with `--network=none`; one that
-  declares hosts is refused rather than run on an open network. **4b:** the
-  allowlist egress gateway that lets a declaring connector reach exactly its
-  hosts. 4b needs a rootless network layer this class of host does not provide
-  by default (see the deployment note), so it is deferred, not skipped.
+  declares hosts is refused rather than run on an open network. **4b (done):**
+  the allowlist egress gateway that lets a declaring connector reach exactly its
+  hosts, and nothing else.
 - **Phase 5 — operator surface.** Splits by what can honestly be offered.
   **5a (done):** a read-only runtime-posture screen at
   `/admin/integrations/runtime` — per connector, its tier, executability read
@@ -277,15 +276,48 @@ reach nothing); a connector that declares hosts is refused before its secret is
 even written, rather than run on an open network. The policy owns no decision —
 it projects the manifest — and no ownership boundary moved. Clean.
 
-**Deployment note (Phase 4b, discovered on seabone).** The allowlist gateway
-that lets a declaring connector reach exactly its hosts needs a rootless network
-layer that Podman 3.4.4 on Ubuntu 22.04 does not provide: rootless custom and
-`--internal` networks fail there because the CNI bridge plugins are not
-installed, and slirp4netns does not do host-name allowlisting. 4b therefore
-requires one of: Podman 4.x with netavark; the CNI plugins installed; or a
-host-provided egress proxy the connector is forced through with no direct route
-out. Until then the Phase 4a refusal keeps a declaring connector from running at
-all rather than running unconfined — which is the safe failure.
+**Phase 4b — allowlist egress gateway.** `PodmanEgressGateway` gives a declaring
+connector a confined path to exactly its declared hosts. Topology, validated
+live: the connector runs on a per-connector `--internal` network with no NAT, so
+it has no route out at the IP level; a proxy container dual-homed onto that
+network and an external one is the only exit, running tinyproxy with
+`FilterDefaultDeny` and one anchored regex per declared host. HTTPS is tunnelled
+with `CONNECT`, so TLS is never intercepted and the allowlist matches the
+CONNECT hostname.
+
+The gateway owns no decision — the allowlist is the manifest's, projected by
+`EgressPolicy` — and it is the mechanism, not the authority. Audited properties,
+each pinned by a live test:
+
+- An allowlisted host is reachable; a host outside the allowlist is refused by
+  the proxy.
+- **A connector that ignores its proxy environment reaches nothing.** The
+  enforcement is the absent route, not the proxy variable, so confinement does
+  not depend on connector cooperation.
+- Changing the allowlist replaces the proxy, so a stale allowlist cannot linger
+  after policy changes.
+- The proxy is itself confined (read-only, memory and pid bounds) and gains
+  exactly one privilege, `NET_ADMIN`, solely to repair its own default route —
+  which Podman puts on the internal network regardless of attach order. A
+  connector never receives it.
+
+No ownership boundary moved. Clean.
+
+**Deployment notes (Phase 4b, discovered on seabone).** Three findings, none
+obvious from documentation:
+
+- Podman 3.4.4 writes new CNI configs as `cniVersion 1.0.0`, which the plugins
+  shipped on Ubuntu 22.04 (0.9.1) reject, making every custom network unusable
+  with a misleading "CNI network not found". The gateway rewrites the version as
+  a contained workaround. **This is a workaround, not the fix:** installing CNI
+  plugins 1.x, or moving to Podman 4.x with netavark, removes the need and
+  should be done before production.
+- `--cap-drop=ALL` removes `SETUID`/`SETGID`, so a proxy configured to drop to
+  an unprivileged user cannot start. Rootless already maps container-root to an
+  unprivileged host uid, so the proxy does not attempt the drop rather than
+  having privileges added back.
+- A tmpfs mounted over a config directory masks the image's baked-in config; the
+  rendered allowlist therefore lives in `/tmp` scratch, not `/etc/tinyproxy`.
 
 **Phase 5a — operator surface (read-only).** `web_connector_runtime` projects
 every registered connector definition onto its runtime posture. It owns no
@@ -298,7 +330,7 @@ authority and could drift from what the runtime actually does. Offering no
 mutating control while the tier fails closed is deliberate for the same reason.
 No ownership boundary moved. Clean.
 
-**Phase 4b / 5b onward.** Each audit must show the runner does not become a
+**Phase 5b onward.** Each audit must show the runner does not become a
 parallel authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and
 `app/services/sot_relationships.py` where a phase changes an ownership boundary,
 and must add or adjust an architecture guard test that prevents a parallel path

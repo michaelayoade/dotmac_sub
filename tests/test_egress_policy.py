@@ -12,6 +12,10 @@ from uuid import uuid4
 
 import pytest
 
+from app.services.integrations.egress_gateway import (
+    EgressAttachment,
+    EgressGatewayError,
+)
 from app.services.integrations.egress_policy import EgressPolicy
 from app.services.integrations.external_runner import RunnerTransportError
 from app.services.integrations.manifest import (
@@ -75,13 +79,47 @@ def test_allow_installation_hosts_requires_network_even_with_no_static_hosts():
 def test_a_no_egress_transport_uses_network_none():
     transport = PodmanTransport(egress=EgressPolicy.deny_all())
     # Resolving the network is what a run would do first; it must be a hard deny.
-    assert transport._network_arg() == "none"
+    network, proxy_env = transport._resolve_egress("example")
+    assert network == "none"
+    assert proxy_env == {}
 
 
-def test_a_transport_for_a_connector_with_egress_hosts_fails_closed():
+def test_a_transport_with_egress_hosts_but_no_gateway_fails_closed():
     transport = PodmanTransport(egress=EgressPolicy(hosts=("api.paystack.co",)))
     with pytest.raises(RunnerTransportError, match="unrestricted network"):
-        transport._network_arg()
+        transport._resolve_egress("example")
+
+
+def test_a_gateway_that_cannot_confine_refuses_rather_than_running_open():
+    """A broken gateway must never degrade into an unconfined run."""
+
+    class BrokenGateway:
+        def attach(self, *, connector_key, policy):
+            raise EgressGatewayError("no route to proxy")
+
+    transport = PodmanTransport(
+        egress=EgressPolicy(hosts=("api.paystack.co",)),
+        egress_gateway=BrokenGateway(),
+    )
+    with pytest.raises(RunnerTransportError, match="refusing to run unconfined"):
+        transport._resolve_egress("example")
+
+
+def test_an_attached_connector_gets_the_gateway_network_and_proxy_env():
+    class StubGateway:
+        def attach(self, *, connector_key, policy):
+            return EgressAttachment(
+                network=f"dm-egress-{connector_key}", proxy_url="http://10.89.0.2:8888"
+            )
+
+    transport = PodmanTransport(
+        egress=EgressPolicy(hosts=("api.paystack.co",)),
+        egress_gateway=StubGateway(),
+    )
+    network, proxy_env = transport._resolve_egress("paystack")
+    assert network == "dm-egress-paystack"
+    assert proxy_env["https_proxy"] == "http://10.89.0.2:8888"
+    assert proxy_env["HTTPS_PROXY"] == "http://10.89.0.2:8888"
 
 
 def test_egress_refusal_happens_before_any_secret_is_written(tmp_path):
