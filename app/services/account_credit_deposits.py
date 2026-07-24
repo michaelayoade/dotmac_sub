@@ -434,6 +434,7 @@ class AccountCreditDeposits:
         channel: TopupIntentChannel,
         created_by: str | None,
         expected_preview_fingerprint: str | None = None,
+        capability_binding_id: uuid.UUID | None = None,
         metadata: dict | None = None,
     ) -> tuple[TopupIntent, DepositPreview, bool]:
         key = str(idempotency_key or "").strip()
@@ -456,6 +457,7 @@ class AccountCreditDeposits:
                 != round_money(to_decimal(amount))
                 or existing.currency != str(currency).upper()
                 or existing.provider_type != provider_type
+                or existing.capability_binding_id != capability_binding_id
             ):
                 raise DepositEligibilityError(
                     "deposit_idempotency_conflict",
@@ -481,6 +483,7 @@ class AccountCreditDeposits:
         intent = TopupIntent(
             account_id=account_id,
             provider_id=provider_id,
+            capability_binding_id=capability_binding_id,
             purpose=PURPOSE,
             allocation_policy=ALLOCATION_POLICY,
             credit_application_policy=CREDIT_APPLICATION_POLICY,

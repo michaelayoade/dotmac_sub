@@ -118,11 +118,9 @@ from app.schemas.billing import (
     PaymentMethodCreate,
     PaymentMethodRead,
     PaymentMethodUpdate,
-    PaymentProviderCreate,
     PaymentProviderEventIngest,
     PaymentProviderEventRead,
     PaymentProviderRead,
-    PaymentProviderUpdate,
     PaymentRead,
     PaymentRefundPreviewRead,
     PaymentRefundPreviewRequest,
@@ -1260,19 +1258,6 @@ def delete_payment_method(method_id: str, db: Session = Depends(get_db)):
 # --- Payment Providers ---
 
 
-@router.post(
-    "/payment-providers",
-    response_model=PaymentProviderRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["payment-providers"],
-    dependencies=[Depends(require_permission("billing:provider:write"))],
-)
-def create_payment_provider(
-    payload: PaymentProviderCreate, db: Session = Depends(get_db)
-):
-    return billing_service.payment_providers.create(db, payload)
-
-
 @router.get(
     "/payment-providers/{provider_id}",
     response_model=PaymentProviderRead,
@@ -1300,28 +1285,6 @@ def list_payment_providers(
     return billing_service.payment_providers.list_response(
         db, is_active, order_by, order_dir, limit, offset
     )
-
-
-@router.patch(
-    "/payment-providers/{provider_id}",
-    response_model=PaymentProviderRead,
-    tags=["payment-providers"],
-    dependencies=[Depends(require_permission("billing:provider:write"))],
-)
-def update_payment_provider(
-    provider_id: str, payload: PaymentProviderUpdate, db: Session = Depends(get_db)
-):
-    return billing_service.payment_providers.update(db, provider_id, payload)
-
-
-@router.delete(
-    "/payment-providers/{provider_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["payment-providers"],
-    dependencies=[Depends(require_permission("billing:provider:write"))],
-)
-def delete_payment_provider(provider_id: str, db: Session = Depends(get_db)):
-    billing_service.payment_providers.delete(db, provider_id)
 
 
 # --- Payment Events ---

@@ -1235,17 +1235,6 @@ class PaymentProviderBase(BaseModel):
     notes: str | None = None
 
 
-class PaymentProviderCreate(PaymentProviderBase):
-    pass
-
-
-class PaymentProviderUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=160)
-    provider_type: PaymentProviderType | None = None
-    is_active: bool | None = None
-    notes: str | None = None
-
-
 class PaymentProviderRead(PaymentProviderBase):
     model_config = ConfigDict(from_attributes=True)
 

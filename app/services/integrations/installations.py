@@ -347,6 +347,30 @@ def update_binding_policy(
     return binding
 
 
+def disable_capability_binding(
+    db: Session,
+    *,
+    capability_binding_id: UUID | str,
+    actor: str | None = None,
+) -> IntegrationCapabilityBinding:
+    """Disable one capability without stopping sibling lifecycle capabilities."""
+
+    binding = db.get(
+        IntegrationCapabilityBinding,
+        coerce_uuid(str(capability_binding_id)),
+    )
+    if binding is None:
+        raise InstallationError("integration capability binding not found")
+    if binding.installation.state != IntegrationInstallationState.enabled.value:
+        raise InstallationError("integration installation must be enabled")
+    binding.state = IntegrationBindingState.disabled.value
+    binding.enabled_at = None
+    binding.disabled_at = datetime.now(UTC)
+    binding.updated_by = actor
+    db.flush()
+    return binding
+
+
 def validate_static(
     db: Session,
     *,

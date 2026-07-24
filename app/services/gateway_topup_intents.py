@@ -15,6 +15,11 @@ from sqlalchemy.orm import Session
 from app.models.billing import BillingAccount, Invoice, InvoiceStatus, TopupIntent
 from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
+from app.models.integration_platform import (
+    IntegrationBindingState,
+    IntegrationCapabilityBinding,
+    IntegrationInstallationState,
+)
 from app.services import topup_intents
 from app.services.account_credit_deposits import (
     SUPPORTED_CURRENCY,
@@ -55,6 +60,7 @@ _FAIL_SAVED_CARD_COMMAND = OwnerCommandDefinition(
 _MINIMUM_SETTING = "topup_min_amount"
 _MAXIMUM_SETTING = "topup_max_amount"
 _TTL_SETTING = "gateway_topup_intent_ttl_minutes"
+_PAYMENT_INTENT_CAPABILITY = "payments.intent.v1"
 
 
 class CustomerGatewayTopupFlow(str, Enum):
@@ -93,6 +99,7 @@ class CreateCustomerGatewayTopupIntentCommand:
     provider_type: str
     provider_id: UUID | None
     created_by: str
+    capability_binding_id: UUID
     requested_amount: Decimal | int | float | str | None = None
     invoice_id: UUID | None = None
     payment_method_id: UUID | None = None
@@ -109,6 +116,7 @@ class CreateResellerGatewayTopupIntentCommand:
     provider_type: str
     provider_id: UUID | None
     requested_amount: Decimal | int | float | str
+    capability_binding_id: UUID
     payment_method_id: UUID | None = None
     save_card: bool = False
     login_subscriber_id: UUID | None = None
@@ -184,6 +192,27 @@ def _amount(value: Decimal | int | float | str | None) -> Decimal:
     return amount
 
 
+def _require_checkout_binding(
+    db: Session,
+    *,
+    provider_type: str,
+    capability_binding_id: UUID,
+) -> IntegrationCapabilityBinding:
+    binding = db.get(IntegrationCapabilityBinding, capability_binding_id)
+    if (
+        binding is None
+        or binding.capability_id != _PAYMENT_INTENT_CAPABILITY
+        or binding.state != IntegrationBindingState.enabled.value
+        or binding.installation.state != IntegrationInstallationState.enabled.value
+        or binding.installation.connector_key != provider_type.strip().lower()
+    ):
+        raise _error(
+            "checkout_binding_unavailable",
+            "An enabled checkout capability binding is required",
+        )
+    return binding
+
+
 def _deposit_idempotency_key(context: CommandContext, account_id: UUID) -> str:
     source = context.idempotency_key or str(context.command_id)
     digest = hashlib.sha256(f"{account_id}:{source}".encode()).hexdigest()
@@ -244,6 +273,11 @@ def _create_customer_gateway_topup_intent(
     command: CreateCustomerGatewayTopupIntentCommand,
     context: CommandContext,
 ) -> GatewayTopupIntentResult:
+    _require_checkout_binding(
+        db,
+        provider_type=command.provider_type,
+        capability_binding_id=command.capability_binding_id,
+    )
     created_by = command.created_by.strip()
     if not created_by:
         raise _error("created_by_required", "Gateway checkout actor is required")
@@ -265,7 +299,7 @@ def _create_customer_gateway_topup_intent(
                 "Invoice was not found for this account",
                 invoice_id=str(command.invoice_id),
             )
-        if invoice.status in {
+        if invoice.is_proforma or invoice.status in {
             InvoiceStatus.draft,
             InvoiceStatus.paid,
             InvoiceStatus.void,
@@ -290,6 +324,7 @@ def _create_customer_gateway_topup_intent(
                     reference=command.reference,
                     provider_type=command.provider_type,
                     provider_id=command.provider_id,
+                    capability_binding_id=command.capability_binding_id,
                     currency=currency,
                     requested_amount=amount,
                     expires_at=expires_at,
@@ -339,6 +374,7 @@ def _create_customer_gateway_topup_intent(
                 reference=command.reference,
                 provider_type=command.provider_type,
                 provider_id=command.provider_id,
+                capability_binding_id=command.capability_binding_id,
                 expires_at=expires_at,
                 idempotency_key=_deposit_idempotency_key(context, command.account_id),
                 channel=topup_intents.TopupIntentChannel.customer_selfcare,
@@ -410,6 +446,11 @@ def _create_reseller_gateway_topup_intent(
     command: CreateResellerGatewayTopupIntentCommand,
     context: CommandContext,
 ) -> GatewayTopupIntentResult:
+    _require_checkout_binding(
+        db,
+        provider_type=command.provider_type,
+        capability_binding_id=command.capability_binding_id,
+    )
     billing_account = lock_for_update(db, BillingAccount, command.billing_account_id)
     if (
         billing_account is None
@@ -431,6 +472,7 @@ def _create_reseller_gateway_topup_intent(
                 reference=command.reference,
                 provider_type=command.provider_type,
                 provider_id=command.provider_id,
+                capability_binding_id=command.capability_binding_id,
                 currency=billing_account.currency,
                 requested_amount=_amount(command.requested_amount),
                 expires_at=datetime.now(UTC)

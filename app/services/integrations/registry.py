@@ -325,16 +325,19 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         config_schema={
             "type": "object",
             "properties": {
-                "base_url": {"type": "string"},
-                "timeout_seconds": {"type": "integer"},
-                "default_currency": {"type": "string"},
+                "base_url": {
+                    "type": "string",
+                    "default": "https://api.paystack.co",
+                },
+                "timeout_seconds": {"type": "integer", "default": 30},
+                "default_currency": {"type": "string", "default": "NGN"},
             },
             "required": ["base_url"],
             "additionalProperties": False,
         },
         secrets=(
             SecretBindingManifest(name="gateway_credentials"),
-            SecretBindingManifest(name="public_key", required=False),
+            SecretBindingManifest(name="public_key"),
         ),
         data_access=DataAccessManifest(
             reads=("financial.payment_intent",),
@@ -375,9 +378,12 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         config_schema={
             "type": "object",
             "properties": {
-                "base_url": {"type": "string"},
-                "timeout_seconds": {"type": "integer"},
-                "default_currency": {"type": "string"},
+                "base_url": {
+                    "type": "string",
+                    "default": "https://api.flutterwave.com/v3",
+                },
+                "timeout_seconds": {"type": "integer", "default": 30},
+                "default_currency": {"type": "string", "default": "NGN"},
             },
             "required": ["base_url"],
             "additionalProperties": False,
@@ -385,7 +391,7 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         secrets=(
             SecretBindingManifest(name="gateway_credentials"),
             SecretBindingManifest(name="public_key", required=False),
-            SecretBindingManifest(name="webhook_signing_secret", required=False),
+            SecretBindingManifest(name="webhook_signing_secret"),
         ),
         data_access=DataAccessManifest(
             reads=("financial.payment_intent",),

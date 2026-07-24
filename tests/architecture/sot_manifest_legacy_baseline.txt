@@ -60,7 +60,6 @@ financial.import_payment_batch_reversals
 financial.invoices
 financial.ledger
 financial.payment_arrangements
-financial.payment_routing
 financial.payments
 financial.prepaid_funding_reconstruction
 financial.prepaid_plan_change
