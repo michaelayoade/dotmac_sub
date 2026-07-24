@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import connector as connector_service
 from app.services import integration as integration_service
+from app.services import web_connector_runtime as web_connector_runtime_service
 from app.services import web_integration_syncs as web_integration_syncs_service
 from app.services import web_integrations as web_integrations_service
 from app.services import (
@@ -63,6 +64,25 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         "admin/integrations/connectors/index.html", context
     )
+
+
+# ==================== Runtime posture ====================
+
+
+@router.get(
+    "/runtime",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def integrations_runtime_posture(request: Request, db: Session = Depends(get_db)):
+    """Read-only view of each connector's runtime tier and confinement."""
+    context = _base_context(request, db, active_page="runtime")
+    context.update(web_connector_runtime_service.build_runtime_posture(db))
+    context["page_title"] = "Connector runtime"
+    context["page_subtitle"] = (
+        "Runtime tier, confinement, and executability for every registered connector"
+    )
+    return templates.TemplateResponse("admin/integrations/runtime.html", context)
 
 
 # ==================== Syncs ====================

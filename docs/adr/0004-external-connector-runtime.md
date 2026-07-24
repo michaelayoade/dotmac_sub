@@ -96,9 +96,14 @@ Each phase lands independently and leaves the system releasable.
   allowlist egress gateway that lets a declaring connector reach exactly its
   hosts. 4b needs a rootless network layer this class of host does not provide
   by default (see the deployment note), so it is deferred, not skipped.
-- **Phase 5 — operator surface.** Extend the installation admin screens with
-  runtime tier, image digest, signature status, resource limits, and
-  install/upgrade by digest.
+- **Phase 5 — operator surface.** Splits by what can honestly be offered.
+  **5a (done):** a read-only runtime-posture screen at
+  `/admin/integrations/runtime` — per connector, its tier, executability read
+  from the real resolver, pinned image and digest, declared egress, and install
+  counts. **5b:** mutating controls (install/upgrade by digest, signature
+  status) wait until the external tier is executable; a control for something
+  that cannot run would mislead, and image signature verification is not yet
+  implemented so a "signed" column would be a claim we cannot make.
 - **Phase 6 — first external connector**, proving the path end to end.
 
 ## Consequences
@@ -282,8 +287,19 @@ host-provided egress proxy the connector is forced through with no direct route
 out. Until then the Phase 4a refusal keeps a declaring connector from running at
 all rather than running unconfined — which is the safe failure.
 
-**Phase 4b onward.** Each audit must show the runner does not become a parallel
-authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and
+**Phase 5a — operator surface (read-only).** `web_connector_runtime` projects
+every registered connector definition onto its runtime posture. It owns no
+decision and holds no state: every fact comes from the code-owned manifest or
+the installations owner, and executability is read from the same
+`resolve_runner` the runtime uses — so the screen cannot claim a connector is
+runnable when a real operation would be refused. That single sourcing is the
+audit's point: a UI that computed executability itself would be a parallel
+authority and could drift from what the runtime actually does. Offering no
+mutating control while the tier fails closed is deliberate for the same reason.
+No ownership boundary moved. Clean.
+
+**Phase 4b / 5b onward.** Each audit must show the runner does not become a
+parallel authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and
 `app/services/sot_relationships.py` where a phase changes an ownership boundary,
 and must add or adjust an architecture guard test that prevents a parallel path
 from returning. Deviations are recorded as explicit decisions, not absorbed
