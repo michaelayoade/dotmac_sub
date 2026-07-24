@@ -66,6 +66,7 @@ from app.services.network.huawei_cli_response import project_huawei_result_evide
 from .actions import (
     AcsAction,
     AcsAddObject,
+    AcsArmDiagnostic,
     AcsDeleteObject,
     AcsSetDhcpServer,
     AcsSetIpv6,
@@ -604,6 +605,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 ",".join(remote_changed),
                 started,
             )
+
+        case AcsArmDiagnostic():
+            # Imperative, not convergent: this asks the device to measure and
+            # report on a later inform. Routed through the applier so the ACS
+            # write-ownership contract holds and diagnostics are audited with
+            # every other device write.
+            _acs_set(action, ctx, dict(action.params))
+            return _ok(action, "acs_arm_diagnostic", None, action.label, started)
 
         case AcsSetNatEnabled():
             inst = ctx.wan_ppp_instances.get(action.wcd_index, action.instance_index)
