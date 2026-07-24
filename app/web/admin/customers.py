@@ -27,6 +27,7 @@ from app.models.subscriber import SubscriberCategory
 from app.services import customer_portal
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
+from app.services import team_inbox_read
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import (
     web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
@@ -752,11 +753,30 @@ def person_detail(
         "notificationTemplates": notification_templates,
     }
 
+    # Communications projection. `communications.team_inbox` remains the owner —
+    # this is a customer-scoped read of its conversation list, gated on the same
+    # permission the inbox workspace uses, so a principal without inbox access
+    # simply does not see the section.
+    can_view_conversations = bool(auth) and has_permission(
+        auth, db, "support:ticket:read"
+    )
+    customer_conversations = ()
+    if can_view_conversations:
+        customer_conversations = team_inbox_read.list_conversations(
+            db,
+            subscriber_id=customer.id,
+            order_by="last_message_at",
+            order_dir="desc",
+            limit=5,
+        ).rows
+
     return templates.TemplateResponse(
         "admin/customers/detail.html",
         {
             "request": request,
             **detail_data,
+            "can_view_conversations": can_view_conversations,
+            "customer_conversations": customer_conversations,
             "pppoe_access": pppoe_access,
             "usage_period": usage_period,
             "usage_page": usage_page,
