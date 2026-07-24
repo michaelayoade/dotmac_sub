@@ -1,6 +1,10 @@
 # Team Inbox: CRM import triage and the single build ordering
 
-Status: triage complete. Slice 1 in progress on `feat/inbox-reconnect-and-context`.
+Status: triage complete. Slices 1, 2 and the read-only two-thirds of slice 3 are
+delivered on `feat/inbox-reconnect-and-context` (not merged, no PR opened).
+The conversation → ticket handoff is the one piece of slice 3 still open; it
+needs a migration and a full SOT registry contract, so it belongs in its own
+branch. See §5 for per-slice status.
 
 Two things prompted this document: 21 CRM web files were copied into
 `app/web/admin/`, and the question of what it takes to make sub's inbox the only
@@ -149,7 +153,7 @@ revisions of this document. Slices are ordered by dependency and risk, but they
 are not strictly gated on one another — a later slice may begin once its inputs
 exist.
 
-### Slice 1 — Workspace integrity
+### Slice 1 — Workspace integrity  *(delivered)*
 
 Things that are currently wrong or silently lossy.
 
@@ -160,7 +164,7 @@ Things that are currently wrong or silently lossy.
 | Duplicate cohort | `team_inbox_projection` literally assigns `unreplied=queue_metrics.needs_response` and `needs_attention=queue_metrics.needs_response`, and `applyAssignmentFilter` maps both `'unreplied'` and `'attention'` to `needs_response=true`. Two labels, one cohort. |
 | Failed-message remediation | **Already exposed** — `_sidebar.html:39` links to the report, which carries "Retry first 50" and per-message "Retry". No work required; recorded here to prevent redundant effort. |
 
-### Slice 2 — Collaboration and context
+### Slice 2 — Collaboration and context  *(delivered)*
 
 - Comments + resolution (`{id}/comments`, `comments/{id}/resolve`) — internal
   collaboration is entirely invisible in the workspace today.
@@ -184,18 +188,34 @@ Things that are currently wrong or silently lossy.
   It is also the clearest thing CRM structurally cannot match — CRM would API-hop
   into sub for connection state and balance; sub answers in the same query.
 
-### Slice 3 — The integration promises
+### Slice 3 — The integration promises  *(2 of 3 delivered)*
 
 The demo buttons that are actually the edges.
 
-- **Native conversation → ticket handoff.** New coordinator
+- **Customer 360 Communications section — done.** The customer support tab now
+  lists the five most recent conversations. Implemented as a customer-scoped
+  read: `team_inbox_read.list_conversations` gained an additive `subscriber_id`
+  filter (the conversation already carries the resolved subscriber, so no join
+  through the contact link is needed). Read-only, gated on `support:ticket:read`.
+- **Conversation history on ticket detail — done.** Same read, so an agent sees
+  what the customer already said on other channels before replying. Scoped by
+  subscriber; once the handoff owner lands it can narrow to the originating
+  conversation.
+- **Native conversation → ticket handoff — open.** New coordinator
   `communications.conversation_ticket_handoff` on the `ticket_work_order_handoff`
   pattern. `support.ticket_lifecycle` owns the ticket official timeline and will
   not accept a foreign writer, so this is built natively rather than ported from
   CRM's `resolve-with-ticket-handoff` / `resolve-with-lead`.
-- **Customer 360 Communications section** — over the existing
-  `InboxContactLink → PartyContactPoint → party → subscriber` join.
-- **Conversation history on ticket detail.**
+
+  Deliberately **not** bundled into the current branch. It requires: a migration
+  adding `origin_conversation_id` to `support_tickets` (FK, `ondelete=RESTRICT`,
+  indexed — mirroring `work_order.origin_ticket_id` in migration 382);
+  `Tickets.create` accepting the provenance kwarg the way
+  `work_order_commands.create` accepts `origin_ticket_id`; a ~150-line typed
+  `SOTService` contract in `app/services/sot_relationships.py`; SOT map rows and
+  a numbered note; a boundary test; and the UI swap from `submitDemoTicket()`.
+  That is a PR in its own right, and a half-migrated ownership boundary is
+  exactly what the standard forbids.
 
 ### Slice 4 — Remaining demo-to-real workflows
 
