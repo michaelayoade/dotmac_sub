@@ -1420,13 +1420,23 @@ def build_beat_schedule() -> dict:
             SettingDomain.network_monitoring,
             "outage_auto_notify_interval_seconds",
         )
+        # The beat entry follows the feature flag rather than being permanently
+        # scheduled: with automation off (the default) nothing is dispatched at
+        # all, instead of a task firing every few minutes only to no-op. Enable
+        # outage_auto_notify_enabled in System > Config > Automated Outage
+        # Notification and the runner starts on the next schedule rebuild.
+        outage_auto_notify_enabled = resolve_boolean(
+            session,
+            SettingDomain.network_monitoring,
+            "outage_auto_notify_enabled",
+        )
         _sync_scheduled_task(
             session,
             name="outage_auto_notify",
             task_name=(
                 "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications"
             ),
-            enabled=True,
+            enabled=outage_auto_notify_enabled,
             interval_seconds=max(outage_auto_notify_seconds, 120),
         )
         # UISP topology sync: import the wireless/UFiber customer-device

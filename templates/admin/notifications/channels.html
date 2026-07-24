@@ -5,10 +5,12 @@
 {% macro channel_boxes(field, channels, selected) %}
 <div class="flex flex-wrap items-center gap-3">
     {% for channel in channels %}
-    <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm {% if channel.id in selected %}border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/30 dark:text-primary-200{% else %}border-slate-300 text-slate-600 dark:border-slate-600 dark:text-slate-300{% endif %}">
-        <input type="checkbox" name="{{ field }}" value="{{ channel.id }}" {% if channel.id in selected %}checked{% endif %} class="rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-500 dark:bg-slate-700">
+    {% set unavailable = channel.disabled and channel.id not in selected %}
+    <label class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm {% if unavailable %}cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500{% elif channel.id in selected %}cursor-pointer border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/30 dark:text-primary-200{% else %}cursor-pointer border-slate-300 text-slate-600 dark:border-slate-600 dark:text-slate-300{% endif %}"
+           {% if unavailable %}title="{{ channel.message }}"{% endif %}>
+        <input type="checkbox" name="{{ field }}" value="{{ channel.id }}" {% if channel.id in selected %}checked{% endif %} {% if unavailable %}disabled{% endif %} class="rounded border-slate-300 text-primary-600 focus:ring-primary-500 disabled:opacity-40 dark:border-slate-500 dark:bg-slate-700">
         {{ channel.label }}
-        {% if not channel.ready %}<span title="{{ channel.message }}" class="text-amber-500">&#9888;</span>{% endif %}
+        {% if unavailable %}<span class="text-[10px] font-medium uppercase tracking-wide text-slate-400">unavailable</span>{% elif not channel.ready %}<span title="{{ channel.message }}" class="text-amber-500">&#9888;</span>{% endif %}
     </label>
     {% endfor %}
 </div>

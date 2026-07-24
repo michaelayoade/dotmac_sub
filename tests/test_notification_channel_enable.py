@@ -72,8 +72,40 @@ def _sms_template(db, *, active: bool = True) -> NotificationTemplate:
     return template
 
 
+def _route_suspended_to_sms(db) -> None:
+    """Event specs no longer declare channels, so route subscription_suspended
+    to SMS via the channel policy — this is what the sms_enabled guard gates."""
+    from app.services.settings_cache import SettingsCache
+
+    row = (
+        db.query(DomainSetting)
+        .filter_by(domain=SettingDomain.notification, key="notification_channel_policy")
+        .one_or_none()
+    )
+    payload = {"events": {"subscription_suspended": ["email", "sms"]}}
+    if row is None:
+        db.add(
+            DomainSetting(
+                domain=SettingDomain.notification,
+                key="notification_channel_policy",
+                value_type=SettingValueType.json,
+                value_json=payload,
+                is_active=True,
+            )
+        )
+    else:
+        row.value_json = payload
+        row.is_active = True
+    db.commit()
+    SettingsCache.invalidate(
+        SettingDomain.notification.value, "notification_channel_policy"
+    )
+
+
 def _handle(db, sub_id) -> None:
-    # subscription_suspended fans out to (email, sms); active+service is allowed.
+    # subscription_suspended is routed to (email, sms) via the policy above;
+    # active+service is allowed.
+    _route_suspended_to_sms(db)
     NotificationHandler().handle(
         db,
         Event(

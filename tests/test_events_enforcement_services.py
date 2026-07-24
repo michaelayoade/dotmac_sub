@@ -1056,6 +1056,53 @@ class TestLifecycleHandler:
 
 
 class TestNotificationHandler:
+    @pytest.fixture(autouse=True)
+    def _route_spec_events_multichannel(self, db_session):
+        """Event specs no longer declare channels — communications.channel_policy
+        owns selection. These tests exercise the handler's multi-channel fan-out
+        (template selection, recipient resolution, suppression), so route the
+        spec categories to email+sms via the policy to supply that premise. The
+        handler still only creates a row where an active template exists, so a
+        test with one template still gets one row.
+        """
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+        from app.services.settings_cache import SettingsCache
+
+        db_session.add_all(
+            [
+                DomainSetting(
+                    domain=SettingDomain.notification,
+                    key="notification_channel_policy",
+                    value_type=SettingValueType.json,
+                    value_json={
+                        "categories": {
+                            "service": ["email", "sms"],
+                            "billing": ["email", "sms"],
+                        }
+                    },
+                    is_active=True,
+                ),
+                # SMS is retired and therefore disabled by default, and the
+                # handler skips a disabled channel regardless of routing. Enable
+                # it here so the fan-out under test actually reaches two
+                # channels — which also demonstrates the retirement is a
+                # reversible config state, not a deletion.
+                DomainSetting(
+                    domain=SettingDomain.notification,
+                    key="sms_enabled",
+                    value_type=SettingValueType.boolean,
+                    value_text="true",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+        SettingsCache.invalidate(
+            SettingDomain.notification.value, "notification_channel_policy"
+        )
+        SettingsCache.invalidate(SettingDomain.notification.value, "sms_enabled")
+
     def _set_customer_balance_notifications(self, db_session, enabled: bool) -> None:
         from app.models.domain_settings import DomainSetting, SettingDomain
         from app.models.subscription_engine import SettingValueType
