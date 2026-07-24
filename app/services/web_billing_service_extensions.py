@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType, AuditEvent
+from app.models.catalog import SubscriptionStatus
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionScope,
@@ -65,6 +66,12 @@ class ServiceExtensionSubscriptionItem:
     subscriber_label: str
     login: str | None
     next_billing_at_display: str
+    service_status_label: str
+    restoration_pending: bool
+    previous_billing_display: str
+    grant_starts_display: str
+    grant_ends_display: str
+    anchor_basis_label: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +81,7 @@ class ServiceExtensionImpactProjection:
     skipped_count: int
     decision_message: str
     outcome_message: str | None
+    sample_provenance_note: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +397,15 @@ def _impact_projection(
         skipped_count=preview.skipped_count,
         decision_message=decision_message,
         outcome_message=outcome_message,
+        # Pending rows are a proposal recomputed at apply time; applied rows are
+        # the immutable intervals actually recorded.
+        sample_provenance_note=(
+            "proposal calculated at "
+            f"{display_format.format_timestamp(preview.previewed_at, db)} "
+            "and rechecked when applied"
+            if extension.status == ServiceExtensionStatus.pending
+            else None
+        ),
     )
 
 
@@ -495,8 +512,37 @@ def build_service_extension_detail(
                     db,
                     fmt="%Y-%m-%d",
                 ),
+                service_status_label=row.subscription.status.value.title(),
+                # A pending extension only *requests* restoration; the lock
+                # writer remains access.subscription_lifecycle.
+                restoration_pending=(
+                    extension.status == ServiceExtensionStatus.pending
+                    and row.subscription.status == SubscriptionStatus.suspended
+                ),
+                previous_billing_display=display_format.format_timestamp(
+                    row.previous_next_billing_at,
+                    db,
+                ),
+                grant_starts_display=(
+                    display_format.format_timestamp(row.grant_starts_at, db)
+                    if row.grant_starts_at is not None
+                    else "Skipped"
+                ),
+                grant_ends_display=display_format.format_timestamp(
+                    row.grant_ends_at,
+                    db,
+                ),
+                anchor_basis_label=(
+                    row.anchor_basis.value.replace("_", " ").title()
+                    if row.anchor_basis is not None
+                    else "No billing date"
+                ),
             )
-            for item in preview.subscriptions
+            for item, row in zip(
+                preview.subscriptions,
+                preview.interval_sample,
+                strict=True,
+            )
         ),
         activity=tuple(activity),
         can_apply=eligibility.can_apply and can_transition,

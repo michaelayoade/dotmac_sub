@@ -292,7 +292,7 @@ def test_template_renders_owner_projection_without_local_decision_maps():
 
     assert 'card("Recent activity"' in source
     assert source.index('card("Recent activity"') < source.index(
-        'card("Affected subscriptions (sample)"'
+        'card("Service grant intervals (sample)"'
     )
     assert "timeline_item(" in source
     assert 'aria-label="Service extension recent activity"' in source

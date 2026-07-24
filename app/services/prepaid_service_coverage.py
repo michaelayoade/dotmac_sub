@@ -114,8 +114,8 @@ def resolve_prepaid_service_coverage(
         select(
             ServiceExtensionEntry.subscription_id,
             ServiceExtensionEntry.id,
-            ServiceExtensionEntry.previous_next_billing_at,
-            ServiceExtensionEntry.new_next_billing_at,
+            ServiceExtensionEntry.grant_starts_at,
+            ServiceExtensionEntry.grant_ends_at,
         )
         .join(
             ServiceExtension,
@@ -124,27 +124,27 @@ def resolve_prepaid_service_coverage(
         .where(
             ServiceExtensionEntry.subscription_id.in_(subscription_ids),
             ServiceExtension.status == ServiceExtensionStatus.applied,
-            ServiceExtensionEntry.previous_next_billing_at.isnot(None),
-            ServiceExtensionEntry.previous_next_billing_at <= observed_at,
-            ServiceExtensionEntry.new_next_billing_at.isnot(None),
-            ServiceExtensionEntry.new_next_billing_at > observed_at,
+            ServiceExtensionEntry.grant_starts_at.isnot(None),
+            ServiceExtensionEntry.grant_starts_at <= observed_at,
+            ServiceExtensionEntry.grant_ends_at.isnot(None),
+            ServiceExtensionEntry.grant_ends_at > observed_at,
         )
         .order_by(
             ServiceExtensionEntry.subscription_id,
-            ServiceExtensionEntry.previous_next_billing_at.desc(),
+            ServiceExtensionEntry.grant_starts_at.desc(),
             ServiceExtensionEntry.id.desc(),
         )
     ).all()
     for extension_row in extension_rows:
         if extension_row.subscription_id in evidence:
             continue
-        assert extension_row.previous_next_billing_at is not None
-        assert extension_row.new_next_billing_at is not None
+        assert extension_row.grant_starts_at is not None
+        assert extension_row.grant_ends_at is not None
         evidence[extension_row.subscription_id] = PrepaidCoverageEvidence(
             source=PrepaidCoverageSource.service_extension_grant,
             source_id=extension_row.id,
-            starts_at=extension_row.previous_next_billing_at,
-            ends_at=extension_row.new_next_billing_at,
+            starts_at=extension_row.grant_starts_at,
+            ends_at=extension_row.grant_ends_at,
         )
 
     decisions: dict[UUID, PrepaidServiceCoverageDecision] = {}

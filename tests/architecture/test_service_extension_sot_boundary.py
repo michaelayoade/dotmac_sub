@@ -40,7 +40,7 @@ def test_service_extension_owners_have_complete_registered_contracts() -> None:
         concern.name: concern for concern in lifecycle.contract.concerns
     }
     assert (
-        lifecycle_concerns["service-extension aggregate lifecycle"].role
+        lifecycle_concerns["service-extension lifecycle and exact grant intervals"].role
         is OwnerRole.COMMAND_WRITER
     )
     assert (
@@ -79,7 +79,7 @@ def test_lifecycle_owner_uses_one_boundary_per_public_command() -> None:
 def test_lifecycle_evidence_and_idempotency_are_database_enforced() -> None:
     owner = _source(OWNER)
     model = _source(ROOT / "app/models/service_extension.py")
-    migration = _source(ROOT / "alembic/versions/417_service_extension_activity_sot.py")
+    migration = _source(ROOT / "alembic/versions/418_service_extension_activity_sot.py")
     events = _source(ROOT / "app/services/events/types.py")
 
     assert "_EXTENSION_ID_NAMESPACE" in owner

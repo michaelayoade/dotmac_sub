@@ -1,10 +1,10 @@
 """Service extensions: bulk validity compensation for outages.
 
 An extension records an outage window and a scope (whole network, POP site,
-NAS device, or an explicit subscriber list) and, when applied, pushes
-``next_billing_at`` forward by N days on every affected active subscription.
-Capped plans keep their calendar-month allowance — this extends validity,
-never data.
+NAS device, or an explicit subscriber list). When applied, it records an exact
+service grant from the later of the existing billing anchor and application
+time, then projects ``next_billing_at`` to the grant end. Capped plans keep
+their calendar-month allowance — this extends validity, never data.
 """
 
 from __future__ import annotations
@@ -40,6 +40,14 @@ class ServiceExtensionStatus(enum.Enum):
     pending = "pending"
     applied = "applied"
     canceled = "canceled"
+
+
+class ServiceExtensionAnchorBasis(enum.Enum):
+    """Why an extension grant starts at its recorded boundary."""
+
+    existing_billing_anchor = "existing_billing_anchor"
+    application_time = "application_time"
+    legacy_previous_anchor = "legacy_previous_anchor"
 
 
 class ServiceExtension(Base):
@@ -113,6 +121,11 @@ class ServiceExtensionEntry(Base):
             "subscriber_id",
             "created_at",
         ),
+        Index(
+            "ix_service_extension_entries_subscriber_grant_end",
+            "subscriber_id",
+            "grant_ends_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -129,6 +142,11 @@ class ServiceExtensionEntry(Base):
     )
     previous_next_billing_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+    grant_starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    grant_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    anchor_basis: Mapped[ServiceExtensionAnchorBasis | None] = mapped_column(
+        Enum(ServiceExtensionAnchorBasis, native_enum=False, length=40)
     )
     new_next_billing_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)

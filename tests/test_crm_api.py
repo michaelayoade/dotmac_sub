@@ -36,6 +36,7 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.service_extension import (
     ServiceExtension,
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -647,6 +648,9 @@ def test_service_extension_endpoints_expose_compensation_for_crm(db_session, crm
             subscriber_id=subscriber.id,
             subscription_id=subscription.id,
             previous_next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+            grant_starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+            grant_ends_at=datetime(2026, 7, 3, tzinfo=UTC),
+            anchor_basis=ServiceExtensionAnchorBasis.legacy_previous_anchor,
             new_next_billing_at=datetime(2026, 7, 3, tzinfo=UTC),
         )
     )
@@ -683,6 +687,12 @@ def test_service_extension_endpoints_expose_compensation_for_crm(db_session, crm
     assert (
         detail_row["affected_customers"][0]["new_next_billing_at"]
         == "2026-07-03T00:00:00Z"
+    )
+    assert (
+        detail_row["affected_customers"][0]["grant_starts_at"] == "2026-07-01T00:00:00Z"
+    )
+    assert (
+        detail_row["affected_customers"][0]["anchor_basis"] == "legacy_previous_anchor"
     )
     assert subscriber_rows.status_code == 200
     assert (

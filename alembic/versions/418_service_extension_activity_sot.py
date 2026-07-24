@@ -1,7 +1,7 @@
 """Complete service-extension lifecycle and activity evidence.
 
-Revision ID: 417_service_extension_activity_sot
-Revises: 416_binary_device_operational_lifecycle
+Revision ID: 418_service_extension_activity_sot
+Revises: 417_service_extension_grant_intervals
 Create Date: 2026-07-24
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "417_service_extension_activity_sot"
-down_revision = "416_binary_device_operational_lifecycle"
+revision = "418_service_extension_activity_sot"
+down_revision = "417_service_extension_grant_intervals"
 branch_labels = None
 depends_on = None
 
@@ -32,6 +32,25 @@ def _unique_constraints(table_name: str) -> set[str]:
         for constraint in sa.inspect(op.get_bind()).get_unique_constraints(table_name)
         if constraint.get("name")
     }
+
+
+def _indexes(table_name: str) -> set[str]:
+    return {
+        str(index["name"])
+        for index in sa.inspect(op.get_bind()).get_indexes(table_name)
+        if index.get("name")
+    }
+
+
+def _entry_identity_enforced() -> bool:
+    """Migration 417 already enforces this identity as a unique index.
+
+    Its index carries the same name as the constraint below, so creating the
+    constraint unconditionally collides on the relation name.
+    """
+
+    table = "service_extension_entries"
+    return _ENTRY_UNIQUE in _unique_constraints(table) | _indexes(table)
 
 
 def _add_column_if_missing(name: str, column: sa.Column) -> None:
@@ -102,7 +121,7 @@ def upgrade() -> None:
             "(extension_id, subscription_id) evidence exists. Reconcile the "
             "reviewed duplicate cohort through financial.service_extensions."
         )
-    if _ENTRY_UNIQUE not in _unique_constraints("service_extension_entries"):
+    if not _entry_identity_enforced():
         op.create_unique_constraint(
             _ENTRY_UNIQUE,
             "service_extension_entries",

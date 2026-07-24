@@ -762,7 +762,39 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="notification_channel_policy",
         env_var=None,
         value_type=SettingValueType.json,
-        default={},
+        # Channel selection is owned here (communications.channel_policy), not in
+        # the event specs. This seeded default ships sensible multi-channel
+        # routing per category so a fresh/unconfigured deploy is not email-only;
+        # an operator edit in the admin matrix writes a DB row that overrides it.
+        # SMS is intentionally absent — it is retired and disabled; a future SMS
+        # plugin adds it back here per category. email is the always-available
+        # base; whatsapp is the approved, delivering channel.
+        # EVENT-level seed only — deliberately no global default and no category
+        # defaults. Both of those tiers outrank a caller's own default_channels,
+        # and several services pass deliberate per-call channel sets under
+        # common categories: FUP enforcement (category="fup", per-kind push),
+        # customer_experience_communications and the support resolution
+        # confirmation (category="service", whatsapp+push). A category seed
+        # silently hijacked those and dropped push.
+        #
+        # Event entries are keyed by template_code, so they can only affect the
+        # specific event-spec notifications they name and can never intercept
+        # another caller. These reproduce the exact channels those five
+        # push-native specs declared before channels moved out of the specs, so
+        # behaviour is unchanged. Every other spec event resolves to the email
+        # system fallback until an operator widens it in the admin matrix —
+        # which is where adding WhatsApp broadly belongs, as a deliberate
+        # decision rather than a blanket default. SMS appears nowhere: it is
+        # retired and disabled.
+        default={
+            "events": {
+                "referral_reward_issued": ["push"],
+                "usage_warning": ["push", "email"],
+                "usage_exhausted": ["push", "email"],
+                "service_extended": ["push", "email"],
+                "addon_expiring": ["push", "email"],
+            },
+        },
         label="Notification channel policy: {default: [], categories: {}, events: {}}",
     ),
     SettingSpec(

@@ -33,6 +33,9 @@ from app.services import (
 )
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import (
+    web_customer_availability as web_customer_availability_service,
+)
+from app.services import (
     web_customer_bulk_actions as web_customer_bulk_actions_service,
 )
 from app.services import web_customer_details as web_customer_details_service
@@ -2439,3 +2442,37 @@ def export_customers(
             "Content-Disposition": f"attachment; filename={filename}",
         },
     )
+
+
+@router.get(
+    "/{subscriber_id}/availability",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def customer_availability_report(
+    request: Request,
+    subscriber_id: str,
+    period: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Agent-facing service availability for one customer over a period.
+
+    Infrastructure-based: what the shared path serving them actually delivered,
+    plus individual provider-fault tickets. The customer's own CPE/session
+    downtime is deliberately excluded — see topology.customer_availability.
+    """
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    context = web_customer_availability_service.customer_availability_context(
+        db, subscriber_id, period=period
+    )
+    context.update(
+        {
+            "request": request,
+            "active_page": "customers",
+            "active_menu": "customers",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        }
+    )
+    return templates.TemplateResponse("admin/customers/availability.html", context)

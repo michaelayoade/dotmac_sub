@@ -84,7 +84,7 @@
             <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ detail.impact.outcome_message }}</p>
             {% endif %}
             {% if detail.can_apply %}
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Applying changes billing anchors and may restore access held only by billing locks. This cannot be undone in bulk.</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">A future billing date is extended from that date. An expired billing date is extended from the time this is applied. Applying may restore access held only by billing locks. This cannot be undone in bulk.</p>
             {% endif %}
         </div>
         {% if detail.can_apply or detail.can_cancel %}
@@ -126,7 +126,7 @@
     </div>
     {% endcall %}
 
-    {% call card("Affected subscriptions (sample)", color="amber") %}
+    {% call card("Service grant intervals (sample)", color="amber") %}
     {% if detail.sample_subscriptions %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
@@ -134,7 +134,11 @@
                 <tr class="text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                     <th class="px-4 py-3">Subscriber</th>
                     <th class="px-4 py-3">Login</th>
-                    <th class="px-4 py-3">Next billing</th>
+                    <th class="px-4 py-3">Service status</th>
+                    <th class="px-4 py-3">Previous billing date</th>
+                    <th class="px-4 py-3">Grant starts</th>
+                    <th class="px-4 py-3">Grant ends / new billing</th>
+                    <th class="px-4 py-3">Basis</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
@@ -142,13 +146,22 @@
                 <tr>
                     <td class="px-4 py-3">{{ subscription.subscriber_label }}</td>
                     <td class="px-4 py-3 font-mono text-xs">{{ subscription.login or "—" }}</td>
-                    <td class="px-4 py-3">{{ subscription.next_billing_at_display }}</td>
+                    <td class="px-4 py-3">
+                        {{ subscription.service_status_label }}
+                        {% if subscription.restoration_pending %}
+                        <span class="block text-xs text-amber-600 dark:text-amber-400">Billing-lock restoration will be attempted</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3">{{ subscription.previous_billing_display }}</td>
+                    <td class="px-4 py-3">{{ subscription.grant_starts_display }}</td>
+                    <td class="px-4 py-3">{{ subscription.grant_ends_display }}</td>
+                    <td class="px-4 py-3 text-xs">{{ subscription.anchor_basis_label }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
-    <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing {{ detail.sample_subscriptions | length }} of {{ detail.impact.total_count }} in scope.</p>
+    <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing {{ detail.sample_subscriptions | length }} of {{ detail.impact.total_count }} in scope{% if detail.impact.sample_provenance_note %}; {{ detail.impact.sample_provenance_note }}{% endif %}.</p>
     {% else %}
     <p class="text-sm text-slate-500 dark:text-slate-400">No active or billing-suspended subscriptions currently match this scope.</p>
     {% endif %}

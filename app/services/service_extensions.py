@@ -1,7 +1,7 @@
-"""Service extensions: bulk validity compensation for outages.
+"""Canonical exact service-grant intervals for outage compensation.
 
-Pushes next_billing_at forward by N days on every active subscription in
-scope. Capped plans keep their calendar-month allowance — validity, not data.
+Each application records an immutable interval and projects next_billing_at to
+its end. Capped plans keep their calendar-month allowance — validity, not data.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.service_extension import (
     ServiceExtension,
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -54,22 +55,22 @@ CANCEL_SCOPE = "billing:extension:apply"
 
 _CREATE_COMMAND = OwnerCommandDefinition(
     owner="financial.service_extensions",
-    concern="service-extension aggregate lifecycle",
+    concern="service-extension lifecycle and exact grant intervals",
     name="create_service_extension",
 )
 _APPLY_COMMAND = OwnerCommandDefinition(
     owner="financial.service_extensions",
-    concern="service-extension aggregate lifecycle",
+    concern="service-extension lifecycle and exact grant intervals",
     name="apply_service_extension",
 )
 _CANCEL_COMMAND = OwnerCommandDefinition(
     owner="financial.service_extensions",
-    concern="service-extension aggregate lifecycle",
+    concern="service-extension lifecycle and exact grant intervals",
     name="cancel_service_extension",
 )
 _REPAIR_ANCHOR_COMMAND = OwnerCommandDefinition(
     owner="financial.service_extensions",
-    concern="extension-caused subscription billing-anchor projection",
+    concern="service-extension billing-anchor projection",
     name="repair_service_extension_anchor_projection",
 )
 
@@ -171,6 +172,8 @@ class ServiceExtensionPreviewSubscriber:
 class ServiceExtensionPreview:
     subscriptions: tuple[ServiceExtensionPreviewSubscription, ...]
     selected_subscribers: tuple[ServiceExtensionPreviewSubscriber, ...]
+    interval_sample: tuple[ServiceExtensionIntervalRow, ...]
+    previewed_at: datetime
     total_count: int
     extendable_count: int
     skipped_count: int
@@ -200,11 +203,62 @@ class ServiceExtensionError(DomainError):
     """Transport-neutral service-extension failure."""
 
 
+@dataclass(frozen=True, slots=True)
+class ServiceExtensionGrantInterval:
+    """Exact non-cash service interval decided by the extension owner."""
+
+    starts_at: datetime
+    ends_at: datetime
+    anchor_basis: ServiceExtensionAnchorBasis
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceExtensionIntervalRow:
+    """Admin projection of one proposed or applied extension interval."""
+
+    subscription: Subscription
+    previous_next_billing_at: datetime | None
+    grant_starts_at: datetime | None
+    grant_ends_at: datetime | None
+    anchor_basis: ServiceExtensionAnchorBasis | None
+
+
 def _error(suffix: str, message: str, **details: object) -> NoReturn:
     raise ServiceExtensionError(
         code=f"financial.service_extensions.{suffix}",
         message=message,
         details=details,
+    )
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def resolve_extension_grant_interval(
+    *,
+    previous_next_billing_at: datetime,
+    applied_at: datetime,
+    days: int,
+) -> ServiceExtensionGrantInterval:
+    """Resolve the exact grant interval from authoritative inputs.
+
+    A current or future billing anchor remains additive. A stale anchor cannot
+    consume compensation in the past, so the grant begins when it is applied.
+    """
+
+    previous = _as_utc(previous_next_billing_at)
+    effective_at = _as_utc(applied_at)
+    if previous >= effective_at:
+        starts_at = previous
+        basis = ServiceExtensionAnchorBasis.existing_billing_anchor
+    else:
+        starts_at = effective_at
+        basis = ServiceExtensionAnchorBasis.application_time
+    return ServiceExtensionGrantInterval(
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(days=days),
+        anchor_basis=basis,
     )
 
 
@@ -892,7 +946,7 @@ def create_service_extension(
         if existing is not None:
             return _assert_create_replay(existing, fingerprint=fingerprint)
 
-        now = datetime.now(UTC)
+        now = _now_utc()
         extension = ServiceExtension(
             id=replay_id,
             reason=reason,
@@ -967,24 +1021,44 @@ def preview_extension(
     db: Session,
     extension: ServiceExtension,
 ) -> ServiceExtensionPreview:
-    """Read-only, typed impact preview for the exact extension scope."""
+    """Typed preview: exact applied evidence, or a current proposal if pending."""
     scope_id = str(extension.scope_id) if extension.scope_id else None
-    total_count, extendable_count = _scope_subscription_counts(
-        db,
-        extension.scope_type,
-        scope_id,
-        extension.scope_subscriber_ids,
-        subscriber_ids_resolved=extension.scope_type
-        == ServiceExtensionScope.subscribers,
-    )
-    sample = _scope_subscription_sample(
-        db,
-        extension.scope_type,
-        scope_id,
-        extension.scope_subscriber_ids,
-        subscriber_ids_resolved=extension.scope_type
-        == ServiceExtensionScope.subscribers,
-    )
+    if extension.status == ServiceExtensionStatus.applied:
+        # Applied extensions report the immutable intervals actually recorded,
+        # never a recomputed proposal.
+        interval_sample = _applied_interval_sample(db, extension.id)
+        sample = [row.subscription for row in interval_sample]
+        extendable_count = extension.affected_count
+        skipped_count = extension.skipped_count
+        total_count = extendable_count + skipped_count
+        previewed_at = extension.applied_at or _now_utc()
+    else:
+        total_count, extendable_count = _scope_subscription_counts(
+            db,
+            extension.scope_type,
+            scope_id,
+            extension.scope_subscriber_ids,
+            subscriber_ids_resolved=extension.scope_type
+            == ServiceExtensionScope.subscribers,
+        )
+        sample = _scope_subscription_sample(
+            db,
+            extension.scope_type,
+            scope_id,
+            extension.scope_subscriber_ids,
+            subscriber_ids_resolved=extension.scope_type
+            == ServiceExtensionScope.subscribers,
+        )
+        previewed_at = _now_utc()
+        interval_sample = [
+            _proposed_interval_row(
+                subscription,
+                applied_at=previewed_at,
+                days=extension.days,
+            )
+            for subscription in sample
+        ]
+        skipped_count = total_count - extendable_count
     selected = (
         _subscriber_scope_rows(db, extension.scope_subscriber_ids)
         if extension.scope_type == ServiceExtensionScope.subscribers
@@ -1010,9 +1084,56 @@ def preview_extension(
             )
             for item in selected
         ),
+        interval_sample=tuple(interval_sample),
+        previewed_at=previewed_at,
         total_count=total_count,
         extendable_count=extendable_count,
-        skipped_count=total_count - extendable_count,
+        skipped_count=skipped_count,
+    )
+
+
+def _applied_interval_sample(
+    db: Session, extension_id: uuid.UUID
+) -> list[ServiceExtensionIntervalRow]:
+    rows = db.execute(
+        select(ServiceExtensionEntry, Subscription)
+        .join(Subscription, Subscription.id == ServiceExtensionEntry.subscription_id)
+        .options(joinedload(Subscription.subscriber))
+        .where(ServiceExtensionEntry.extension_id == extension_id)
+        .order_by(ServiceExtensionEntry.created_at.desc(), ServiceExtensionEntry.id)
+        .limit(PREVIEW_SAMPLE_LIMIT)
+    ).all()
+    return [
+        ServiceExtensionIntervalRow(
+            subscription=subscription,
+            previous_next_billing_at=entry.previous_next_billing_at,
+            grant_starts_at=entry.grant_starts_at,
+            grant_ends_at=entry.grant_ends_at,
+            anchor_basis=entry.anchor_basis,
+        )
+        for entry, subscription in rows
+    ]
+
+
+def _proposed_interval_row(
+    subscription: Subscription, *, applied_at: datetime, days: int
+) -> ServiceExtensionIntervalRow:
+    previous = subscription.next_billing_at
+    interval = (
+        resolve_extension_grant_interval(
+            previous_next_billing_at=previous,
+            applied_at=applied_at,
+            days=days,
+        )
+        if previous is not None
+        else None
+    )
+    return ServiceExtensionIntervalRow(
+        subscription=subscription,
+        previous_next_billing_at=previous,
+        grant_starts_at=interval.starts_at if interval else None,
+        grant_ends_at=interval.ends_at if interval else None,
+        anchor_basis=interval.anchor_basis if interval else None,
     )
 
 
@@ -1037,7 +1158,7 @@ def cancel_service_extension(
                 current_status=extension.status.value,
             )
         previous_status = extension.status
-        now = datetime.now(UTC)
+        now = _now_utc()
         extension.status = ServiceExtensionStatus.canceled
         extension.canceled_by = _actor(command.context)[1]
         extension.canceled_at = now
@@ -1124,8 +1245,7 @@ def apply_service_extension(
             )
 
         previous_status = extension.status
-        now = datetime.now(UTC)
-        delta = timedelta(days=extension.days)
+        now = _now_utc()
         applied = 0
         skipped = 0
         resumed = 0
@@ -1147,14 +1267,22 @@ def apply_service_extension(
                 if processed % APPLY_BATCH_SIZE == 0:
                     db.flush()
                 continue
-            subscription.next_billing_at = previous + delta
+            interval = resolve_extension_grant_interval(
+                previous_next_billing_at=previous,
+                applied_at=now,
+                days=extension.days,
+            )
+            subscription.next_billing_at = interval.ends_at
             db.add(
                 ServiceExtensionEntry(
                     extension_id=extension.id,
                     subscription_id=subscription.id,
                     subscriber_id=subscription.subscriber_id,
                     previous_next_billing_at=previous,
-                    new_next_billing_at=subscription.next_billing_at,
+                    grant_starts_at=interval.starts_at,
+                    grant_ends_at=interval.ends_at,
+                    anchor_basis=interval.anchor_basis,
+                    new_next_billing_at=interval.ends_at,
                     created_at=now,
                 )
             )
@@ -1281,7 +1409,7 @@ def repair_service_extension_anchor_projection(
             subscription.next_billing_at = target
             repaired += 1
         if repaired:
-            now = datetime.now(UTC)
+            now = _now_utc()
             db.flush()
             actor_type, actor_id = _actor(command.context)
             actor_label = resolve_actor_label_from_db(db, actor_id, actor_type)
@@ -1340,19 +1468,12 @@ def repair_service_extension_anchor_projection(
     )
 
 
-def _shield_window_end(created_at: datetime, days: int) -> datetime:
-    start = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
-    return start + timedelta(days=days)
-
-
 def extension_shield_reason(db: Session, account_id: str | uuid.UUID) -> str | None:
     """Why billing enforcement should skip this account, or None.
 
-    An applied service extension grants N days of service regardless of
-    arrears (outage compensation / goodwill). Until those N days elapse from
-    the moment the extension was applied, dunning must not suspend the
-    account — otherwise enforcement undoes the extension within hours, which
-    is exactly what happened at cutover.
+    An applied service extension grants its exact recorded interval regardless
+    of arrears. Enforcement uses that same interval as coverage and billing;
+    it does not maintain a second clock based on row creation time.
     """
     reasons = bulk_extension_shield_reasons(db, [coerce_uuid(str(account_id))])
     return next(iter(reasons.values()), None)
@@ -1365,12 +1486,11 @@ def bulk_extension_shield_reasons(
     ids = {coerce_uuid(str(account_id)) for account_id in account_ids}
     if not ids:
         return {}
-    now = datetime.now(UTC)
+    now = _now_utc()
     rows = db.execute(
         select(
             ServiceExtensionEntry.subscriber_id,
-            ServiceExtensionEntry.created_at,
-            ServiceExtension.days,
+            ServiceExtensionEntry.grant_ends_at,
             ServiceExtension.id,
         )
         .join(
@@ -1379,18 +1499,20 @@ def bulk_extension_shield_reasons(
         .where(
             ServiceExtensionEntry.subscriber_id.in_(ids),
             ServiceExtension.status == ServiceExtensionStatus.applied,
-            ServiceExtensionEntry.created_at
-            >= now - timedelta(days=MAX_ALLOWED_EXTENSION_DAYS),
+            ServiceExtensionEntry.grant_starts_at.isnot(None),
+            ServiceExtensionEntry.grant_starts_at <= now,
+            ServiceExtensionEntry.grant_ends_at.isnot(None),
+            ServiceExtensionEntry.grant_ends_at > now,
         )
     ).all()
     reasons: dict[uuid.UUID, str] = {}
-    for subscriber_id, created_at, days, extension_id in rows:
-        until = _shield_window_end(created_at, int(days))
-        if until > now:
-            reasons.setdefault(
-                subscriber_id,
-                f"service extension {extension_id} in force until {until.date().isoformat()}",
-            )
+    for subscriber_id, grant_ends_at, extension_id in rows:
+        assert grant_ends_at is not None
+        reasons.setdefault(
+            subscriber_id,
+            "service extension "
+            f"{extension_id} in force until {grant_ends_at.date().isoformat()}",
+        )
     return reasons
 
 

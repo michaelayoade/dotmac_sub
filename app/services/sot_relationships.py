@@ -4669,33 +4669,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="financial.service_extensions",
                 module="app.services.service_extensions",
                 owns=(
-                    "service-extension aggregate lifecycle",
+                    "service-extension lifecycle and exact grant intervals",
                     "immutable applied service-extension entry evidence",
-                    "extension-caused subscription billing-anchor projection",
+                    "service-extension billing-anchor projection",
                 ),
                 depends_on=(
                     "access.subscription_lifecycle",
                     "auth.permission_gate",
+                    "control.settings_spec",
                     "customer.accounts",
                     "events.dispatcher",
                     "observability.audit_log",
                 ),
                 notes=(
-                    "Typed create, apply, and cancel commands are the only lifecycle "
-                    "writers. They stage immutable extension evidence, exact entity-linked "
-                    "audit records, and aggregate/per-subscription domain events in the "
-                    "same owner transaction. Access restoration remains a request to "
+                    "Typed create, apply, cancel, and anchor-repair commands are the "
+                    "only lifecycle writers. They stage immutable extension evidence, "
+                    "exact entity-linked audit records, and aggregate/per-subscription "
+                    "domain events in the same owner transaction. The owner records one "
+                    "immutable grant interval per affected subscription, starting at the "
+                    "later of the existing billing anchor and application time; "
+                    "next_billing_at, coverage, enforcement shielding, audit, events, "
+                    "and UI projections consume that interval rather than maintaining "
+                    "parallel clocks. Access restoration remains a request to "
                     "access.subscription_lifecycle."
                 ),
                 contract=ServiceContract(
                     concerns=(
                         ConcernContract(
-                            name="service-extension aggregate lifecycle",
+                            name="service-extension lifecycle and exact grant intervals",
                             role=OwnerRole.COMMAND_WRITER,
                             input_names=(
-                                "authorized service-extension command",
+                                "authenticated extension command",
                                 "canonical service-extension aggregate",
                                 "canonical subscriber scope",
+                                "canonical subscription lifecycle and billing anchor",
+                                "service-extension duration policy",
                             ),
                             canonical_writer="financial.service_extensions",
                         ),
@@ -4704,16 +4712,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.AUTHORITATIVE_RECORD,
                             input_names=(
                                 "canonical service-extension aggregate",
-                                "canonical subscription billing anchor",
+                                "canonical subscription lifecycle and billing anchor",
                             ),
                             canonical_writer="financial.service_extensions",
                         ),
                         ConcernContract(
-                            name="extension-caused subscription billing-anchor projection",
+                            name="service-extension billing-anchor projection",
                             role=OwnerRole.PROJECTION_WRITER,
                             input_names=(
                                 "canonical service-extension aggregate",
-                                "canonical subscription billing anchor",
+                                "canonical subscription lifecycle and billing anchor",
                                 "immutable applied service-extension entry evidence",
                             ),
                             canonical_writer="financial.service_extensions",
@@ -4721,13 +4729,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     authoritative_inputs=(
                         AuthorityInput(
-                            name="authorized service-extension command",
+                            name="authenticated extension command",
                             owner="auth.permission_gate",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "CreateServiceExtensionCommand, "
-                                "ApplyServiceExtensionCommand, or "
-                                "CancelServiceExtensionCommand with CommandContext"
+                                "ApplyServiceExtensionCommand, "
+                                "CancelServiceExtensionCommand, or "
+                                "RepairServiceExtensionAnchorProjectionCommand with "
+                                "CommandContext actor and reason"
                             ),
                         ),
                         AuthorityInput(
@@ -4746,62 +4756,68 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="canonical subscription billing anchor",
+                            name="canonical subscription lifecycle and billing anchor",
                             owner="access.subscription_lifecycle",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
-                                "locked Subscription lifecycle and next_billing_at "
-                                "before the extension consequence"
+                                "locked Subscription identity, lifecycle status, "
+                                "enforcement locks, and next_billing_at before the "
+                                "extension consequence"
                             ),
+                        ),
+                        AuthorityInput(
+                            name="service-extension duration policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="billing.service_extension_max_days",
                         ),
                         AuthorityInput(
                             name="immutable applied service-extension entry evidence",
                             owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
-                                "unique ServiceExtensionEntry previous and resulting "
-                                "billing-anchor interval"
+                                "unique ServiceExtensionEntry grant_starts_at, "
+                                "grant_ends_at, and anchor_basis with its previous and "
+                                "resulting billing-anchor interval"
                             ),
                         ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "Each public create, apply, or cancel command enters "
-                            "execute_owner_command exactly once on a transaction-free "
-                            "session. Internal mutation, access-restoration, audit, and "
-                            "event helpers are flush-only."
+                            "Each public create, apply, cancel, or anchor-repair command "
+                            "enters execute_owner_command exactly once on a "
+                            "transaction-free session. Internal mutation, "
+                            "access-restoration, audit, and event helpers are flush-only."
                         ),
                         locking=(
                             "Apply and cancel select the extension FOR UPDATE. Apply "
                             "locks its resolved subscriptions in stable UUID order, and "
                             "database primary and unique keys arbitrate create and entry "
-                            "races."
+                            "races so a duplicate extension/subscription grant is "
+                            "database-rejected."
                         ),
                         idempotency=(
                             "Create derives its extension UUID from the form key and "
                             "compares a complete material-input fingerprint. Apply and "
-                            "cancel persist command evidence and replay the stable outcome "
-                            "without duplicate entries, audits, or events."
+                            "cancel persist command evidence and replay the stable "
+                            "outcome without duplicate entries, audits, or events."
                         ),
                         retries=(
                             "Adapters retry only after complete rollback. A reused key "
                             "with changed evidence or an incompatible terminal transition "
-                            "fails closed."
+                            "fails closed rather than granting service twice."
                         ),
                     ),
                     errors=ErrorContract(
                         domain_codes=(
                             "financial.service_extensions.access_restoration_failed",
-                            "financial.service_extensions.active_caller_transaction",
                             "financial.service_extensions.ambiguous_customer_identifier",
                             "financial.service_extensions.blank_customer_identifier",
-                            "financial.service_extensions.command_contract_violation",
                             "financial.service_extensions.customer_not_found",
                             "financial.service_extensions.empty_subscriber_scope",
                             "financial.service_extensions.extension_not_found",
                             "financial.service_extensions.idempotency_conflict",
-                            "financial.service_extensions.invalid_command_context",
                             "financial.service_extensions.invalid_customer_identifier",
                             "financial.service_extensions.invalid_days",
                             "financial.service_extensions.invalid_extension_id",
@@ -4812,12 +4828,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.service_extensions.missing_idempotency_key",
                             "financial.service_extensions.missing_reason",
                             "financial.service_extensions.missing_scope_id",
-                            "financial.service_extensions.nested_owner_command",
-                            "financial.service_extensions.nested_transaction_completion",
                             "financial.service_extensions.transition_conflict",
                             "financial.service_extensions.write_conflict",
+                            *owner_command_boundary_error_codes(
+                                "financial.service_extensions"
+                            ),
                         ),
-                        mapping_owner="admin billing service-extension adapters",
+                        mapping_owner="admin billing and CRM service-extension adapters",
+                        retryable_codes=(),
                         fail_closed_on=(
                             "changed idempotency evidence",
                             "stale or incompatible lifecycle transition",
@@ -4838,7 +4856,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         compatibility=(
                             "Version 1 carries stable extension, command, correlation, "
                             "scope, status, and bounded outcome evidence without customer "
-                            "contact data or full subscriber lists."
+                            "contact data or full subscriber lists. Grant interval and "
+                            "anchor-basis fields are additive within schema version 1."
                         ),
                         replay=(
                             "Consumers deduplicate aggregate events by deterministic "
@@ -4848,12 +4867,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     projections=(
                         ProjectionContract(
-                            name=(
-                                "extension-caused subscription billing-anchor projection"
-                            ),
+                            name="service-extension billing-anchor projection",
                             input_names=(
                                 "canonical service-extension aggregate",
-                                "canonical subscription billing anchor",
+                                "canonical subscription lifecycle and billing anchor",
                                 "immutable applied service-extension entry evidence",
                             ),
                             writer="financial.service_extensions",
@@ -4864,15 +4881,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             stale_behavior=(
                                 "Access restoration fails closed and the entire owner "
                                 "transaction rolls back when the anchor consequence "
-                                "cannot be completed."
+                                "cannot be completed. Coverage and enforcement trust the "
+                                "exact interval and report anchor drift."
                             ),
                             drift_signal=(
-                                "An applied entry whose resulting anchor is later than "
-                                "the visible subscription billing anchor."
+                                "An applied entry whose grant end or resulting anchor "
+                                "differs from the visible subscription billing anchor."
                             ),
                             rebuild_operation=(
                                 "Run the bounded financial.service_extensions anchor "
-                                "repair command from immutable entry evidence."
+                                "repair command over ordered immutable applied grant "
+                                "evidence."
                             ),
                             repair_owner="financial.service_extensions",
                         ),
@@ -4882,25 +4901,33 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         old_owner=(
                             "app.services.service_extensions internal commits, deferred "
                             "apply auditing, overloaded applied_by cancellation evidence, "
-                            "and route/template lifecycle presentation"
+                            "route/template lifecycle presentation, stale-anchor "
+                            "addition, and the created_at-based enforcement shield"
                         ),
                         new_owner="financial.service_extensions",
                         verification=(
-                            "Lifecycle atomicity, idempotency, concurrency, projection, "
-                            "audit provenance, route delegation, and architecture tests."
+                            "Lifecycle atomicity, idempotency, concurrency, "
+                            "effective-interval behavior, exact coverage, CRM, "
+                            "projection, audit provenance, route delegation, migration, "
+                            "and architecture boundary tests."
                         ),
                         cutover_gate=(
-                            "All create, apply, and cancel adapters invoke typed owner "
-                            "commands and detail reads use the registered UI projection."
+                            "All create, apply, cancel, and repair adapters invoke typed "
+                            "owner commands, detail reads use the registered UI "
+                            "projection, and all grant consumers read "
+                            "grant_starts_at/grant_ends_at."
                         ),
                         fallback_retirement=(
                             "Internal commits, deferred lifecycle audit, path-based "
-                            "history, and the legacy writer baseline entry are absent."
+                            "history, and the legacy writer baseline entry are absent. "
+                            "previous_next_billing_at plus days and created_at plus days "
+                            "are historical evidence only, never current decisions."
                         ),
                     ),
-                    steward="billing and operations",
+                    steward="billing and customer operations",
                     design_refs=(
                         "docs/designs/SERVICE_EXTENSION_LIFECYCLE_SOT.md",
+                        "docs/designs/SERVICE_EXTENSION_EFFECTIVE_INTERVALS.md",
                         "docs/runbooks/SERVICE_EXTENSION_ACTIVITY_CUTOVER.md",
                         "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
@@ -4908,8 +4935,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_service_extensions.py",
                         "tests/test_web_billing_service_extensions.py",
+                        "tests/test_prepaid_service_coverage.py",
                         "tests/integration/test_service_extension_concurrency.py",
                         "tests/architecture/test_service_extension_sot_boundary.py",
+                        "tests/architecture/test_service_extension_boundary.py",
                     ),
                 ),
             ),
@@ -4986,8 +5015,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
-                                "applied ServiceExtensionEntry exact previous and new "
-                                "billing-anchor interval"
+                                "applied ServiceExtensionEntry exact grant_starts_at and "
+                                "grant_ends_at interval"
                             ),
                         ),
                     ),
@@ -5126,7 +5155,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             name="explicit granted-service intervals",
                             owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source="applied ServiceExtensionEntry exact added interval",
+                            source=(
+                                "applied ServiceExtensionEntry exact grant_starts_at and "
+                                "grant_ends_at interval"
+                            ),
                         ),
                     ),
                     transaction=TransactionContract(
