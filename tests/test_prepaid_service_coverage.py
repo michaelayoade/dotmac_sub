@@ -12,6 +12,7 @@ from app.models.billing import (
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.service_extension import (
     ServiceExtension,
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -94,6 +95,9 @@ def test_applied_extension_covers_only_its_exact_granted_interval(
         subscription_id=subscription.id,
         subscriber_id=subscriber_account.id,
         previous_next_billing_at=NOW - timedelta(days=1),
+        grant_starts_at=NOW - timedelta(days=1),
+        grant_ends_at=NOW + timedelta(days=2),
+        anchor_basis=ServiceExtensionAnchorBasis.legacy_previous_anchor,
         new_next_billing_at=NOW + timedelta(days=2),
     )
     db_session.add(entry)

@@ -25,6 +25,7 @@ from app.services.settings_spec import resolve_value
 
 NotificationCategory = str
 _DISABLED_VALUES = {"false", "0", "no", "off", "disabled"}
+_ENABLED_VALUES = {"true", "1", "yes", "on", "enabled"}
 
 _BILLING_PREFIXES = ("invoice_", "payment_")
 _SERVICE_PREFIXES = (
@@ -213,10 +214,14 @@ def channel_disabled_in_config(db: Session, channel: NotificationChannel | str) 
     try:
         from app.services.sms import _get_setting
 
-        value = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true")
+        # Fail closed, matching sms.send_sms and the readiness probe: an
+        # unconfigured SMS channel is disabled, so its notifications are
+        # cancelled cleanly at queue time rather than created and left to fail.
+        # SMS is retired by default; a future SMS plugin flips sms_enabled on.
+        value = _get_setting(db, "sms_enabled", "SMS_ENABLED", "false")
     except Exception:
-        return False
-    return str(value or "true").strip().lower() in _DISABLED_VALUES
+        return True
+    return str(value or "false").strip().lower() not in _ENABLED_VALUES
 
 
 def _setting_int(db: Session, key: str, default: int = 0) -> int:

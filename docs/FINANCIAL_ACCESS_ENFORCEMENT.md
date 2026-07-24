@@ -119,7 +119,15 @@ suspension or restoration for that account.
 1. an active `ServiceEntitlement` spanning the decision time and structurally
    linked to the exact renewal debit, paid invoice line, or append-only
    `SubscriptionBillingGrant`; or
-2. an applied `ServiceExtensionEntry` spanning the exact granted interval.
+2. an applied `ServiceExtensionEntry` spanning the exact
+   `[grant_starts_at, grant_ends_at)` interval owned by
+   `financial.service_extensions`.
+
+For a service extension, `grant_starts_at` is the later of the existing billing
+anchor and application time. Coverage, reconciliation, and enforcement
+shielding consume that same immutable interval; `created_at + days` and
+`previous_next_billing_at + days` are not parallel coverage clocks. See
+`docs/designs/SERVICE_EXTENSION_EFFECTIVE_INTERVALS.md`.
 
 A paid invoice is source evidence, not read-time coverage. The coverage
 reconciler must project its exact subscription line and ordered period into an
