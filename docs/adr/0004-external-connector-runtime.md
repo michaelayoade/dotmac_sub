@@ -224,9 +224,42 @@ the `RunnerResponse` back. It is a transport adapter and owns no decision:
   crash a worker or be mistaken for a healthy one.
 
 No ownership boundary moved, so no `SOT_RELATIONSHIP_MAP.md` or
-`sot_relationships.py` change is due for this half. Clean. The transport half
-(rootless Podman subprocess, secret delivery, deadline-kill) carries its own
-audit when it lands, focused on the security invariants at the process boundary.
+`sot_relationships.py` change is due for this half. Clean.
+
+**Phase 3 — transport half.** `PodmanTransport` runs the connector's image as a
+short-lived, hardened, rootless Podman container: request JSON on stdin,
+response on stdout, container removed after. It owns no decision — it moves
+bytes and enforces confinement — and its `_build_argv` is a pure function so the
+security flags are unit-tested in isolation, with a live integration test on a
+real container (validated on seabone) covering the mechanics the unit test
+cannot: stdin/stdout, exit codes, the deadline kill, and out-of-band secret
+delivery. Audited properties:
+
+- Secrets are written to a tmpfs, user-private, `0600` env file and passed with
+  `--env-file`; a secret value never appears on argv (where `ps` would expose
+  it) and the file is deleted in a `finally`. The live test asserts the value
+  never crosses back across the boundary.
+- Confinement is `--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-
+  privileges`, no host mounts, an in-memory `noexec,nosuid` scratch tmpfs, and
+  bounded memory and pids. Rootless maps container-root to an unprivileged host
+  uid.
+- The app-side subprocess deadline is authoritative and unambiguous; Podman's
+  own `--timeout` is a longer backstop that reaps an orphaned container. An
+  overrun is therefore always a `RunnerTimeout`, which `ExternalOciRunner` maps
+  to `reconciliation_required` — never a silent retry.
+
+No ownership boundary moved. Clean.
+
+**Deployment prerequisites (Phase 3, discovered on seabone).** Rootless Podman;
+`subuid`/`subgid` mapped for the runner user; a user systemd instance. memory
+and pids cgroup controllers are delegated to a rootless user by default and
+enforce out of the box. The **cpu** controller is *not* delegated by default on
+Ubuntu 22.04, so CPU limiting is opt-in in the transport rather than defaulted —
+setting `--cpus` where the controller is absent fails every operation. A
+production host that wants CPU bounds must delegate the controller
+(`Delegate=cpu cpuset io memory pids` under `user@.service.d`, then re-login) and
+opt in; otherwise memory, pids, and the wall-clock deadline are the enforced
+bounds. Egress restriction is Phase 4.
 
 **Phase 4 onward.** Each audit must show the runner does not become a parallel
 authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and
