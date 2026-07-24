@@ -96,7 +96,10 @@ def test_duplicate_cohort_filter_is_gone(markup):
 
 
 def test_attention_token_no_longer_routed():
+    """The command palette also routed this token; with the branch removed it
+    fell through to assigned_person_id and filtered by a bogus id."""
     assert '"attention"' not in JAVASCRIPT
+    assert 'applyAssignmentFilter("attention")' not in JAVASCRIPT
 
 
 # --- Slice 2: collaboration ---------------------------------------------
@@ -132,8 +135,10 @@ def test_arrears_hidden_without_billing_access_shows_reason():
 
 def test_ip_is_gated_independently_of_connection_status():
     """Offline/last-seen answers the support question; the IP is separate."""
-    marker = DRAWER.index("subscriber_summary.connection")
+    # Anchor on the connection panel, not the identity badge that also reads
+    # `subscriber_summary.connection` higher up the drawer.
+    marker = DRAWER.index("{% set connection = subscriber_summary.connection %}")
     block = DRAWER[marker : marker + 1400]
     assert "Offline" in block
-    assert "last_seen_at" in block
+    assert "connection.last_seen_at" in block
     assert "can_view_network_detail and connection.ip" in block

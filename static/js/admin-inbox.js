@@ -78,7 +78,7 @@
         { id: "reply", label: "Focus reply composer", shortcut: "R" },
         { id: "resolve", label: "Resolve current conversation", shortcut: "E" },
         { id: "contact", label: "Toggle contact details", shortcut: "" },
-        { id: "attention", label: "Open needs attention", shortcut: "" },
+        { id: "unreplied", label: "Open unreplied", shortcut: "" },
       ],
 
       init() {
@@ -624,7 +624,7 @@
         if (id === "contact") {
           this.contactOpen ? this.closeContact() : this.openContact(this.selectedId);
         }
-        if (id === "attention") this.applyAssignmentFilter("attention");
+        if (id === "unreplied") this.applyAssignmentFilter("unreplied");
       },
 
       focusReply() {
