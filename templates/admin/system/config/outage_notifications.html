@@ -1,0 +1,74 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, icon_cog %}
+{% block title %}Automated Outage Notification - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("amber", "rose") }}
+<div class="relative space-y-8">
+    {% call page_header(title="Automated Outage Notification", subtitle="Notify affected customers when the classifier confirms a node outage", icon=icon_cog(), color="amber", color2="rose") %}{% endcall %}
+
+    <div class="rounded-2xl border p-5 shadow-sm
+        {% if outage_auto_notify_tone == 'active' %}border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-900/20
+        {% elif outage_auto_notify_tone == 'warning' %}border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20
+        {% else %}border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40{% endif %}">
+        <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Current state</p>
+        <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ outage_auto_notify_state }}</p>
+        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ outage_auto_notify_summary }}</p>
+    </div>
+
+    <form method="POST" class="space-y-6">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        {% call card("Enable", color="amber") %}
+        <div class="space-y-4">
+            <label class="flex items-start gap-3">
+                <input type="checkbox" name="outage_auto_notify_enabled" value="true" {% if outage_auto_notify.outage_auto_notify_enabled %}checked{% endif %} class="mt-1 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-500 dark:bg-slate-700">
+                <span>
+                    <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">Enable automated outage notification</span>
+                    <span class="block text-sm text-slate-500 dark:text-slate-400">When off, outage notifications are sent only by an operator from the detected-outages page. Nothing below has any effect.</span>
+                </span>
+            </label>
+            <label class="flex items-start gap-3">
+                <input type="checkbox" name="outage_auto_notify_dry_run" value="true" {% if outage_auto_notify.outage_auto_notify_dry_run %}checked{% endif %} class="mt-1 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-500 dark:bg-slate-700">
+                <span>
+                    <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">Dry run &mdash; select and log recipients, send nothing</span>
+                    <span class="block text-sm text-slate-500 dark:text-slate-400">Leave this on first. Compare the logged selections against the incidents your NOC would have notified about, then turn it off to go live.</span>
+                </span>
+            </label>
+        </div>
+        {% endcall %}
+
+        {% call card("Thresholds", color="amber") %}
+        <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">These bound what automation may act on. They are deliberately stricter than what an operator may send manually, because a scheduler cannot judge a marginal incident.</p>
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Settling window (minutes)</label>
+                <input type="number" min="1" name="outage_auto_notify_settle_minutes" value="{{ outage_auto_notify.outage_auto_notify_settle_minutes }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">How long an incident must stay customer-visible first. A fault that clears inside this window never reaches a customer.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Minimum affected customers</label>
+                <input type="number" min="1" name="outage_auto_notify_min_affected" value="{{ outage_auto_notify.outage_auto_notify_min_affected }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Smaller incidents are left to an operator.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Max incidents per run</label>
+                <input type="number" min="1" name="outage_auto_notify_max_incidents_per_run" value="{{ outage_auto_notify.outage_auto_notify_max_incidents_per_run }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Bounds blast radius if many incidents confirm at once.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Run interval (seconds)</label>
+                <input type="number" min="120" name="outage_auto_notify_interval_seconds" value="{{ outage_auto_notify.outage_auto_notify_interval_seconds }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">How often the pass runs. The settling window, not this, decides how quickly a customer hears.</p>
+            </div>
+        </div>
+        {% endcall %}
+
+        <p class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+            Only classifier-confirmed <span class="font-medium">node outages</span> are automated; radio-cluster incidents and operator-declared incidents always stay manual.
+            Delivery channels are set in <a href="/admin/notifications/channels" class="font-medium text-primary-600 hover:underline">Notification Channels</a>.
+        </p>
+
+        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-amber-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-amber-700">Save Configuration</button></div>
+    </form>
+</div>
+{% endblock %}

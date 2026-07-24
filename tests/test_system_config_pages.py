@@ -318,13 +318,23 @@ def test_direct_bank_transfer_save_ignores_retired_alias_field(db_session):
 def test_reminders_save_roundtrips_raw_strings(db_session):
     web_system_config_service.save_reminders(
         db_session,
-        {"reminders_enabled": "yes", "reminder_channel": "email"},
+        {"reminders_enabled": "yes", "reminder_send_time": "09:00"},
     )
 
     rows = _collections_rows(db_session)
     assert rows["reminders_enabled"].value_text == "yes"
     assert rows["reminders_enabled"].value_type == SettingValueType.string
-    assert rows["reminder_channel"].value_text == "email"
+    assert rows["reminder_send_time"].value_text == "09:00"
+
+
+def test_reminders_save_ignores_channel_selection(db_session):
+    """Channel selection belongs to the notification channel policy alone."""
+    web_system_config_service.save_reminders(
+        db_session,
+        {"reminders_enabled": "yes", "reminder_channel": "sms"},
+    )
+
+    assert "reminder_channel" not in _collections_rows(db_session)
 
 
 # --- 8.17 Billing notifications: send-hour is spec-backed ---

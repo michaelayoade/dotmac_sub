@@ -10,7 +10,6 @@
         {% call card("Billing Reminders", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Enable Reminders</label><input type="text" name="reminders_enabled" value="{{ reminders.reminders_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Delivery Channel</label><input type="text" name="reminder_channel" value="{{ reminders.reminder_channel or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Send Time</label><input type="text" name="reminder_send_time" value="{{ reminders.reminder_send_time or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Wave 1 Days Before Due</label><input type="text" name="wave1_days" value="{{ reminders.wave1_days or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Wave 1 Subject</label><input type="text" name="wave1_subject" value="{{ reminders.wave1_subject or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
@@ -21,7 +20,8 @@
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Attach Invoices</label><input type="text" name="attach_invoices" value="{{ reminders.attach_invoices or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
         </div>
 	        {% endcall %}
-	        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Configuration</button></div>
+	        <p class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">Delivery channels for reminders are set in <a href="/admin/notifications/channels" class="font-medium text-primary-600 hover:underline">Notification Channels</a> (category <span class="font-medium">billing</span>).</p>
+        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Configuration</button></div>
 	    </form>
 	    <section class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
 	        <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">

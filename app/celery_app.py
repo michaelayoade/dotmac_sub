@@ -94,6 +94,9 @@ celery_app.conf.task_routes = {
         "queue": "ingestion"
     },
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
+    "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications": {
+        "queue": "ingestion"
+    },
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
     # Operator-triggered writes must not wait behind long inventory and
