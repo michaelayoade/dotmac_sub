@@ -167,10 +167,12 @@ phase rather than Phase 1.
 1. **First external connector** (blocks Phase 6). Flutterwave v4 delivers real
    value but couples a payment integration to a new execution path. A trivial
    connector first proves the rails at lower risk.
-2. **SDK scope** (blocks the SDK half of Phase 2). A Python-only SDK matches the
-   current stack. A language-agnostic contract is only worth its cost if Dotmac
-   intends to run connectors it did not write — the same trust question that
-   sets the escalation ceiling in resolved decision 1.
+2. **SDK scope** — *Resolved 2026-07-24: Python-only.* Michael confirmed
+   connectors are written and managed by Dotmac. A language-agnostic contract
+   only earns its cost when third parties author connectors, which is not the
+   intent. The wire contract stays language-agnostic regardless (it is just
+   JSON), so a second language remains possible later without redesign; only
+   the published SDK is scoped to Python.
 3. **Built-in connectors currently execute in web processes.** The design
    states built-in connectors "execute in integration worker processes rather
    than FastAPI web processes". They do not: interactive capability calls such
@@ -347,14 +349,24 @@ goes through `build_execution_context` and `make_operation_executor` — rather
 than reaching past them, which is what makes it evidence about the system and
 not just about the transport. No ownership boundary moved. Clean.
 
-**Known gap at Phase 6: image signature verification is not implemented.** The
-design calls for "approved, signed, digest-pinned" workloads. Digest pinning is
-enforced (the manifest requires a sha256 digest and the transport runs the
-digest-addressed reference), but nothing verifies a signature. That is
-acceptable for the **first-party** scope this tier is sized for, where images
-are built by Dotmac, and is not acceptable for third-party connector code. Image
-signing must land before any connector Dotmac did not build is run, alongside
-the dedicated-host and microVM escalation.
+**Image signature verification is not implemented — and with first-party scope
+confirmed, this is defence in depth rather than a precondition.** The design
+calls for "approved, signed, digest-pinned" workloads. Digest pinning is
+enforced: the manifest requires a sha256 digest and the transport runs the
+digest-addressed reference. Because a digest is content-addressed, the image
+that runs cannot differ from the one the digest names, and the digest lives in a
+code-reviewed manifest in this repository. Substituting an image therefore
+requires changing the manifest, which code review sees.
+
+What signing would add is *provenance* — evidence of who built the artifact —
+which matters most when pulling by mutable tag, from a registry outside your
+control, or when running code you did not write. None of those hold for
+Dotmac-authored, digest-pinned connectors, so signing is worth doing but does
+not gate this tier.
+
+It becomes a genuine precondition if the trust model changes: running connector
+code Dotmac did not write, together with the dedicated-runner-host and microVM
+escalation recorded in resolved decision 1.
 
 **Phase 5b onward.** Each audit must show the runner does not become a
 parallel authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and

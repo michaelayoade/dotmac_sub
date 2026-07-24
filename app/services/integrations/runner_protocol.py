@@ -26,7 +26,7 @@ from "the connector never ran".
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -39,7 +39,9 @@ from app.services.integrations.runtime import (
     ValidationResult,
 )
 
-RUNNER_CONTRACT_VERSION = "dotmac.io/integrations/runner/v1"
+# Final so the type checker infers the Literal the model fields declare,
+# rather than a plain str that cannot satisfy them.
+RUNNER_CONTRACT_VERSION: Final = "dotmac.io/integrations/runner/v1"
 
 
 class RunnerVerb(StrEnum):

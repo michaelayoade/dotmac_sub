@@ -37,6 +37,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.config import settings
 from app.services.integrations.egress_gateway import EgressGateway, EgressGatewayError
 from app.services.integrations.egress_policy import EgressPolicy
 from app.services.integrations.external_runner import (
@@ -137,9 +138,10 @@ class PodmanTransport:
         self._memory = memory
         self._cpus = cpus
         self._pids_limit = pids_limit
-        # Secret env files live on tmpfs. XDG_RUNTIME_DIR is tmpfs and
-        # user-private on a rootless host; fall back only if it is unset.
-        self._runtime_dir = runtime_dir or os.environ.get("XDG_RUNTIME_DIR")
+        # Secret env files live on tmpfs. The directory is a deployment input
+        # owned by app.config, not read from the environment here: environment
+        # reads outside the declared owners are a parallel decision source.
+        self._runtime_dir = runtime_dir or (settings.connector_runtime_dir or None)
         self._podman_path = podman_path
 
     def _resolve_egress(self, connector_key: str) -> tuple[str, dict[str, str]]:
