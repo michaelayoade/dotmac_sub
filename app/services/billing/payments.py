@@ -513,8 +513,6 @@ class PaymentMethods(ListResponseMixin):
                 PaymentMethod.is_default.is_(True),
             ).update({"is_default": False})
         data = payload.model_dump()
-        data["is_active"] = False
-        data["is_default"] = False
         fields_set = payload.model_fields_set
         if "method_type" not in fields_set:
             default_method = settings_spec.resolve_value(
