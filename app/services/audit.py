@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import HTTPException, Request, Response
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import DetachedInstanceError
 
@@ -88,6 +88,7 @@ class AuditEvents(ListResponseMixin):
     def list(
         db: Session,
         actor_id: str | None = None,
+        actor_search: str | None = None,
         actor_type: AuditActorType | None = None,
         action: str | None = None,
         entity_type: str | None = None,
@@ -104,6 +105,17 @@ class AuditEvents(ListResponseMixin):
         stmt = select(AuditEvent)
         if actor_id:
             stmt = stmt.where(AuditEvent.actor_id == actor_id)
+        if actor_search:
+            # Search by the resolved person/key label. Also matches an exact
+            # actor_id so the field accepts either a name or a pasted uuid.
+            term = actor_search.strip()
+            if term:
+                stmt = stmt.where(
+                    or_(
+                        AuditEvent.actor_label.ilike(f"%{term}%"),
+                        AuditEvent.actor_id == term,
+                    )
+                )
         if actor_type:
             stmt = stmt.where(AuditEvent.actor_type == actor_type)
         if action:

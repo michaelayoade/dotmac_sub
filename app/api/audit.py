@@ -22,6 +22,13 @@ def get_audit_event(event_id: str, db: Session = Depends(get_db)):
 @router.get("", response_model=ListResponse[AuditEventRead])
 def list_audit_events(
     actor_id: str | None = None,
+    actor: str | None = Query(
+        default=None,
+        description=(
+            "Search by resolved actor name / API-key label "
+            "(also matches an exact actor id)."
+        ),
+    ),
     actor_type: str | None = None,
     action: str | None = None,
     entity_type: str | None = None,
@@ -40,6 +47,7 @@ def list_audit_events(
     return audit_service.audit_events.list_response(
         db,
         actor_id=actor_id,
+        actor_search=actor,
         actor_type=resolved_actor_type,
         action=action,
         entity_type=entity_type,

@@ -233,9 +233,15 @@ def log_audit_event(
         db_label = _resolve_actor_label_from_db(db, resolved_actor_id, actor_type)
         if db_label:
             metadata_payload["actor_name"] = db_label
+    # The resolved label is also stored in its own column so audit can be
+    # searched by person without a join and without parsing JSON.
+    actor_label = metadata_payload.get("actor_name") or metadata_payload.get(
+        "actor_email"
+    )
     payload = AuditEventCreate(
         actor_type=actor_type,
         actor_id=resolved_actor_id,
+        actor_label=actor_label,
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -621,6 +627,11 @@ def _resolve_actor_label_from_db(db, actor_id, actor_type) -> str | None:
 
 
 def _resolve_actor_name(event, subscribers: dict[str, object]) -> str:
+    # Prefer the label stored at write time — it is authoritative and survives
+    # deletion of the actor. Live resolution below only backfills older rows.
+    stored_label = getattr(event, "actor_label", None)
+    if stored_label:
+        return str(stored_label)
     actor_id = getattr(event, "actor_id", None)
     actor_type = getattr(event, "actor_type", None)
     if actor_id and (_is_user_actor(actor_type) or _is_api_key_actor(actor_type)):
