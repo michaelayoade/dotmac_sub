@@ -1,7 +1,7 @@
 """Cut payment gateway control over to connector capability bindings.
 
-Revision ID: 410_payment_gateway_control_plane
-Revises: 409_tr069_operation_lifecycle
+Revision ID: 412_payment_gateway_control_plane
+Revises: 411_uisp_olt_config_pack_exemption
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "410_payment_gateway_control_plane"
-down_revision = "409_tr069_operation_lifecycle"
+revision = "412_payment_gateway_control_plane"
+down_revision = "411_uisp_olt_config_pack_exemption"
 branch_labels = None
 depends_on = None
 

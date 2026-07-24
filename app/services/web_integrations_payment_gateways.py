@@ -246,15 +246,7 @@ def save_config(
     provider_type = _provider_type(provider_type_value)
     definition = _manifest(provider_type)
     installation = _selected_installation(db, provider_type)
-    if installation is None:
-        installation = installations.create_draft(
-            db,
-            connector_key=provider_type.value,
-            name=f"{provider_type.value.title()} Production",
-            environment="production",
-            actor=actor,
-        )
-    current = installation.current_config_revision
+    current = installation.current_config_revision if installation else None
     existing_refs = dict(current.secret_refs or {}) if current else {}
     capability_ids = _manifest_capabilities(definition)
     required = set(_required_refs(definition)) | set(
@@ -295,6 +287,14 @@ def save_config(
             + ". Create the value at that exact path and field before saving."
         )
 
+    if installation is None:
+        installation = installations.create_draft(
+            db,
+            connector_key=provider_type.value,
+            name=f"{provider_type.value.title()} Production",
+            environment="production",
+            actor=actor,
+        )
     installations.create_config_revision(
         db,
         installation_id=installation.id,

@@ -299,7 +299,7 @@ def _create_customer_gateway_topup_intent(
                 "Invoice was not found for this account",
                 invoice_id=str(command.invoice_id),
             )
-        if invoice.status in {
+        if invoice.is_proforma or invoice.status in {
             InvoiceStatus.draft,
             InvoiceStatus.paid,
             InvoiceStatus.void,

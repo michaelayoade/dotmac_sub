@@ -122,7 +122,7 @@ The cutover is direct:
 - retired template and route-level Paystack fallback.
 
 No legacy routing-setting reader or dual-write remains. Migration
-`410_payment_gateway_control_plane` removes the retired settings and adds the
+`412_payment_gateway_control_plane` removes the retired settings and adds the
 pinned capability binding to payment intents. Pre-cutover intents without a
 binding remain provider-pinned so an already-debited customer is not stranded;
 all new intents require and persist the selected binding.

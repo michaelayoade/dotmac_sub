@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
 
 from app.models.billing import BillingAccount, Invoice, InvoiceStatus, TopupIntent
 from app.models.idempotency import IdempotencyKey
@@ -127,6 +128,55 @@ def test_customer_invoice_creation_derives_locked_invoice_amount(
         "account_id": str(account_id),
         "capability_binding_id": str(binding_id),
     }
+
+
+def test_customer_invoice_creation_rejects_proforma_at_owner_boundary(
+    monkeypatch, db_session, subscriber
+):
+    _patch_policy(monkeypatch)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="PF-GATEWAY-OWNER",
+        currency="NGN",
+        subtotal=Decimal("3750.00"),
+        total=Decimal("3750.00"),
+        balance_due=Decimal("3750.00"),
+        status=InvoiceStatus.issued,
+        is_proforma=True,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    binding = _checkout_binding(db_session)
+    account_id = subscriber.id
+    invoice_id = invoice.id
+    binding_id = binding.id
+
+    db_session_adapter.release_read_transaction(db_session)
+    with pytest.raises(svc.GatewayTopupIntentError) as rejected:
+        svc.create_customer_gateway_topup_intent(
+            db_session,
+            svc.CreateCustomerGatewayTopupIntentCommand(
+                flow=svc.CustomerGatewayTopupFlow.invoice_payment,
+                account_id=account_id,
+                invoice_id=invoice_id,
+                reference="gateway-proforma-test-ref",
+                provider_type="paystack",
+                provider_id=None,
+                created_by="pytest",
+                capability_binding_id=binding_id,
+            ),
+            context=_context(svc.CREATE_CUSTOMER_SCOPE),
+        )
+
+    assert rejected.value.code.endswith("invoice_not_payable")
+    assert (
+        db_session.scalar(
+            select(TopupIntent).where(
+                TopupIntent.reference == "gateway-proforma-test-ref"
+            )
+        )
+        is None
+    )
 
 
 def test_customer_deposit_creation_uses_policy_and_replays(
