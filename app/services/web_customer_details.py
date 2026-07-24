@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
@@ -1455,7 +1456,7 @@ def _build_network_access_cards(
     traces_by_subscription: dict[str, dict[str, object] | None] | None = None,
     access_state_by_subscription: dict[str, dict[str, object] | None] | None = None,
     incident_by_subscription: dict[str, dict[str, object] | None] | None = None,
-    service_health_by_subscription: dict[str, object] | None = None,
+    service_health_by_subscription: Mapping[str, object] | None = None,
 ) -> list[dict]:
     """Build network access info cards from subscriptions with live access."""
     cards = []

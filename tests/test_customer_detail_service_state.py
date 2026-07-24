@@ -305,10 +305,7 @@ def test_network_access_defaults_to_active_cards_and_expands_inactive_cards():
     template = Path("templates/admin/customers/detail.html").read_text()
 
     assert "showAllNetworkAccess: false" in template
-    assert (
-        "showAllNetworkAccess || '{{ card.status }}' === 'active'"
-        in template
-    )
+    assert "showAllNetworkAccess || '{{ card.status }}' === 'active'" in template
     assert "(network_access_inactive_count | default(0)) > 0" in template
     assert "showAllNetworkAccess ? 'Show active only' : 'View more'" in template
     assert "cancelled, hidden, and other inactive subscriptions" in template
