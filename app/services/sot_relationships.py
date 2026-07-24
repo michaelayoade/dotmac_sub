@@ -4666,6 +4666,204 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.service_extensions",
+                module="app.services.service_extensions",
+                owns=(
+                    "service-extension lifecycle and exact grant intervals",
+                    "service-extension billing-anchor projection",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "auth.permission_gate",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "The owner records one immutable grant interval per affected "
+                    "subscription. Its start is the later of the existing billing "
+                    "anchor and application time; next_billing_at, coverage, "
+                    "enforcement shielding, audit, events, and UI projections consume "
+                    "that interval rather than maintaining parallel clocks."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="service-extension lifecycle and exact grant intervals",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authenticated extension command",
+                                "canonical subscription lifecycle and billing anchor",
+                                "service-extension duration policy",
+                            ),
+                            canonical_writer="financial.service_extensions",
+                        ),
+                        ConcernContract(
+                            name="service-extension billing-anchor projection",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "exact service-extension grant interval",
+                                "canonical subscription lifecycle and billing anchor",
+                            ),
+                            canonical_writer="financial.service_extensions",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated extension command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authorized create, apply, or cancel command with actor "
+                                "and reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle and billing anchor",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Subscription identity, lifecycle status, "
+                                "enforcement locks, and next_billing_at projection"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="service-extension duration policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="billing.service_extension_max_days",
+                        ),
+                        AuthorityInput(
+                            name="exact service-extension grant interval",
+                            owner="financial.service_extensions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "applied ServiceExtensionEntry grant_starts_at, "
+                                "grant_ends_at, and anchor_basis"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each create, apply, or cancel command enters "
+                            "execute_owner_command once; nested lifecycle, event, and "
+                            "audit helpers are flush-only."
+                        ),
+                        locking=(
+                            "Apply and cancel lock the ServiceExtension transition row; "
+                            "restoration locks each affected subscription, and a unique "
+                            "extension/subscription entry prevents duplicate grants."
+                        ),
+                        idempotency=(
+                            "An extension may transition from pending once; apply uses "
+                            "the extension id as its idempotency identity and duplicate "
+                            "entry evidence is database-rejected."
+                        ),
+                        retries=(
+                            "Adapters retry only after rollback; a completed transition "
+                            "returns a stable invalid-transition outcome rather than "
+                            "granting service twice."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "access.service_extensions.ambiguous_customer_identifier",
+                            "access.service_extensions.blank_customer_identifier",
+                            "access.service_extensions.customer_not_found",
+                            "access.service_extensions.empty_subscriber_scope",
+                            "access.service_extensions.extension_not_found",
+                            "access.service_extensions.invalid_customer_identifier",
+                            "access.service_extensions.invalid_days",
+                            "access.service_extensions.invalid_extension_id",
+                            "access.service_extensions.invalid_transition",
+                            "access.service_extensions.invalid_window",
+                            "access.service_extensions.missing_reason",
+                            "access.service_extensions.missing_scope_id",
+                            *owner_command_boundary_error_codes(
+                                "financial.service_extensions"
+                            ),
+                        ),
+                        mapping_owner="admin billing and CRM adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "stale or missing billing anchor",
+                            "duplicate lifecycle transition",
+                            "ambiguous customer scope",
+                            "incomplete restoration evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("billing.service_extended",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Grant interval and anchor-basis fields are additive within "
+                            "schema version 1."
+                        ),
+                        replay=(
+                            "Consumers deduplicate by event identity and extension-entry "
+                            "identity."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="service-extension billing-anchor projection",
+                            input_names=(
+                                "exact service-extension grant interval",
+                                "canonical subscription lifecycle and billing anchor",
+                            ),
+                            writer="financial.service_extensions",
+                            freshness="Atomic with each applied extension entry.",
+                            stale_behavior=(
+                                "Coverage and enforcement trust the exact interval and "
+                                "report anchor drift."
+                            ),
+                            drift_signal=(
+                                "ServiceExtensionEntry grant end differs from its "
+                                "subscription billing-anchor projection."
+                            ),
+                            rebuild_operation=(
+                                "Project next_billing_at from ordered immutable applied "
+                                "grant evidence under operator reconciliation."
+                            ),
+                            repair_owner="financial.service_extensions",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "unregistered service_extensions direct commits, stale-anchor "
+                            "addition, and created_at-based enforcement shield"
+                        ),
+                        new_owner="financial.service_extensions",
+                        verification=(
+                            "Effective-interval behavior, exact coverage, CRM, migration, "
+                            "and architecture boundary tests."
+                        ),
+                        cutover_gate=(
+                            "All grant consumers read grant_starts_at/grant_ends_at and "
+                            "public transitions use the owner command executor."
+                        ),
+                        fallback_retirement=(
+                            "previous_next_billing_at plus days and created_at plus days "
+                            "are historical evidence only, never current decisions."
+                        ),
+                    ),
+                    steward="billing and customer operations",
+                    design_refs=(
+                        "docs/designs/SERVICE_EXTENSION_EFFECTIVE_INTERVALS.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_service_extensions.py",
+                        "tests/test_prepaid_service_coverage.py",
+                        "tests/architecture/test_service_extension_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_service_coverage",
                 module="app.services.prepaid_service_coverage",
                 owns=(
@@ -4674,6 +4872,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=(
                     "access.subscription_lifecycle",
+                    "financial.service_extensions",
                     "financial.prepaid_service_renewals",
                     "financial.subscription_billing_grants",
                 ),
@@ -4734,11 +4933,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="explicit granted-service intervals",
-                            owner="access.subscription_lifecycle",
+                            owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
-                                "applied ServiceExtensionEntry exact previous and new "
-                                "billing-anchor interval"
+                                "applied ServiceExtensionEntry exact grant_starts_at and "
+                                "grant_ends_at interval"
                             ),
                         ),
                     ),
@@ -4814,6 +5013,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.invoices",
                     "financial.prepaid_service_coverage",
                     "financial.prepaid_service_renewals",
+                    "financial.service_extensions",
                 ),
                 notes=(
                     "A preview classifies the complete or selected prepaid cohort from "
@@ -4874,9 +5074,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="explicit granted-service intervals",
-                            owner="access.subscription_lifecycle",
+                            owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source="applied ServiceExtensionEntry exact added interval",
+                            source=(
+                                "applied ServiceExtensionEntry exact grant_starts_at and "
+                                "grant_ends_at interval"
+                            ),
                         ),
                     ),
                     transaction=TransactionContract(

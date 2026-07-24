@@ -160,7 +160,6 @@ app.services.reseller_service_requests
 app.services.router_management.config
 app.services.router_management.inventory
 app.services.service_entitlements
-app.services.service_extensions
 app.services.sms
 app.services.stale_overdue_lock_reconcile
 app.services.subscription_changes
