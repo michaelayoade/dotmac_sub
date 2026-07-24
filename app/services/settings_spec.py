@@ -661,8 +661,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
         # SMS is intentionally absent — it is retired and disabled; a future SMS
         # plugin adds it back here per category. email is the always-available
         # base; whatsapp is the approved, delivering channel.
+        # No global "default": a global default would intercept callers that
+        # pass their own sensible fallback channels (e.g. FUP enforcement routes
+        # category="fup" with per-kind push channels) before their default is
+        # reached. Category defaults cover the event-spec categories; event
+        # overrides preserve the handful of push-native events whose channels a
+        # category default cannot express.
         default={
-            "default": ["email"],
             "categories": {
                 "account": ["email"],
                 "billing": ["email", "whatsapp"],
@@ -670,7 +675,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
                 "support": ["email", "whatsapp", "push"],
                 "usage": ["email", "whatsapp"],
             },
-            "events": {},
+            "events": {
+                "referral_reward_issued": ["push"],
+                "usage_warning": ["push", "email"],
+                "usage_exhausted": ["push", "email"],
+                "service_extended": ["push", "email"],
+                "addon_expiring": ["push", "email"],
+            },
         },
         label="Notification channel policy: {default: [], categories: {}, events: {}}",
     ),

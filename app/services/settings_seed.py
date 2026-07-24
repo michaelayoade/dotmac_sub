@@ -1058,9 +1058,11 @@ def _seed_missing_notification_templates(db: Session) -> int:
     # the seeded billing-category policy can route this reward to, so a routed
     # channel is never missing its template. Operators add more via the UI.
     referral_reward_spec = EVENT_NOTIFICATION_SPECS[EventType.referral_reward_issued]
+    # The seeded policy routes this reward to push; seed an email template too as
+    # a usable spare if an operator adds email in the matrix.
     referral_template_channels = (
+        NotificationChannel.push,
         NotificationChannel.email,
-        NotificationChannel.whatsapp,
     )
     templates.extend(
         {
