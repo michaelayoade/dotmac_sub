@@ -117,15 +117,25 @@ def test_a_future_plugin_re_enables_sms_by_flipping_the_flag(monkeypatch):
     assert policy.channel_disabled_in_config(None, NotificationChannel.sms) is False
 
 
-def test_matrix_marks_a_not_ready_channel_unavailable(monkeypatch):
-    """The channel policy page must not offer a dead channel for selection."""
+def test_matrix_marks_a_disabled_channel_unavailable(monkeypatch):
+    """A config-disabled channel (retired SMS) is marked unavailable; a merely
+    not-ready-but-enabled channel is not."""
     from app.services import notification_channel_policy as channel_policy
     from app.services import web_notification_channels as view
 
     monkeypatch.setattr(
         view,
         "_channel_readiness",
-        lambda db: {"email": (True, ""), "sms": (False, "SMS is disabled")},
+        lambda db: {
+            "email": (True, ""),
+            "sms": (False, "SMS is disabled"),
+            "whatsapp": (False, "not configured yet"),
+        },
+    )
+    monkeypatch.setattr(
+        view,
+        "channel_disabled_in_config",
+        lambda db, channel: channel.value == "sms",
     )
     monkeypatch.setattr(
         channel_policy,
@@ -134,21 +144,25 @@ def test_matrix_marks_a_not_ready_channel_unavailable(monkeypatch):
     )
     monkeypatch.setattr(channel_policy, "legacy_event_overrides", lambda db: {})
 
-    context = view.channel_policy_context(None)
-    sms = next(c for c in context["channel_policy_channels"] if c["id"] == "sms")
-    assert sms["ready"] is False
-    assert "disabled" in sms["message"].lower()
+    channels = {
+        c["id"]: c for c in view.channel_policy_context(None)["channel_policy_channels"]
+    }
+    assert channels["sms"]["disabled"] is True
+    # whatsapp is not ready but NOT disabled -> stays selectable with a warning
+    assert channels["whatsapp"]["disabled"] is False
 
 
-def test_save_drops_a_hand_posted_unavailable_channel(monkeypatch):
-    """The checkbox is disabled in the UI; the writer defends the POST too."""
+def test_save_drops_a_hand_posted_disabled_channel(monkeypatch):
+    """The checkbox is disabled in the UI; the writer defends the POST too.
+
+    Only a config-disabled channel is dropped, never a merely not-ready one."""
     from app.services import notification_channel_policy as channel_policy
     from app.services import web_notification_channels as view
 
     monkeypatch.setattr(
         view,
-        "_channel_readiness",
-        lambda db: {"email": (True, ""), "sms": (False, "off")},
+        "channel_disabled_in_config",
+        lambda db, channel: channel.value == "sms",
     )
     written = {}
     monkeypatch.setattr(

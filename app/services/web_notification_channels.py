@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.models.notification import NotificationChannel
 from app.services import notification_channel_policy as channel_policy
 from app.services import web_notifications
+from app.services.customer_notification_policy import channel_disabled_in_config
 from app.services.events.handlers.notification import (
     event_catalogue,
     event_categories,
@@ -69,6 +70,13 @@ def channel_policy_context(db: Session) -> dict[str, Any]:
             "label": _CHANNEL_LABELS.get(channel, channel.value.capitalize()),
             "ready": readiness.get(channel.value, (False, "Unknown"))[0],
             "message": readiness.get(channel.value, (False, "Unknown"))[1],
+            # `disabled` is a deliberate config state (e.g. SMS retired via
+            # sms_enabled=false), distinct from `ready` which is a transient
+            # transport probe. Only a disabled channel is made unselectable and
+            # dropped from writes; a not-ready-but-enabled channel keeps its
+            # warning but stays selectable so a brief probe failure never drops
+            # an operator's routing.
+            "disabled": channel_disabled_in_config(db, channel),
             "settings_url": _READINESS_URLS.get(channel),
         }
         for channel in channel_policy.SELECTABLE_CHANNELS
@@ -138,14 +146,15 @@ def save_channel_policy(
     """
     getlist = getattr(form, "getlist", None)
 
-    # A channel that is not ready is disabled in the UI, but defend the write
-    # too: never persist a route to an unavailable channel (e.g. a hand-crafted
-    # POST, or SMS while it is retired). A channel already routes to nothing if
-    # it is disabled; storing it would just resurface a dead option.
+    # Defend the write: never persist a route to a channel that is explicitly
+    # DISABLED in config (e.g. SMS while retired). This is a deliberate operator
+    # state, not the transient readiness probe — keying on readiness here would
+    # silently drop email routes during a brief SMTP hiccup. The UI already
+    # disables these checkboxes; this covers a hand-crafted POST.
     unavailable = {
-        channel_id
-        for channel_id, (ready, _msg) in _channel_readiness(db).items()
-        if not ready
+        channel.value
+        for channel in channel_policy.SELECTABLE_CHANNELS
+        if channel_disabled_in_config(db, channel)
     }
 
     def _values(field: str) -> list[str]:
