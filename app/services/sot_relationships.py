@@ -11782,7 +11782,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "native conversation-to-ticket provenance",
                 ),
                 depends_on=(
-                    "communications.team_inbox",
+                    "communications.team_inbox_threads",
                     "support.ticket_lifecycle",
                     "observability.audit_log",
                 ),
@@ -11816,7 +11816,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     inputs=(
                         AuthorityInput(
                             name="canonical conversation state",
-                            owner="communications.team_inbox",
+                            owner="communications.team_inbox_threads",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
                                 "Active InboxConversation identity, status, "
