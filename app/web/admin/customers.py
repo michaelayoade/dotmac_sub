@@ -24,10 +24,9 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.subscriber import SubscriberCategory
-from app.services import customer_portal
+from app.services import customer_portal, team_inbox_read
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
-from app.services import team_inbox_read
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import (
     web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
