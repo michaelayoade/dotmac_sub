@@ -30,6 +30,10 @@ class AuditEvent(Base):
         Enum(AuditActorType), default=AuditActorType.system
     )
     actor_id: Mapped[str | None] = mapped_column(String(120))
+    # Human label resolved at write time (person name, API-key label). Stored,
+    # not derived on read, so it survives deletion of the referenced actor
+    # (actor_id is not a foreign key) and can be searched without a join.
+    actor_label: Mapped[str | None] = mapped_column(String(160), index=True)
     action: Mapped[str] = mapped_column(String(80))
     entity_type: Mapped[str] = mapped_column(String(160))
     entity_id: Mapped[str | None] = mapped_column(String(120))
