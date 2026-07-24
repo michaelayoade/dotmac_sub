@@ -299,6 +299,13 @@ Enablement requires current manifest/config compatibility, resolvable secret
 references, successful connection validation, explicit capability grants,
 required domain policy bindings, and current security approval.
 
+An executable manifest change requires an explicit adoption path from each
+known prior version/digest in the same release. After migrations and before
+service replacement, deployment verification compares every enabled
+installation pin with the candidate registry and aborts on unknown drift.
+Runtime consumers independently fail closed; customer-facing routing projects a
+mismatched installation as unavailable instead of attempting execution.
+
 ## Security and authorization
 
 Every manifest declares requested capabilities, data classes, secret bindings,
@@ -418,6 +425,7 @@ Every behavior slice must prove:
   retirement;
 - no duplicate external send and no duplicate Sub domain write;
 - manifest, contract, config, and capability validation;
+- exact prior-pin adoption plus a post-migration candidate-manifest gate;
 - crash/restart behavior at every durable state boundary;
 - stable idempotency and safe replay of incomplete work;
 - shadow parity on a representative cohort;
