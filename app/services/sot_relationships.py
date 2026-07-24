@@ -2991,6 +2991,147 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.payment_configuration_staff_actions",
+                module="app.services.payment_configuration_staff_actions",
+                owns=(
+                    "reviewed payment configuration lifecycle and audit coordination",
+                ),
+                depends_on=(
+                    "financial.collection_accounts",
+                    "financial.payment_routing",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Settings adapters preview and submit only. This coordinator "
+                    "locks and rechecks collection-account, payment-channel, and "
+                    "channel-mapping state, applies lifecycle/default changes, and "
+                    "stages the decision audit atomically. It never selects a "
+                    "customer checkout gateway."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "reviewed payment configuration lifecycle and "
+                                "audit coordination"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "payment configuration staff command",
+                                "canonical collection-account state",
+                                "canonical settlement-attribution state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="payment configuration staff command",
+                            owner="financial.payment_configuration_staff_actions",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed resource, action, actor, permission scope, "
+                                "review fingerprint, confirmation, and command context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical collection-account state",
+                            owner="financial.collection_accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked CollectionAccount identity, currency, "
+                                "presentment priority, and lifecycle"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical settlement-attribution state",
+                            owner="financial.payment_configuration_staff_actions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked PaymentChannel and PaymentChannelAccount "
+                                "identity, provider, currency, priority, default, "
+                                "and lifecycle facts"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "confirm_payment_configuration_staff_action enters "
+                            "execute_owner_command exactly once on a transaction-free "
+                            "session and commits configuration plus audit atomically."
+                        ),
+                        locking=(
+                            "The target and affected same-provider, same-currency, "
+                            "collection-account, and mapping rows are locked before "
+                            "the preview fingerprint is rechecked."
+                        ),
+                        idempotency=(
+                            "The command context carries the resource, action, and "
+                            "review fingerprint; a stale fingerprint fails closed."
+                        ),
+                        retries=(
+                            "Contention or stale-preview failures return to review; "
+                            "adapters do not replay an unreviewed decision."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes(
+                                "financial.payment_configuration_staff_actions"
+                            ),
+                            "financial.payment_configuration_staff_actions.not_found",
+                            "financial.payment_configuration_staff_actions.invalid_action",
+                            "financial.payment_configuration_staff_actions.invalid_mapping",
+                            "financial.payment_configuration_staff_actions.invalid_scope",
+                            "financial.payment_configuration_staff_actions.invalid_actor",
+                            "financial.payment_configuration_staff_actions.confirmation_required",
+                            "financial.payment_configuration_staff_actions.stale_preview",
+                            "financial.payment_configuration_staff_actions.action_not_available",
+                        ),
+                        mapping_owner="Settings payment-configuration web adapter",
+                        retryable_codes=(
+                            "financial.payment_configuration_staff_actions.stale_preview",
+                        ),
+                        fail_closed_on=(
+                            "missing actor or scope",
+                            "stale reviewed state",
+                            "last customer transfer destination",
+                            "inactive mapping dependencies",
+                            "default mapping replacement not selected",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "Billing templates, form booleans, direct toggle routes, "
+                            "and PaymentChannel.default_collection_account_id"
+                        ),
+                        new_owner="financial.payment_configuration_staff_actions",
+                        verification=(
+                            "Owner behavior, stale-preview, route, template, migration, "
+                            "and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Canonical Settings routes use reviewed actions and "
+                            "payment_channel_accounts is the sole channel-to-account map."
+                        ),
+                        fallback_retirement=(
+                            "Old Billing routes, browser confirmation toggles, lifecycle "
+                            "form fields, and the duplicate default pointer are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/PAYMENT_CONFIGURATION_SETTINGS_SAFE_ACTIONS.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_configuration_staff_actions.py",
+                        "tests/test_payment_configuration_settings_ui.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.payment_routing",
                 module="app.services.payment_routing",
                 owns=(
@@ -18476,6 +18617,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "integration.installations.invalid_transition",
                             "integration.installations.manifest_adoption_incompatible",
                             "integration.installations.manifest_adoption_scope_invalid",
+                            "integration.installations.capability_provisioning_scope_invalid",
+                            "integration.installations.invalid_capability",
+                            "integration.installations.stale_capability_binding",
+                            "integration.installations.connection_validation_failed",
                             "integration.installations.stale_manifest_pin",
                             "integration.installations.target_manifest_not_deployed",
                             "integration.installations.invalid_command_context",
@@ -18499,6 +18644,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         event_types=(
                             "integration.installation.lifecycle.v1",
                             "integration.installation.manifest_adopted",
+                            "integration.installation.capability_provisioned",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
@@ -19076,10 +19222,167 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="integration.jobs",
                 module="app.services.integration",
                 owns=("integration targets", "integration jobs", "integration runs"),
-                depends_on=("integration.registry",),
+                depends_on=(
+                    "integration.registry",
+                    "integration.installations",
+                    "scheduler.registry",
+                ),
                 notes=(
                     "Jobs bind directly to versioned connector capabilities; "
-                    "adapter/action transport selection is not a runtime input."
+                    "adapter/action transport selection is not a runtime input. "
+                    "The CRM ticket cutover activates its historical job only "
+                    "through the exact-state owner command."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=concern,
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "deployed capability contract",
+                                "enabled integration capability binding",
+                                "integration job lifecycle protocol",
+                                "scheduler-owned cadence",
+                            ),
+                            canonical_writer="integration.jobs",
+                        )
+                        for concern in (
+                            "integration targets",
+                            "integration jobs",
+                            "integration runs",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="deployed capability contract",
+                            owner="integration.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "registered capability identity, supported modes, "
+                                "and connector contract version"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="enabled integration capability binding",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "enabled version-pinned installation binding selected "
+                                "for one exact integration job"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="integration job lifecycle protocol",
+                            owner="integration.jobs",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "target, inactive or active job, exact capability "
+                                "binding, run identity, and terminal run evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="scheduler-owned cadence",
+                            owner="scheduler.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "canonical feature enablement and cadence; a manual "
+                                "capability job does not create a second schedule"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each migrated public job command completes one exact "
+                            "target/job/run aggregate transaction."
+                        ),
+                        locking=(
+                            "Capability activation locks the selected job, target, and "
+                            "binding in stable order before changing executable state."
+                        ),
+                        idempotency=(
+                            "An already active job on the reviewed binding replays; "
+                            "changed reviewed job state fails closed."
+                        ),
+                        retries=(
+                            "Stale state and lifecycle conflicts require a new preview; "
+                            "database conflicts retry the complete command."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "integration.jobs.job_activation_scope_invalid",
+                            "integration.jobs.invalid_capability",
+                            "integration.jobs.job_not_found",
+                            "integration.jobs.target_not_found",
+                            "integration.jobs.target_type_mismatch",
+                            "integration.jobs.target_disabled",
+                            "integration.jobs.job_type_mismatch",
+                            "integration.jobs.binding_not_found",
+                            "integration.jobs.binding_capability_mismatch",
+                            "integration.jobs.binding_disabled",
+                            "integration.jobs.stale_job_state",
+                            "integration.jobs.binding_conflict",
+                            "integration.jobs.invalid_command_context",
+                            "integration.jobs.command_contract_violation",
+                            "integration.jobs.nested_owner_command",
+                            "integration.jobs.active_caller_transaction",
+                            "integration.jobs.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "integration admin API and reviewed integration cutover CLI"
+                        ),
+                        fail_closed_on=(
+                            "missing or disabled capability binding",
+                            "inactive or wrong-type target",
+                            "stale reviewed job state",
+                            "a second scheduler cadence path",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("integration.job.capability_activated",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 identifies the job, target, connector, "
+                            "capability binding, actor, and command without secrets."
+                        ),
+                        replay=(
+                            "The authoritative job and binding rows rebuild executable "
+                            "state; replay does not emit another activation event."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "legacy adapter/action jobs disabled without explicit "
+                            "capability reactivation"
+                        ),
+                        new_owner="integration.jobs",
+                        verification=(
+                            "Exact-state activation, replay, stale-state, scheduler "
+                            "readiness, deployment-gate, and CRM sync tests."
+                        ),
+                        cutover_gate=(
+                            "Enabled crm.ticket_pull requires exactly one enabled "
+                            "ticket-observation binding and one active bound manual job."
+                        ),
+                        fallback_retirement=(
+                            "Unbound active jobs and independent interval scheduling "
+                            "remain prohibited."
+                        ),
+                    ),
+                    steward="platform integrations",
+                    design_refs=(
+                        "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                        "docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_integration_capability_sync.py",
+                        "tests/test_crm_ticket_capability_cutover.py",
+                        "tests/architecture/test_integration_platform_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

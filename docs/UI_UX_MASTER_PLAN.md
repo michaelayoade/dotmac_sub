@@ -446,7 +446,7 @@ record.
   deposits and online/card checkout remain full-value and do not ask the
   customer for a WHT rate.
 
-### 3k. Payment Channels (`/admin/billing/payment-channels`)
+### 3k. Payment Channels (`/admin/settings/billing/payment-channels`)
 
 CRUD table: Name, Type, Provider, Active, Actions
 
