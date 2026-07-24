@@ -437,3 +437,51 @@ def test_config_rejects_an_out_of_bounds_interval(db_session):
                 "outage_auto_notify_interval_seconds": "5",
             },
         )
+
+
+# --- nothing runs by default ------------------------------------------------
+
+
+def test_beat_entry_follows_the_feature_flag_not_always_on():
+    """With automation off (the default) the runner is not even scheduled, so
+    no outage dispatch task fires at all.
+
+    Scoped to this one _sync_scheduled_task call rather than a character window
+    around it: an offset-based assertion silently breaks whenever anything else
+    edits the file, which is exactly how it passed in isolation and failed on
+    the CI merge with main.
+    """
+    import inspect
+
+    from app.services import scheduler_config
+
+    source = inspect.getsource(scheduler_config)
+    blocks = [
+        block
+        for block in source.split("_sync_scheduled_task(")
+        if 'name="outage_auto_notify"' in block
+    ]
+    assert len(blocks) == 1, "expected exactly one outage_auto_notify schedule entry"
+
+    # Only the arguments of that call, up to its closing parenthesis.
+    call = blocks[0].split("\n        )")[0]
+    assert "enabled=outage_auto_notify_enabled" in call
+    assert "enabled=True" not in call
+
+
+def test_automation_ships_off_and_dry_run():
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    assert (
+        settings_spec.get_spec(
+            SettingDomain.network_monitoring, "outage_auto_notify_enabled"
+        ).default
+        is False
+    )
+    assert (
+        settings_spec.get_spec(
+            SettingDomain.network_monitoring, "outage_auto_notify_dry_run"
+        ).default
+        is True
+    )
