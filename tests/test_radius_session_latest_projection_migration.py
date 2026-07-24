@@ -31,7 +31,7 @@ def test_radius_session_projection_remains_in_the_single_migration_chain() -> No
 
     assert module.revision == "408_radius_session_latest_projection"
     assert module.down_revision == "407_retire_parallel_radius_refresh"
-    assert script.get_heads() == ["413_audit_actor_label"]
+    assert script.get_heads() == ["414_adopt_paystack_manifest_pin"]
 
 
 def test_radius_session_projection_uses_nonblocking_postgres_ddl() -> None:
