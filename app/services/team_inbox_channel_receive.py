@@ -21,6 +21,8 @@ from app.models.team_inbox import (
 from app.services import team_inbox_media, team_inbox_realtime, team_inbox_routing
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import (
+    IDENTITY_TYPE_EMAIL,
+    IDENTITY_TYPE_PHONE,
     default_country_code,
     normalize_channel_address,
 )
@@ -134,6 +136,99 @@ def _reseller_contact(reseller: Reseller, channel_type: str) -> str | None:
     return reseller.contact_phone
 
 
+def _indexed_subscriber_ids(
+    db: Session, *, channel_type: str, normalized: str
+) -> list[UUID] | None:
+    """Every subscriber matching this contact, via the identity index.
+
+    Returns ``None`` when the index holds no rows at all, so a deployment or
+    test database without a backfill falls back to the legacy scan rather than
+    silently resolving nobody. An empty list means the index is populated and
+    genuinely has no match.
+
+    The index is keyed on the same normalization this module already applies
+    (``normalize_channel_address`` dispatches to the same phone/email
+    normalizers the index writer uses), and it spans Subscriber,
+    SubscriberContact and SubscriberChannel — so this both avoids a full-table
+    scan per inbound message and matches contacts the old scan missed.
+    """
+    from app.models.customer_identity import CustomerIdentityIndex
+
+    identity_type = (
+        IDENTITY_TYPE_EMAIL
+        if channel_type == InboxChannelType.email.value
+        else IDENTITY_TYPE_PHONE
+    )
+    rows = (
+        db.query(CustomerIdentityIndex.subscriber_id)
+        .filter(CustomerIdentityIndex.identity_type == identity_type)
+        .filter(CustomerIdentityIndex.normalized_value == normalized)
+        .distinct()
+        .all()
+    )
+    if rows:
+        return [row[0] for row in rows]
+
+    index_populated = db.query(CustomerIdentityIndex.id).limit(1).first() is not None
+    return [] if index_populated else None
+
+
+def _subscriber_matches(
+    db: Session,
+    *,
+    channel_type: str,
+    normalized: str | None,
+    country_code: str,
+) -> tuple[list[Subscriber], list[Subscriber]]:
+    """All matching subscribers, partitioned into linkable and suppressed.
+
+    Deliberately multi-result: the inbox must record EVERY match so an
+    ambiguous contact is never silently resolved to one of several people, and
+    an inactive match is reported as suppressed with its ids rather than
+    disappearing. Collapsing this to a single answer is what makes a wrong
+    auto-link possible, and a wrong link shows one customer another's account.
+
+    Opaque channels (Instagram, Facebook, chat widget) carry a platform-scoped
+    id with nothing to look up, so they never auto-match — they resolve only
+    through a reviewed InboxContactLink, handled by the caller.
+    """
+    if not normalized or channel_type in _OPAQUE_CONTACT_CHANNELS:
+        return [], []
+
+    matched: list[Subscriber] = []
+    suppressed: list[Subscriber] = []
+
+    subscriber_ids = _indexed_subscriber_ids(
+        db, channel_type=channel_type, normalized=normalized
+    )
+    if subscriber_ids is not None:
+        for subscriber_id in subscriber_ids:
+            subscriber = db.get(Subscriber, subscriber_id)
+            if subscriber is None:
+                continue
+            if _subscriber_is_linkable(subscriber):
+                matched.append(subscriber)
+            else:
+                suppressed.append(subscriber)
+        return matched, suppressed
+
+    # No identity index available — fall back to the original scan so behaviour
+    # is never worse than before, just slower.
+    for subscriber in db.query(Subscriber).all():
+        candidate = _normalize_contact_with_country(
+            channel_type,
+            _subscriber_contact(subscriber, channel_type),
+            country_code=country_code,
+        )
+        if candidate != normalized:
+            continue
+        if _subscriber_is_linkable(subscriber):
+            matched.append(subscriber)
+        else:
+            suppressed.append(subscriber)
+    return matched, suppressed
+
+
 def resolve_contact_context(
     db: Session,
     *,
@@ -214,21 +309,12 @@ def resolve_contact_context(
                 matched_reseller_ids=[str(reseller.id)],
             )
 
-    matched_subscribers: list[Subscriber] = []
-    suppressed_subscribers: list[Subscriber] = []
-    if normalized:
-        for subscriber in db.query(Subscriber).all():
-            candidate = _normalize_contact_with_country(
-                channel_type,
-                _subscriber_contact(subscriber, channel_type),
-                country_code=country_code,
-            )
-            if candidate != normalized:
-                continue
-            if _subscriber_is_linkable(subscriber):
-                matched_subscribers.append(subscriber)
-            else:
-                suppressed_subscribers.append(subscriber)
+    matched_subscribers, suppressed_subscribers = _subscriber_matches(
+        db,
+        channel_type=channel_type,
+        normalized=normalized,
+        country_code=country_code,
+    )
 
     matched_resellers: list[Reseller] = []
     if normalized:
