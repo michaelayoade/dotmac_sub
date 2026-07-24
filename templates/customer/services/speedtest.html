@@ -9,6 +9,14 @@
             <div>
                 <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">Connection Speed Test</h1>
                 <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Run an on-demand browser speed test and save the result to your account history.</p>
+                {# Name what is being measured. This test runs on THIS device over
+                   its own Wi-Fi, so it reports the slowest link in the chain -
+                   usually the Wi-Fi, not the Dotmac connection. Presenting it as
+                   "your internet speed" turns a Wi-Fi problem into a dispute
+                   about the service. #}
+                <div class="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:border-sky-800 dark:bg-sky-900/25 dark:text-sky-200">
+                    This measures <strong>this device, over your Wi-Fi</strong> &mdash; not the Dotmac line into your building. A low result here is often Wi-Fi range, an older device, or other people using the network at the same time. For a slow result, try again with the device next to your router or plugged in by cable before reporting a fault.
+                </div>
             </div>
             <a href="/portal/services" class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">Back to Services</a>
         </div>

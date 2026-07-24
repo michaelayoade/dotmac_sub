@@ -173,13 +173,54 @@ def test_unchanged_status_does_not_notify(monkeypatch):
     assert sent == []
 
 
-def test_status_notification_is_deduped_per_state(monkeypatch):
+def test_status_notification_dedupes_a_transition_not_a_state(monkeypatch):
+    """Keying on the state alone silences every later re-entry into it.
+
+    Intent dedupe is permanent and global, so a ticket parked on_hold would be
+    told "we'll let you know when it resumes" and then never hear the resume.
+    """
     support, sent = _capture(monkeypatch)
     ticket = _Ticket(status=TicketStatus.closed.value)
+
     support.Tickets._notify_customer_of_status_change(
         None, ticket, TicketStatus.open.value
     )
-    assert sent[0]["dedupe_key"] == f"ticket-status:{ticket.id}:closed"
+
+    key = sent[0]["dedupe_key"]
+    assert key.startswith(f"ticket-status:{ticket.id}:open->closed:")
+    assert key != f"ticket-status:{ticket.id}:closed"
+
+
+def test_re_entering_a_status_is_not_suppressed(monkeypatch):
+    """open -> on_hold -> open must notify twice; the second is the resume."""
+    support, sent = _capture(monkeypatch)
+    ticket = _Ticket(status=TicketStatus.on_hold.value)
+
+    support.Tickets._notify_customer_of_status_change(
+        None, ticket, TicketStatus.open.value
+    )
+    ticket.status = TicketStatus.open.value
+    support.Tickets._notify_customer_of_status_change(
+        None, ticket, TicketStatus.on_hold.value
+    )
+
+    assert len(sent) == 2
+    assert sent[0]["dedupe_key"] != sent[1]["dedupe_key"]
+
+
+def test_the_same_transition_still_collapses(monkeypatch):
+    """Idempotency is retained: a repeated identical transition dedupes."""
+    support, sent = _capture(monkeypatch)
+    ticket = _Ticket(status=TicketStatus.closed.value)
+
+    support.Tickets._notify_customer_of_status_change(
+        None, ticket, TicketStatus.open.value
+    )
+    support.Tickets._notify_customer_of_status_change(
+        None, ticket, TicketStatus.open.value
+    )
+
+    assert sent[0]["dedupe_key"] == sent[1]["dedupe_key"]
 
 
 def test_ticket_updates_do_not_hardcode_a_single_channel():
