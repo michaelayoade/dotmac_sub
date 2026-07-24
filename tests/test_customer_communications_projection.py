@@ -98,3 +98,16 @@ def test_customer_detail_renders_communications_behind_permission():
     # Same gate as the inbox workspace itself.
     assert 'has_permission(\n        auth, db, "support:ticket:read"\n    )' in routes
     assert "subscriber_id=customer.id" in routes
+
+
+def test_ticket_detail_shows_customer_conversation_history():
+    """An agent replying on a ticket should see what the customer already said
+    on other channels."""
+    detail = Path("templates/admin/support/tickets/detail.html").read_text()
+    assert "ticket_conversations" in detail
+    assert "Customer conversations" in detail
+
+    routes = Path("app/web/admin/support_tickets.py").read_text()
+    assert "team_inbox_read.list_conversations" in routes
+    # Scoped by subscriber until a conversation->ticket link exists.
+    assert "subscriber_id=subscriber_id" in routes

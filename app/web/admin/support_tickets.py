@@ -27,6 +27,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import team_inbox_read
 from app.services import web_support_ticket_bulk as support_ticket_bulk_service
 from app.services import (
     web_support_ticket_bulk_actions as support_ticket_bulk_actions_service,
@@ -443,6 +444,24 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
     )
     context["handoff_notice"] = request.query_params.get("handoff_notice")
     context["handoff_error"] = request.query_params.get("handoff_error")
+    # Conversation history for the same customer. `communications.team_inbox`
+    # owns these rows; this is a read so an agent can see what the customer has
+    # already said on other channels before replying on the ticket. Scoped by
+    # subscriber because no conversation-to-ticket link exists yet — once the
+    # handoff owner lands this can narrow to the originating conversation.
+    ticket = context.get("ticket")
+    subscriber_id = getattr(ticket, "subscriber_id", None) if ticket else None
+    context["ticket_conversations"] = (
+        team_inbox_read.list_conversations(
+            db,
+            subscriber_id=subscriber_id,
+            order_by="last_message_at",
+            order_dir="desc",
+            limit=5,
+        ).items
+        if subscriber_id
+        else ()
+    )
     return templates.TemplateResponse("admin/support/tickets/detail.html", context)
 
 
