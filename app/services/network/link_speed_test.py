@@ -47,6 +47,10 @@ STATE_COMPLETE = "Completed"
 #: loop — a CPE that cannot run the test will not start being able to.
 TERMINAL_ERROR_PREFIX = "Error_"
 
+#: "Not measured" timestamps. 0001-01-01 is the spec's sentinel; 1900-01-00 is
+#: what the production HG8546M fleet actually emits (an invalid date).
+_UNSET_TIME_PREFIXES = ("0001-01-01", "1900-01-00", "0000-00-00")
+
 
 class AcsReader(Protocol):
     """The read slice of the ACS client this module needs.
@@ -95,22 +99,27 @@ class LinkSpeedResult:
 
 
 def _parse_tr143_time(value: object) -> datetime | None:
-    """TR-143 timestamps are ISO 8601 with microseconds, or the unset sentinel.
+    """TR-143 timestamps are ISO 8601 with microseconds, or an unset sentinel.
 
-    The spec's "unknown time" sentinel is 0001-01-01T00:00:00Z; a device that
-    reports it has not actually measured the boundary, so it must not be
-    treated as a real instant.
+    The spec's "unknown time" sentinel is 0001-01-01T00:00:00Z, but firmware
+    invents its own. The production HG8546M fleet reports
+    ``1900-01-00T00:00:00.000000`` - note day ``00``, which is not a valid date
+    at all. Both mean "not measured" and neither is an error worth logging, so
+    known sentinels are recognised before parsing and any pre-1970 result is
+    treated as unset.
     """
     if value is None:
         return None
     raw = str(value).strip()
-    if not raw or raw.startswith("0001-01-01"):
+    if not raw or raw.startswith(_UNSET_TIME_PREFIXES):
         return None
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         logger.warning("Unparseable TR-143 timestamp %r", raw)
         return None
+    # A device that reports a pre-epoch instant has not measured the boundary.
+    return None if parsed.year < 1970 else parsed
 
 
 def throughput_mbps(
@@ -157,8 +166,20 @@ def build_arm_action(
     *,
     direction: str = "download",
     target_url: str,
+    interface: str | None,
 ) -> AcsArmDiagnostic:
     """The applier action that requests a TR-143 run.
+
+    ``interface`` is the WAN connection the CPE must run the test over, e.g.
+    ``InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1``.
+    It has no default on purpose: leaving it unset on a production HG8546M made
+    the device fall back to its default route and fail with
+    ``Error_InitConnectionFailed``, so the caller must choose the path
+    deliberately. Pass ``None`` only to accept the device's own default.
+
+    Which interface is chosen decides *what is measured* - the management WAN
+    measures the management path, the PPPoE WAN measures the customer's
+    service. They are not interchangeable.
 
     Writing is not this module's job. It composes the parameter set and hands
     back an action for ``reconcile.applier.apply_plan`` to execute, so the
@@ -168,9 +189,19 @@ def build_arm_action(
     if not paths:
         raise ValueError(f"No TR-143 {direction} paths in this parameter tree")
 
+    params: dict[str, object] = {paths["url"]: target_url}
+    if interface is not None:
+        if "interface" not in paths:
+            raise ValueError(
+                f"This parameter tree has no TR-143 {direction} interface path"
+            )
+        params[paths["interface"]] = interface
+    # State last: the device starts the run the moment it is set.
+    params[paths["state"]] = STATE_REQUESTED
+
     return AcsArmDiagnostic(
         device_id=device_id,
-        params={paths["url"]: target_url, paths["state"]: STATE_REQUESTED},
+        params=params,
         label=f"tr143.{direction}",
     )
 

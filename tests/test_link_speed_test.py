@@ -45,6 +45,7 @@ class _FakeAcs:
 TR098 = {
     "diag.download.state": "DownloadDiagnostics.DiagnosticsState",
     "diag.download.url": "DownloadDiagnostics.DownloadURL",
+    "diag.download.interface": "DownloadDiagnostics.Interface",
     "diag.download.test_bytes": "DownloadDiagnostics.TestBytesReceived",
     "diag.download.total_bytes": "DownloadDiagnostics.TotalBytesReceived",
     "diag.download.bom_time": "DownloadDiagnostics.BOMTime",
@@ -118,7 +119,7 @@ def test_the_arm_is_an_applier_action_not_a_direct_write():
     """ACS writes converge on reconcile/applier.py; see the architecture guard."""
 
     action = lst.build_arm_action(
-        "dev-1", TR098, target_url="http://speedtest.dotmac.ng/10mb"
+        "dev-1", TR098, target_url="http://speedtest.dotmac.ng/10mb", interface=None
     )
 
     assert action.device_id == "dev-1"
@@ -140,7 +141,7 @@ def test_this_module_never_writes_to_the_acs_itself():
 
 def test_a_tree_without_tr143_is_rejected():
     with pytest.raises(ValueError, match="No TR-143"):
-        lst.build_arm_action("dev-1", {}, target_url="http://x/")
+        lst.build_arm_action("dev-1", {}, target_url="http://x/", interface=None)
 
     with pytest.raises(ValueError, match="No TR-143"):
         lst.prepare_diagnostic_object(_FakeAcs(), "dev-1", {})
@@ -268,3 +269,71 @@ def test_the_module_only_calls_the_client_with_real_arguments():
 
     assert "timeout_sec" not in source
     assert "allow_when_pending" in accepted  # sanity: we read the right method
+
+
+# ---------------------------------------------------------------------------
+# Interface selection and firmware timestamp sentinels (found on hardware)
+# ---------------------------------------------------------------------------
+
+WAN_MGMT = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1"
+
+
+def test_the_arm_sets_the_interface_the_device_must_use():
+    """Omitting Interface made a production HG8546M fail InitConnectionFailed."""
+
+    action = lst.build_arm_action(
+        "dev-1", TR098, target_url="http://probe/10mb.bin", interface=WAN_MGMT
+    )
+
+    assert action.params["DownloadDiagnostics.Interface"] == WAN_MGMT
+
+
+def test_state_is_written_last_because_it_starts_the_run():
+    action = lst.build_arm_action(
+        "dev-1", TR098, target_url="http://probe/10mb.bin", interface=WAN_MGMT
+    )
+
+    assert list(action.params)[-1] == "DownloadDiagnostics.DiagnosticsState"
+
+
+def test_interface_must_be_chosen_explicitly():
+    """No default: the interface decides whether you measure mgmt or service."""
+    import inspect
+
+    sig = inspect.signature(lst.build_arm_action)
+
+    assert sig.parameters["interface"].default is inspect.Parameter.empty
+
+
+def test_an_interface_cannot_be_set_when_the_tree_lacks_the_path():
+    tree = {k: v for k, v in TR098.items() if k != "diag.download.interface"}
+
+    with pytest.raises(ValueError, match="interface path"):
+        lst.build_arm_action(
+            "dev-1", tree, target_url="http://probe/", interface=WAN_MGMT
+        )
+
+
+@pytest.mark.parametrize(
+    "sentinel",
+    [
+        "0001-01-01T00:00:00Z",  # the TR-143 spec sentinel
+        "1900-01-00T00:00:00.000000",  # what the HG8546M fleet actually emits
+        "0000-00-00T00:00:00",
+    ],
+)
+def test_firmware_unset_timestamps_are_not_treated_as_real_instants(sentinel):
+    """1900-01-00 is not even a valid date; it means "not measured"."""
+
+    mbps, started, finished = lst.throughput_mbps(10_000_000, sentinel, sentinel)
+
+    assert (mbps, started, finished) == (0.0, None, None)
+
+
+def test_a_pre_epoch_timestamp_is_treated_as_unset():
+    assert (
+        lst.throughput_mbps(10_000_000, "1969-12-31T23:59:59Z", "2026-07-24T09:00:10Z")[
+            0
+        ]
+        == 0.0
+    )
