@@ -72,14 +72,24 @@ def test_no_direct_orm_write_of_the_provenance_column_outside_the_owner():
 
 
 def test_handoff_does_not_transition_the_conversation():
-    """Conversation status belongs to communications.team_inbox."""
+    """Conversation status belongs to communications.team_inbox.
+
+    Checked by AST rather than substring: `conversation.status ==` is a
+    legitimate read, and a naive `conversation.status =` match flags it.
+    """
     owner_source = (ROOT / OWNER).read_text()
-    for forbidden in (
-        "team_inbox_commands.update_status",
-        "conversation.status =",
-        "team_inbox_operations",
-    ):
+    for forbidden in ("team_inbox_commands.update_status", "team_inbox_operations"):
         assert forbidden not in owner_source
+
+    tree = ast.parse(owner_source)
+    written = [
+        ast.unparse(target)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr == "status"
+    ]
+    assert written == []
 
 
 def test_web_adapter_stays_thin():

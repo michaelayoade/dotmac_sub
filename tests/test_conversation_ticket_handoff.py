@@ -1,5 +1,9 @@
 """Behaviour of communications.conversation_ticket_handoff.
 
+Owner commands require a transaction-free adapter session, so these helpers
+commit and return plain identifiers — holding an ORM object across the call
+would re-open a transaction on attribute access and fail at entry.
+
 See docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md §5, slice 3.
 """
 
@@ -16,7 +20,7 @@ from app.services import conversation_ticket_handoff as handoff
 
 
 @pytest.fixture()
-def customer(db_session):
+def customer_id(db_session) -> uuid.UUID:
     from app.services.subscriber import _default_reseller_id
 
     row = Subscriber(
@@ -27,11 +31,12 @@ def customer(db_session):
     )
     db_session.add(row)
     db_session.commit()
-    db_session.refresh(row)
-    return row
+    captured = row.id
+    db_session.rollback()
+    return captured
 
 
-def _conversation(db_session, *, subscriber_id=None, status=None):
+def _conversation_id(db_session, *, subscriber_id=None, status=None) -> uuid.UUID:
     conversation = InboxConversation(
         channel_type="whatsapp",
         subject="No internet since morning",
@@ -41,13 +46,14 @@ def _conversation(db_session, *, subscriber_id=None, status=None):
     )
     db_session.add(conversation)
     db_session.commit()
-    db_session.refresh(conversation)
-    return conversation
+    captured = conversation.id
+    db_session.rollback()
+    return captured
 
 
-def _command(conversation, **overrides):
+def _command(conversation_id, **overrides):
     base = dict(
-        conversation_id=conversation.id,
+        conversation_id=conversation_id,
         actor_id=uuid.uuid4(),
         actor_type=handoff.HandoffActorType.SYSTEM_USER,
         permission_keys=frozenset({"support:ticket:update"}),
@@ -59,114 +65,117 @@ def _command(conversation, **overrides):
     return handoff.ConversationTicketIssueCommand(**base)
 
 
-def test_issue_records_provenance_and_inherits_customer(db_session, customer):
-    conversation = _conversation(db_session, subscriber_id=customer.id)
+def _ticket_count(db_session, conversation_id) -> int:
+    return (
+        db_session.query(Ticket)
+        .filter(Ticket.origin_conversation_id == conversation_id)
+        .count()
+    )
 
-    result = handoff.issue_ticket(db_session, _command(conversation))
+
+def test_issue_records_provenance_and_inherits_customer(db_session, customer_id):
+    conversation_id = _conversation_id(db_session, subscriber_id=customer_id)
+
+    result = handoff.issue_ticket(db_session, _command(conversation_id))
 
     assert result.replayed is False
-    assert result.ticket.origin_conversation_id == conversation.id
-    assert result.ticket.subscriber_id == customer.id
+    assert result.ticket.origin_conversation_id == conversation_id
+    assert result.ticket.subscriber_id == customer_id
     assert result.ticket.number
 
 
-def test_reissuing_the_same_intent_replays(db_session, customer):
+def test_reissuing_the_same_intent_replays(db_session, customer_id):
     """A double-submitted form must not open a second ticket."""
-    conversation = _conversation(db_session, subscriber_id=customer.id)
+    conversation_id = _conversation_id(db_session, subscriber_id=customer_id)
     actor = uuid.uuid4()
 
-    first = handoff.issue_ticket(db_session, _command(conversation, actor_id=actor))
-    second = handoff.issue_ticket(db_session, _command(conversation, actor_id=actor))
+    first = handoff.issue_ticket(db_session, _command(conversation_id, actor_id=actor))
+    first_ticket_id = first.ticket.id
+    db_session.rollback()
+
+    second = handoff.issue_ticket(db_session, _command(conversation_id, actor_id=actor))
 
     assert second.replayed is True
-    assert second.ticket.id == first.ticket.id
-    assert db_session.query(Ticket).filter(
-        Ticket.origin_conversation_id == conversation.id
-    ).count() == 1
+    assert second.ticket.id == first_ticket_id
+    assert _ticket_count(db_session, conversation_id) == 1
 
 
-def test_a_different_intent_opens_a_second_ticket(db_session, customer):
+def test_a_different_intent_opens_a_second_ticket(db_session, customer_id):
     """One conversation may legitimately issue many tickets."""
-    conversation = _conversation(db_session, subscriber_id=customer.id)
+    conversation_id = _conversation_id(db_session, subscriber_id=customer_id)
     actor = uuid.uuid4()
 
-    handoff.issue_ticket(db_session, _command(conversation, actor_id=actor))
+    handoff.issue_ticket(db_session, _command(conversation_id, actor_id=actor))
+    db_session.rollback()
     handoff.issue_ticket(
         db_session,
-        _command(conversation, actor_id=actor, title="Separate billing dispute"),
+        _command(conversation_id, actor_id=actor, title="Separate billing dispute"),
     )
 
-    assert (
-        db_session.query(Ticket)
-        .filter(Ticket.origin_conversation_id == conversation.id)
-        .count()
-        == 2
-    )
+    assert _ticket_count(db_session, conversation_id) == 2
 
 
-def test_issuance_does_not_transition_the_conversation(db_session, customer):
+def test_issuance_does_not_transition_the_conversation(db_session, customer_id):
     """Opening a ticket and resolving a thread are separate decisions."""
-    conversation = _conversation(db_session, subscriber_id=customer.id)
+    conversation_id = _conversation_id(db_session, subscriber_id=customer_id)
 
-    handoff.issue_ticket(db_session, _command(conversation))
+    handoff.issue_ticket(db_session, _command(conversation_id))
 
-    db_session.refresh(conversation)
+    conversation = db_session.get(InboxConversation, conversation_id)
     assert conversation.status == InboxConversationStatus.open.value
 
 
-def test_missing_permission_is_refused(db_session, customer):
-    conversation = _conversation(db_session, subscriber_id=customer.id)
+def test_missing_permission_is_refused(db_session, customer_id):
+    conversation_id = _conversation_id(db_session, subscriber_id=customer_id)
 
     with pytest.raises(handoff.ConversationTicketHandoffError) as exc:
         handoff.issue_ticket(
-            db_session, _command(conversation, permission_keys=frozenset())
+            db_session, _command(conversation_id, permission_keys=frozenset())
         )
     assert exc.value.kind == "forbidden"
 
 
-def test_resolved_conversation_cannot_issue(db_session, customer):
-    conversation = _conversation(
+def test_resolved_conversation_cannot_issue(db_session, customer_id):
+    conversation_id = _conversation_id(
         db_session,
-        subscriber_id=customer.id,
+        subscriber_id=customer_id,
         status=InboxConversationStatus.resolved.value,
     )
 
     with pytest.raises(handoff.ConversationTicketHandoffError) as exc:
-        handoff.issue_ticket(db_session, _command(conversation))
+        handoff.issue_ticket(db_session, _command(conversation_id))
     assert exc.value.kind == "conflict"
 
 
-def test_blank_title_is_refused(db_session, customer):
-    conversation = _conversation(db_session, subscriber_id=customer.id)
+def test_blank_title_is_refused(db_session, customer_id):
+    conversation_id = _conversation_id(db_session, subscriber_id=customer_id)
 
     with pytest.raises(handoff.ConversationTicketHandoffError) as exc:
-        handoff.issue_ticket(db_session, _command(conversation, title="   "))
+        handoff.issue_ticket(db_session, _command(conversation_id, title="   "))
     assert exc.value.kind == "invalid"
 
 
 def test_unknown_conversation_is_not_found(db_session):
-    conversation = _conversation(db_session)
-    command = _command(conversation, conversation_id=uuid.uuid4())
-
     with pytest.raises(handoff.ConversationTicketHandoffError) as exc:
-        handoff.issue_ticket(db_session, command)
+        handoff.issue_ticket(db_session, _command(uuid.uuid4()))
     assert exc.value.kind == "not_found"
 
 
-def test_list_for_conversation_returns_issued_tickets(db_session, customer):
-    conversation = _conversation(db_session, subscriber_id=customer.id)
-    result = handoff.issue_ticket(db_session, _command(conversation))
+def test_list_for_conversation_returns_issued_tickets(db_session, customer_id):
+    conversation_id = _conversation_id(db_session, subscriber_id=customer_id)
+    result = handoff.issue_ticket(db_session, _command(conversation_id))
+    issued_id = result.ticket.id
 
-    listed = handoff.list_for_conversation(db_session, conversation.id)
+    listed = handoff.list_for_conversation(db_session, conversation_id)
 
-    assert [row.id for row in listed] == [result.ticket.id]
+    assert [row.id for row in listed] == [issued_id]
 
 
-def test_unresolved_conversation_still_issues_without_a_customer(db_session):
+def test_conversation_without_a_customer_still_issues(db_session):
     """An unlinked thread can still raise a ticket; identity is simply absent."""
-    conversation = _conversation(db_session)
+    conversation_id = _conversation_id(db_session)
 
-    result = handoff.issue_ticket(db_session, _command(conversation))
+    result = handoff.issue_ticket(db_session, _command(conversation_id))
 
-    assert result.ticket.origin_conversation_id == conversation.id
+    assert result.ticket.origin_conversation_id == conversation_id
     assert result.ticket.subscriber_id is None
