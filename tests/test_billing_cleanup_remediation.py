@@ -656,8 +656,20 @@ def test_missing_radius_syncs_when_credential_is_usable(db_session, monkeypatch)
     db_session.commit()
 
     def fake_reconcile(db, subscription_id):
+        from app.services.radius import (
+            ConnectivityProjectionDisposition,
+            SubscriptionConnectivityOutcome,
+        )
+
         assert subscription_id == str(subscription.id)
-        return {"ok": True, "radius_users_changed": 1}
+        return SubscriptionConnectivityOutcome(
+            subscription_id=subscription_id,
+            disposition=ConnectivityProjectionDisposition.projected,
+            radius_users_changed=1,
+            requested_logins=1,
+            projected_logins=1,
+            projection_targets=1,
+        )
 
     monkeypatch.setattr(
         "app.services.radius.reconcile_subscription_connectivity",

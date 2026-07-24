@@ -305,11 +305,28 @@ class NetworkOperations(ListResponseMixin):
             retry_count=redrive.retry_count if redrive else 0,
             max_retries=redrive.max_retries if redrive else 3,
         )
-        db.add(op)
         try:
-            db.flush()
+            from app.services.owner_commands import (
+                execute_owner_savepoint,
+                owner_command_active,
+            )
+
+            if owner_command_active(db):
+
+                def _persist_operation() -> None:
+                    db.add(op)
+                    db.flush()
+
+                execute_owner_savepoint(
+                    db,
+                    _persist_operation,
+                )
+            else:
+                db.add(op)
+                db.flush()
         except IntegrityError as e:
-            db.rollback()
+            if not owner_command_active(db):
+                db.rollback()
             if "uq_netops_active_correlation" in str(e):
                 logger.warning(
                     "Concurrent duplicate blocked by DB constraint: %s",

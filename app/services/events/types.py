@@ -84,6 +84,7 @@ class EventType(enum.Enum):
     # Prepaid enforcement control-state evidence
     prepaid_enforcement_timer_changed = "prepaid_enforcement.timer_changed"
     prepaid_coverage_reconciled = "prepaid_coverage.reconciled"
+    prepaid_draft_reconciled = "prepaid_draft.reconciled"
 
     # Billing - Outage compensation (1)
     service_extended = "billing.service_extended"
@@ -260,9 +261,11 @@ class EventType(enum.Enum):
     nas_provisioning_completed = "nas_provisioning.completed"
     nas_provisioning_failed = "nas_provisioning.failed"
 
-    # TR-069 events (4)
+    # TR-069 events (6)
+    tr069_job_accepted = "tr069_job.accepted"
     tr069_job_completed = "tr069_job.completed"
     tr069_job_failed = "tr069_job.failed"
+    tr069_job_unverified = "tr069_job.unverified"
     tr069_device_discovered = "tr069_device.discovered"
     tr069_device_stale = "tr069_device.stale"
 

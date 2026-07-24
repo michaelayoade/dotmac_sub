@@ -1060,6 +1060,33 @@ class TopupEligibleInvoice(BaseModel):
     currency: str
 
 
+class TopupPreviewInvoiceApplication(BaseModel):
+    invoice_id: UUID
+    invoice_number: str | None = None
+    currency: str
+    amount_applied: Decimal
+    outstanding_after_application: Decimal
+
+
+class TopupPreviewResponse(BaseModel):
+    account_id: UUID
+    currency: str = "NGN"
+    current_account_credit: Decimal
+    requested_deposit: Decimal
+    eligible_invoice_count: int
+    invoice_applications: list[TopupPreviewInvoiceApplication] = Field(
+        default_factory=list
+    )
+    total_applied_to_invoices: Decimal = Decimal("0.00")
+    total_outstanding_after_application: Decimal = Decimal("0.00")
+    remaining_account_credit: Decimal = Decimal("0.00")
+    projected_available_credit: Decimal = Decimal("0.00")
+    allocation_policy: str = "credit_only"
+    credit_application_policy: str = "pay_eligible_invoices"
+    policy_version: int = 1
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+
+
 class TopupPageResponse(BaseModel):
     provider_type: str
     provider_public_key: str | None = None
@@ -1080,6 +1107,10 @@ class TopupPageResponse(BaseModel):
     direct_bank_transfer: DirectBankTransferConfig | None = None
 
 
+class TopupPreviewRequest(BaseModel):
+    amount: Decimal = Field(gt=0)
+
+
 class TopupInitiateRequest(BaseModel):
     amount: Decimal = Field(gt=0)
     # Which online gateway to checkout with when paying by a new card. Defaults
@@ -1090,6 +1121,7 @@ class TopupInitiateRequest(BaseModel):
     # against a double-tap (a replay returns the original intent).
     payment_method_id: UUID | None = None
     idempotency_key: str | None = None
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
 
 
 class TopupInitiateResponse(BaseModel):

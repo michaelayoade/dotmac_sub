@@ -57,18 +57,14 @@ hardening slices are in flight.
 
 ### Access Enforcement
 
-This has two sub-cutovers:
-
-- prove group routing by shadow-compare, then make group routing canonical;
-- prove desired-IP projection from `IPAssignment`, then make that projection
-  canonical.
-
-Only remove `_shadow_write_access_state` after the direct path has proven it
-matches production behavior.
+The subscription lifecycle owner writes the local access-state projection.
+The RADIUS projection owner writes the exact external rows and compares the
+whole desired row set with observed state. Accounting observations are stored
+separately and cannot overwrite desired service addresses.
 
 Exit invariant: access enforcement has one canonical RADIUS projection path.
 
-Guard test: no new shadow access-state writer can be added.
+Guard test: no parallel access-state or RADIUS-row writer can be added.
 
 ### CRM And Imported Identity
 

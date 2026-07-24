@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.billing import (
     AccountCreditApplicationPolicy,
+    Invoice,
     Payment,
     PaymentSettlementOrigin,
     PaymentStatus,
@@ -113,11 +114,24 @@ class DepositPreview:
     current_account_credit: Decimal
     requested_deposit: Decimal
     eligible_invoice_count: int
+    invoice_applications: tuple[DepositPreviewInvoiceApplication, ...]
+    total_applied_to_invoices: Decimal
+    total_outstanding_after_application: Decimal
+    remaining_account_credit: Decimal
     projected_available_credit: Decimal
     allocation_policy: str
     credit_application_policy: str
     policy_version: int
     fingerprint: str
+
+
+@dataclass(frozen=True)
+class DepositPreviewInvoiceApplication:
+    invoice_id: uuid.UUID
+    invoice_number: str | None
+    currency: str
+    amount_applied: Decimal
+    outstanding_after_application: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,7 +180,7 @@ def _fingerprint(
     amount: Decimal,
     currency: str,
     current_credit: Decimal,
-    eligible_invoice_ids: list[str],
+    invoice_inputs: list[dict[str, str]],
 ) -> str:
     encoded = json.dumps(
         {
@@ -175,7 +189,7 @@ def _fingerprint(
             "amount": f"{amount:.2f}",
             "currency": currency,
             "current_account_credit": f"{current_credit:.2f}",
-            "eligible_invoice_ids": eligible_invoice_ids,
+            "invoice_inputs": invoice_inputs,
             "allocation_policy": ALLOCATION_POLICY,
             "credit_application_policy": CREDIT_APPLICATION_POLICY,
             "policy_version": POLICY_VERSION,
@@ -184,6 +198,67 @@ def _fingerprint(
         separators=(",", ":"),
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _invoice_preview_inputs(invoices: list[Invoice]) -> list[dict[str, str]]:
+    return [
+        {
+            "invoice_id": str(invoice.id),
+            "currency": str(invoice.currency or "").upper(),
+            "balance_due": f"{round_money(to_decimal(invoice.balance_due or 0)):.2f}",
+            "due_at": (
+                invoice.due_at.astimezone(UTC).isoformat()
+                if invoice.due_at is not None and invoice.due_at.tzinfo is not None
+                else invoice.due_at.replace(tzinfo=UTC).isoformat()
+                if invoice.due_at is not None
+                else ""
+            ),
+            "created_at": (
+                invoice.created_at.astimezone(UTC).isoformat()
+                if invoice.created_at is not None
+                and invoice.created_at.tzinfo is not None
+                else invoice.created_at.replace(tzinfo=UTC).isoformat()
+                if invoice.created_at is not None
+                else ""
+            ),
+        }
+        for invoice in invoices
+    ]
+
+
+def _preview_invoice_applications(
+    invoices: list[Invoice],
+    *,
+    amount: Decimal,
+    currency: str,
+) -> tuple[tuple[DepositPreviewInvoiceApplication, ...], Decimal, Decimal]:
+    remaining = round_money(amount)
+    applications: list[DepositPreviewInvoiceApplication] = []
+    total_applied = Decimal("0.00")
+    total_outstanding = Decimal("0.00")
+
+    for invoice in invoices:
+        invoice_currency = str(invoice.currency or "").upper()
+        balance_due = round_money(to_decimal(invoice.balance_due or 0))
+        if balance_due <= Decimal("0.00") or invoice_currency != currency:
+            applied = Decimal("0.00")
+            outstanding = balance_due
+        else:
+            applied = min(remaining, balance_due)
+            outstanding = round_money(balance_due - applied)
+            remaining = round_money(remaining - applied)
+        total_applied = round_money(total_applied + applied)
+        total_outstanding = round_money(total_outstanding + outstanding)
+        applications.append(
+            DepositPreviewInvoiceApplication(
+                invoice_id=invoice.id,
+                invoice_number=invoice.invoice_number,
+                currency=invoice_currency,
+                amount_applied=applied,
+                outstanding_after_application=outstanding,
+            )
+        )
+    return tuple(applications), total_applied, total_outstanding
 
 
 def _account(db: Session, account_id: uuid.UUID) -> Subscriber:
@@ -237,15 +312,25 @@ def _existing_preview(db: Session, intent: TopupIntent) -> DepositPreview:
         get_account_credit_balance(db, str(intent.account_id), currency=intent.currency)
     )
     invoices = eligible_invoices(db, str(intent.account_id))
+    applications, total_applied, outstanding_after = _preview_invoice_applications(
+        invoices,
+        amount=round_money(intent.requested_amount),
+        currency=intent.currency,
+    )
+    remaining_account_credit = round_money(
+        current_credit + round_money(intent.requested_amount) - total_applied
+    )
     return DepositPreview(
         account_id=intent.account_id,
         currency=intent.currency,
         current_account_credit=current_credit,
         requested_deposit=round_money(intent.requested_amount),
         eligible_invoice_count=len(invoices),
-        projected_available_credit=round_money(
-            current_credit + round_money(intent.requested_amount)
-        ),
+        invoice_applications=applications,
+        total_applied_to_invoices=total_applied,
+        total_outstanding_after_application=outstanding_after,
+        remaining_account_credit=remaining_account_credit,
+        projected_available_credit=remaining_account_credit,
         allocation_policy=intent.allocation_policy or ALLOCATION_POLICY,
         credit_application_policy=(
             intent.credit_application_policy or CREDIT_APPLICATION_POLICY
@@ -290,11 +375,6 @@ class AccountCreditDeposits:
                 f"Deposit amount must not exceed ₦{maximum_amount:,.2f}",
             )
         invoices = eligible_invoices(db, str(account_id))
-        if invoices:
-            raise DepositEligibilityError(
-                "deposit_payable_invoices_exist",
-                "Pay the eligible invoice balance instead of depositing account credit",
-            )
         if check_pending and _pending_incompatible_intent(db, account_id):
             raise DepositEligibilityError(
                 "deposit_intent_already_pending",
@@ -305,12 +385,20 @@ class AccountCreditDeposits:
                 db, str(account_id), currency=normalized_currency
             )
         )
+        applications, total_applied, outstanding_after = _preview_invoice_applications(
+            invoices,
+            amount=normalized_amount,
+            currency=normalized_currency,
+        )
+        remaining_account_credit = round_money(
+            current_credit + normalized_amount - total_applied
+        )
         fingerprint = _fingerprint(
             account_id=account_id,
             amount=normalized_amount,
             currency=normalized_currency,
             current_credit=current_credit,
-            eligible_invoice_ids=[str(invoice.id) for invoice in invoices],
+            invoice_inputs=_invoice_preview_inputs(invoices),
         )
         return DepositPreview(
             account_id=account_id,
@@ -318,7 +406,11 @@ class AccountCreditDeposits:
             current_account_credit=current_credit,
             requested_deposit=normalized_amount,
             eligible_invoice_count=len(invoices),
-            projected_available_credit=round_money(current_credit + normalized_amount),
+            invoice_applications=applications,
+            total_applied_to_invoices=total_applied,
+            total_outstanding_after_application=outstanding_after,
+            remaining_account_credit=remaining_account_credit,
+            projected_available_credit=remaining_account_credit,
             allocation_policy=ALLOCATION_POLICY,
             credit_application_policy=CREDIT_APPLICATION_POLICY,
             policy_version=POLICY_VERSION,
@@ -341,6 +433,7 @@ class AccountCreditDeposits:
         idempotency_key: str,
         channel: TopupIntentChannel,
         created_by: str | None,
+        expected_preview_fingerprint: str | None = None,
         metadata: dict | None = None,
     ) -> tuple[TopupIntent, DepositPreview, bool]:
         key = str(idempotency_key or "").strip()
@@ -378,6 +471,13 @@ class AccountCreditDeposits:
             minimum=minimum,
             maximum=maximum,
         )
+        expected_fingerprint = str(expected_preview_fingerprint or "").strip()
+        if expected_fingerprint:
+            if preview.fingerprint != expected_fingerprint:
+                raise DepositEligibilityError(
+                    "deposit_preview_stale",
+                    "Deposit Account Credit preview changed; review the latest allocation preview",
+                )
         intent = TopupIntent(
             account_id=account_id,
             provider_id=provider_id,
@@ -492,15 +592,16 @@ class AccountCreditDeposits:
         _account(db, intent.account_id)
         amount = round_money(to_decimal(command.amount))
         provider_fee = round_money(to_decimal(command.provider_fee))
-        if amount != round_money(intent.requested_amount):
-            raise DepositEligibilityError(
-                "deposit_amount_mismatch",
-                "Provider amount did not match the authorized deposit amount",
-            )
         if provider_fee < Decimal("0.00") or provider_fee > amount:
             raise DepositEligibilityError(
                 "deposit_provider_fee_invalid",
                 "Provider fee must be between zero and the confirmed amount",
+            )
+        credited_amount = round_money(amount - provider_fee)
+        if credited_amount != round_money(intent.requested_amount):
+            raise DepositEligibilityError(
+                "deposit_amount_mismatch",
+                "Provider net amount did not match the authorized deposit amount",
             )
         currency = command.currency.strip().upper()
         if currency != intent.currency:
@@ -567,8 +668,11 @@ class AccountCreditDeposits:
             if (
                 existing.account_id != intent.account_id
                 or round_money(existing.amount) != amount
+                or round_money(existing.provider_fee) != provider_fee
                 or existing.currency != currency
                 or existing.status != PaymentStatus.succeeded
+                or existing.settlement is None
+                or round_money(existing.settlement.amount) != credited_amount
             ):
                 raise DepositEligibilityError(
                     "deposit_provider_reference_conflict",
@@ -576,6 +680,24 @@ class AccountCreditDeposits:
                 )
             payment = existing
             already_recorded = True
+        elif intent.provider_id is not None:
+            creation = Payments.stage_verified_provider_settlement(
+                db,
+                account_id=intent.account_id,
+                provider_id=intent.provider_id,
+                external_id=external_transaction_id,
+                gross_amount=amount,
+                provider_fee=provider_fee,
+                net_amount=credited_amount,
+                currency=currency,
+                memo=(
+                    f"{provider_type.replace('_', ' ').title()} "
+                    "Deposit Account Credit "
+                    f"ref: {intent.reference}"
+                ),
+            )
+            payment = creation.payment
+            already_recorded = creation.idempotent_replay
         else:
             creation = Payments.create_account_credit_deposit(
                 db,

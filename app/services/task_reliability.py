@@ -654,8 +654,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.tr069.check_device_health": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.cleanup_stale_genieacs_tasks": _c("tr069", SWEEP, IDEMP, LOG),
     "app.tasks.tr069.cleanup_tr069_records": _c("tr069", SWEEP, IDEMP, LOG),
-    "app.tasks.tr069.execute_bulk_action": _c("tr069", ITEMS, PER_ITEM, STATUS),
-    "app.tasks.tr069.execute_pending_jobs": _c("tr069", STATE, STATEFUL, STATUS),
+    "app.tasks.tr069.reconcile_command_outcomes": _c("tr069", STATE, STATEFUL, STATUS),
+    "app.tasks.tr069.execute_network_operation_job": _c(
+        "tr069",
+        NONE,
+        GUARDED,
+        STATUS,
+        "A durable dispatch and queued-to-running claim gate one ACS submission. "
+        "Ambiguous or interrupted delivery becomes unverified; it is never "
+        "automatically replayed.",
+    ),
     "app.tasks.tr069.refresh_ont_runtime_data": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.refresh_single_ont_runtime": _c("tr069", MANUAL, IDEMP, STATUS),
     "app.tasks.tr069.scrape_genieacs_metrics": _c("tr069", SWEEP, IDEMP, HEALTH),

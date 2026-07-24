@@ -102,7 +102,7 @@ def audit_ip_consistency() -> dict:
     its three sources (subscription.ipv4_address column, the IPAM IPAssignment,
     and the external radreply Framed-IP). Drift here is the structural risk
     behind silent partial desync — see
-    docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md. Stores the result in
+    docs/FINANCIAL_ACCESS_ENFORCEMENT.md. Stores the result in
     Redis where the web process's metrics collector exports it as
     radius_ip_consistency_drift{kind}."""
     from app.services.ip_consistency_audit import (
@@ -126,7 +126,7 @@ def connectivity_shadow_audit() -> dict:
     subscriber and stores it in Redis, where the web process's metrics collector
     exports it as ``connectivity_shadow_drift{dimension}``. This is the
     cutover-readiness gauge for the connectivity reconciler — see
-    docs/designs/CONNECTIVITY_STATE_MACHINE.md. Writes nothing."""
+    docs/FINANCIAL_ACCESS_ENFORCEMENT.md. Writes nothing."""
     from app.services.connectivity_reconciler import (
         connectivity_shadow_audit as run_sweep,
     )
@@ -148,8 +148,10 @@ def connectivity_shadow_audit() -> dict:
         session.close()
 
 
-@celery_app.task(name="app.tasks.radius.run_enforcement_reconciler")
-def run_enforcement_reconciler() -> dict[str, int]:
+_ENFORCEMENT_RECONCILER_LOCK_KEY = 778_003
+
+
+def _run_enforcement_reconciler() -> dict[str, int]:
     """Converge local lifecycle state, RADIUS projection, and live sessions.
 
     This is the one periodic recovery loop for account access. Immediate
@@ -165,11 +167,12 @@ def run_enforcement_reconciler() -> dict[str, int]:
        (blocked/negative/bad_mac/bad_password networks; the not_found
        pool is excluded because legit BNG-local pools overlap it) ->
        CoA-kick so the redial picks up a routable IP.
-    4. Compare canonical per-login projection modes against radcheck/radreply
-       in both directions and request one single-writer refresh for any drift.
+    4. Compare canonical per-login projection modes and, after its explicit
+       cutover, simultaneous-session check placement against radcheck/radreply
+       in both directions; request one single-writer refresh for any drift.
 
-    Kicks are capped per run so systemic drift degrades to alerts, not a
-    mass disconnect.
+    Disconnect attempts are capped per run so transport failure or systemic
+    drift degrades to alerts, not an unbounded retry or mass disconnect.
     """
     import ipaddress
 
@@ -187,23 +190,32 @@ def run_enforcement_reconciler() -> dict[str, int]:
     stats = {
         "account_projection_candidates": 0,
         "account_projections_changed": 0,
+        "account_active_projections_changed": 0,
         "access_states_changed": 0,
         "account_projection_errors": 0,
         "accounting_target_configured": 0,
         "stale_unserviceable_sessions": 0,
         "reject_pool_sessions": 0,
+        "kick_attempted": 0,
         "kicked": 0,
         "kick_failed": 0,
         "kicks_capped": 0,
         "walled_garden_drift": 0,
         "missing_radius_auth": 0,
+        "stale_radius_auth": 0,
         "missing_reject": 0,
         "stale_reject": 0,
         "missing_captive": 0,
         "stale_captive": 0,
+        "radius_attribute_drift": 0,
+        "radius_unbuildable_logins": 0,
+        "missing_concurrency_check": 0,
+        "stale_concurrency_check": 0,
+        "misplaced_concurrency_reply": 0,
         "radius_projection_unconverged": 0,
         "radius_projection_repair_enqueued": 0,
         "sync_gap_logins": 0,
+        "coa_session_not_found": 0,
         "ghosts_closed": 0,
     }
     db = SessionLocal()
@@ -218,9 +230,16 @@ def run_enforcement_reconciler() -> dict[str, int]:
     )
     stats["account_projection_candidates"] = local.candidates
     stats["account_projections_changed"] = local.changed
+    stats["account_active_projections_changed"] = local.account_active_changed
     stats["access_states_changed"] = local.access_states_changed
     stats["account_projection_errors"] = local.errors
 
+    from app.services.radius_population import (
+        populate as preview_radius_projection,
+    )
+    from app.services.radius_population import (
+        simultaneous_use_enforcement_enabled,
+    )
     from app.services.radius_projection_planner import (
         compare_radius_projection,
         plan_login_radius_projections,
@@ -231,6 +250,21 @@ def run_enforcement_reconciler() -> dict[str, int]:
         login: projection.plan.mode
         for login, projection in desired_login_projections.items()
     }
+    projection_preview = preview_radius_projection(
+        dry_run=True,
+        source_db=db,
+        include_expected_fingerprints=True,
+    )
+    unbuildable_logins = projection_preview.get("unbuildable_logins")
+    stats["radius_unbuildable_logins"] = (
+        unbuildable_logins if isinstance(unbuildable_logins, int) else 0
+    )
+    expected_projection_fingerprints = projection_preview.get(
+        "expected_projection_fingerprints"
+    )
+    if not isinstance(expected_projection_fingerprints, dict):
+        expected_projection_fingerprints = {}
+    enforce_simultaneous_use = simultaneous_use_enforcement_enabled(db)
     max_kicks = int(
         settings_spec.resolve_value(
             db, SettingDomain.radius, "enforcement_reconciler_max_kicks"
@@ -254,6 +288,19 @@ def run_enforcement_reconciler() -> dict[str, int]:
         or 7200
     )
     walled_garden_address_list = suspended_address_list(db)
+    owned_access_groups = sorted(
+        {
+            str(
+                settings_spec.resolve_value(db, SettingDomain.radius, setting_key)
+                or default
+            )
+            for setting_key, default in (
+                ("active_group_name", "dotmac-active"),
+                ("suspended_group_name", "dotmac-suspended"),
+                ("captive_group_name", "dotmac-captive"),
+            )
+        }
+    )
     target = authoritative_accounting_target(db)
     db.rollback()
     if not target:
@@ -266,13 +313,19 @@ def run_enforcement_reconciler() -> dict[str, int]:
             status="degraded",
             counters=stats,
         )
+        from app.services.task_heartbeat import record_success
+
+        record_success("app.tasks.radius.run_enforcement_reconciler", stats)
         return stats
     stats["accounting_target_configured"] = 1
     dsn = str(target["db_url"]).replace("postgresql+psycopg://", "postgresql://", 1)
     radacct = sql.Identifier(*str(target["radacct_table"]).split("."))
     radcheck = sql.Identifier(*str(target["radcheck_table"]).split("."))
     radreply = sql.Identifier(*str(target["radreply_table"]).split("."))
-    radius_refresh_required = bool(local.changed or local.access_states_changed)
+    radusergroup = sql.Identifier(*str(target["radusergroup_table"]).split("."))
+    radius_refresh_required = bool(
+        local.changed or local.account_active_changed or local.access_states_changed
+    )
 
     # --- collect violations from radacct -------------------------------
     with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
@@ -364,10 +417,10 @@ def run_enforcement_reconciler() -> dict[str, int]:
             nas_ip,
             framed_ip,
             radacctid,
-            stale,
+            _stale,
         ) in to_kick.values():
-            if stats["kicked"] >= max_kicks:
-                stats["kicks_capped"] = len(to_kick) - stats["kicked"]
+            if stats["kick_attempted"] >= max_kicks:
+                stats["kicks_capped"] = len(to_kick) - stats["kick_attempted"]
                 logger.error(
                     "enforcement reconciler: kick cap (%d) reached with %d "
                     "violations outstanding — investigate systemic drift",
@@ -375,6 +428,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
                     stats["kicks_capped"],
                 )
                 break
+            stats["kick_attempted"] += 1
             nas_device = _nas_device_by_ip(db, nas_ip)
             if not nas_device:
                 stats["kick_failed"] += 1
@@ -386,7 +440,10 @@ def run_enforcement_reconciler() -> dict[str, int]:
                     session_id,
                 )
                 continue
-            if _send_coa_disconnect(db, nas_device, username, framed_ip, session_id):
+            disconnect = _send_coa_disconnect(
+                db, nas_device, username, framed_ip, session_id
+            )
+            if disconnect.disconnected:
                 stats["kicked"] += 1
                 logger.info(
                     "enforcement reconciler: kicked %s on %s (session %s, ip %s)",
@@ -395,12 +452,12 @@ def run_enforcement_reconciler() -> dict[str, int]:
                     session_id,
                     framed_ip,
                 )
-            elif stale:
-                # CoA failed AND the row hasn't seen accounting in >2h
-                # (interim cadence is 5 min): the session no longer exists
-                # on the NAS — a ghost row from a lost Stop packet. The
-                # BNGs Disconnect-NAK these (code 42). Close the row so it
-                # stops masquerading as an enforcement leak.
+            elif disconnect.session_absent:
+                # RFC 5176 Error-Cause 503 is direct NAS evidence that the
+                # requested session context does not exist. Only that verified
+                # outcome may close an accounting row; timeouts, configuration
+                # failures and generic NAKs remain visible as failed kicks.
+                stats["coa_session_not_found"] += 1
                 ghost_rows.append((radacctid, username))
             else:
                 stats["kick_failed"] += 1
@@ -419,7 +476,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
             stats["ghosts_closed"] = len(ghost_rows)
             logger.info(
                 "enforcement reconciler: closed %d ghost radacct rows "
-                "(no accounting >2h, NAS refused disconnect): %s",
+                "(NAS verified session context absent): %s",
                 len(ghost_rows),
                 sorted({u for _, u in ghost_rows})[:10],
             )
@@ -431,6 +488,9 @@ def run_enforcement_reconciler() -> dict[str, int]:
     with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
         cur.execute(sql.SQL("SELECT DISTINCT username FROM {}").format(radcheck))
         in_radcheck = {r[0] for r in cur.fetchall()}
+        from app.services.radius_probe import probe_username
+
+        in_radcheck.discard(probe_username())
         cur.execute(
             sql.SQL(
                 "SELECT DISTINCT username FROM {} "
@@ -446,33 +506,148 @@ def run_enforcement_reconciler() -> dict[str, int]:
             (walled_garden_address_list,),
         )
         captive_tagged = {r[0] for r in cur.fetchall()}
+        desired_logins = sorted(desired_login_projections)
+        observed_check_rows: list[dict[str, object]] = []
+        observed_reply_rows: list[dict[str, object]] = []
+        observed_group_rows: list[dict[str, object]] = []
+        if desired_logins:
+            cur.execute(
+                sql.SQL(
+                    "SELECT username, attribute, op, value FROM {} "
+                    "WHERE username = ANY(%s)"
+                ).format(radcheck),
+                (desired_logins,),
+            )
+            observed_check_rows = [
+                {
+                    "username": row[0],
+                    "attribute": row[1],
+                    "op": row[2],
+                    "value": row[3],
+                }
+                for row in cur.fetchall()
+            ]
+            cur.execute(
+                sql.SQL(
+                    "SELECT username, attribute, op, value FROM {} "
+                    "WHERE username = ANY(%s)"
+                ).format(radreply),
+                (desired_logins,),
+            )
+            observed_reply_rows = [
+                {
+                    "username": row[0],
+                    "attribute": row[1],
+                    "op": row[2],
+                    "value": row[3],
+                }
+                for row in cur.fetchall()
+            ]
+            if bool(target["use_group"]):
+                cur.execute(
+                    sql.SQL(
+                        "SELECT username, groupname, priority FROM {} "
+                        "WHERE username = ANY(%s)"
+                    ).format(radusergroup),
+                    (desired_logins,),
+                )
+            else:
+                cur.execute(
+                    sql.SQL(
+                        "SELECT username, groupname, priority FROM {} "
+                        "WHERE username = ANY(%s) AND groupname = ANY(%s)"
+                    ).format(radusergroup),
+                    (desired_logins, owned_access_groups),
+                )
+            observed_group_rows = [
+                {
+                    "username": row[0],
+                    "groupname": row[1],
+                    "priority": row[2],
+                }
+                for row in cur.fetchall()
+            ]
+
+    from app.services.radius_population import fingerprint_observed_radius_rows
+
+    observed_fingerprints = fingerprint_observed_radius_rows(
+        radcheck_rows=observed_check_rows,
+        radreply_rows=observed_reply_rows,
+        radusergroup_rows=observed_group_rows,
+    )
+    target_fingerprint = str(target["target_fingerprint"])
+    target_expected = expected_projection_fingerprints.get(target_fingerprint)
+    if not isinstance(target_expected, dict):
+        logger.error(
+            "access projection exact parity unavailable for accounting target %s",
+            target_fingerprint,
+        )
+        target_expected = dict.fromkeys(
+            desired_login_projections,
+            "expected-fingerprint-unavailable",
+        )
+    simultaneous_use_check = (
+        {
+            str(row["username"])
+            for row in observed_check_rows
+            if str(row["attribute"]).lower() == "simultaneous-use"
+        }
+        if enforce_simultaneous_use
+        else set()
+    )
+    simultaneous_use_reply = (
+        {
+            str(row["username"])
+            for row in observed_reply_rows
+            if str(row["attribute"]).lower() == "simultaneous-use"
+        }
+        if enforce_simultaneous_use
+        else set()
+    )
 
     drift = compare_radius_projection(
         desired_login_projections,
         observed_auth=in_radcheck,
         observed_reject=rejected,
         observed_captive=captive_tagged,
+        desired_fingerprints=target_expected,
+        observed_fingerprints=observed_fingerprints,
+        enforce_simultaneous_use=enforce_simultaneous_use,
+        observed_simultaneous_use_check=simultaneous_use_check,
+        observed_simultaneous_use_reply=simultaneous_use_reply,
     )
     stats["missing_radius_auth"] = len(drift.missing_auth)
+    stats["stale_radius_auth"] = len(drift.stale_auth)
     stats["missing_reject"] = len(drift.missing_reject)
     stats["stale_reject"] = len(drift.stale_reject)
     stats["missing_captive"] = len(drift.missing_captive)
     stats["stale_captive"] = len(drift.stale_captive)
+    stats["radius_attribute_drift"] = len(drift.attribute_drift)
+    stats["missing_concurrency_check"] = len(drift.missing_concurrency_check)
+    stats["stale_concurrency_check"] = len(drift.stale_concurrency_check)
+    stats["misplaced_concurrency_reply"] = len(drift.misplaced_concurrency_reply)
     stats["walled_garden_drift"] = len(drift.missing_captive | drift.stale_captive)
     stats["radius_projection_unconverged"] = len(drift.usernames)
     radius_refresh_required = radius_refresh_required or bool(drift.usernames)
 
     if drift.usernames:
         logger.error(
-            "access projection unconverged: total=%d missing_auth=%d "
+            "access projection unconverged: total=%d missing_auth=%d stale_auth=%d "
             "missing_reject=%d stale_reject=%d missing_captive=%d "
-            "stale_captive=%d sample=%s",
+            "stale_captive=%d missing_concurrency_check=%d "
+            "stale_concurrency_check=%d misplaced_concurrency_reply=%d "
+            "attribute_drift=%d sample=%s",
             len(drift.usernames),
             len(drift.missing_auth),
+            len(drift.stale_auth),
             len(drift.missing_reject),
             len(drift.stale_reject),
             len(drift.missing_captive),
             len(drift.stale_captive),
+            len(drift.missing_concurrency_check),
+            len(drift.stale_concurrency_check),
+            len(drift.misplaced_concurrency_reply),
+            len(drift.attribute_drift),
             sorted(drift.usernames)[:5],
         )
 
@@ -484,16 +659,42 @@ def run_enforcement_reconciler() -> dict[str, int]:
 
     from app.services.observability import record_task_run
 
+    run_status = (
+        "degraded"
+        if stats["account_projection_errors"]
+        or stats["radius_projection_unconverged"]
+        or stats["radius_unbuildable_logins"]
+        or stats["kick_failed"]
+        or stats["kicks_capped"]
+        else "ok"
+    )
     record_task_run(
         "app.tasks.radius.run_enforcement_reconciler",
-        status=(
-            "degraded"
-            if stats["account_projection_errors"]
-            or stats["radius_projection_unconverged"]
-            else "ok"
-        ),
+        status=run_status,
         counters=stats,
     )
+    if run_status != "ok":
+        # A degraded pass still completed and released the single-flight lock.
+        # Reset the consecutive-overlap streak while retaining the degraded
+        # outcome in the canonical job result above.
+        from app.services.task_heartbeat import record_success
+
+        record_success("app.tasks.radius.run_enforcement_reconciler", stats)
 
     logger.info("enforcement reconciler done: %s", stats)
     return stats
+
+
+@celery_app.task(name="app.tasks.radius.run_enforcement_reconciler")
+def run_enforcement_reconciler() -> dict[str, int]:
+    """Single-flight adapter for the canonical access-control recovery loop."""
+    with postgres_session_advisory_lock(_ENFORCEMENT_RECONCILER_LOCK_KEY) as acquired:
+        if not acquired:
+            logger.warning(
+                "enforcement reconciler skipped: previous run still in progress"
+            )
+            from app.services.task_heartbeat import record_skip
+
+            record_skip("app.tasks.radius.run_enforcement_reconciler")
+            return {"skipped_already_running": 1}
+        return _run_enforcement_reconciler()

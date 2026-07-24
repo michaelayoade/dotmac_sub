@@ -86,7 +86,8 @@ change IPAM, RADIUS, NAS, or ONT authority. The active IP assignment is consumed
 as a readiness observation. The existing activation projections remain in
 place, but failures now propagate to the event store instead of being logged
 and treated as customer success. The connectivity cutover described in
-`CONNECTIVITY_STATE_MACHINE.md` remains a separate guarded migration.
+The service/network projection contract remains independently guarded in
+`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
 
 Remote same-medium service changes use the existing RADIUS control plane rather
 than manufacturing a field service order. The service-change execution

@@ -12,8 +12,15 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.billing import (
+    PaymentProvider,
+    PaymentProviderEvent,
+    PaymentProviderEventSource,
+    PaymentProviderType,
+)
 from app.models.integration_platform import (
     IntegrationBindingState,
     IntegrationCapabilityBinding,
@@ -27,10 +34,14 @@ from app.services.integrations import registry as integration_registry
 from app.services.integrations.connectors.dotmac_crm import (
     CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
 )
+from app.services.payment_reconciliation import topup_reconciliation_backlog
 
 TR069_SYNC_TASK = "app.tasks.tr069.sync_all_acs_devices"
 CRM_OPERATION_OBSERVATION = "integration.crm.capability.crm.operational_observation.v1"
 _CRM_CONNECTOR_KEY = "dotmac.crm"
+_PAYSTACK_CONNECTOR_KEY = "paystack"
+_PAYSTACK_CAPABILITIES = frozenset({"payments.webhook.v1", "payments.reconcile.v1"})
+PAYSTACK_WEBHOOK_PATH = "/api/v1/payment-events/paystack"
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +334,213 @@ def crm_operational_check(db: Session) -> OperationalCheck:
     )
 
 
+def _paystack_binding_evidence(db: Session) -> tuple[str, bool, bool]:
+    installations = (
+        db.query(IntegrationInstallation)
+        .filter(IntegrationInstallation.connector_key == _PAYSTACK_CONNECTOR_KEY)
+        .order_by(IntegrationInstallation.created_at.asc())
+        .all()
+    )
+    if not installations:
+        return "No Paystack installation exists.", False, False
+    enabled_installations = [
+        installation
+        for installation in installations
+        if installation.state == IntegrationInstallationState.enabled.value
+    ]
+    if len(enabled_installations) != 1:
+        return (
+            "Paystack does not have exactly one enabled installation.",
+            False,
+            True,
+        )
+    installation = enabled_installations[0]
+    enabled_capabilities = {
+        binding.capability_id
+        for binding in installation.capability_bindings
+        if binding.state == IntegrationBindingState.enabled.value
+    }
+    missing = sorted(_PAYSTACK_CAPABILITIES - enabled_capabilities)
+    if missing:
+        return (
+            "Enabled Paystack installation is missing: " + ", ".join(missing) + ".",
+            False,
+            True,
+        )
+    revision = installation.current_config_revision
+    if (
+        revision is None
+        or revision.validation_status != IntegrationValidationStatus.valid.value
+    ):
+        return (
+            "Enabled Paystack installation has no validated current revision.",
+            False,
+            True,
+        )
+    definition = integration_registry.require_connector_definition(
+        _PAYSTACK_CONNECTOR_KEY
+    )
+    if (
+        definition.version != installation.connector_version
+        or definition.digest != installation.manifest_digest
+    ):
+        return (
+            "Enabled Paystack installation pin differs from the deployed connector.",
+            False,
+            True,
+        )
+    undeclared = sorted(
+        capability_id
+        for capability_id in _PAYSTACK_CAPABILITIES
+        if definition.capability(capability_id) is None
+    )
+    if undeclared:
+        return (
+            "Deployed Paystack connector is missing: " + ", ".join(undeclared) + ".",
+            False,
+            True,
+        )
+    return (
+        "Paystack webhook and reconciliation capabilities are enabled on a "
+        "validated installation.",
+        True,
+        True,
+    )
+
+
+def _latest_paystack_webhook_at(db: Session) -> datetime | None:
+    return (
+        db.query(func.max(PaymentProviderEvent.received_at))
+        .join(
+            PaymentProvider,
+            PaymentProvider.id == PaymentProviderEvent.provider_id,
+        )
+        .filter(
+            PaymentProvider.provider_type == PaymentProviderType.paystack,
+            PaymentProviderEvent.source == PaymentProviderEventSource.verified_webhook,
+        )
+        .scalar()
+    )
+
+
+def paystack_payment_check(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> OperationalCheck:
+    """Explain Paystack automatic-posting evidence without inventing health."""
+
+    now = now or datetime.now(UTC)
+    binding_evidence, executable, installed = _paystack_binding_evidence(db)
+    schedule = _task_row(db, job_heartbeat.PAYMENT_RECONCILIATION_TASK)
+    schedule_enabled = bool(schedule and schedule.enabled)
+    interval = int(schedule.interval_seconds or 0) if schedule else 0
+    result, result_at = _task_result(job_heartbeat.PAYMENT_RECONCILIATION_TASK)
+    detail_value = result.get("detail")
+    detail = dict(detail_value) if isinstance(detail_value, dict) else {}
+    last_success = job_heartbeat.get_last_success(
+        job_heartbeat.PAYMENT_RECONCILIATION_TASK
+    )
+    if last_success is not None and last_success.tzinfo is None:
+        last_success = last_success.replace(tzinfo=UTC)
+    runner_stale = bool(
+        schedule_enabled
+        and interval > 0
+        and (
+            last_success is None or (now - last_success).total_seconds() > interval * 2
+        )
+    )
+    backlog = topup_reconciliation_backlog(db, observed_at=now)
+    webhook_at = _latest_paystack_webhook_at(db)
+    if webhook_at is not None and webhook_at.tzinfo is None:
+        webhook_at = webhook_at.replace(tzinfo=UTC)
+    errors = int(detail.get("errors") or 0)
+    checked = int(detail.get("checked") or 0)
+    recovered = int(detail.get("recovered") or 0)
+    stale_backlog = backlog.eligible + backlog.outside_window
+    webhook_missing_with_backlog = bool(
+        installed and webhook_at is None and stale_backlog
+    )
+    needs_attention = bool(
+        installed
+        and (
+            not executable
+            or not schedule_enabled
+            or runner_stale
+            or errors
+            or backlog.outside_window
+            or webhook_missing_with_backlog
+        )
+    )
+
+    if not installed:
+        last_result = "Paystack is not installed; no automatic posting is expected."
+    elif not result:
+        last_result = "No reconciliation execution result has been recorded."
+    else:
+        last_result = (
+            f"Reconciliation checked {checked}, recovered {recovered}, and "
+            f"rejected {errors}; {stale_backlog} stale intent(s) remain."
+        )
+    webhook_evidence = (
+        f"Last signature-verified Paystack webhook: {webhook_at.isoformat()}."
+        if webhook_at
+        else "No signature-verified Paystack webhook has been recorded."
+    )
+    runner_evidence = (
+        f"Last successful reconciliation execution: {last_success.isoformat()}."
+        if last_success
+        else "No successful reconciliation execution has been recorded."
+    )
+    if not installed:
+        next_step = "Install Paystack before configuring automatic posting."
+    elif not executable:
+        next_step = (
+            "Repair the Paystack webhook and reconciliation capability bindings."
+        )
+    elif not schedule_enabled or runner_stale:
+        next_step = "Repair the reconciliation schedule or billing worker before taking payments."
+    elif webhook_missing_with_backlog:
+        next_step = (
+            f"Set the Paystack live webhook URL to POST {PAYSTACK_WEBHOOK_PATH}, "
+            "then confirm a signature-verified receipt appears."
+        )
+    elif errors:
+        next_step = (
+            "Inspect and repair the rejected intents; the runner itself is executing."
+        )
+    elif backlog.outside_window:
+        next_step = "Reconcile intents outside the automatic retry window explicitly."
+    else:
+        next_step = "No operator action is required."
+    observations = [value for value in (result_at, webhook_at) if value is not None]
+    observed_at = max(observations) if observations else None
+    expected = (
+        f"Paystack posts through POST {PAYSTACK_WEBHOOK_PATH}; "
+        f"reconciliation runs every {interval // 60 or 1} minute(s)."
+        if installed and schedule_enabled
+        else f"Paystack posts through POST {PAYSTACK_WEBHOOK_PATH}; reconciliation is not enabled."
+    )
+    return OperationalCheck(
+        key="paystack_payment_automation",
+        subject="Paystack automatic payment posting",
+        expected=expected,
+        last_result=last_result,
+        observed_at=observed_at,
+        evidence=f"{binding_evidence} {webhook_evidence} {runner_evidence}",
+        impact=(
+            "Stale successful charges can remain absent from customer accounts until "
+            "a verified webhook or successful reconciliation commits settlement."
+            if needs_attention
+            else "No unresolved automatic-posting evidence requires attention."
+        ),
+        next_step=next_step,
+        next_attempt_at=None,
+        action_url="/admin/integrations/installed",
+        needs_attention=needs_attention,
+    )
+
+
 def operational_checks(
     db: Session,
     *,
@@ -337,6 +555,7 @@ def operational_checks(
         _bandwidth_check(poller, now=now),
         _tr069_check(db, now=now),
         crm_operational_check(db),
+        paystack_payment_check(db, now=now),
     ]
     checks.sort(key=lambda item: (not item.needs_attention, item.subject.lower()))
     return [check.to_dict() for check in checks]

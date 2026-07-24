@@ -14,19 +14,26 @@ admin commands; it does not introduce a second access policy or write money.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from importlib import import_module
-from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import AccessState, Subscription
+from app.models.enforcement_lock import EnforcementLock
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.common import coerce_uuid
 from app.services.notification_suppression import suppress_notifications
+from app.services.radius_access_state import (
+    ACTIVE_STATUSES,
+    BLOCKED_STATUSES,
+    TERMINATED_STATUSES,
+    UNPROVISIONED_STATUSES,
+)
+from app.services.subscriber_access_policy import (
+    RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,7 @@ class DriftResult:
     prior_status: str
     new_status: str | None = None
     changed: bool = False
+    account_active_changed: bool = False
     access_states_changed: int = 0
     error: str | None = None
 
@@ -49,6 +57,7 @@ class DriftResult:
 class DriftSummary:
     candidates: int = 0
     changed: int = 0
+    account_active_changed: int = 0
     access_states_changed: int = 0
     errors: int = 0
     dry_run: bool = True
@@ -61,29 +70,41 @@ class DriftSummary:
 
 
 def account_eligibility(db: Session, account_id: str) -> tuple[bool, str | None]:
-    """Return whether an account has safe, derived parent-status drift.
+    """Return whether canonical account or child access projections have drift."""
+    from app.services.account_lifecycle import (
+        derive_account_active_projection,
+        derive_account_status,
+        derive_subscription_access_projection,
+    )
 
-    Explicit overrides remain authoritative.  Otherwise any active child makes
-    a blocking parent a stale projection, even when another child is suspended;
-    per-service restrictions remain on that child and are not cleared here.
-    """
     account = db.get(Subscriber, coerce_uuid(account_id))
     if account is None:
         return False, "not_found"
-    if account.lifecycle_override_status is not None:
-        return False, "explicit_lifecycle_override"
-    if account.status in _PERMISSIVE_ACTIVE_PARENT_STATUSES:
-        status = account.status.value if account.status else "unknown"
-        return False, f"parent_already_permissive (status={status})"
-    statuses = [
-        r[0]
-        for r in db.execute(
-            select(Subscription.status).where(Subscription.subscriber_id == account.id)
+    derived_status = derive_account_status(db, str(account.id))
+    if account.status != derived_status:
+        return True, None
+    if account.is_active != derive_account_active_projection(
+        account,
+        account_status=derived_status,
+    ):
+        return True, None
+    projected = derive_subscription_access_projection(
+        db,
+        account,
+        account_status=derived_status,
+    )
+    actual = {
+        subscription.id: subscription.access_state
+        for subscription in db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == account.id)
         ).all()
-    ]
-    if not any(status == SubscriptionStatus.active for status in statuses):
-        return False, "no_active_subscription"
-    return True, None
+    }
+    if any(
+        actual.get(subscription_id) != state
+        for subscription_id, state in projected.items()
+    ):
+        return True, None
+    return False, "already_converged"
 
 
 def _partition_requested(
@@ -104,16 +125,134 @@ def _partition_requested(
 def find_account_projection_drift_ids(
     db: Session, *, limit: int | None = None
 ) -> list[str]:
-    """Blocking parents with an active child and no explicit override."""
+    """Find broad SQL candidates; the lifecycle owner performs exact repair."""
+
+    active_child = exists(
+        select(Subscription.id).where(
+            Subscription.subscriber_id == Subscriber.id,
+            Subscription.status.in_(ACTIVE_STATUSES),
+        )
+    )
+    active_lock = exists(
+        select(EnforcementLock.id).where(
+            EnforcementLock.subscription_id == Subscription.id,
+            EnforcementLock.is_active.is_(True),
+        )
+    )
+    child_projection_drift = exists(
+        select(Subscription.id).where(
+            Subscription.subscriber_id == Subscriber.id,
+            or_(
+                (
+                    Subscription.status.in_(ACTIVE_STATUSES)
+                    & Subscriber.status.in_(_PERMISSIVE_ACTIVE_PARENT_STATUSES)
+                    & ~active_lock
+                    & or_(
+                        Subscription.access_state.is_(None),
+                        Subscription.access_state != AccessState.active.value,
+                    )
+                ),
+                (
+                    Subscription.status.in_(ACTIVE_STATUSES)
+                    & active_lock
+                    & or_(
+                        Subscription.access_state.is_(None),
+                        Subscription.access_state.notin_(
+                            {
+                                AccessState.suspended.value,
+                                AccessState.captive.value,
+                            }
+                        ),
+                    )
+                ),
+                (
+                    Subscription.status.in_(ACTIVE_STATUSES)
+                    & Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES)
+                    & or_(
+                        Subscription.access_state.is_(None),
+                        Subscription.access_state.notin_(
+                            {
+                                AccessState.suspended.value,
+                                AccessState.captive.value,
+                            }
+                        ),
+                    )
+                ),
+                (
+                    Subscription.status.in_(BLOCKED_STATUSES)
+                    & or_(
+                        Subscription.access_state.is_(None),
+                        Subscription.access_state.notin_(
+                            {
+                                AccessState.suspended.value,
+                                AccessState.captive.value,
+                            }
+                        ),
+                    )
+                ),
+                (
+                    Subscription.status.in_(TERMINATED_STATUSES)
+                    & or_(
+                        Subscription.access_state.is_(None),
+                        Subscription.access_state != AccessState.terminated.value,
+                    )
+                ),
+                (
+                    Subscription.status.in_(UNPROVISIONED_STATUSES)
+                    & Subscription.access_state.isnot(None)
+                ),
+            ),
+        )
+    )
+    parent_projection_drift = or_(
+        (
+            active_child
+            & Subscriber.status.notin_(_PERMISSIVE_ACTIVE_PARENT_STATUSES)
+            & Subscriber.lifecycle_override_status.is_(None)
+        ),
+        (~active_child & Subscriber.status.in_(_PERMISSIVE_ACTIVE_PARENT_STATUSES)),
+    )
+    account_active_drift = or_(
+        (
+            Subscriber.status.in_(
+                {
+                    SubscriberStatus.active,
+                    SubscriberStatus.new,
+                    SubscriberStatus.blocked,
+                    SubscriberStatus.delinquent,
+                }
+            )
+            & Subscriber.is_active.is_(False)
+        ),
+        (
+            Subscriber.status.in_(
+                {SubscriberStatus.disabled, SubscriberStatus.canceled}
+            )
+            & Subscriber.is_active.is_(True)
+        ),
+        (
+            (Subscriber.status == SubscriberStatus.suspended)
+            & (Subscriber.lifecycle_override_status == SubscriberStatus.suspended)
+            & Subscriber.is_active.is_(True)
+        ),
+        (
+            (Subscriber.status == SubscriberStatus.suspended)
+            & or_(
+                Subscriber.lifecycle_override_status.is_(None),
+                Subscriber.lifecycle_override_status != SubscriberStatus.suspended,
+            )
+            & Subscriber.is_active.is_(False)
+        ),
+    )
     stmt = (
         select(Subscriber.id)
-        .join(Subscription, Subscription.subscriber_id == Subscriber.id)
         .where(
-            Subscription.status == SubscriptionStatus.active,
-            Subscriber.status.notin_(_PERMISSIVE_ACTIVE_PARENT_STATUSES),
+            or_(
+                parent_projection_drift,
+                account_active_drift,
+                child_projection_drift,
+            )
         )
-        .where(Subscriber.lifecycle_override_status.is_(None))
-        .distinct()
         .order_by(Subscriber.id)
     )
     if limit is not None:
@@ -123,7 +262,11 @@ def find_account_projection_drift_ids(
 
 def project_account(db: Session, account_id: str) -> DriftResult:
     """Read-only: report what the reconcile would derive, mutating nothing."""
-    from app.services.account_lifecycle import derive_account_status
+    from app.services.account_lifecycle import (
+        derive_account_active_projection,
+        derive_account_status,
+        derive_subscription_access_projection,
+    )
 
     account = db.get(Subscriber, coerce_uuid(account_id))
     prior = account.status.value if account and account.status else "unknown"
@@ -134,11 +277,30 @@ def project_account(db: Session, account_id: str) -> DriftResult:
             error="not_found",
         )
     projected = derive_account_status(db, str(account.id))
+    access_projection = derive_subscription_access_projection(
+        db,
+        account,
+        account_status=projected,
+    )
+    actual = {
+        subscription.id: subscription.access_state
+        for subscription in db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == account.id)
+        ).all()
+    }
     return DriftResult(
         account_id=str(account_id),
         prior_status=prior,
         new_status=projected.value,
         changed=projected != account.status,
+        account_active_changed=(
+            account.is_active
+            != derive_account_active_projection(account, account_status=projected)
+        ),
+        access_states_changed=sum(
+            actual.get(subscription_id) != access_state
+            for subscription_id, access_state in access_projection.items()
+        ),
     )
 
 
@@ -147,7 +309,14 @@ def reconcile_account(db: Session, account_id: str) -> DriftResult:
     from app.services.account_lifecycle import compute_account_status
 
     account = db.get(Subscriber, coerce_uuid(account_id))
-    prior = account.status if account else None
+    if account is None:
+        return DriftResult(
+            account_id=str(account_id),
+            prior_status="unknown",
+            error="not_found",
+        )
+    prior = account.status
+    prior_active = account.is_active
     result = DriftResult(
         account_id=str(account_id),
         prior_status=prior.value if prior else "unknown",
@@ -163,7 +332,8 @@ def reconcile_account(db: Session, account_id: str) -> DriftResult:
         }
         new_status = compute_account_status(db, str(account_id))
         result.new_status = new_status.value
-        result.changed = prior is not None and new_status != prior
+        result.changed = new_status != prior
+        result.account_active_changed = account.is_active != prior_active
         after_access = {
             str(subscription.id): subscription.access_state
             for subscription in db.scalars(
@@ -196,24 +366,11 @@ def _account_subscription_ids(db: Session, account_id: str) -> list[str]:
 
 
 def _default_refresh_radius() -> None:
-    """Lazy default: rebuild RADIUS from authoritative state.
+    """Rebuild RADIUS through the canonical projection owner."""
+    from app.services.radius_population import populate, require_complete_projection
 
-    Imported lazily and only on the apply path so the status-repair logic (and
-    its tests) never depend on the RADIUS-sweep module at import time — apply
-    mode legitimately needs it, dry-run does not.
-
-    Prefers the relocated ``app.services.radius_population`` module; falls back to
-    the committed ``scripts.migration.populate_radius_from_subs`` (same logic,
-    its current home on ``main``). Both expose ``populate(dry_run=...)``, so this
-    one file works before and after the legacy-decommission relocation lands.
-    """
-    try:
-        module = import_module("app.services.radius_population")
-    except ImportError:
-        module = import_module("scripts.migration.populate_radius_from_subs")
-
-    populate_radius = cast(Callable[..., object], module.populate)
-    populate_radius(dry_run=False)
+    result = populate(dry_run=False)
+    require_complete_projection(result)
 
 
 def _default_coa(db: Session, subscription_id: str, *, reason: str) -> int:
@@ -236,10 +393,10 @@ def reconcile_cohort(
 ) -> DriftSummary:
     """Reconcile safe parent/access drift, then refresh RADIUS + CoA.
 
-    ``account_ids`` given → reconcile ONLY those that pass the same eligibility
-    filter (active child, blocking parent, no explicit override); ineligible
-    accounts are recorded in ``summary.skipped`` and never mutated. ``limit`` is
-    ignored when ``account_ids`` is given.
+    ``account_ids`` given → reconcile only accounts whose canonical parent,
+    account-active, or child access projection differs from stored state.
+    Already-converged accounts are recorded in ``summary.skipped`` and never
+    mutated. ``limit`` is ignored when ``account_ids`` is given.
 
     ``notify`` defaults False — this is a bulk catch-up, so suppress the
     "service resumed" burst. RADIUS is rebuilt ONCE after all status writes, then
@@ -271,14 +428,23 @@ def reconcile_cohort(
             if result.error:
                 summary.errors += 1
                 continue
-            if result.changed or result.access_states_changed:
+            if (
+                result.changed
+                or result.account_active_changed
+                or result.access_states_changed
+            ):
                 if result.changed:
                     summary.changed += 1
+                if result.account_active_changed:
+                    summary.account_active_changed += 1
                 coa_subscription_ids.update(_account_subscription_ids(db, account_id))
             summary.access_states_changed += result.access_states_changed
 
     if refresh_radius and (
-        summary.changed or summary.access_states_changed or account_ids is not None
+        summary.changed
+        or summary.access_states_changed
+        or account_ids is not None
+        or summary.account_active_changed
     ):
         (refresh_fn or _default_refresh_radius)()
         summary.radius_refreshed = True

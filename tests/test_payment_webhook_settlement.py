@@ -45,6 +45,7 @@ from app.services.payment_reconciliation import (
     RECONCILIATION_SCOPE,
     RunTopupReconciliationCommand,
     reconcile_pending_topups,
+    topup_reconciliation_backlog,
 )
 from app.services.settings_cache import SettingsCache
 from app.services.settings_spec import get_spec
@@ -649,6 +650,35 @@ def _run_reconciliation(db):
     )
 
 
+def test_reconciliation_backlog_separates_eligible_and_outside_window(
+    db_session, subscriber
+):
+    observed_at = datetime.now(UTC)
+    eligible = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-BACKLOG-ELIGIBLE",
+    )
+    outside_window = _stale_intent(
+        db_session,
+        subscriber,
+        reference="DMAC-RECON-BACKLOG-OUTSIDE",
+    )
+    outside_window.created_at = observed_at - timedelta(days=8)
+    db_session.commit()
+
+    backlog = topup_reconciliation_backlog(
+        db_session,
+        observed_at=observed_at,
+    )
+
+    assert backlog.pending == 2
+    assert backlog.eligible == 1
+    assert backlog.outside_window == 1
+    assert backlog.oldest_pending_at == outside_window.created_at
+    assert eligible.created_at < backlog.stale_before.replace(tzinfo=None)
+
+
 def test_reconciliation_recovers_stranded_topup(db_session, subscriber):
     _make_provider(db_session)
     intent = _stale_intent(db_session, subscriber, reference="DMAC-RECON-1")
@@ -706,7 +736,8 @@ def test_reconciliation_routes_typed_deposit_through_deposit_owner(
         "app.services.payment_reconciliation.payment_gateway_adapter.verify",
         return_value=PaymentGatewayTransaction(
             provider_type="paystack",
-            amount=Decimal("5000.00"),
+            amount=Decimal("5090.00"),
+            provider_fee=Decimal("90.00"),
             currency="NGN",
             external_id="typed-reconciliation-deposit-payment",
             memo_prefix="Paystack",
@@ -718,7 +749,10 @@ def test_reconciliation_routes_typed_deposit_through_deposit_owner(
     payment = db_session.get(Payment, intent.completed_payment_id)
     assert result.recovered == 1
     assert payment is not None
+    assert payment.amount == Decimal("5090.00")
+    assert payment.provider_fee == Decimal("90.00")
     assert payment.settlement is not None
+    assert payment.settlement.amount == Decimal("5000.00")
     assert payment.settlement.unallocated_amount == Decimal("5000.00")
     assert intent.status == "completed"
     assert intent.metadata_["settlement_payment_id"] == str(payment.id)

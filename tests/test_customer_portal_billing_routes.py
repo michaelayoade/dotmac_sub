@@ -394,12 +394,17 @@ class TestCustomerTopupRoutes:
                         "topup_intent_id": "intent-1",
                         "account_id": "acct-1",
                     },
+                    "preview_fingerprint": "a" * 64,
                 },
             ),
         ):
             response = customer_create_topup_intent(
                 request=request,
-                payload={"amount": 5000, "provider": "paystack"},
+                payload={
+                    "amount": 5000,
+                    "provider": "paystack",
+                    "preview_fingerprint": "a" * 64,
+                },
                 db=MagicMock(),
             )
 

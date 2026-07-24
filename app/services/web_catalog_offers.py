@@ -487,7 +487,7 @@ def sync_offer_radius_profile_to_subscriptions(
     db.commit()
     for subscription_id in active_subscription_ids:
         try:
-            reconcile_subscription_connectivity(db, subscription_id)
+            reconcile_subscription_connectivity(db, subscription_id).require_projected()
         except Exception:
             logger.warning(
                 "Failed to reconcile subscription %s after offer profile sync.",

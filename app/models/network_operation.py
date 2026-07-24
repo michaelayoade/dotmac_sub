@@ -62,6 +62,7 @@ class NetworkOperationType(enum.Enum):
     cpe_send_conn_request = "cpe_send_conn_request"
     cpe_reboot = "cpe_reboot"
     cpe_factory_reset = "cpe_factory_reset"
+    cpe_tr069_command = "cpe_tr069_command"
     tr069_bootstrap = "tr069_bootstrap"
     wifi_update = "wifi_update"
     pppoe_push = "pppoe_push"

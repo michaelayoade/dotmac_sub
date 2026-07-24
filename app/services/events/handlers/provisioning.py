@@ -195,7 +195,7 @@ class ProvisioningHandler:
 
         sync_account_credentials_to_radius(db, str(subscription.subscriber_id))
         result = reconcile_subscription_connectivity(db, subscription_id)
-        if not result.get("ok"):
+        if not result.ok:
             raise RuntimeError(f"RADIUS connectivity reconciliation failed: {result}")
         logger.info(
             "Reconciled RADIUS state for subscription %s: %s",

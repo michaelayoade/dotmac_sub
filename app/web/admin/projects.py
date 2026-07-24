@@ -8,6 +8,9 @@ the ``/{project_ref}`` detail routes so they match first.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Coroutine
+from typing import Any
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import (
     HTMLResponse,
@@ -15,6 +18,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from fastapi.routing import APIRoute
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -22,8 +26,41 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_projects as projects_web_service
 from app.services.auth_dependencies import require_permission
+from app.services.domain_errors import DomainError
 
-router = APIRouter(prefix="/projects", tags=["web-admin-projects"])
+
+class ProjectDomainRoute(APIRoute):
+    """Map uncaught Projects domain errors at the web adapter boundary."""
+
+    def get_route_handler(
+        self,
+    ) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original = super().get_route_handler()
+
+        async def handler(request: Request) -> Response:
+            try:
+                return await original(request)
+            except DomainError as exc:
+                code = exc.code
+                status_code = (
+                    404
+                    if code.endswith(".not_found")
+                    else 403
+                    if code.endswith(".unauthorized")
+                    else 409
+                    if code.endswith((".stale_state", ".relationship_conflict"))
+                    else 400
+                )
+                raise HTTPException(
+                    status_code=status_code, detail=exc.message
+                ) from exc
+
+        return handler
+
+
+router = APIRouter(
+    prefix="/projects", tags=["web-admin-projects"], route_class=ProjectDomainRoute
+)
 templates = Jinja2Templates(directory="templates")
 
 
@@ -168,7 +205,7 @@ async def project_create(request: Request, db: Session = Depends(get_db)):
         project = projects_web_service.create_project_from_form(
             db, request=request, actor_id=_actor_id(request), **form
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
+    except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         context = _ctx(request, db)
         context.update(
@@ -258,7 +295,7 @@ async def project_task_create(request: Request, db: Session = Depends(get_db)):
         task = projects_web_service.create_task_from_form(
             db, request=request, actor_id=_actor_id(request), **form
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
+    except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         context = _ctx(request, db, active_page="project-tasks")
         context.update(
@@ -335,7 +372,7 @@ async def project_task_update(
             actor_id=_actor_id(request),
             **form,
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
+    except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         context = _ctx(request, db, active_page="project-tasks")
         context.update(
@@ -445,7 +482,7 @@ async def project_template_create(request: Request, db: Session = Depends(get_db
     form = dict(await request.form())
     try:
         template = projects_web_service.create_template_from_form(db, **form)
-    except (HTTPException, ValidationError, ValueError) as exc:
+    except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         context = _ctx(request, db, active_page="project-templates")
         context.update(
@@ -515,7 +552,7 @@ async def project_template_update(
         projects_web_service.update_template_from_form(
             db, template_id=template_id, **form
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
+    except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         template = projects_service.project_templates.get(db, template_id)
         context = _ctx(request, db, active_page="project-templates")
@@ -649,7 +686,7 @@ async def project_template_task_create(
         projects_web_service.create_template_task_from_form(
             db, template_id=template_id, **form
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
+    except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         template = projects_service.project_templates.get(db, template_id)
         context = _ctx(request, db, active_page="project-templates")
@@ -810,7 +847,7 @@ async def project_update(
             actor_id=_actor_id(request),
             **form,
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
+    except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
         context = _ctx(request, db)
         context.update(

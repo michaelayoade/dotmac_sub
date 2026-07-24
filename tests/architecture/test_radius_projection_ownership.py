@@ -75,3 +75,20 @@ def test_writer_baseline_only_shrinks() -> None:
         "WRITER_BASELINE so the migration debt reflects reality:\n  "
         + "\n  ".join(stale)
     )
+
+
+def test_concurrency_policy_stays_inside_the_projection_owner() -> None:
+    owner_source = (PROJECT_ROOT / OWNER).read_text(encoding="utf-8")
+    registry = (PROJECT_ROOT / "app/services/sot_relationships.py").read_text(
+        encoding="utf-8"
+    )
+    relationship_map = (PROJECT_ROOT / "docs/SOT_RELATIONSHIP_MAP.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def _radcheck_policy_attrs(" in owner_source
+    assert "simultaneous_use_enforcement_enabled" in owner_source
+    assert "RADIUS simultaneous-session check/control placement" in registry
+    assert "Simultaneous-Use` is a FreeRADIUS check/control attribute" in (
+        relationship_map
+    )

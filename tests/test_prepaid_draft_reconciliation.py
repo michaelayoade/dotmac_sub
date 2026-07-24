@@ -1,0 +1,393 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from uuid import uuid4
+
+import pytest
+
+from app.models.billing import (
+    AccountAdjustment,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+    Payment,
+    PaymentAllocation,
+    PaymentSettlement,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+    ServiceEntitlement,
+)
+from app.models.catalog import BillingMode, SubscriptionStatus
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
+from app.services.prepaid_draft_reconciliation import (
+    PrepaidDraftAction,
+    PrepaidDraftDisposition,
+    ReconcilePrepaidDraftCommand,
+    preview_prepaid_draft_cohort,
+    preview_prepaid_draft_reconciliation,
+    reconcile_prepaid_draft_invoice,
+)
+from app.services.prepaid_service_renewals import (
+    FundingChangeRenewalDisposition,
+    apply_due_prepaid_service_after_funding_change,
+    confirm_prepaid_service_renewal,
+    preview_prepaid_service_renewal,
+)
+from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
+
+START = datetime(2026, 7, 17, tzinfo=UTC)
+END = datetime(2026, 8, 17, tzinfo=UTC)
+
+
+def _draft(db, account, subscription, *, total: Decimal) -> Invoice:
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = START
+    invoice = Invoice(
+        account_id=account.id,
+        invoice_number=f"INV-DRAFT-{uuid4().hex[:8]}",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        subtotal=total,
+        tax_total=Decimal("0.00"),
+        total=total,
+        balance_due=total,
+        billing_period_start=START,
+        billing_period_end=END,
+        is_proforma=False,
+        is_active=True,
+    )
+    db.add(invoice)
+    db.flush()
+    db.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Prepaid service",
+            quantity=Decimal("1.000"),
+            unit_price=total,
+            amount=total,
+            is_active=True,
+        )
+    )
+    db.commit()
+    return invoice
+
+
+def _payment(db, account, *, amount: Decimal):
+    payment = Payment(
+        account_id=account.id,
+        amount=amount,
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
+        is_active=True,
+    )
+    db.add(payment)
+    db.flush()
+    entry = LedgerEntry(
+        account_id=account.id,
+        payment_id=payment.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=amount,
+        currency="NGN",
+        memo="Reviewed test payment",
+        is_active=True,
+    )
+    db.add(entry)
+    db.flush()
+    db.add(
+        PaymentSettlement(
+            payment_id=payment.id,
+            unallocated_ledger_entry_id=entry.id,
+            amount=amount,
+            unallocated_amount=amount,
+            prepaid_amount=Decimal("0.00"),
+            currency="NGN",
+            origin=PaymentSettlementOrigin.system,
+            idempotency_key=f"pytest-prepaid-draft-payment-{payment.id}",
+        )
+    )
+    db.commit()
+    return payment
+
+
+def _command(invoice_id, fingerprint: str, *, key: str):
+    return ReconcilePrepaidDraftCommand(
+        context=CommandContext.system(
+            actor="pytest:billing-operator",
+            scope="prepaid_draft_reconciliation",
+            reason="Reviewed prepaid draft reconciliation",
+            idempotency_key=key,
+        ),
+        invoice_id=invoice_id,
+        preview_fingerprint=fingerprint,
+        effective_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
+    )
+
+
+def test_fifty_kobo_shortfall_stays_draft(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("18812.50"),
+    )
+    _payment(db_session, subscriber, amount=Decimal("18812.00"))
+
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidDraftDisposition.insufficient_funding
+    assert preview.recommended_action is PrepaidDraftAction.none
+    assert preview.payment_backed_credit == Decimal("18812.00")
+    assert preview.shortfall == Decimal("0.50")
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:fifty-kobo-short",
+    )
+    db_session.commit()
+
+    db_session.refresh(invoice)
+    assert result.disposition is FundingChangeRenewalDisposition.draft_invoice_pending
+    assert result.draft_invoices_pending == 1
+    assert invoice.status is InvoiceStatus.draft
+    assert invoice.issued_at is None
+    assert db_session.query(PaymentAllocation).count() == 0
+    assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(ServiceEntitlement).count() == 0
+
+
+def test_cohort_deduplicates_invoice_with_multiple_prepaid_lines(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Additional prepaid line",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("1.00"),
+            amount=Decimal("1.00"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    previews = preview_prepaid_draft_cohort(
+        db_session,
+        account_id=subscriber.id,
+    )
+
+    assert tuple(preview.invoice_id for preview in previews) == (invoice.id,)
+
+
+def test_legacy_unbacked_credit_is_separated_from_native_shortfall(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("18812.50"),
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.other,
+            amount=Decimal("18812.00"),
+            currency="NGN",
+            memo="Legacy wallet projection",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidDraftDisposition.legacy_unbacked_funding
+    assert preview.recommended_action is PrepaidDraftAction.none
+    assert preview.payment_backed_credit == Decimal("0.00")
+    assert preview.unbacked_credit == Decimal("18812.00")
+    assert preview.shortfall == Decimal("18812.50")
+
+
+def test_funding_change_settles_exact_existing_draft_before_direct_renewal(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("18812.50"),
+    )
+    _payment(db_session, subscriber, amount=Decimal("18812.50"))
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:exact-draft-first",
+    )
+    db_session.commit()
+
+    db_session.refresh(invoice)
+    assert result.disposition is FundingChangeRenewalDisposition.draft_invoice_settled
+    assert result.draft_invoices_settled == 1
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert db_session.query(PaymentAllocation).count() == 1
+    entitlement = db_session.query(ServiceEntitlement).one()
+    assert entitlement.source_invoice_id == invoice.id
+    assert db_session.query(AccountAdjustment).count() == 0
+
+
+def test_reviewed_exact_funding_command_is_atomic_and_replay_safe(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    _payment(db_session, subscriber, amount=Decimal("100.00"))
+    invoice_id = invoice.id
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice_id)
+    assert preview.disposition is PrepaidDraftDisposition.exact_payment_fundable
+    db_session.commit()
+
+    command = _command(
+        invoice_id,
+        preview.fingerprint,
+        key=f"pytest-prepaid-draft-{invoice_id}",
+    )
+    first = reconcile_prepaid_draft_invoice(db_session, command)
+    replay = reconcile_prepaid_draft_invoice(db_session, command)
+
+    db_session.refresh(invoice)
+    assert first.action is PrepaidDraftAction.settle_paid
+    assert first.applied_amount == Decimal("100.00")
+    assert first.replayed is False
+    assert replay.replayed is True
+    assert replay.invoice_id == first.invoice_id
+    assert invoice.status is InvoiceStatus.paid
+    assert db_session.query(PaymentAllocation).count() == 1
+
+
+def test_reviewed_command_rejects_insufficient_funding_without_mutation(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.50"),
+    )
+    _payment(db_session, subscriber, amount=Decimal("100.00"))
+    invoice_id = invoice.id
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice_id)
+    db_session.commit()
+
+    with pytest.raises(DomainError) as exc_info:
+        reconcile_prepaid_draft_invoice(
+            db_session,
+            _command(
+                invoice_id,
+                preview.fingerprint,
+                key=f"pytest-prepaid-draft-short-{invoice_id}",
+            ),
+        )
+
+    assert exc_info.value.code.endswith("not_actionable")
+    db_session.refresh(invoice)
+    assert invoice.status is InvoiceStatus.draft
+    assert db_session.query(PaymentAllocation).count() == 0
+
+
+def test_exact_direct_renewal_overlap_voids_duplicate_without_second_charge(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("100.00"),
+        position_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    renewal_preview = preview_prepaid_service_renewal(
+        db_session,
+        subscription_id=subscription.id,
+        starts_at=START,
+        ends_at=END,
+        amount=Decimal("100.00"),
+        currency="NGN",
+    )
+    renewal = confirm_prepaid_service_renewal(
+        db_session,
+        renewal_preview,
+        evidence_ref="pytest:historical-direct-renewal",
+    )
+    db_session.commit()
+
+    invoice_id = invoice.id
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice_id)
+    assert preview.disposition is PrepaidDraftDisposition.already_renewed
+    assert preview.recommended_action is PrepaidDraftAction.void_duplicate
+    assert preview.entitlement_ids == (renewal.entitlement.id,)
+    db_session.commit()
+
+    result = reconcile_prepaid_draft_invoice(
+        db_session,
+        _command(
+            invoice_id,
+            preview.fingerprint,
+            key=f"pytest-prepaid-draft-overlap-{invoice_id}",
+        ),
+    )
+
+    db_session.refresh(invoice)
+    assert result.action is PrepaidDraftAction.void_duplicate
+    assert result.applied_amount == Decimal("0.00")
+    assert invoice.status is InvoiceStatus.void
+    assert db_session.query(AccountAdjustment).count() == 1
+    assert db_session.query(ServiceEntitlement).count() == 1
+    assert db_session.query(PaymentAllocation).count() == 0

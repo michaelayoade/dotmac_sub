@@ -719,6 +719,8 @@ Dashboard implementation notes:
         "last_invoice": Invoice | None,
         "monthly_recurring": float,
     },
+    "account_health": PortalAccountHealth,  # active services only in Customer 360;
+                                            # history remains in the Service tab
 
     "has_active_subscribers": bool,
     "has_any_subscribers": bool,

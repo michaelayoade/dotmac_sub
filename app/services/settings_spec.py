@@ -1342,6 +1342,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="simultaneous_use_enforcement_enabled",
+        env_var="RADIUS_SIMULTANEOUS_USE_ENFORCEMENT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Enforce Per-Login RADIUS Session Limit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="active_group_name",
         env_var="RADIUS_ACTIVE_GROUP_NAME",
         value_type=SettingValueType.string,
@@ -3626,6 +3634,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default=None,
         label="Default TR-069 ACS Server ID",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="tr069_pending_resolution_timeout_seconds",
+        env_var="TR069_PENDING_RESOLUTION_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=3600,
+        min_value=300,
+        max_value=86400,
+        label="TR-069 Command Confirmation Window (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="tr069_command_reconciliation_interval_seconds",
+        env_var="TR069_COMMAND_RECONCILIATION_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=30,
+        max_value=3600,
+        label="TR-069 Command Reconciliation Interval (seconds)",
     ),
     # ── Network Monitoring ─────────────────────────────────────────────
     SettingSpec(

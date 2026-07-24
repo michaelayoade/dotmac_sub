@@ -127,7 +127,6 @@ app/services/nin_verifications.py
 app/services/notification.py
 app/services/payment_arrangements.py
 app/services/portal_session.py
-app/services/projects.py
 app/services/provider_payment_settlements.py
 app/services/provisioning_helpers.py
 app/services/provisioning_managers.py
@@ -188,7 +187,6 @@ app/services/web_network_ont_actions/snapshots.py
 app/services/web_network_ont_assignments.py
 app/services/web_network_pon_interfaces.py
 app/services/web_network_pop_sites.py
-app/services/web_projects.py
 app/services/web_provisioning_migration.py
 app/services/web_reseller_auth.py
 app/services/web_reseller_routes.py

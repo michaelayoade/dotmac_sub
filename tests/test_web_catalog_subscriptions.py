@@ -1062,8 +1062,20 @@ def test_force_subscription_reauth_reconciles_disconnects_and_audits(
     captured: dict[str, object] = {}
 
     def fake_reconcile(db, subscription_id):
+        from app.services.radius import (
+            ConnectivityProjectionDisposition,
+            SubscriptionConnectivityOutcome,
+        )
+
         captured["reconcile_subscription_id"] = subscription_id
-        return {"external_credentials_synced": 1}
+        return SubscriptionConnectivityOutcome(
+            subscription_id=subscription_id,
+            disposition=ConnectivityProjectionDisposition.projected,
+            external_credentials_synced=1,
+            requested_logins=1,
+            projected_logins=1,
+            projection_targets=1,
+        )
 
     def fake_disconnect(db, subscription_id, reason=None):
         captured["disconnect_subscription_id"] = subscription_id
