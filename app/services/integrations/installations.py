@@ -384,7 +384,7 @@ def validate_static(
     installation.updated_by = actor
     db.flush()
 
-    errors = _static_validation_errors(installation)
+    errors = runtime_readiness_errors(installation)
     revision = installation.current_config_revision
     if errors:
         installation.state = IntegrationInstallationState.draft.value
@@ -413,7 +413,7 @@ def enable_after_connection_validation(
     actor: str | None = None,
 ) -> IntegrationInstallation:
     installation = get_installation(db, installation_id)
-    static_errors = _static_validation_errors(installation)
+    static_errors = runtime_readiness_errors(installation)
     if static_errors:
         raise InstallationError(
             "installation static validation failed: " + ",".join(static_errors)
@@ -582,16 +582,18 @@ def _validate_secret_refs(
         )
 
 
-def _static_validation_errors(
+def runtime_readiness_errors(
     installation: IntegrationInstallation,
-) -> list[str]:
+) -> tuple[str, ...]:
+    """Return fail-closed deployed-manifest and configuration readiness errors."""
+
     try:
         definition = _definition_for_installation(installation)
     except (InstallationError, KeyError):
-        return ["definition_mismatch"]
+        return ("definition_mismatch",)
     revision = installation.current_config_revision
     if revision is None:
-        return ["config_revision_missing"]
+        return ("config_revision_missing",)
     errors = list(validate_config_shape(revision.config_json, definition.config_schema))
     secret_refs = {
         str(name): str(reference)
@@ -621,4 +623,4 @@ def _static_validation_errors(
             }
             if host not in approved_hosts:
                 errors.append(f"egress_host_not_approved:{host}")
-    return errors
+    return tuple(errors)
