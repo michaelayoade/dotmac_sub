@@ -22,6 +22,7 @@ from app.models.billing import (
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.idempotency import IdempotencyKey
+from app.models.integration_platform import IntegrationInstallation
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
@@ -226,6 +227,34 @@ def test_get_topup_page_includes_limits_and_public_key(
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
     ]
+
+
+def test_get_topup_page_degrades_when_gateway_manifest_pin_drifts(
+    monkeypatch, db_session, subscriber
+):
+    installation = (
+        db_session.query(IntegrationInstallation)
+        .filter_by(connector_key="paystack")
+        .one()
+    )
+    installation.manifest_digest = "0" * 64
+    db_session.flush()
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_args, **_kwargs: pytest.fail(
+            "An unavailable gateway must not be executed while rendering the page"
+        ),
+    )
+    _patch_topup_settings(monkeypatch)
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["provider_type"] is None
+    assert page["provider_public_key"] is None
+    assert page["payment_options"] == []
 
 
 def test_get_topup_page_uses_configured_preset_amounts_within_limits(
