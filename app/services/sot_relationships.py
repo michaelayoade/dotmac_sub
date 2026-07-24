@@ -8705,6 +8705,148 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.outage_auto_notify",
+                module="app.services.topology.outage_auto_notify",
+                owns=(
+                    "automation eligibility for customer outage notification",
+                    "automated dispatch trigger and its transaction",
+                ),
+                depends_on=(
+                    "network.outage_lifecycle",
+                    "network.outage_impact",
+                ),
+                notes=(
+                    "ADR 0004. Owns WHICH incidents automation may notify "
+                    "about and the trigger, never the send itself: "
+                    "outage_notifications.dispatch_outage_notifications stays "
+                    "the only writer of a customer outage notification and "
+                    "keeps its confidence gate, debounce, opt-out and caps. "
+                    "Channel selection belongs to "
+                    "communications.channel_policy. Automated sends are "
+                    "stamped with AUTO_ACTOR_ID so the audit separates them "
+                    "from operator dispatches."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "automation eligibility for customer "
+                                "outage notification"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "classifier outage incident",
+                                "automation gate configuration",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="automated dispatch trigger and its transaction",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "classifier outage incident",
+                                "affected subscription set",
+                                "automation gate configuration",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="classifier outage incident",
+                            owner="network.outage_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "OutageIncident rows with detection_source, "
+                                "status, classification, affected_count and "
+                                "confirmed_at"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="affected subscription set",
+                            owner="network.outage_impact",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "subscriptions downstream of the incident "
+                                "boundary node, base station or cabinet"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="automation gate configuration",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "outage_auto_notify_enabled, dry-run, settling "
+                                "window, minimum affected count and per-run "
+                                "incident cap"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "One automated pass commits its dispatch audit rows "
+                            "together. The Celery task is an adapter and never "
+                            "commits; a failure rolls the whole pass back."
+                        ),
+                        locking=(
+                            "A Postgres advisory lock makes the pass "
+                            "single-flight. Concurrent passes would each read "
+                            "the debounce table before the other wrote it."
+                        ),
+                        idempotency=(
+                            "The persisted debounce window in "
+                            "outage_notification_dispatches suppresses a "
+                            "boundary already notified, so a repeated pass "
+                            "re-notifies nobody."
+                        ),
+                        retries=(
+                            "A rolled-back pass is safe to retry: no audit row "
+                            "survives, so no boundary is muted by a send that "
+                            "never happened. Ineligible incidents fail closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=owner_command_boundary_error_codes(
+                            "network.outage_auto_notify"
+                        ),
+                        mapping_owner="scheduled task adapter",
+                        fail_closed_on=(
+                            "automation disabled",
+                            "incident not a customer-visible classifier node_outage",
+                            "incident still inside the settling window",
+                            "incident below the minimum affected count",
+                            "no affected subscriptions resolved",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="network.outage_auto_notify",
+                        old_owner=None,
+                        verification=(
+                            "Dry-run mode plans and logs recipients without "
+                            "sending, so automated selection can be compared "
+                            "against what the NOC would have dispatched."
+                        ),
+                        cutover_gate=(
+                            "Dry-run output shows no incident an operator would "
+                            "not have notified about, and per-run recipient "
+                            "counts are within expectation."
+                        ),
+                        fallback_retirement=(
+                            "None. The operator dispatch path is retained for "
+                            "incidents automation deliberately excludes: "
+                            "radio_cluster, operator-declared, and "
+                            "below-threshold incidents."
+                        ),
+                    ),
+                    steward="Network operations",
+                    design_refs=(
+                        "docs/adr/0004-automated-outage-notification-dispatch.md",
+                        "docs/designs/OUTAGE_CLASSIFIER.md",
+                    ),
+                    test_refs=("tests/test_outage_auto_notify.py",),
+                ),
+            ),
+            SOTService(
                 name="network.connection_health",
                 module="app.services.topology.connection_status",
                 owns=(
@@ -9033,7 +9175,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="communications.channel_policy",
                 module="app.services.notification_channel_policy",
-                owns=("channel eligibility", "channel preference resolution"),
+                owns=(
+                    "channel eligibility",
+                    "channel preference resolution",
+                    "stored channel policy (default/category/event overrides)",
+                ),
+                notes=(
+                    "Channel selection for customer notifications happens here "
+                    "and nowhere else. Feature areas must not carry their own "
+                    "channel setting; they state intent (template code, event "
+                    "type, category) and the policy resolves the channels. "
+                    "Operator surface: /admin/notifications/channels."
+                ),
             ),
             SOTService(
                 name="communications.customer_policy",

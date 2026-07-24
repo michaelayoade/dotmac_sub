@@ -1160,6 +1160,28 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=subscription_expiration_interval_seconds,
         )
+        # Warn BEFORE the expiry runner above cuts service. `send_expiry_reminders`
+        # and the `expiry_reminder_days` setting have both existed for a long
+        # time, but the task was never scheduled — so subscriptions expired and
+        # suspended on time while nobody was warned first, which is the single
+        # largest source of "I paid, why am I off?" contacts. Daily is right:
+        # the task reminds on a days-before window, so a shorter interval would
+        # re-send to the same customers.
+        expiry_reminder_interval_seconds = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "expiry_reminder_interval_seconds",
+            "EXPIRY_REMINDER_INTERVAL_SECONDS",
+            86400,  # Daily
+        )
+        expiry_reminder_interval_seconds = max(expiry_reminder_interval_seconds, 3600)
+        _sync_scheduled_task(
+            session,
+            name="subscription_expiry_reminder_runner",
+            task_name="app.tasks.catalog.send_expiry_reminders",
+            enabled=True,
+            interval_seconds=expiry_reminder_interval_seconds,
+        )
         # Apply admin-scheduled next-cycle plan changes once their effective
         # (next-billing) date arrives. Hourly so a change lands promptly after
         # the boundary; the applier is idempotent (only picks up approved,
@@ -1742,6 +1764,27 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.topology_outage.reconcile_detected_outages",
             enabled=True,
             interval_seconds=max(outage_reconcile_seconds, 120),
+        )
+        # Automated customer outage notification (ADR 0004). Scheduling this is
+        # safe while the decision to enable it is still open: the service is
+        # gated on OUTAGE_AUTO_NOTIFY_ENABLED (off) and defaults to dry-run, so
+        # an enabled beat entry is a no-op until both are flipped. Cadence is
+        # deliberately slower than the reconcile above — the settle window, not
+        # the poll rate, decides how fast a customer hears.
+        outage_auto_notify_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "outage_auto_notify_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="outage_auto_notify",
+            task_name=(
+                "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications"
+            ),
+            enabled=True,
+            interval_seconds=max(outage_auto_notify_seconds, 120),
         )
         # UISP topology sync: import the wireless/UFiber customer-device
         # relationship layer (radios -> APs, ONUs -> UF-OLTs) into sub's

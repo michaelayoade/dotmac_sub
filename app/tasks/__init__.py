@@ -126,6 +126,7 @@ from app.tasks.ont_runtime_status import (
 )
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
+from app.tasks.outage_auto_notify import auto_dispatch_outage_notifications
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
@@ -309,6 +310,7 @@ __all__ = [
     "run_lldp_topology_poll",
     "run_forwarding_control_observation_poll",
     "reconcile_detected_outages",
+    "auto_dispatch_outage_notifications",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",
     "apply_uisp_intent",

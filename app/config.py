@@ -257,6 +257,12 @@ class Settings:
     outage_notify_area_min_affected: int = int(
         os.getenv("OUTAGE_NOTIFY_AREA_MIN_AFFECTED", "5")
     )
+    # Automated dispatch (ADR 0004) is NOT configured here. Its gates are
+    # database-authoritative settings under SettingDomain.network_monitoring
+    # (outage_auto_notify_*), so an operator can arm, disarm or re-tighten
+    # automation from the admin UI mid-incident instead of waiting for a
+    # deploy. Their env vars are materialized into the database by settings
+    # bootstrap, which keeps one owner for the value.
 
 
 settings = Settings()
