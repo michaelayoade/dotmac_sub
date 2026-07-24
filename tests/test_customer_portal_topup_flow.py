@@ -38,6 +38,7 @@ from app.services.customer_portal_flow_payments import (
     verify_and_record_payment,
     verify_and_record_topup,
 )
+from app.services.integrations.runtime_execution import RuntimeExecutionError
 from app.services.settings_cache import SettingsCache
 from tests.integration_platform_helpers import enable_payment_provider
 
@@ -225,6 +226,41 @@ def test_get_topup_page_includes_limits_and_public_key(
     assert page["max_amount"] == 750000
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
+    ]
+
+
+def test_get_topup_page_degrades_runtime_failure_to_direct_transfer(
+    monkeypatch,
+    db_session,
+    subscriber,
+):
+    def _runtime_unavailable(*_args, **_kwargs):
+        raise RuntimeExecutionError(
+            "connector manifest pin is not available in this deployment"
+        )
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        _runtime_unavailable,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    _patch_topup_settings(monkeypatch)
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["provider_type"] == "direct_bank_transfer"
+    assert page["provider_public_key"] is None
+    assert page["payment_options"] == [
+        {
+            "provider_type": "direct_bank_transfer",
+            "label": "Direct bank transfer",
+        }
     ]
 
 

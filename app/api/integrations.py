@@ -24,12 +24,16 @@ from app.schemas.integration import (
     IntegrationJobRead,
     IntegrationJobUpdate,
     IntegrationLifecycleCommand,
+    IntegrationManifestAdoptionCommand,
+    IntegrationManifestAdoptionPreviewRead,
+    IntegrationManifestAdoptionRead,
     IntegrationRunRead,
     IntegrationTargetCreate,
     IntegrationTargetRead,
     IntegrationTargetUpdate,
 )
 from app.services import integration as integration_service
+from app.services.domain_errors import DomainError
 from app.services.integrations import delivery as integration_delivery
 from app.services.integrations import inbox as integration_inbox
 from app.services.integrations import installations
@@ -39,6 +43,7 @@ from app.services.integrations.runtime_execution import (
     build_execution_context,
     validate_connection,
 )
+from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 T = TypeVar("T")
@@ -133,6 +138,79 @@ def get_integration_installation(
         return installations.get_installation(db, installation_id)
     except installations.InstallationError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/installations/{installation_id}/manifest-adoption",
+    response_model=IntegrationManifestAdoptionPreviewRead,
+)
+def preview_integration_installation_manifest_adoption(
+    installation_id: UUID,
+    db: Session = Depends(get_db),
+):
+    try:
+        return installations.preview_manifest_adoption(
+            db,
+            installation_id=installation_id,
+        )
+    except installations.InstallationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/installations/{installation_id}/manifest-adoption",
+    response_model=IntegrationManifestAdoptionRead,
+)
+def adopt_integration_installation_manifest(
+    installation_id: UUID,
+    payload: IntegrationManifestAdoptionCommand,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        return installations.adopt_installation_manifest(
+            db,
+            installations.AdoptManifestCommand(
+                installation_id=installation_id,
+                expected_installed_pin=installations.ManifestPin(
+                    connector_version=(
+                        payload.expected_installed_pin.connector_version
+                    ),
+                    manifest_digest=payload.expected_installed_pin.manifest_digest,
+                ),
+                target_pin=installations.ManifestPin(
+                    connector_version=payload.target_pin.connector_version,
+                    manifest_digest=payload.target_pin.manifest_digest,
+                ),
+            ),
+            context=CommandContext.system(
+                actor=_operator_id(principal),
+                scope=installations.MANIFEST_ADOPTION_SCOPE,
+                reason=payload.reason,
+                idempotency_key=payload.idempotency_key,
+            ),
+        )
+    except DomainError as exc:
+        status_code = (
+            404
+            if exc.code.endswith(".not_found")
+            else 409
+            if exc.code.rsplit(".", 1)[-1]
+            in {
+                "manifest_adoption_incompatible",
+                "stale_manifest_pin",
+                "target_manifest_not_deployed",
+            }
+            else 400
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+            },
+        ) from exc
 
 
 @router.post(

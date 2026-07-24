@@ -49,6 +49,7 @@ class GatewayHealthState(StrEnum):
     checkout_disabled = "checkout_disabled"
     disabled = "disabled"
     misconfigured = "misconfigured"
+    manifest_unavailable = "manifest_unavailable"
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,9 @@ class GatewayHealth:
     active: bool
     capability_ready: bool
     lifecycle_ready: bool
+    manifest_ready: bool
+    manifest_current: bool
+    manifest_pin_state: installations.ManifestPinState | None
     missing_capabilities: tuple[str, ...]
     installation_id: UUID | None
     capability_binding_id: UUID | None
@@ -165,6 +169,18 @@ def provider_health(db: Session) -> list[GatewayHealth]:
             if len(installation_rows) == 1:
                 installation = installation_rows[0]
         missing_capabilities = _missing_capabilities(db, installation)
+        pin_check = (
+            installations.manifest_pin_check(installation)
+            if installation is not None
+            else None
+        )
+        manifest_ready = bool(
+            pin_check
+            and pin_check.state is not installations.ManifestPinState.unavailable
+        )
+        manifest_current = bool(
+            pin_check and pin_check.state is installations.ManifestPinState.current
+        )
         capability_ready = not missing_capabilities
         lifecycle_missing = [
             capability_id
@@ -174,6 +190,7 @@ def provider_health(db: Session) -> list[GatewayHealth]:
         lifecycle_ready = bool(
             installation
             and installation.state == IntegrationInstallationState.enabled.value
+            and manifest_ready
             and not lifecycle_missing
         )
         if len(providers) > 1:
@@ -185,6 +202,12 @@ def provider_health(db: Session) -> list[GatewayHealth]:
         elif installation is None:
             health = GatewayHealthState.not_installed
             health_label = "Gateway not installed"
+        elif (
+            installation.state == IntegrationInstallationState.enabled.value
+            and not manifest_ready
+        ):
+            health = GatewayHealthState.manifest_unavailable
+            health_label = "Connector manifest unavailable"
         elif (
             installation.state == IntegrationInstallationState.enabled.value
             and intent_binding is None
@@ -200,7 +223,11 @@ def provider_health(db: Session) -> list[GatewayHealth]:
             health_label = "Capability bundle incomplete"
         else:
             health = GatewayHealthState.healthy
-            health_label = "Healthy"
+            health_label = (
+                "Healthy — connector update available"
+                if not manifest_current
+                else "Healthy"
+            )
         provider = providers[0] if providers else None
         rows.append(
             GatewayHealth(
@@ -216,6 +243,9 @@ def provider_health(db: Session) -> list[GatewayHealth]:
                 ),
                 capability_ready=capability_ready,
                 lifecycle_ready=lifecycle_ready,
+                manifest_ready=manifest_ready,
+                manifest_current=manifest_current,
+                manifest_pin_state=pin_check.state if pin_check else None,
                 missing_capabilities=tuple(missing_capabilities),
                 installation_id=installation.id if installation else None,
                 capability_binding_id=intent_binding.id if intent_binding else None,
