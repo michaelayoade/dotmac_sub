@@ -768,7 +768,7 @@ def person_detail(
             order_by="last_message_at",
             order_dir="desc",
             limit=5,
-        ).rows
+        ).items
 
     return templates.TemplateResponse(
         "admin/customers/detail.html",

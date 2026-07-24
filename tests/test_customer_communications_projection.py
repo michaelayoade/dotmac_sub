@@ -66,7 +66,7 @@ def test_list_conversations_scopes_to_subscriber(
 
     result = team_inbox_read.list_conversations(db_session, subscriber_id=subscriber_a)
 
-    assert [row.id for row in result.rows] == [str(kept)]
+    assert [row.id for row in result.items] == [str(kept)]
     assert result.count == 1
 
 
@@ -85,7 +85,7 @@ def test_subscriber_filter_ignores_unlinked_conversations(db_session, subscriber
 
     result = team_inbox_read.list_conversations(db_session, subscriber_id=subscriber_a)
     assert result.count == 1
-    assert result.rows[0].subject == "Mine"
+    assert result.items[0].subject == "Mine"
 
 
 def test_customer_detail_renders_communications_behind_permission():
