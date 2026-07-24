@@ -11774,6 +11774,80 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                 ),
             ),
+            SOTService(
+                name="communications.conversation_ticket_handoff",
+                module="app.services.conversation_ticket_handoff",
+                owns=(
+                    "conversation-to-ticket issuance eligibility",
+                    "native conversation-to-ticket provenance",
+                ),
+                depends_on=(
+                    "communications.team_inbox",
+                    "support.ticket_lifecycle",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "An agent holding support:ticket:update explicitly issues a "
+                    "ticket from an active conversation. Ticket identity, state "
+                    "and official timeline stay owned by "
+                    "support.ticket_lifecycle; this owner writes only "
+                    "Ticket.origin_conversation_id, through the keyword-only "
+                    "provenance argument on the Ticket create command. One "
+                    "conversation may issue many tickets. Issuance never "
+                    "transitions the conversation — opening a ticket and "
+                    "resolving a thread are separate decisions and conversation "
+                    "status belongs to communications.team_inbox. Replay is "
+                    "keyed on conversation, actor and title rather than the "
+                    "transport request id, so a double-submitted form replays "
+                    "instead of opening a second ticket."
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.conversation_ticket_handoff",
+                    concerns=(
+                        (
+                            "conversation-to-ticket issuance eligibility",
+                            OwnerRole.APPLICATION_COORDINATOR,
+                        ),
+                        (
+                            "native conversation-to-ticket provenance",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="canonical conversation state",
+                            owner="communications.team_inbox",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Active InboxConversation identity, status, "
+                                "channel, resolved subscriber and primary "
+                                "service team."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed issuance request",
+                            owner="communications.conversation_ticket_handoff",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "ConversationTicketIssueCommand with explicit "
+                                "actor, permission keys, title, reason and "
+                                "derived idempotency key."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ticket command result",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Ticket created by the canonical Ticket create "
+                                "command, including number and status defaults."
+                            ),
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                    projections=("conversation-to-ticket provenance link",),
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.events.handlers.notification",
@@ -11783,6 +11857,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.notifications",
             "app.web.admin.inbox",
             "app.services.team_inbox_*",
+            "app.services.conversation_ticket_handoff",
         ),
         rule=(
             "Domain services request communication outcomes; channel choice, "

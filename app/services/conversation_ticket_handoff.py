@@ -1,0 +1,242 @@
+"""Authoritative handoff from an inbox conversation to a support ticket.
+
+An agent working a thread decides it needs a tracked incident. Ticket identity,
+state and official timeline remain owned by ``support.ticket_lifecycle`` — this
+service owns handoff eligibility, idempotency, and the conversation-to-ticket
+provenance link. It is the only writer of ``Ticket.origin_conversation_id``.
+
+Mirrors ``support.ticket_work_order_handoff``: the downstream owner creates the
+row and accepts a keyword-only provenance argument, and this coordinator stages
+the audit fact. One conversation may issue many tickets.
+
+Deliberately *not* done here: resolving or otherwise transitioning the
+conversation. Opening a ticket is not the same decision as closing a thread, and
+conversation status belongs to ``communications.team_inbox``. A caller that
+wants both makes both calls.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Literal
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from app.models.audit import AuditActorType, AuditEvent
+from app.models.support import Ticket
+from app.models.team_inbox import InboxConversation, InboxConversationStatus
+from app.schemas.support import TicketCreate
+from app.services import support as support_service
+from app.services.audit_adapter import stage_audit_event
+from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
+
+HandoffErrorKind = Literal["invalid", "forbidden", "not_found", "conflict"]
+
+TICKET_ISSUE_SCOPE = "communications.conversation_ticket:issue"
+_REQUIRED_PERMISSIONS = frozenset({"support:ticket:update"})
+_ISSUE_DEFINITION = OwnerCommandDefinition(
+    owner="communications.conversation_ticket_handoff",
+    concern="conversation-to-ticket issuance eligibility",
+    name="issue_conversation_ticket",
+)
+_AUDIT_ACTION = "conversation.ticket_issued"
+
+
+class HandoffActorType(StrEnum):
+    SYSTEM_USER = "system_user"
+    API_KEY = "api_key"
+    SERVICE = "service"
+
+
+@dataclass(frozen=True)
+class ConversationTicketIssueCommand:
+    """Typed issuance request. Every field is an explicit control input."""
+
+    conversation_id: UUID
+    actor_id: object
+    actor_type: HandoffActorType
+    permission_keys: frozenset[str]
+    title: str
+    description: str | None = None
+    priority: str | None = None
+    reason: str | None = None
+    request_id: str | None = None
+
+
+class ConversationTicketHandoffError(DomainError):
+    def __init__(self, kind: HandoffErrorKind, message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+
+
+@dataclass(frozen=True)
+class ConversationTicketIssueResult:
+    ticket: Ticket
+    replayed: bool
+
+
+def _actor_type(actor_type: HandoffActorType) -> AuditActorType:
+    if actor_type is HandoffActorType.API_KEY:
+        return AuditActorType.api_key
+    if actor_type is HandoffActorType.SERVICE:
+        return AuditActorType.system
+    return AuditActorType.system_user
+
+
+def _normalize_actor(actor_id: object | None) -> UUID:
+    actor_uuid = coerce_uuid(actor_id)
+    if actor_uuid is None:
+        raise ConversationTicketHandoffError(
+            "forbidden", "A known actor must issue the ticket."
+        )
+    return actor_uuid
+
+
+def _active_conversation(db: Session, conversation_id: UUID) -> InboxConversation:
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise ConversationTicketHandoffError("not_found", "Conversation not found.")
+    return conversation
+
+
+def _stable_request_id(command: ConversationTicketIssueCommand) -> str:
+    """Derive a replay key from the issuance intent.
+
+    A transport request id is not trustworthy for this: a double-submitted form
+    sends a fresh one each time. Hashing the conversation, actor and title means
+    the same intent replays instead of opening a second ticket.
+    """
+    digest = hashlib.sha256(
+        "|".join(
+            [
+                str(command.conversation_id),
+                str(command.actor_id),
+                (command.title or "").strip().casefold(),
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"conversation-ticket:{digest[:32]}"
+
+
+def _validate_issue_eligibility(
+    db: Session, command: ConversationTicketIssueCommand
+) -> InboxConversation:
+    missing = _REQUIRED_PERMISSIONS - set(command.permission_keys)
+    if missing:
+        raise ConversationTicketHandoffError(
+            "forbidden",
+            "Issuing a ticket from a conversation requires "
+            + ", ".join(sorted(missing))
+            + ".",
+        )
+    if not (command.title or "").strip():
+        raise ConversationTicketHandoffError("invalid", "A ticket title is required.")
+
+    conversation = _active_conversation(db, command.conversation_id)
+    if conversation.status == InboxConversationStatus.resolved.value:
+        raise ConversationTicketHandoffError(
+            "conflict",
+            "Reopen the conversation before issuing a ticket from it.",
+        )
+    return conversation
+
+
+def list_for_conversation(db: Session, conversation_id: str | UUID) -> list[Ticket]:
+    """Tickets issued from this conversation, newest first."""
+    conversation_uuid = coerce_uuid(conversation_id)
+    if conversation_uuid is None:
+        return []
+    return (
+        db.query(Ticket)
+        .filter(Ticket.origin_conversation_id == conversation_uuid)
+        .filter(Ticket.is_active.is_(True))
+        .order_by(Ticket.created_at.desc())
+        .all()
+    )
+
+
+def issue_ticket(
+    db: Session, command: ConversationTicketIssueCommand
+) -> ConversationTicketIssueResult:
+    """Public entrypoint — enters the canonical handoff transaction."""
+    context = CommandContext.system(
+        actor=f"{command.actor_type.value}:{command.actor_id}"[:80],
+        scope=TICKET_ISSUE_SCOPE,
+        reason=command.reason or "issue ticket from inbox conversation",
+        idempotency_key=_stable_request_id(command),
+    )
+    return execute_owner_command(
+        db,
+        definition=_ISSUE_DEFINITION,
+        context=context,
+        operation=lambda: _issue_ticket(db, command),
+    )
+
+
+def _issue_ticket(
+    db: Session, command: ConversationTicketIssueCommand
+) -> ConversationTicketIssueResult:
+    conversation = _validate_issue_eligibility(db, command)
+    actor_uuid = _normalize_actor(command.actor_id)
+    stable_request_id = _stable_request_id(command)
+
+    existing_audit = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.action == _AUDIT_ACTION)
+        .filter(AuditEvent.entity_type == "inbox_conversation")
+        .filter(AuditEvent.entity_id == str(conversation.id))
+        .filter(AuditEvent.request_id == stable_request_id)
+        .one_or_none()
+    )
+    if existing_audit is not None:
+        replayed = list_for_conversation(db, conversation.id)
+        if replayed:
+            return ConversationTicketIssueResult(ticket=replayed[0], replayed=True)
+
+    ticket = support_service.Tickets.create(
+        db,
+        TicketCreate(
+            title=command.title.strip()[:255],
+            description=command.description,
+            # The conversation already carries the resolved subscriber; the
+            # ticket inherits it rather than re-deriving identity.
+            subscriber_id=conversation.subscriber_id,
+            service_team_id=conversation.primary_service_team_id,
+            priority=command.priority or "normal",
+            created_by_person_id=actor_uuid,
+        ),
+        actor_id=str(actor_uuid),
+        origin_conversation_id=conversation.id,
+    )
+
+    stage_audit_event(
+        db,
+        action=_AUDIT_ACTION,
+        entity_type="inbox_conversation",
+        entity_id=str(conversation.id),
+        actor_type=_actor_type(command.actor_type),
+        actor_id=str(actor_uuid),
+        request_id=stable_request_id,
+        metadata={
+            "owner": "communications.conversation_ticket_handoff",
+            "ticket_id": str(ticket.id),
+            "ticket_number": ticket.number,
+            "channel_type": conversation.channel_type,
+            "subscriber_id": str(conversation.subscriber_id)
+            if conversation.subscriber_id
+            else None,
+            "reason": command.reason,
+            "transport_request_id": command.request_id,
+        },
+    )
+    return ConversationTicketIssueResult(ticket=ticket, replayed=False)

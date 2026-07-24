@@ -1423,8 +1423,20 @@ class Tickets:
     @staticmethod
     @ticket_owner_command("create")
     def create(
-        db: Session, payload: TicketCreate, actor_id: str | None = None, request=None
+        db: Session,
+        payload: TicketCreate,
+        actor_id: str | None = None,
+        request=None,
+        *,
+        origin_conversation_id: UUID | None = None,
     ) -> Ticket:
+        """Create a ticket inside the canonical Ticket transaction.
+
+        ``origin_conversation_id`` is keyword-only and deliberately absent from
+        ``TicketCreate``: only ``communications.conversation_ticket_handoff``
+        may assert that a ticket originated from an inbox conversation, so the
+        claim must not be settable by anything that can post a ticket payload.
+        """
         ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
         data["status"] = data.get(
@@ -1452,6 +1464,8 @@ class Tickets:
                 }
             }
         )
+        if origin_conversation_id is not None:
+            ticket.origin_conversation_id = origin_conversation_id
         ticket.number = Tickets._resolve_ticket_number(db)
 
         db.add(ticket)
