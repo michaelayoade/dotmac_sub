@@ -1796,6 +1796,22 @@
                                 </div>
                                 {% endif %}
                             </div>
+                            {% if card.access_state %}
+                            <div class="mt-4 rounded-lg border {% if card.access_state.radius_blocked %}border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-900/20{% else %}border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-800/40{% endif %} p-3">
+                                <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">RADIUS Access</p>
+                                <p class="font-medium {% if card.access_state.radius_blocked %}text-amber-800 dark:text-amber-200{% else %}text-slate-800 dark:text-slate-200{% endif %}">
+                                    {{ card.access_state.radius_state or 'not provisioned' }}
+                                    <span class="text-xs font-normal text-slate-500 dark:text-slate-400">&middot; {{ card.access_state.radius_mode }}</span>
+                                </p>
+                                {% if card.access_state.access_block_reason %}
+                                <p class="text-xs text-slate-600 dark:text-slate-400">Access blocked: {{ card.access_state.access_block_reason }}</p>
+                                {% endif %}
+                                {% if card.access_state.billing_block_reason %}
+                                <p class="text-xs text-slate-600 dark:text-slate-400">Billing blocked: {{ card.access_state.billing_block_reason }}</p>
+                                {% endif %}
+                                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ card.access_state.source }}</p>
+                            </div>
+                            {% endif %}
                             {% if card.topology_trace and (card.topology_trace.nodes or card.topology_trace.breaks) %}
                             <div class="mt-4 border-t border-slate-200 pt-3 dark:border-slate-700">
                                 <p class="mb-2 text-xs text-slate-500 dark:text-slate-400">Active Path</p>
@@ -1817,6 +1833,16 @@
                                     <span class="font-medium">{{ gap.code }}</span> &mdash; {{ gap.message }}
                                 </p>
                                 {% endfor %}
+                                {% for node in card.topology_trace.nodes %}
+                                {% if node.detail and node.detail.onu_rx_signal_dbm is not none %}
+                                <p class="mt-2 text-xs text-slate-600 dark:text-slate-400">ONT receive power: <span class="font-mono">{{ node.detail.onu_rx_signal_dbm }} dBm</span></p>
+                                {% endif %}
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            {% if card.ticket_prefill_url %}
+                            <div class="mt-3">
+                                <a href="{{ card.ticket_prefill_url }}" class="inline-block rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600">Create ticket with this state</a>
                             </div>
                             {% endif %}
                         </div>

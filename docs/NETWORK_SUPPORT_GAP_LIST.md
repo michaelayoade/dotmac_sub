@@ -20,7 +20,7 @@ verified against the working tree on 2026-07-23.
 | ID | Gap | Impact | Effort | Depends on |
 |---|---|---|---|---|
 | **G1** | Serving base-station / OLT-PON endpoint not shown | High | S | — |
-| **G2** | No composed "why can't this customer browse?" verdict | Highest | L | G1 |
+| **G2** | Observed service state not visible in one place | Highest | M | G1 |
 | **G3** | Ticket creation is manual and human-typed | High | M | G2 |
 | **G4** | No infrastructure/mass-incident ticket with affected-customer linking | High | L | G1 |
 | **G5** | Access-denial reason (billing) not surfaced | High | S | — |
@@ -80,7 +80,14 @@ must consume the DTO and must not infer or parse the endpoint independently.
 
 ---
 
-## G2 — No composed "why can't this customer browse?" verdict
+## G2 — Observed service state not visible in one place
+
+> **Reframed 2026-07-23.** This was originally "no composed verdict". A verdict
+> engine was built and removed — see the decision note at the top of
+> `docs/designs/NETWORK_SUPPORT_DIAGNOSTICS.md`. The channel asks *where* and
+> *what state*, not *why*; agents infer correctly once they can see. Sub now
+> reports state from its owners and shows the path, and stops there.
+
 
 **Evidence (44 messages — the single largest category):** "connected but cannot browse",
 "online but can't browse", "connected and online, but they are unable to browse", "his
