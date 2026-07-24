@@ -33,9 +33,7 @@ def test_radius_session_projection_remains_in_the_single_migration_chain() -> No
     assert module.down_revision == "407_retire_parallel_radius_refresh"
     assert script.get_heads() == ["419_customer_wht_policy_and_direct_targets"]
     assert (
-        script.get_revision(
-            "419_customer_wht_policy_and_direct_targets"
-        ).down_revision
+        script.get_revision("419_customer_wht_policy_and_direct_targets").down_revision
         == "418_payment_channel_mapping_sot"
     )
     assert (
