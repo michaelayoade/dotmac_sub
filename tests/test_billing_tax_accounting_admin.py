@@ -22,6 +22,40 @@ def _request(path: str) -> Request:
     return request
 
 
+def _billing_overview_response(db_session, permission_keys: frozenset[str]):
+    from app.web.admin.billing_invoices import billing_overview
+
+    request = _request("/admin/billing")
+    request.state.auth = {"permission_keys": permission_keys}
+    state = {
+        "stats": {},
+        "invoices": [],
+        "default_currency": "NGN",
+        "selected_partner_id": None,
+        "partner_options": [],
+        "invoice_status_presentations": {},
+    }
+
+    with (
+        patch(
+            "app.web.admin.billing_invoices.web_billing_overview_service.build_overview_data",
+            return_value=state,
+        ),
+        patch(
+            "app.web.admin.billing_invoices.get_current_user",
+            return_value={"id": "admin"},
+        ),
+        patch("app.web.admin.billing_invoices.get_sidebar_stats", return_value={}),
+    ):
+        return billing_overview(
+            request=request,
+            partner_id=None,
+            location=None,
+            period="this_month",
+            db=db_session,
+        )
+
+
 def test_tax_accounting_operator_console_renders_owned_state(db_session) -> None:
     reseller = Reseller(
         name="Tax Console Reseller",
@@ -75,4 +109,36 @@ def test_tax_accounting_operator_console_renders_owned_state(db_session) -> None
     assert "Reconciliation and parity" not in text
     assert "Pending certificate" in text
     assert "Tax Console Reseller" in text
-    assert "Page 1 of 1 · 1 records" in text
+    assert "Page 1 of 1 \u00b7 1 records" in text
+
+
+def test_billing_workbench_shows_tax_wht_link_for_authorized_finance_user(
+    db_session,
+) -> None:
+    response = _billing_overview_response(
+        db_session,
+        frozenset({"billing:invoice:read", "billing:tax:read"}),
+    )
+
+    text = response.body.decode()
+
+    assert response.status_code == 200
+    assert "Tax &amp; WHT" in text
+    assert "Source register and WHT evidence" in text
+    assert 'href="/admin/billing/tax-accounting"' in text
+
+
+def test_billing_workbench_hides_tax_wht_link_without_tax_read_permission(
+    db_session,
+) -> None:
+    response = _billing_overview_response(
+        db_session,
+        frozenset({"billing:invoice:read"}),
+    )
+
+    text = response.body.decode()
+
+    assert response.status_code == 200
+    assert "Tax &amp; WHT" not in text
+    assert "Source register and WHT evidence" not in text
+    assert 'href="/admin/billing/tax-accounting"' not in text
