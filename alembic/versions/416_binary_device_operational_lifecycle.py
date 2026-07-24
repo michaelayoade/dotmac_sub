@@ -78,9 +78,20 @@ def upgrade() -> None:
     )
     op.execute(
         sa.text(
+            "DO $$ "
+            "BEGIN "
+            "IF NOT EXISTS ("
+            "SELECT 1 FROM pg_constraint "
+            "WHERE conname = "
+            "'ck_device_projection_binary_operational_status' "
+            "AND conrelid = 'device_projections'::regclass"
+            ") THEN "
             "ALTER TABLE device_projections "
             "ADD CONSTRAINT ck_device_projection_binary_operational_status "
-            "CHECK (operational_status IN ('working', 'not_working')) NOT VALID"
+            "CHECK (operational_status IN ('working', 'not_working')) NOT VALID; "
+            "END IF; "
+            "END "
+            "$$;"
         )
     )
     op.execute(

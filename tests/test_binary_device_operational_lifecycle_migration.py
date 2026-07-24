@@ -22,6 +22,7 @@ def _load_migration():
 
 def test_binary_device_operational_lifecycle_migration_contract() -> None:
     migration = _load_migration()
+    source = Path(migration.__file__).read_text(encoding="utf-8")
 
     assert migration.revision == "416_binary_device_operational_lifecycle"
     assert migration.down_revision == "415_permanent_lifecycle_drainage"
@@ -35,6 +36,11 @@ def test_binary_device_operational_lifecycle_migration_contract() -> None:
         "app.tasks.monitoring_cleanup.sync_inventory_to_monitoring",
         "app.tasks.channel_health.observe_channel_health",
     }
+    assert "IF NOT EXISTS" in source
+    assert "FROM pg_constraint" in source
+    assert (
+        "VALIDATE CONSTRAINT ck_device_projection_binary_operational_status" in source
+    )
 
 
 def test_binary_device_operational_lifecycle_is_forward_only() -> None:
