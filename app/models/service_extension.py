@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -60,7 +61,7 @@ class ServiceExtension(Base):
     )
     scope_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     # Explicit subscriber id list for scope_type=subscribers.
-    scope_subscriber_ids: Mapped[list | None] = mapped_column(JSON)
+    scope_subscriber_ids: Mapped[list[str] | None] = mapped_column(JSON)
     status: Mapped[ServiceExtensionStatus] = mapped_column(
         Enum(ServiceExtensionStatus),
         default=ServiceExtensionStatus.pending,
@@ -68,9 +69,25 @@ class ServiceExtension(Base):
     )
     affected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     skipped_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    resumed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    still_suspended_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
     created_by: Mapped[str | None] = mapped_column(String(64))
     applied_by: Mapped[str | None] = mapped_column(String(64))
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    canceled_by: Mapped[str | None] = mapped_column(String(64))
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    create_idempotency_key_sha256: Mapped[str | None] = mapped_column(String(64))
+    create_fingerprint_sha256: Mapped[str | None] = mapped_column(String(64))
+    create_command_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    create_correlation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    apply_idempotency_key_sha256: Mapped[str | None] = mapped_column(String(64))
+    apply_command_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    apply_correlation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    cancel_idempotency_key_sha256: Mapped[str | None] = mapped_column(String(64))
+    cancel_command_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    cancel_correlation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -83,6 +100,11 @@ class ServiceExtension(Base):
 class ServiceExtensionEntry(Base):
     __tablename__ = "service_extension_entries"
     __table_args__ = (
+        UniqueConstraint(
+            "extension_id",
+            "subscription_id",
+            name="uq_service_extension_entries_extension_subscription",
+        ),
         Index("ix_service_extension_entries_extension", "extension_id"),
         Index("ix_service_extension_entries_subscription", "subscription_id"),
         # Dunning-shield lookup path (bulk_extension_shield_reasons).

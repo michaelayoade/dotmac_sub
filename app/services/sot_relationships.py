@@ -4666,6 +4666,254 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.service_extensions",
+                module="app.services.service_extensions",
+                owns=(
+                    "service-extension aggregate lifecycle",
+                    "immutable applied service-extension entry evidence",
+                    "extension-caused subscription billing-anchor projection",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "auth.permission_gate",
+                    "customer.accounts",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Typed create, apply, and cancel commands are the only lifecycle "
+                    "writers. They stage immutable extension evidence, exact entity-linked "
+                    "audit records, and aggregate/per-subscription domain events in the "
+                    "same owner transaction. Access restoration remains a request to "
+                    "access.subscription_lifecycle."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="service-extension aggregate lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authorized service-extension command",
+                                "canonical service-extension aggregate",
+                                "canonical subscriber scope",
+                            ),
+                            canonical_writer="financial.service_extensions",
+                        ),
+                        ConcernContract(
+                            name="immutable applied service-extension entry evidence",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical service-extension aggregate",
+                                "canonical subscription billing anchor",
+                            ),
+                            canonical_writer="financial.service_extensions",
+                        ),
+                        ConcernContract(
+                            name="extension-caused subscription billing-anchor projection",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical service-extension aggregate",
+                                "canonical subscription billing anchor",
+                                "immutable applied service-extension entry evidence",
+                            ),
+                            canonical_writer="financial.service_extensions",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authorized service-extension command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "CreateServiceExtensionCommand, "
+                                "ApplyServiceExtensionCommand, or "
+                                "CancelServiceExtensionCommand with CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical service-extension aggregate",
+                            owner="financial.service_extensions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="service_extensions lifecycle and command evidence",
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber scope",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "validated subscriber, site, zone, or network scope "
+                                "resolved at command execution"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription billing anchor",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Subscription lifecycle and next_billing_at "
+                                "before the extension consequence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="immutable applied service-extension entry evidence",
+                            owner="financial.service_extensions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique ServiceExtensionEntry previous and resulting "
+                                "billing-anchor interval"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each public create, apply, or cancel command enters "
+                            "execute_owner_command exactly once on a transaction-free "
+                            "session. Internal mutation, access-restoration, audit, and "
+                            "event helpers are flush-only."
+                        ),
+                        locking=(
+                            "Apply and cancel select the extension FOR UPDATE. Apply "
+                            "locks its resolved subscriptions in stable UUID order, and "
+                            "database primary and unique keys arbitrate create and entry "
+                            "races."
+                        ),
+                        idempotency=(
+                            "Create derives its extension UUID from the form key and "
+                            "compares a complete material-input fingerprint. Apply and "
+                            "cancel persist command evidence and replay the stable outcome "
+                            "without duplicate entries, audits, or events."
+                        ),
+                        retries=(
+                            "Adapters retry only after complete rollback. A reused key "
+                            "with changed evidence or an incompatible terminal transition "
+                            "fails closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.service_extensions.access_restoration_failed",
+                            "financial.service_extensions.active_caller_transaction",
+                            "financial.service_extensions.ambiguous_customer_identifier",
+                            "financial.service_extensions.blank_customer_identifier",
+                            "financial.service_extensions.command_contract_violation",
+                            "financial.service_extensions.customer_not_found",
+                            "financial.service_extensions.empty_subscriber_scope",
+                            "financial.service_extensions.extension_not_found",
+                            "financial.service_extensions.idempotency_conflict",
+                            "financial.service_extensions.invalid_command_context",
+                            "financial.service_extensions.invalid_customer_identifier",
+                            "financial.service_extensions.invalid_days",
+                            "financial.service_extensions.invalid_extension_id",
+                            "financial.service_extensions.invalid_idempotency_key",
+                            "financial.service_extensions.invalid_scope",
+                            "financial.service_extensions.invalid_transition_action",
+                            "financial.service_extensions.invalid_window",
+                            "financial.service_extensions.missing_idempotency_key",
+                            "financial.service_extensions.missing_reason",
+                            "financial.service_extensions.missing_scope_id",
+                            "financial.service_extensions.nested_owner_command",
+                            "financial.service_extensions.nested_transaction_completion",
+                            "financial.service_extensions.transition_conflict",
+                            "financial.service_extensions.write_conflict",
+                        ),
+                        mapping_owner="admin billing service-extension adapters",
+                        fail_closed_on=(
+                            "changed idempotency evidence",
+                            "stale or incompatible lifecycle transition",
+                            "ambiguous subscriber scope",
+                            "failed access-restoration consequence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "billing.service_extension_created",
+                            "billing.service_extension_applied",
+                            "billing.service_extension_canceled",
+                            "billing.service_extension_anchor_repaired",
+                            "billing.service_extended",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries stable extension, command, correlation, "
+                            "scope, status, and bounded outcome evidence without customer "
+                            "contact data or full subscriber lists."
+                        ),
+                        replay=(
+                            "Consumers deduplicate aggregate events by deterministic "
+                            "extension action ID and subscription consequences by "
+                            "extension-entry ID."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name=(
+                                "extension-caused subscription billing-anchor projection"
+                            ),
+                            input_names=(
+                                "canonical service-extension aggregate",
+                                "canonical subscription billing anchor",
+                                "immutable applied service-extension entry evidence",
+                            ),
+                            writer="financial.service_extensions",
+                            freshness=(
+                                "Atomic with each immutable ServiceExtensionEntry and "
+                                "the applied aggregate transition."
+                            ),
+                            stale_behavior=(
+                                "Access restoration fails closed and the entire owner "
+                                "transaction rolls back when the anchor consequence "
+                                "cannot be completed."
+                            ),
+                            drift_signal=(
+                                "An applied entry whose resulting anchor is later than "
+                                "the visible subscription billing anchor."
+                            ),
+                            rebuild_operation=(
+                                "Run the bounded financial.service_extensions anchor "
+                                "repair command from immutable entry evidence."
+                            ),
+                            repair_owner="financial.service_extensions",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.service_extensions internal commits, deferred "
+                            "apply auditing, overloaded applied_by cancellation evidence, "
+                            "and route/template lifecycle presentation"
+                        ),
+                        new_owner="financial.service_extensions",
+                        verification=(
+                            "Lifecycle atomicity, idempotency, concurrency, projection, "
+                            "audit provenance, route delegation, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "All create, apply, and cancel adapters invoke typed owner "
+                            "commands and detail reads use the registered UI projection."
+                        ),
+                        fallback_retirement=(
+                            "Internal commits, deferred lifecycle audit, path-based "
+                            "history, and the legacy writer baseline entry are absent."
+                        ),
+                    ),
+                    steward="billing and operations",
+                    design_refs=(
+                        "docs/designs/SERVICE_EXTENSION_LIFECYCLE_SOT.md",
+                        "docs/runbooks/SERVICE_EXTENSION_ACTIVITY_CUTOVER.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_service_extensions.py",
+                        "tests/test_web_billing_service_extensions.py",
+                        "tests/integration/test_service_extension_concurrency.py",
+                        "tests/architecture/test_service_extension_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_service_coverage",
                 module="app.services.prepaid_service_coverage",
                 owns=(
@@ -4675,6 +4923,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "access.subscription_lifecycle",
                     "financial.prepaid_service_renewals",
+                    "financial.service_extensions",
                     "financial.subscription_billing_grants",
                 ),
                 notes=(
@@ -4734,7 +4983,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="explicit granted-service intervals",
-                            owner="access.subscription_lifecycle",
+                            owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
                                 "applied ServiceExtensionEntry exact previous and new "
@@ -4814,6 +5063,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.invoices",
                     "financial.prepaid_service_coverage",
                     "financial.prepaid_service_renewals",
+                    "financial.service_extensions",
                 ),
                 notes=(
                     "A preview classifies the complete or selected prepaid cohort from "
@@ -4874,7 +5124,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="explicit granted-service intervals",
-                            owner="access.subscription_lifecycle",
+                            owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source="applied ServiceExtensionEntry exact added interval",
                         ),
@@ -20002,11 +20252,183 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.payment_proofs",
                 ),
             ),
+            SOTService(
+                name="ui.service_extension_detail_projection",
+                module="app.services.web_billing_service_extensions",
+                owns=(
+                    "admin service-extension detail projection",
+                    "exact service-extension activity presentation",
+                    "service-extension status and action presentation",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "auth.staff_provisioning",
+                    "financial.service_extensions",
+                    "observability.audit_log",
+                    "ui.display_formatting",
+                ),
+                notes=(
+                    "One typed read owner composes lifecycle facts, exact entity-linked "
+                    "audit evidence, actor labels, defensible legacy provenance, impact, "
+                    "status presentation, and permission-aware transition visibility. "
+                    "It never treats request-path audits as entity history and never "
+                    "exposes raw audit metadata through the billing-read page."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin service-extension detail projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical service-extension lifecycle facts",
+                                "canonical service-extension activity evidence",
+                                "canonical staff display identity",
+                                "service-extension permission result",
+                                "application display-timezone policy",
+                                "service-extension presentation policy",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="exact service-extension activity presentation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical service-extension lifecycle facts",
+                                "canonical service-extension activity evidence",
+                                "canonical staff display identity",
+                                "application display-timezone policy",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="service-extension status and action presentation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical service-extension lifecycle facts",
+                                "service-extension permission result",
+                                "service-extension presentation policy",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical service-extension lifecycle facts",
+                            owner="financial.service_extensions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "ServiceExtension aggregate, immutable entries, selected "
+                                "scope, and sampled affected subscriptions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical service-extension activity evidence",
+                            owner="observability.audit_log",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "AuditEvent rows filtered by exact "
+                                "entity_type=service_extension and exact extension UUID"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff display identity",
+                            owner="auth.staff_provisioning",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "write-time audit actor-label snapshot, with canonical "
+                                "SystemUser lookup only for legacy lifecycle columns"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="service-extension permission result",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "billing:extension:read and billing:extension:apply "
+                                "request authorization"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="application display-timezone policy",
+                            owner="ui.display_formatting",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="application timezone and timestamp display formatter",
+                        ),
+                        AuthorityInput(
+                            name="service-extension presentation policy",
+                            owner="ui.service_extension_detail_projection",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed status, action, activity-label, ordering, and "
+                                "legacy-provenance policy"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "The projection reads on the adapter-owned session and never "
+                            "mutates, flushes, commits, or rolls back."
+                        ),
+                        locking=(
+                            "No mutation lock is acquired; state-changing command owners "
+                            "lock and recheck lifecycle eligibility."
+                        ),
+                        idempotency=(
+                            "The same extension, exact audit cohort, staff identities, "
+                            "permissions, and evaluation time produce the same typed "
+                            "projection and deterministic activity order."
+                        ),
+                        retries="The bounded read-only projection is safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="admin billing service-extension adapter",
+                        fail_closed_on=(
+                            "missing lifecycle permission",
+                            "ambiguous or absent canonical extension identity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "admin billing route audit queries, template-local status "
+                            "mapping, lifecycle eligibility, and path-based activity"
+                        ),
+                        new_owner="ui.service_extension_detail_projection",
+                        verification=(
+                            "Exact filtering, activity provenance, actor snapshot, "
+                            "permission, deterministic ordering, template, mobile layout, "
+                            "and route-delegation tests."
+                        ),
+                        cutover_gate=(
+                            "The detail route passes one typed projection and the template "
+                            "renders owner-provided status and action eligibility."
+                        ),
+                        fallback_retirement=(
+                            "Route/template audit queries, actor lookup, status maps, "
+                            "eligibility decisions, and misleading broad audit links are "
+                            "absent."
+                        ),
+                    ),
+                    steward="billing operations UI",
+                    design_refs=(
+                        "docs/designs/SERVICE_EXTENSION_LIFECYCLE_SOT.md",
+                        "docs/FRONTEND_SPEC.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_web_billing_service_extensions.py",
+                        "tests/architecture/test_service_extension_sot_boundary.py",
+                    ),
+                ),
+            ),
         ),
         entrypoints=(
             "app.web.admin.billing_payment_proofs",
+            "app.web.admin.billing_extensions",
             "templates.admin.billing.payment_proof_detail",
+            "templates.admin.billing.service_extension_detail",
             "templates.components.forms.action_form",
+            "templates.components.ui.timeline_item",
         ),
         rule=(
             "Action forms render owner-provided eligibility, impact, confirmation, "
