@@ -205,7 +205,30 @@ and connector-pin invariants — supporting the security boundary, not creating 
 decision surface. Clean. When Phase 3 gives it callers, its audit re-checks that
 the runner gains no authority.
 
-**Phase 3 onward.** Each audit must show the runner does not become a parallel
+**Phase 3 — external runner, marshalling half.** `ExternalOciRunner` implements
+the in-process `ConnectorRunner` protocol by translating each verb to a
+`RunnerRequest`, handing it to an injected `RunnerTransport`, and translating
+the `RunnerResponse` back. It is a transport adapter and owns no decision:
+
+- It never persists domain state and never decides a consequence. It returns a
+  sanitized `OperationResult`; the domain owner that receives it still decides
+  what that observation means. The split between observation and consequence is
+  preserved.
+- Its one piece of judgement is deliberately conservative and hands authority
+  *back* to an owner rather than taking it: an ambiguous execute outcome — a
+  timeout, or a protocol-violating response from a container that may already
+  have acted — becomes `reconciliation_required`, never a silent retry or a
+  fabricated success. The reconciler owns the resolution.
+- A semi-trusted connector cannot escalate into Sub: every malformed or hostile
+  response maps to a fail-closed typed result, so a broken connector cannot
+  crash a worker or be mistaken for a healthy one.
+
+No ownership boundary moved, so no `SOT_RELATIONSHIP_MAP.md` or
+`sot_relationships.py` change is due for this half. Clean. The transport half
+(rootless Podman subprocess, secret delivery, deadline-kill) carries its own
+audit when it lands, focused on the security invariants at the process boundary.
+
+**Phase 4 onward.** Each audit must show the runner does not become a parallel
 authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and
 `app/services/sot_relationships.py` where a phase changes an ownership boundary,
 and must add or adjust an architecture guard test that prevents a parallel path
