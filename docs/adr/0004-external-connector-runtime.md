@@ -168,6 +168,50 @@ phase rather than Phase 1.
    recorded here and needs its own decision; it is deliberately out of scope
    for Phase 1.
 
+## Source-of-truth audit per phase
+
+Every phase of this work carries an SOT audit before it is called done. The
+external tier is exactly where a parallel decision authority could creep in
+unnoticed: a connector and its runner are *transports*, never business-decision
+owners, but out-of-process execution and a new wire contract make it easy to
+let the runner decide, cache, or project state that a named owner should own.
+Each audit confirms the phase stays a thin adapter around existing owners.
+
+Named owners this work must not duplicate or bypass:
+
+- **Installations service** owns config revisions, capability bindings, and
+  installation lifecycle.
+- **`payment_routing`** owns provider routing and eligibility.
+- **Domain command owners** own the consequences of provider observations.
+- **The connector manifest** (code/artifact-owned) owns the runtime tier,
+  capability, egress, and secret declarations.
+
+The runtime layer executes and returns a sanitized observation; it never
+decides a consequence, never persists domain state, and never becomes a second
+copy of truth.
+
+**Phase 1 — tier dispatch.** `resolve_runner` is a pure selection over
+`manifest.runtime.type`. It decides no business state — not installation state,
+config, bindings, routing, or consequence — and reads only the code-owned
+manifest to pick a transport. Failing closed on an unexecutable tier preserves
+the isolation invariant rather than introducing a decision. No new authority;
+the manifest remains the source of the runtime tier. Clean.
+
+**Phase 2 — wire contract.** `runner_protocol.py` is a data schema with no
+callers, no persistence, and no behaviour. It carries the `OperationEnvelope`
+(produced by `runtime_execution`) and the result types (owned by `runtime`); it
+owns neither. Its validators enforce transport shape and the no-secret-on-wire
+and connector-pin invariants — supporting the security boundary, not creating a
+decision surface. Clean. When Phase 3 gives it callers, its audit re-checks that
+the runner gains no authority.
+
+**Phase 3 onward.** Each audit must show the runner does not become a parallel
+authority, must update `docs/SOT_RELATIONSHIP_MAP.md` and
+`app/services/sot_relationships.py` where a phase changes an ownership boundary,
+and must add or adjust an architecture guard test that prevents a parallel path
+from returning. Deviations are recorded as explicit decisions, not absorbed
+silently.
+
 ## Related
 
 - `docs/designs/INTEGRATION_PLATFORM_SOT.md` — runtime and trust tiers, the
