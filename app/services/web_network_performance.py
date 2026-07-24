@@ -6,8 +6,8 @@ Three surfaces, all built from existing data:
 * **ranking** — worst-performer table per tier (BTS / OLT / PON / AP) over a
   window, sorted by uptime % ascending, enriched with affected-subscriber count
   and incident count. Reuses ``network_monitoring.uptime_report`` as the engine.
-* **wallboard** — live up/down/degraded counts per tier from the warmed
-  ``live_status`` cache + ONT-online ratio (no live fan-out on the request path).
+* **wallboard** — binary working/not-working counts per tier from timestamped
+  cached observations + ONT operation (no live fan-out on the request path).
 * **sla** — uptime % vs target with PASS/BREACH + MTTR (see Phase 2b).
 
 Tiers map onto the engine's ``group_by`` dimensions:
@@ -281,7 +281,13 @@ _STATE_ORDER = {
 }
 
 
-def _device_state(status, live_status: str | None, *, warm_stale: bool) -> str:
+def _device_state(
+    status,
+    live_status: str | None,
+    live_status_at: datetime | None,
+    *,
+    warm_stale: bool,
+) -> str:
     """Coarse wallboard bucket for a device, via the shared operational-status
     reader so the wallboard and Network Devices page agree."""
     from types import SimpleNamespace
@@ -289,7 +295,11 @@ def _device_state(status, live_status: str | None, *, warm_stale: bool) -> str:
     from app.services.device_operational_status import derive_operational_status
 
     op = derive_operational_status(
-        SimpleNamespace(status=status, live_status=live_status),
+        SimpleNamespace(
+            status=status,
+            live_status=live_status,
+            live_status_at=live_status_at,
+        ),
         warm_stale=warm_stale,
     )
     return op.status
@@ -319,6 +329,7 @@ def wallboard(db: Session) -> dict:
             NetworkDevice.matched_device_type,
             NetworkDevice.pop_site_id,
             NetworkDevice.live_status,
+            NetworkDevice.live_status_at,
             NetworkDevice.status,
         )
         .filter(NetworkDevice.is_active.is_(True))
@@ -332,8 +343,21 @@ def wallboard(db: Session) -> dict:
     ap_card = _empty_card("ap", TIERS["ap"][0])
     # BTS: roll each pop_site up to the worst state among its devices.
     site_worst: dict[str, str] = {}
-    for did, dtype, matched, pop_site_id, live_status, status in devices:
-        state = _device_state(status, live_status, warm_stale=warm_stale)
+    for (
+        did,
+        dtype,
+        matched,
+        pop_site_id,
+        live_status,
+        live_status_at,
+        status,
+    ) in devices:
+        state = _device_state(
+            status,
+            live_status,
+            live_status_at,
+            warm_stale=warm_stale,
+        )
         if matched == "olt":
             _bump(olt_card, state)
         if dtype == DeviceType.access_point:
