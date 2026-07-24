@@ -75,6 +75,11 @@ Customer and reseller checkout render only the server-owned gateway option
 projection. An empty projection produces an honest unavailable state. Templates
 must never invent Paystack, a provider key, or a default provider.
 
+Gateway eligibility also requires the installation's connector version and
+manifest digest to match the deployed registry definition. A mismatch is an
+unavailable/misconfigured state: customer pages continue to render without the
+gateway, while runtime execution remains fail-closed.
+
 ### Payment gateway setup page contract
 
 - Screen: `admin.integration.payment_gateway_setup`; control-plane editor.
@@ -127,9 +132,25 @@ pinned capability binding to payment intents. Pre-cutover intents without a
 binding remain provider-pinned so an already-debited customer is not stranded;
 all new intents require and persist the selected binding.
 
+### Manifest adoption
+
+A connector manifest digest is a deployment contract. Any change to an
+executable manifest requires an explicit, exact prior-pin adoption migration or
+owner command in the same release. Migration
+`414_adopt_paystack_manifest_pin` repairs the unversioned Paystack definition
+change introduced by the control-plane cutover; it adopts only the known prior
+digest and leaves unknown drift untouched.
+
+After migrations and before service replacement, deployment verification
+compares every enabled installation's version and digest with the candidate
+image. Any mismatch aborts deployment. Runtime routing independently excludes a
+mismatched installation so configuration drift produces an honest unavailable
+state rather than an HTTP 500.
+
 ## Verification
 
 Tests must prove that unavailable gateways never render, complete bundles appear
 in priority order, duplicate finance identities fail closed, saved cards select
 Paystack in the service owner, intents retain their checkout binding, and secret
-values never return from admin projections.
+values never return from admin projections. Migration and deployment tests must
+also prove exact manifest-pin adoption and rejection of unadopted enabled pins.
