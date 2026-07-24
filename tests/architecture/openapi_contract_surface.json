@@ -5063,6 +5063,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/integrations/installations/{installation_id}/manifest-adoption": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "c12ebc3f5fec",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/integrations/jobs": {
    "params": [
     "header:authorization",
@@ -14577,6 +14589,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/integrations/installations/{installation_id}/manifest-adoption": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": "da3e7864f2eb",
+   "responses": {
+    "200": "98f5bf290cb2",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/integrations/installations/{installation_id}/quarantine": {
    "params": [
     "header:authorization",
@@ -18699,6 +18723,10 @@
   "IntegrationJobType": "95fd3ca7c853",
   "IntegrationJobUpdate": "fbddf4f1e78d",
   "IntegrationLifecycleCommand": "5be315235dbd",
+  "IntegrationManifestAdoptionCommand": "76978728dfbe",
+  "IntegrationManifestAdoptionPreviewRead": "aa84df6679f4",
+  "IntegrationManifestAdoptionRead": "668d8111002b",
+  "IntegrationManifestPin": "e291777a5b96",
   "IntegrationRunRead": "0ac917af40e6",
   "IntegrationRunStatus": "cc0db9f1c430",
   "IntegrationScheduleType": "e4f9f44e67ad",

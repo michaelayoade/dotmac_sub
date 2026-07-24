@@ -355,11 +355,41 @@ Definitions use semantic connector versions, a platform API major version, and
 independently versioned capabilities. Installations pin an exact artifact
 digest. A breaking domain contract receives a new capability major version.
 
-Upgrade flow is validate compatibility, create a migrated immutable config
-revision, run contract tests, shadow without sending/mutating, canary selected
-installations or jobs, move the installation pointer, observe, and retire the
-previous revision. The prior digest and config revision remain available for a
-bounded rollback window.
+Manifest contents are immutable for one connector version. The reviewed
+manifest-pin ledger at
+`tests/architecture/connector_manifest_pins.json` changes additively: changing
+configuration schema, secret declarations, runtime, capabilities, data access,
+egress, or health metadata requires a new semantic connector version. The two
+Paystack `1.0.0` digests are a documented, shrink-only historical anomaly from
+the payment control-plane cutover; no new version/digest collision is allowed.
+
+Upgrade flow is expand, adopt, then contract:
+
+1. Deploy the new version while retaining every still-pinned prior definition
+   and compatible runner for a bounded adoption/rollback window.
+2. The deployment gate executes
+   `scripts.integrations.verify_manifest_pins` from the candidate image and
+   refuses service replacement if an enabled installation pin is unavailable.
+   A supported historical pin is executable but reported as adoption debt.
+3. Preview adoption through the `integration.installations` owner. The preview
+   names the installed pin, exact deployed target pin, lifecycle state, and
+   configuration/secret-reference/capability compatibility errors.
+4. Submit the reviewed exact expected and target pins through
+   `adopt_installation_manifest`. The owner locks the installation, rejects
+   stale review evidence, updates version and digest atomically without
+   changing lifecycle or capability state, and records a non-secret
+   `integration.installation.manifest_adopted` event.
+5. Observe runtime and customer-flow evidence. A reviewed rollback adopts the
+   retained prior exact pin through the same owner.
+6. Remove a historical definition only in a later release after the deployment
+   report proves no enabled installation still pins it and the rollback window
+   is closed.
+
+Configuration migration, connection validation, contract tests, shadowing, and
+canary execution remain required when the target changes those contracts. A
+deployment never silently re-pins installations: that would erase the approval
+boundary the digest provides. The operator procedure is
+`docs/runbooks/CONNECTOR_MANIFEST_ADOPTION.md`.
 
 ## Admin and API surfaces
 

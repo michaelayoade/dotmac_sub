@@ -59,6 +59,9 @@ class EventType(enum.Enum):
     payment_gateway_finance_identity_ensured = (
         "payment_gateway.finance_identity_ensured"
     )
+    integration_installation_manifest_adopted = (
+        "integration.installation.manifest_adopted"
+    )
     account_credit_deposited = "account_credit.deposited"
     prepaid_service_renewed = "prepaid_service.renewed"
     subscription_billing_treatment_changed = "subscription_billing_treatment.changed"
