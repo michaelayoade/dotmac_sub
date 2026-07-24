@@ -2871,7 +2871,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "Enabled payments.intent.v1 bindings are the only online "
                     "gateway control plane. Payment channels classify recorded "
-                    "settlement and never route checkout."
+                    "settlement and never route checkout. Installation version "
+                    "and digest drift is an unavailable state and never reaches "
+                    "customer gateway presentment."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -2954,6 +2956,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         mapping_owner="customer, reseller, and payment admin adapters",
                         retryable_codes=(),
                         fail_closed_on=(
+                            "connector version or manifest digest mismatch",
                             "missing or incomplete capability bundle",
                             "disabled intent binding or installation",
                             "missing or duplicate finance identity",
@@ -2973,7 +2976,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         cutover_gate=(
                             "Every new checkout option and selection comes from an "
-                            "enabled payments.intent.v1 binding."
+                            "enabled payments.intent.v1 binding whose installation "
+                            "version and digest match the deployed connector manifest."
                         ),
                         fallback_retirement=(
                             "Routing settings, provider fallback readers, and "
@@ -17842,7 +17846,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "This is the sole owner of integration_installations, "
                     "integration_config_revisions, and integration_capability_"
                     "bindings. CRM, ERP, WhatsApp, payment, and webhook callers "
-                    "resolve configuration only through versioned bindings."
+                    "resolve configuration only through versioned bindings. "
+                    "Manifest changes require explicit prior-pin adoption; the "
+                    "deployment gate rejects unadopted enabled installations."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -17985,7 +17991,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         cutover_gate=(
                             "Every executable connector resolves an enabled version-pinned "
-                            "capability binding before runtime execution."
+                            "capability binding before runtime execution, and "
+                            "post-migration deployment verification proves each enabled "
+                            "pin matches the candidate registry."
                         ),
                         fallback_retirement=(
                             "Legacy connector configs, hooks, provider secret columns, and "
