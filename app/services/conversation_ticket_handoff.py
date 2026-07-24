@@ -73,10 +73,17 @@ class ConversationTicketIssueCommand:
 
 
 class ConversationTicketHandoffError(DomainError):
-    def __init__(self, kind: HandoffErrorKind, message: str) -> None:
-        super().__init__(message)
+    """``code`` is the machine contract; ``kind`` maps it to a response class."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        kind: HandoffErrorKind = "conflict",
+    ) -> None:
+        super().__init__(code=code, message=message, details={"kind": kind})
         self.kind = kind
-        self.message = message
 
 
 @dataclass(frozen=True)
@@ -97,7 +104,9 @@ def _normalize_actor(actor_id: object | None) -> UUID:
     actor_uuid = coerce_uuid(actor_id)
     if actor_uuid is None:
         raise ConversationTicketHandoffError(
-            "forbidden", "A known actor must issue the ticket."
+            "actor_required",
+            "A known actor must issue the ticket.",
+            kind="forbidden",
         )
     return actor_uuid
 
@@ -105,7 +114,11 @@ def _normalize_actor(actor_id: object | None) -> UUID:
 def _active_conversation(db: Session, conversation_id: UUID) -> InboxConversation:
     conversation = db.get(InboxConversation, conversation_id)
     if conversation is None or not conversation.is_active:
-        raise ConversationTicketHandoffError("not_found", "Conversation not found.")
+        raise ConversationTicketHandoffError(
+            "conversation_not_found",
+            "Conversation not found.",
+            kind="not_found",
+        )
     return conversation
 
 
@@ -134,19 +147,25 @@ def _validate_issue_eligibility(
     missing = _REQUIRED_PERMISSIONS - set(command.permission_keys)
     if missing:
         raise ConversationTicketHandoffError(
-            "forbidden",
+            "permission_denied",
             "Issuing a ticket from a conversation requires "
             + ", ".join(sorted(missing))
             + ".",
+            kind="forbidden",
         )
     if not (command.title or "").strip():
-        raise ConversationTicketHandoffError("invalid", "A ticket title is required.")
+        raise ConversationTicketHandoffError(
+            "title_required",
+            "A ticket title is required.",
+            kind="invalid",
+        )
 
     conversation = _active_conversation(db, command.conversation_id)
     if conversation.status == InboxConversationStatus.resolved.value:
         raise ConversationTicketHandoffError(
-            "conflict",
+            "conversation_resolved",
             "Reopen the conversation before issuing a ticket from it.",
+            kind="conflict",
         )
     return conversation
 
