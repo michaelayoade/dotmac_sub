@@ -24,7 +24,6 @@ from app.services.customer_identity_normalization import (
     default_country_code,
     normalize_channel_address,
 )
-from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.integrations.connectors import whatsapp_runtime
 from app.services.owner_commands import CommandContext
 from app.services.realtime_platform import EventType
@@ -75,10 +74,6 @@ class ContactResolution:
     matched_subscriber_ids: list[str]
     suppressed_subscriber_ids: list[str]
     matched_reseller_ids: list[str]
-    #: Graded confidence of a subscriber auto-match (high/medium/low), so the
-    #: agent chip can distinguish an exact phone/email match from a weaker one.
-    #: None for link-based, reseller, or unmatched resolutions.
-    match_confidence: str | None = None
 
     def as_metadata(self) -> dict[str, object]:
         return {
@@ -89,7 +84,6 @@ class ContactResolution:
             "matched_subscriber_ids": self.matched_subscriber_ids,
             "suppressed_subscriber_ids": self.suppressed_subscriber_ids,
             "matched_reseller_ids": self.matched_reseller_ids,
-            "match_confidence": self.match_confidence,
         }
 
 
@@ -126,6 +120,12 @@ def _normalize_contact_with_country(
         value,
         default_country_code=country_code,
     )
+
+
+def _subscriber_contact(subscriber: Subscriber, channel_type: str) -> str | None:
+    if channel_type == InboxChannelType.email.value:
+        return subscriber.email
+    return subscriber.phone
 
 
 def _reseller_contact(reseller: Reseller, channel_type: str) -> str | None:
@@ -214,30 +214,20 @@ def resolve_contact_context(
                 matched_reseller_ids=[str(reseller.id)],
             )
 
-    # Subscriber auto-match. Opaque channels (Instagram/Facebook/chat widget)
-    # carry no phone/email — only a platform-scoped id — so they NEVER
-    # auto-match; they resolve solely via the reviewed InboxContactLink handled
-    # above, and an unmatched one is linked once by an agent and remembered.
-    # Phone/email channels delegate to the indexed customer-identity resolver
-    # (CustomerIdentityIndex), which covers Subscriber, SubscriberContact and
-    # SubscriberChannel with graded confidence — replacing a full-table scan of
-    # every subscriber that ran on each inbound message.
     matched_subscribers: list[Subscriber] = []
     suppressed_subscribers: list[Subscriber] = []
-    subscriber_ambiguous = False
-    match_confidence: str | None = None
-    if normalized and channel_type not in _OPAQUE_CONTACT_CHANNELS:
-        identity = resolve_customer_identity(
-            db, contact_address, channel_hint=channel_type
-        )
-        if identity.ambiguous:
-            subscriber_ambiguous = True
-        elif identity.matched and identity.subscriber_id is not None:
-            subscriber = db.get(Subscriber, identity.subscriber_id)
-            if subscriber is not None and _subscriber_is_linkable(subscriber):
+    if normalized:
+        for subscriber in db.query(Subscriber).all():
+            candidate = _normalize_contact_with_country(
+                channel_type,
+                _subscriber_contact(subscriber, channel_type),
+                country_code=country_code,
+            )
+            if candidate != normalized:
+                continue
+            if _subscriber_is_linkable(subscriber):
                 matched_subscribers.append(subscriber)
-                match_confidence = identity.match_confidence
-            elif subscriber is not None:
+            else:
                 suppressed_subscribers.append(subscriber)
 
     matched_resellers: list[Reseller] = []
@@ -264,7 +254,7 @@ def resolve_contact_context(
         status = "linked_subscriber"
     elif selected_reseller_id is not None:
         status = "linked_reseller"
-    elif subscriber_ambiguous or matched_resellers:
+    elif matched_subscribers or matched_resellers:
         status = "ambiguous"
     elif suppressed_subscribers:
         status = "suppressed_inactive"
@@ -283,7 +273,6 @@ def resolve_contact_context(
             str(subscriber.id) for subscriber in suppressed_subscribers
         ],
         matched_reseller_ids=[str(reseller.id) for reseller in matched_resellers],
-        match_confidence=match_confidence if selected_subscriber else None,
     )
 
 
