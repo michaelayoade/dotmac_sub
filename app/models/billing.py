@@ -1765,6 +1765,9 @@ class TopupIntent(Base):
     provider_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_providers.id")
     )
+    capability_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("integration_capability_bindings.id")
+    )
     purpose: Mapped[str | None] = mapped_column(String(40))
     allocation_policy: Mapped[str | None] = mapped_column(String(40))
     credit_application_policy: Mapped[str | None] = mapped_column(String(40))

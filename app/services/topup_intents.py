@@ -286,6 +286,7 @@ class StageGatewayTopupIntentCommand:
     requested_amount: Decimal
     expires_at: datetime
     provider_id: UUID | None = None
+    capability_binding_id: UUID | None = None
     account_id: UUID | None = None
     billing_account_id: UUID | None = None
     invoice_id: UUID | None = None
@@ -485,6 +486,8 @@ def _gateway_intent_metadata(
     metadata = {"payment_flow": command.flow.value}
     if command.provider_id is not None:
         metadata["provider_id"] = str(command.provider_id)
+    if command.capability_binding_id is not None:
+        metadata["capability_binding_id"] = str(command.capability_binding_id)
     if command.flow is GatewayTopupIntentFlow.invoice_payment:
         if command.account_id is None or command.invoice_id is None:
             raise _error(
@@ -586,6 +589,7 @@ def stage_gateway_topup_intent(
                 existing.account_id == command.account_id,
                 existing.billing_account_id == command.billing_account_id,
                 existing.provider_id == command.provider_id,
+                existing.capability_binding_id == command.capability_binding_id,
                 existing.provider_type == provider_type,
                 existing.currency == currency,
                 round_money(existing.requested_amount) == amount,
@@ -604,6 +608,7 @@ def stage_gateway_topup_intent(
         account_id=command.account_id,
         billing_account_id=command.billing_account_id,
         provider_id=command.provider_id,
+        capability_binding_id=command.capability_binding_id,
         reference=reference,
         provider_type=provider_type,
         currency=currency,

@@ -1125,18 +1125,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "DELETE /api/v1/payment-providers/{provider_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:provider_id!"
-   ],
-   "request": null,
-   "responses": {
-    "204": "cc5fd302f9c4",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "DELETE /api/v1/payments/{payment_id}": {
    "params": [
     "header:authorization",
@@ -11938,18 +11926,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "PATCH /api/v1/payment-providers/{provider_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:provider_id!"
-   ],
-   "request": "482af71fe15d",
-   "responses": {
-    "200": "97eac4e07f27",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "PATCH /api/v1/payments/{payment_id}": {
    "params": [
     "header:authorization",
@@ -16276,17 +16252,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "POST /api/v1/payment-providers": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": "58925d14c8a6",
-   "responses": {
-    "201": "97eac4e07f27",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "POST /api/v1/payments": {
    "params": [
     "header:authorization",
@@ -19156,7 +19121,6 @@
   "PaymentMethodRead": "79a083174c04",
   "PaymentMethodType": "b0c210102540",
   "PaymentMethodUpdate": "43da40ecb872",
-  "PaymentProviderCreate": "4c387b9b5f73",
   "PaymentProviderEventFinancialEffect": "5f944c2c8bc5",
   "PaymentProviderEventIngest": "15804490e40b",
   "PaymentProviderEventRead": "dc960a3d10f6",
@@ -19165,7 +19129,6 @@
   "PaymentProviderOption": "d553802be4ab",
   "PaymentProviderRead": "eb01197f980e",
   "PaymentProviderType": "bae72c1da52e",
-  "PaymentProviderUpdate": "fa5ae1822098",
   "PaymentRead": "a39274695cd9",
   "PaymentRefundInvoiceEffectRead": "d0878d8fb0b6",
   "PaymentRefundOrigin": "62c638d95da1",

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ class PaymentGatewayContext:
     provider_type: str
     public_key: str | None
     reference: str
+    capability_binding_id: UUID
 
 
 @dataclass(frozen=True)
@@ -78,14 +80,20 @@ class PaymentGatewayAdapter:
         db: Session,
         *,
         provider_type: str,
+        capability_binding_id: UUID,
         invoice_number: str | None = None,
     ) -> PaymentGatewayContext:
         if provider_type not in {"paystack", "flutterwave"}:
             raise ValueError(f"Unsupported payment provider {provider_type!r}")
         return PaymentGatewayContext(
             provider_type=provider_type,
-            public_key=payment_capability.get_public_key(db, provider_type),
+            public_key=payment_capability.get_public_key(
+                db,
+                provider_type,
+                checkout_binding_id=capability_binding_id,
+            ),
             reference=payment_capability.generate_reference(invoice_number),
+            capability_binding_id=capability_binding_id,
         )
 
     def verify(
@@ -94,10 +102,14 @@ class PaymentGatewayAdapter:
         *,
         provider_type: str,
         reference: str,
+        capability_binding_id: UUID | str | None = None,
     ) -> PaymentGatewayTransaction:
         if provider_type == "flutterwave":
             tx = payment_capability.verify_transaction(
-                db, provider_type="flutterwave", reference=reference
+                db,
+                provider_type="flutterwave",
+                reference=reference,
+                checkout_binding_id=capability_binding_id,
             )
             if tx.get("status") != "successful":
                 raise ValueError(
@@ -118,7 +130,10 @@ class PaymentGatewayAdapter:
             raise ValueError(f"Unsupported payment provider {provider_type!r}")
 
         tx = payment_capability.verify_transaction(
-            db, provider_type="paystack", reference=reference
+            db,
+            provider_type="paystack",
+            reference=reference,
+            checkout_binding_id=capability_binding_id,
         )
         if tx.get("status") != "success":
             raise ValueError(f"Payment was not successful (status: {tx.get('status')})")
@@ -139,6 +154,7 @@ class PaymentGatewayAdapter:
         *,
         provider_type: str,
         reference: str,
+        capability_binding_id: UUID | str | None = None,
     ) -> PaymentGatewayVerificationObservation:
         """Observe one gateway reference and normalize transport failures."""
 
@@ -147,6 +163,7 @@ class PaymentGatewayAdapter:
                 db,
                 provider_type=provider_type,
                 reference=reference,
+                capability_binding_id=capability_binding_id,
             )
         except payment_capability.PaymentCapabilityError as exc:
             outcome = (
