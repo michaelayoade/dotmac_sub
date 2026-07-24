@@ -138,15 +138,28 @@ def save_channel_policy(
     """
     getlist = getattr(form, "getlist", None)
 
+    # A channel that is not ready is disabled in the UI, but defend the write
+    # too: never persist a route to an unavailable channel (e.g. a hand-crafted
+    # POST, or SMS while it is retired). A channel already routes to nothing if
+    # it is disabled; storing it would just resurface a dead option.
+    unavailable = {
+        channel_id
+        for channel_id, (ready, _msg) in _channel_readiness(db).items()
+        if not ready
+    }
+
     def _values(field: str) -> list[str]:
         if getlist is not None:
-            return [str(item) for item in getlist(field)]
-        raw = form.get(field)
-        if raw is None:
-            return []
-        if isinstance(raw, str):
-            return [item for item in raw.split(",") if item.strip()]
-        return [str(item) for item in raw]
+            raw_values = [str(item) for item in getlist(field)]
+        else:
+            raw = form.get(field)
+            if raw is None:
+                raw_values = []
+            elif isinstance(raw, str):
+                raw_values = [item for item in raw.split(",") if item.strip()]
+            else:
+                raw_values = [str(item) for item in raw]
+        return [value for value in raw_values if value not in unavailable]
 
     categories = {
         category: _values(f"{CATEGORY_FIELD_PREFIX}{category}")
