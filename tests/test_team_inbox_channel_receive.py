@@ -227,3 +227,110 @@ def test_receive_whatsapp_webhook_normalizes_and_deduplicates(db_session):
     assert message.channel_type == InboxChannelType.whatsapp.value
     assert message.from_address == "+2348012345678"
     assert message.body == "Hello"
+
+
+# --- channel-aware identity resolution (indexed resolver, opaque link-only) ---
+
+
+def test_resolve_phone_channel_links_active_subscriber_with_confidence(db_session):
+    _subscriber(db_session, phone="+2348030000001", email="ada@example.com")
+    db_session.commit()
+
+    resolution = team_inbox_channel_receive.resolve_contact_context(
+        db_session,
+        channel_type=InboxChannelType.whatsapp.value,
+        contact_address="+2348030000001",
+    )
+    assert resolution.status == "linked_subscriber"
+    assert resolution.subscriber_id is not None
+    assert resolution.match_confidence is not None
+    assert resolution.as_metadata()["match_confidence"] == resolution.match_confidence
+
+
+def test_resolve_ambiguous_shared_phone_does_not_guess(db_session):
+    _subscriber(db_session, phone="+2348030000002", email="a@example.com")
+    _subscriber(db_session, phone="+2348030000002", email="b@example.com")
+    db_session.commit()
+
+    resolution = team_inbox_channel_receive.resolve_contact_context(
+        db_session,
+        channel_type=InboxChannelType.whatsapp.value,
+        contact_address="+2348030000002",
+    )
+    assert resolution.status == "ambiguous"
+    assert resolution.subscriber_id is None
+    assert resolution.match_confidence is None
+
+
+def test_resolve_inactive_subscriber_is_suppressed_not_linked(db_session):
+    _subscriber(
+        db_session,
+        phone="+2348030000003",
+        email="c@example.com",
+        status=SubscriberStatus.disabled,
+        is_active=False,
+    )
+    db_session.commit()
+
+    resolution = team_inbox_channel_receive.resolve_contact_context(
+        db_session,
+        channel_type=InboxChannelType.whatsapp.value,
+        contact_address="+2348030000003",
+    )
+    assert resolution.status == "suppressed_inactive"
+    assert resolution.subscriber_id is None
+
+
+def test_opaque_instagram_id_never_auto_matches(db_session):
+    """An Instagram-scoped id must never resolve by lookup — only via a
+    reviewed link. Even with a subscriber whose phone happens to equal the raw
+    id string, the opaque channel does not scan."""
+    _subscriber(db_session, phone="17841400000001", email="ig@example.com")
+    db_session.commit()
+
+    resolution = team_inbox_channel_receive.resolve_contact_context(
+        db_session,
+        channel_type=InboxChannelType.instagram_dm.value,
+        contact_address="17841400000001",
+    )
+    assert resolution.status == "unmatched"
+    assert resolution.subscriber_id is None
+
+
+def test_opaque_channel_resolves_via_existing_reviewed_link(db_session):
+    """The confirm-and-remember path: once linked, an opaque handle
+    auto-resolves on the next message."""
+    from app.models.team_inbox import InboxContactLink
+
+    subscriber = _subscriber(
+        db_session, phone="+2348030000004", email="linked@example.com"
+    )
+    db_session.add(
+        InboxContactLink(
+            channel_type=InboxChannelType.instagram_dm.value,
+            normalized_contact="17841400000009",
+            subscriber_id=subscriber.id,
+            is_active=True,
+            source="manual_inbox_conversation",
+        )
+    )
+    db_session.commit()
+
+    resolution = team_inbox_channel_receive.resolve_contact_context(
+        db_session,
+        channel_type=InboxChannelType.instagram_dm.value,
+        contact_address="17841400000009",
+    )
+    assert resolution.status == "linked_subscriber"
+    assert resolution.subscriber_id == subscriber.id
+
+
+def test_unmatched_phone_falls_through_cleanly(db_session):
+    resolution = team_inbox_channel_receive.resolve_contact_context(
+        db_session,
+        channel_type=InboxChannelType.whatsapp.value,
+        contact_address="+2348039999999",
+    )
+    assert resolution.status == "unmatched"
+    assert resolution.subscriber_id is None
+    assert resolution.match_confidence is None
