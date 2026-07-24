@@ -1,7 +1,7 @@
-"""Service extensions: bulk validity compensation for outages.
+"""Canonical exact service-grant intervals for outage compensation.
 
-Pushes next_billing_at forward by N days on every active subscription in
-scope. Capped plans keep their calendar-month allowance — validity, not data.
+Each application records an immutable interval and projects next_billing_at to
+its end. Capped plans keep their calendar-month allowance — validity, not data.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 
@@ -19,6 +20,7 @@ from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.service_extension import (
     ServiceExtension,
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -28,6 +30,11 @@ from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +46,47 @@ APPLY_BATCH_SIZE = 500
 # Postgres int4 ceiling: digit strings above this are not legacy customer IDs.
 # (e.g. phone numbers) and would overflow the column comparison.
 _MAX_INT4 = 2_147_483_647
+_OWNER = "financial.service_extensions"
+_LIFECYCLE_CONCERN = "service-extension lifecycle and exact grant intervals"
+_CREATE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LIFECYCLE_CONCERN,
+    name="create_service_extension",
+)
+_APPLY_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LIFECYCLE_CONCERN,
+    name="apply_service_extension",
+)
+_CANCEL_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LIFECYCLE_CONCERN,
+    name="cancel_service_extension",
+)
 
 
 class ServiceExtensionError(DomainError):
     """Transport-neutral service-extension failure."""
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceExtensionGrantInterval:
+    """Exact non-cash service interval decided by the extension owner."""
+
+    starts_at: datetime
+    ends_at: datetime
+    anchor_basis: ServiceExtensionAnchorBasis
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceExtensionIntervalRow:
+    """Admin projection of one proposed or applied extension interval."""
+
+    subscription: Subscription
+    previous_next_billing_at: datetime | None
+    grant_starts_at: datetime | None
+    grant_ends_at: datetime | None
+    anchor_basis: ServiceExtensionAnchorBasis | None
 
 
 def _error(suffix: str, message: str, **details: object) -> NoReturn:
@@ -50,6 +94,79 @@ def _error(suffix: str, message: str, **details: object) -> NoReturn:
         code=f"access.service_extensions.{suffix}",
         message=message,
         details=details,
+    )
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def _command_context(
+    *,
+    actor_id: str | None,
+    scope: str,
+    reason: str,
+    idempotency_key: str | None = None,
+) -> CommandContext:
+    return CommandContext.system(
+        actor=actor_id or "system:service_extensions",
+        scope=scope,
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _record_extension_audit(
+    db: Session,
+    *,
+    action: str,
+    extension: ServiceExtension,
+    actor_id: str | None,
+    metadata: dict[str, object],
+) -> None:
+    from app.models.audit import AuditActorType
+    from app.services.audit_adapter import record_audit_event
+
+    record_audit_event(
+        db,
+        action=action,
+        entity_type="service_extension",
+        entity_id=str(extension.id),
+        actor_type=AuditActorType.user,
+        actor_id=actor_id,
+        metadata=metadata,
+        defer_until_commit=True,
+    )
+
+
+def resolve_extension_grant_interval(
+    *,
+    previous_next_billing_at: datetime,
+    applied_at: datetime,
+    days: int,
+) -> ServiceExtensionGrantInterval:
+    """Resolve the exact grant interval from authoritative inputs.
+
+    A current or future billing anchor remains additive. A stale anchor cannot
+    consume compensation in the past, so the grant begins when it is applied.
+    """
+
+    previous = _as_utc(previous_next_billing_at)
+    effective_at = _as_utc(applied_at)
+    if previous >= effective_at:
+        starts_at = previous
+        basis = ServiceExtensionAnchorBasis.existing_billing_anchor
+    else:
+        starts_at = effective_at
+        basis = ServiceExtensionAnchorBasis.application_time
+    return ServiceExtensionGrantInterval(
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(days=days),
+        anchor_basis=basis,
     )
 
 
@@ -414,44 +531,71 @@ def create_extension(
     created_by: str | None = None,
 ) -> ServiceExtension:
     """Create a pending extension. Scope is validated but not applied yet."""
-    if not str(reason or "").strip():
-        _error("missing_reason", "Reason is required.")
-    if window_end <= window_start:
-        _error("invalid_window", "Outage end must be after its start.")
-    days = _validated_days(db, days)
-    resolved_subscriber_ids = None
-    if scope_type == ServiceExtensionScope.subscribers:
-        resolver = (
-            _validate_resolved_subscriber_ids
-            if subscriber_ids_resolved
-            else resolve_subscriber_identifiers
-        )
-        resolved_subscriber_ids = [str(item) for item in resolver(db, subscriber_ids)]
-    # Validates scope inputs (raises on missing scope_id / empty list) without
-    # materializing every active subscription for network-wide extensions.
-    _scope_subscription_counts(
-        db,
-        scope_type,
-        scope_id,
-        resolved_subscriber_ids,
-        subscriber_ids_resolved=scope_type == ServiceExtensionScope.subscribers,
+    context = _command_context(
+        actor_id=created_by,
+        scope=f"service_extensions:{scope_type.value}",
+        reason=str(reason or "").strip() or "service extension creation",
     )
 
-    extension = ServiceExtension(
-        reason=reason.strip(),
-        window_start=window_start,
-        window_end=window_end,
-        days=days,
-        scope_type=scope_type,
-        scope_id=coerce_uuid(scope_id) if scope_id else None,
-        scope_subscriber_ids=resolved_subscriber_ids,
-        status=ServiceExtensionStatus.pending,
-        created_by=created_by,
+    def operation() -> ServiceExtension:
+        if not str(reason or "").strip():
+            _error("missing_reason", "Reason is required.")
+        if window_end <= window_start:
+            _error("invalid_window", "Outage end must be after its start.")
+        validated_days = _validated_days(db, days)
+        resolved_subscriber_ids = None
+        if scope_type == ServiceExtensionScope.subscribers:
+            resolver = (
+                _validate_resolved_subscriber_ids
+                if subscriber_ids_resolved
+                else resolve_subscriber_identifiers
+            )
+            resolved_subscriber_ids = [
+                str(item) for item in resolver(db, subscriber_ids)
+            ]
+        # Validate without materializing every network-wide subscription.
+        _scope_subscription_counts(
+            db,
+            scope_type,
+            scope_id,
+            resolved_subscriber_ids,
+            subscriber_ids_resolved=scope_type == ServiceExtensionScope.subscribers,
+        )
+
+        extension = ServiceExtension(
+            reason=reason.strip(),
+            window_start=window_start,
+            window_end=window_end,
+            days=validated_days,
+            scope_type=scope_type,
+            scope_id=coerce_uuid(scope_id) if scope_id else None,
+            scope_subscriber_ids=resolved_subscriber_ids,
+            status=ServiceExtensionStatus.pending,
+            created_by=created_by,
+        )
+        db.add(extension)
+        db.flush()
+        _record_extension_audit(
+            db,
+            action="billing.service_extension_created",
+            extension=extension,
+            actor_id=created_by,
+            metadata={
+                "days": validated_days,
+                "scope_type": scope_type.value,
+                "reason": extension.reason,
+            },
+        )
+        db.refresh(extension)
+        db.expunge(extension)
+        return extension
+
+    return execute_owner_command(
+        db,
+        definition=_CREATE_COMMAND,
+        context=context,
+        operation=operation,
     )
-    db.add(extension)
-    db.commit()
-    db.refresh(extension)
-    return extension
 
 
 def get_extension(db: Session, extension_id: str) -> ServiceExtension:
@@ -465,28 +609,108 @@ def get_extension(db: Session, extension_id: str) -> ServiceExtension:
     return extension
 
 
+def _lock_extension(db: Session, extension_id: str) -> ServiceExtension:
+    try:
+        resolved_id = coerce_uuid(extension_id)
+    except (TypeError, ValueError):
+        _error("invalid_extension_id", "Service extension identifier is invalid.")
+    extension = db.scalar(
+        select(ServiceExtension)
+        .where(ServiceExtension.id == resolved_id)
+        .with_for_update()
+    )
+    if extension is None:
+        _error("extension_not_found", "Service extension was not found.")
+    return extension
+
+
+def _applied_interval_sample(
+    db: Session, extension_id: uuid.UUID
+) -> list[ServiceExtensionIntervalRow]:
+    rows = db.execute(
+        select(ServiceExtensionEntry, Subscription)
+        .join(Subscription, Subscription.id == ServiceExtensionEntry.subscription_id)
+        .options(joinedload(Subscription.subscriber))
+        .where(ServiceExtensionEntry.extension_id == extension_id)
+        .order_by(ServiceExtensionEntry.created_at.desc(), ServiceExtensionEntry.id)
+        .limit(PREVIEW_SAMPLE_LIMIT)
+    ).all()
+    return [
+        ServiceExtensionIntervalRow(
+            subscription=subscription,
+            previous_next_billing_at=entry.previous_next_billing_at,
+            grant_starts_at=entry.grant_starts_at,
+            grant_ends_at=entry.grant_ends_at,
+            anchor_basis=entry.anchor_basis,
+        )
+        for entry, subscription in rows
+    ]
+
+
+def _proposed_interval_row(
+    subscription: Subscription, *, applied_at: datetime, days: int
+) -> ServiceExtensionIntervalRow:
+    previous = subscription.next_billing_at
+    interval = (
+        resolve_extension_grant_interval(
+            previous_next_billing_at=previous,
+            applied_at=applied_at,
+            days=days,
+        )
+        if previous is not None
+        else None
+    )
+    return ServiceExtensionIntervalRow(
+        subscription=subscription,
+        previous_next_billing_at=previous,
+        grant_starts_at=interval.starts_at if interval else None,
+        grant_ends_at=interval.ends_at if interval else None,
+        anchor_basis=interval.anchor_basis if interval else None,
+    )
+
+
 def preview_extension(db: Session, extension: ServiceExtension) -> dict:
-    """Affected subscriptions as of now (recomputed at apply time too)."""
+    """Return exact applied evidence or a current proposal for pending scope."""
     scope_id = str(extension.scope_id) if extension.scope_id else None
-    total_count, extendable_count = _scope_subscription_counts(
-        db,
-        extension.scope_type,
-        scope_id,
-        extension.scope_subscriber_ids,
-        subscriber_ids_resolved=extension.scope_type
-        == ServiceExtensionScope.subscribers,
-    )
-    sample = _scope_subscription_sample(
-        db,
-        extension.scope_type,
-        scope_id,
-        extension.scope_subscriber_ids,
-        subscriber_ids_resolved=extension.scope_type
-        == ServiceExtensionScope.subscribers,
-    )
+    if extension.status == ServiceExtensionStatus.applied:
+        interval_sample = _applied_interval_sample(db, extension.id)
+        sample = [row.subscription for row in interval_sample]
+        total_count = extension.affected_count + extension.skipped_count
+        extendable_count = extension.affected_count
+        skipped_count = extension.skipped_count
+        previewed_at = extension.applied_at
+    else:
+        total_count, extendable_count = _scope_subscription_counts(
+            db,
+            extension.scope_type,
+            scope_id,
+            extension.scope_subscriber_ids,
+            subscriber_ids_resolved=extension.scope_type
+            == ServiceExtensionScope.subscribers,
+        )
+        sample = _scope_subscription_sample(
+            db,
+            extension.scope_type,
+            scope_id,
+            extension.scope_subscriber_ids,
+            subscriber_ids_resolved=extension.scope_type
+            == ServiceExtensionScope.subscribers,
+        )
+        previewed_at = _now_utc()
+        interval_sample = [
+            _proposed_interval_row(
+                subscription,
+                applied_at=previewed_at,
+                days=extension.days,
+            )
+            for subscription in sample
+        ]
+        skipped_count = total_count - extendable_count
     return {
         "subscriptions": sample,
         "sample": sample,
+        "interval_sample": interval_sample,
+        "previewed_at": previewed_at,
         "selected_subscribers": (
             _subscriber_scope_rows(db, extension.scope_subscriber_ids)
             if extension.scope_type == ServiceExtensionScope.subscribers
@@ -494,23 +718,50 @@ def preview_extension(db: Session, extension: ServiceExtension) -> dict:
         ),
         "total_count": total_count,
         "extendable_count": extendable_count,
-        "skipped_count": total_count - extendable_count,
+        "skipped_count": skipped_count,
     }
 
 
 def cancel_extension(
     db: Session, extension_id: str, *, actor_id: str | None = None
 ) -> ServiceExtension:
-    extension = get_extension(db, extension_id)
-    if extension.status != ServiceExtensionStatus.pending:
-        _error(
-            "invalid_transition",
-            "Only pending extensions can be canceled.",
+    context = _command_context(
+        actor_id=actor_id,
+        scope=f"service_extension:{extension_id}",
+        reason="cancel pending service extension",
+    )
+
+    def operation() -> ServiceExtension:
+        extension = _lock_extension(db, extension_id)
+        if extension.status != ServiceExtensionStatus.pending:
+            _error(
+                "invalid_transition",
+                "Only pending extensions can be canceled.",
+            )
+        extension.status = ServiceExtensionStatus.canceled
+        extension.applied_by = actor_id
+        db.flush()
+        _record_extension_audit(
+            db,
+            action="billing.service_extension_canceled",
+            extension=extension,
+            actor_id=actor_id,
+            metadata={
+                "days": extension.days,
+                "scope_type": extension.scope_type.value,
+                "reason": extension.reason,
+            },
         )
-    extension.status = ServiceExtensionStatus.canceled
-    extension.applied_by = actor_id
-    db.commit()
-    return extension
+        db.refresh(extension)
+        db.expunge(extension)
+        return extension
+
+    return execute_owner_command(
+        db,
+        definition=_CANCEL_COMMAND,
+        context=context,
+        operation=operation,
+    )
 
 
 def _resume_billing_suspension(
@@ -549,7 +800,7 @@ def _resume_billing_suspension(
     return False
 
 
-def apply_extension(
+def _apply_extension(
     db: Session, extension_id: str, *, actor_id: str | None = None
 ) -> ServiceExtension:
     """Apply a pending extension exactly once: push next_billing_at by N days
@@ -560,15 +811,14 @@ def apply_extension(
     from app.services.events import emit_event
     from app.services.events.types import EventType
 
-    extension = get_extension(db, extension_id)
+    extension = _lock_extension(db, extension_id)
     if extension.status != ServiceExtensionStatus.pending:
         _error(
             "invalid_transition",
             "Extension has already been applied or canceled.",
         )
 
-    now = datetime.now(UTC)
-    delta = timedelta(days=extension.days)
+    applied_at = _now_utc()
     applied = 0
     skipped = 0
     resumed = 0
@@ -589,14 +839,23 @@ def apply_extension(
             if processed % APPLY_BATCH_SIZE == 0:
                 db.flush()
             continue
-        subscription.next_billing_at = previous + delta
+        interval = resolve_extension_grant_interval(
+            previous_next_billing_at=previous,
+            applied_at=applied_at,
+            days=extension.days,
+        )
+        subscription.next_billing_at = interval.ends_at
         db.add(
             ServiceExtensionEntry(
                 extension_id=extension.id,
                 subscription_id=subscription.id,
                 subscriber_id=subscription.subscriber_id,
                 previous_next_billing_at=previous,
-                new_next_billing_at=subscription.next_billing_at,
+                grant_starts_at=interval.starts_at,
+                grant_ends_at=interval.ends_at,
+                anchor_basis=interval.anchor_basis,
+                new_next_billing_at=interval.ends_at,
+                created_at=applied_at,
             )
         )
         if subscription.status == SubscriptionStatus.suspended:
@@ -612,7 +871,10 @@ def apply_extension(
                 "account_id": str(subscription.subscriber_id),
                 "days": extension.days,
                 "reason": extension.reason,
-                "extended_until": subscription.next_billing_at.isoformat(),
+                "grant_starts_at": interval.starts_at.isoformat(),
+                "grant_ends_at": interval.ends_at.isoformat(),
+                "anchor_basis": interval.anchor_basis.value,
+                "extended_until": interval.ends_at.isoformat(),
             },
             subscription_id=subscription.id,
             subscriber_id=subscription.subscriber_id,
@@ -627,7 +889,7 @@ def apply_extension(
     extension.affected_count = applied
     extension.skipped_count = skipped
     extension.applied_by = actor_id
-    extension.applied_at = now
+    extension.applied_at = applied_at
 
     record_audit_event(
         db,
@@ -644,27 +906,44 @@ def apply_extension(
             "resumed": resumed,
             "still_suspended": still_suspended,
             "reason": extension.reason,
+            "interval_rule": "max(previous_next_billing_at, applied_at) + days",
         },
         defer_until_commit=True,
     )
-    db.commit()
+    db.flush()
     db.refresh(extension)
+    db.expunge(extension)
     return extension
 
 
-def _shield_window_end(created_at: datetime, days: int) -> datetime:
-    start = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
-    return start + timedelta(days=days)
+def apply_extension(
+    db: Session, extension_id: str, *, actor_id: str | None = None
+) -> ServiceExtension:
+    """Apply one pending extension through its canonical transaction owner."""
+    context = _command_context(
+        actor_id=actor_id,
+        scope=f"service_extension:{extension_id}",
+        reason="apply service extension",
+        idempotency_key=f"service-extension-apply:{extension_id}",
+    )
+    return execute_owner_command(
+        db,
+        definition=_APPLY_COMMAND,
+        context=context,
+        operation=lambda: _apply_extension(
+            db,
+            extension_id,
+            actor_id=actor_id,
+        ),
+    )
 
 
 def extension_shield_reason(db: Session, account_id: str | uuid.UUID) -> str | None:
     """Why billing enforcement should skip this account, or None.
 
-    An applied service extension grants N days of service regardless of
-    arrears (outage compensation / goodwill). Until those N days elapse from
-    the moment the extension was applied, dunning must not suspend the
-    account — otherwise enforcement undoes the extension within hours, which
-    is exactly what happened at cutover.
+    An applied service extension grants its exact recorded interval regardless
+    of arrears. Enforcement uses that same interval as coverage and billing;
+    it does not maintain a second clock based on row creation time.
     """
     reasons = bulk_extension_shield_reasons(db, [coerce_uuid(str(account_id))])
     return next(iter(reasons.values()), None)
@@ -677,12 +956,11 @@ def bulk_extension_shield_reasons(
     ids = {coerce_uuid(str(account_id)) for account_id in account_ids}
     if not ids:
         return {}
-    now = datetime.now(UTC)
+    now = _now_utc()
     rows = db.execute(
         select(
             ServiceExtensionEntry.subscriber_id,
-            ServiceExtensionEntry.created_at,
-            ServiceExtension.days,
+            ServiceExtensionEntry.grant_ends_at,
             ServiceExtension.id,
         )
         .join(
@@ -691,18 +969,20 @@ def bulk_extension_shield_reasons(
         .where(
             ServiceExtensionEntry.subscriber_id.in_(ids),
             ServiceExtension.status == ServiceExtensionStatus.applied,
-            ServiceExtensionEntry.created_at
-            >= now - timedelta(days=MAX_ALLOWED_EXTENSION_DAYS),
+            ServiceExtensionEntry.grant_starts_at.isnot(None),
+            ServiceExtensionEntry.grant_starts_at <= now,
+            ServiceExtensionEntry.grant_ends_at.isnot(None),
+            ServiceExtensionEntry.grant_ends_at > now,
         )
     ).all()
     reasons: dict[uuid.UUID, str] = {}
-    for subscriber_id, created_at, days, extension_id in rows:
-        until = _shield_window_end(created_at, int(days))
-        if until > now:
-            reasons.setdefault(
-                subscriber_id,
-                f"service extension {extension_id} in force until {until.date().isoformat()}",
-            )
+    for subscriber_id, grant_ends_at, extension_id in rows:
+        assert grant_ends_at is not None
+        reasons.setdefault(
+            subscriber_id,
+            "service extension "
+            f"{extension_id} in force until {grant_ends_at.date().isoformat()}",
+        )
     return reasons
 
 

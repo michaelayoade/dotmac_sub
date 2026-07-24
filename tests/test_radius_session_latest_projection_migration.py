@@ -31,7 +31,11 @@ def test_radius_session_projection_remains_in_the_single_migration_chain() -> No
 
     assert module.revision == "408_radius_session_latest_projection"
     assert module.down_revision == "407_retire_parallel_radius_refresh"
-    assert script.get_heads() == ["416_binary_device_operational_lifecycle"]
+    assert script.get_heads() == ["417_service_extension_grant_intervals"]
+    assert (
+        script.get_revision("417_service_extension_grant_intervals").down_revision
+        == "416_binary_device_operational_lifecycle"
+    )
 
 
 def test_radius_session_projection_uses_nonblocking_postgres_ddl() -> None:

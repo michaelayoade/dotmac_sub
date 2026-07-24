@@ -370,6 +370,9 @@ def _service_extension_entry_payload(
         "name": subscriber_name(subscriber) if subscriber else None,
         "subscription_id": str(entry.subscription_id),
         "previous_next_billing_at": utc_iso(entry.previous_next_billing_at),
+        "grant_starts_at": utc_iso(entry.grant_starts_at),
+        "grant_ends_at": utc_iso(entry.grant_ends_at),
+        "anchor_basis": enum_value(entry.anchor_basis),
         "new_next_billing_at": utc_iso(entry.new_next_billing_at),
         "created_at": utc_iso(entry.created_at),
     }

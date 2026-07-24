@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
+from app.models.audit import AuditEvent
 from app.models.catalog import NasVendor, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.service_extension import (
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -21,6 +24,11 @@ from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service
 from app.services import service_extensions as svc
+from app.services.prepaid_service_coverage import (
+    PrepaidCoverageSource,
+    PrepaidCoverageStatus,
+    resolve_prepaid_service_coverage,
+)
 from app.services.service_extensions import ServiceExtensionError
 from app.services.settings_cache import SettingsCache
 from app.services.settings_spec import get_spec
@@ -31,6 +39,26 @@ from app.web.admin.billing_extensions import (
 
 _WIN_START = datetime(2026, 6, 10, 8, 0, tzinfo=UTC)
 _WIN_END = datetime(2026, 6, 10, 20, 0, tzinfo=UTC)
+_APPLIED_AT = datetime(2026, 7, 1, tzinfo=UTC)
+_CREATE_EXTENSION = svc.create_extension
+_APPLY_EXTENSION = svc.apply_extension
+_CANCEL_EXTENSION = svc.cancel_extension
+
+
+@pytest.fixture(autouse=True)
+def _fixed_application_time(monkeypatch):
+    def owner_ready(call):
+        def wrapped(db, *args, **kwargs):
+            if db.in_transaction():
+                db.commit()
+            return call(db, *args, **kwargs)
+
+        return wrapped
+
+    monkeypatch.setattr(svc, "_now_utc", lambda: _APPLIED_AT)
+    monkeypatch.setattr(svc, "create_extension", owner_ready(_CREATE_EXTENSION))
+    monkeypatch.setattr(svc, "apply_extension", owner_ready(_APPLY_EXTENSION))
+    monkeypatch.setattr(svc, "cancel_extension", owner_ready(_CANCEL_EXTENSION))
 
 
 def _naive(dt):
@@ -157,6 +185,70 @@ def test_apply_network_scope_extends_all_active(db_session, subscriber, catalog_
         .all()
     )
     assert len(entries) == 2
+    by_subscription = {entry.subscription_id: entry for entry in entries}
+    assert _naive(by_subscription[s1.id].grant_starts_at) == datetime(2026, 7, 1)
+    assert _naive(by_subscription[s1.id].grant_ends_at) == datetime(2026, 7, 3)
+    assert (
+        by_subscription[s1.id].anchor_basis
+        == ServiceExtensionAnchorBasis.existing_billing_anchor
+    )
+    assert _naive(by_subscription[s2.id].grant_starts_at) == datetime(2026, 7, 15)
+    assert _naive(by_subscription[s2.id].grant_ends_at) == datetime(2026, 7, 17)
+
+
+def test_stale_anchor_grants_from_application_time(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    applied_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(svc, "_now_utc", lambda: applied_at)
+    subscription = _sub(
+        db_session,
+        subscriber,
+        catalog_offer,
+        next_billing_at=datetime(2026, 7, 2, tzinfo=UTC),
+    )
+    ext = svc.create_extension(
+        db_session,
+        reason="Delayed outage compensation",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=10,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+    )
+
+    preview = svc.preview_extension(db_session, ext)
+    proposed = preview["interval_sample"][0]
+    assert proposed.grant_starts_at == applied_at
+    assert proposed.grant_ends_at == datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
+    assert proposed.anchor_basis == ServiceExtensionAnchorBasis.application_time
+
+    applied = svc.apply_extension(db_session, str(ext.id), actor_id="admin-1")
+
+    db_session.refresh(subscription)
+    entry = (
+        db_session.query(ServiceExtensionEntry)
+        .filter(ServiceExtensionEntry.extension_id == ext.id)
+        .one()
+    )
+    assert _naive(subscription.next_billing_at) == datetime(2026, 8, 3, 12, 0)
+    assert _naive(entry.previous_next_billing_at) == datetime(2026, 7, 2)
+    assert _naive(entry.grant_starts_at) == datetime(2026, 7, 24, 12, 0)
+    assert _naive(entry.grant_ends_at) == datetime(2026, 8, 3, 12, 0)
+    assert entry.anchor_basis == ServiceExtensionAnchorBasis.application_time
+    assert entry.new_next_billing_at == entry.grant_ends_at
+    assert applied.applied_at == entry.created_at
+    coverage = resolve_prepaid_service_coverage(
+        db_session,
+        [subscription],
+        as_of=applied_at + timedelta(days=1),
+    )[subscription.id]
+    assert coverage.status == PrepaidCoverageStatus.covered
+    assert coverage.evidence is not None
+    assert coverage.evidence.source == PrepaidCoverageSource.service_extension_grant
+    assert coverage.evidence.starts_at == entry.grant_starts_at
+    assert coverage.evidence.ends_at == entry.grant_ends_at
+    assert svc.extension_shield_reason(db_session, subscriber.id) is not None
 
 
 def test_apply_is_idempotent(db_session, subscriber, catalog_offer):
@@ -173,6 +265,45 @@ def test_apply_is_idempotent(db_session, subscriber, catalog_offer):
     with pytest.raises(ServiceExtensionError) as exc:
         svc.apply_extension(db_session, str(ext.id))
     assert exc.value.code.endswith("invalid_transition")
+
+
+def test_sequential_extensions_compose_from_latest_grant_end(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    applied_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(svc, "_now_utc", lambda: applied_at)
+    subscription = _sub(
+        db_session,
+        subscriber,
+        catalog_offer,
+        next_billing_at=datetime(2026, 7, 2, tzinfo=UTC),
+    )
+
+    entries: list[ServiceExtensionEntry] = []
+    for reason in ("First correction", "Second correction"):
+        extension = svc.create_extension(
+            db_session,
+            reason=reason,
+            window_start=_WIN_START,
+            window_end=_WIN_END,
+            days=10,
+            scope_type=ServiceExtensionScope.subscribers,
+            subscriber_ids=[str(subscriber.id)],
+        )
+        svc.apply_extension(db_session, str(extension.id), actor_id="admin-1")
+        entries.append(
+            db_session.query(ServiceExtensionEntry)
+            .filter(ServiceExtensionEntry.extension_id == extension.id)
+            .one()
+        )
+
+    db_session.refresh(subscription)
+    assert _naive(subscription.next_billing_at) == datetime(2026, 8, 13, 12, 0)
+    assert entries[0].anchor_basis == ServiceExtensionAnchorBasis.application_time
+    assert (
+        entries[1].anchor_basis == ServiceExtensionAnchorBasis.existing_billing_anchor
+    )
+    assert entries[1].grant_starts_at == entries[0].grant_ends_at
 
 
 def test_nas_scope_only_extends_matching(db_session, subscriber, catalog_offer):
@@ -245,11 +376,37 @@ def test_cancel_pending_extension(db_session, subscriber, catalog_offer):
         days=1,
         scope_type=ServiceExtensionScope.network,
     )
-    svc.cancel_extension(db_session, str(ext.id), actor_id="admin-1")
-    db_session.refresh(ext)
-    assert ext.status == ServiceExtensionStatus.canceled
+    canceled = svc.cancel_extension(db_session, str(ext.id), actor_id="admin-1")
+    assert canceled.status == ServiceExtensionStatus.canceled
     with pytest.raises(ServiceExtensionError):
         svc.apply_extension(db_session, str(ext.id))
+
+
+def test_create_and_cancel_record_actor_audit(db_session, subscriber, catalog_offer):
+    _sub(db_session, subscriber, catalog_offer)
+    extension = svc.create_extension(
+        db_session,
+        reason="Audited compensation",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=1,
+        scope_type=ServiceExtensionScope.network,
+        created_by="admin-1",
+    )
+    svc.cancel_extension(db_session, str(extension.id), actor_id="admin-1")
+
+    actions = set(
+        db_session.scalars(
+            select(AuditEvent.action).where(
+                AuditEvent.entity_type == "service_extension",
+                AuditEvent.entity_id == str(extension.id),
+            )
+        ).all()
+    )
+    assert actions == {
+        "billing.service_extension_created",
+        "billing.service_extension_canceled",
+    }
 
 
 def test_subscribers_scope_requires_ids(db_session, subscriber, catalog_offer):
@@ -531,8 +688,6 @@ def test_apply_does_not_lift_admin_or_fraud_suspension(
 def test_extension_shield_covers_window_then_expires(
     db_session, subscriber, catalog_offer
 ):
-    from datetime import timedelta
-
     _sub(db_session, subscriber, catalog_offer)
     ext = svc.create_extension(
         db_session,
@@ -549,13 +704,13 @@ def test_extension_shield_covers_window_then_expires(
     reason = svc.extension_shield_reason(db_session, subscriber.id)
     assert reason is not None and str(ext.id) in reason
 
-    # Age the entry past its window: no shield.
+    # Move the canonical grant end into the past: no shield.
     entry = (
         db_session.query(ServiceExtensionEntry)
         .filter(ServiceExtensionEntry.extension_id == ext.id)
         .one()
     )
-    entry.created_at = datetime.now(UTC) - timedelta(days=6)
+    entry.grant_ends_at = _APPLIED_AT - timedelta(days=1)
     db_session.commit()
     assert svc.extension_shield_reason(db_session, subscriber.id) is None
 

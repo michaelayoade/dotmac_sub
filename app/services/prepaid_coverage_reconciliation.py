@@ -366,10 +366,10 @@ def _current_extensions(
         .where(
             ServiceExtensionEntry.subscription_id.in_(subscription_ids),
             ServiceExtension.status == ServiceExtensionStatus.applied,
-            ServiceExtensionEntry.previous_next_billing_at.isnot(None),
-            ServiceExtensionEntry.previous_next_billing_at <= as_of,
-            ServiceExtensionEntry.new_next_billing_at.isnot(None),
-            ServiceExtensionEntry.new_next_billing_at > as_of,
+            ServiceExtensionEntry.grant_starts_at.isnot(None),
+            ServiceExtensionEntry.grant_starts_at <= as_of,
+            ServiceExtensionEntry.grant_ends_at.isnot(None),
+            ServiceExtensionEntry.grant_ends_at > as_of,
         )
         .order_by(ServiceExtensionEntry.subscription_id, ServiceExtensionEntry.id)
     ).all()
