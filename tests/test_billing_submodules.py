@@ -52,13 +52,12 @@ from app.schemas.billing import (
     PaymentCreate,
     PaymentMethodCreate,
     PaymentMethodUpdate,
-    PaymentProviderCreate,
-    PaymentProviderUpdate,
     PaymentUpdate,
     TaxRateCreate,
     TaxRateUpdate,
 )
 from app.services import billing as billing_service
+from app.services import payment_gateway_finance
 from app.services.billing import _common as billing_common
 from app.services.billing._common import (
     _calculate_tax_amount,
@@ -912,30 +911,19 @@ class TestLedgerEntryCRUD:
 
 
 # ============================================================================
-# Payment Provider CRUD
+# Payment Provider Directory
 # ============================================================================
 
 
-class TestPaymentProviderCRUD:
-    def test_create_payment_provider(self, db_session):
-        provider = billing_service.payment_providers.create(
+class TestPaymentProviderDirectory:
+    def _identity(self, db_session):
+        return payment_gateway_finance.ensure_gateway_identity(
             db_session,
-            PaymentProviderCreate(
-                name=f"Stripe-{uuid.uuid4().hex[:6]}",
-                provider_type=PaymentProviderType.stripe,
-            ),
+            provider_type=PaymentProviderType.paystack,
         )
-        assert provider.id is not None
-        assert provider.provider_type == PaymentProviderType.stripe
 
     def test_get_payment_provider(self, db_session):
-        provider = billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"PayPal-{uuid.uuid4().hex[:6]}",
-                provider_type=PaymentProviderType.paypal,
-            ),
-        )
+        provider = self._identity(db_session).provider
         fetched = billing_service.payment_providers.get(db_session, str(provider.id))
         assert fetched.id == provider.id
 
@@ -945,12 +933,7 @@ class TestPaymentProviderCRUD:
         assert exc.value.status_code == 404
 
     def test_list_payment_providers(self, db_session):
-        billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"Prov-{uuid.uuid4().hex[:6]}",
-            ),
-        )
+        self._identity(db_session)
         results = billing_service.payment_providers.list(
             db_session,
             is_active=None,
@@ -961,44 +944,12 @@ class TestPaymentProviderCRUD:
         )
         assert len(results) >= 1
 
-    def test_update_payment_provider(self, db_session):
-        provider = billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"UpdProv-{uuid.uuid4().hex[:6]}",
-            ),
-        )
-        updated = billing_service.payment_providers.update(
-            db_session,
-            str(provider.id),
-            PaymentProviderUpdate(notes="Updated note"),
-        )
-        assert updated.notes == "Updated note"
+    def test_gateway_identity_is_idempotent(self, db_session):
+        first = self._identity(db_session)
+        second = self._identity(db_session)
 
-    def test_update_payment_provider_not_found(self, db_session):
-        with pytest.raises(HTTPException) as exc:
-            billing_service.payment_providers.update(
-                db_session,
-                str(uuid.uuid4()),
-                PaymentProviderUpdate(notes="nope"),
-            )
-        assert exc.value.status_code == 404
-
-    def test_delete_payment_provider_soft(self, db_session):
-        provider = billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"DelProv-{uuid.uuid4().hex[:6]}",
-            ),
-        )
-        billing_service.payment_providers.delete(db_session, str(provider.id))
-        db_session.refresh(provider)
-        assert provider.is_active is False
-
-    def test_delete_payment_provider_not_found(self, db_session):
-        with pytest.raises(HTTPException) as exc:
-            billing_service.payment_providers.delete(db_session, str(uuid.uuid4()))
-        assert exc.value.status_code == 404
+        assert second.provider.id == first.provider.id
+        assert second.channel.id == first.channel.id
 
 
 # ============================================================================

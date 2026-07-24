@@ -1,7 +1,6 @@
 {# Overview Tab - KPI cards, optical link, device info, runtime status #}
 
-{%- set is_online = signal_info and signal_info.online_status == 'online' -%}
-{%- set is_offline = signal_info and signal_info.online_status == 'offline' -%}
+{%- set is_working = signal_info and signal_info.operational_status == 'working' -%}
 {%- set fsp = (assignment.pon_port.name if assignment and assignment.pon_port else ('0/' ~ (ont.board or '0') ~ '/' ~ (ont.port or '0') if ont.board or ont.port else '')) -%}
 <div class="space-y-4">
     {# ==================== KPI CARDS ROW ==================== #}
@@ -13,9 +12,10 @@
                 Runtime
             </div>
             <div class="mt-2 flex items-center gap-2">
-                <span class="h-3 w-3 rounded-full {{ 'bg-emerald-500' if is_online else ('bg-rose-500' if is_offline else 'bg-slate-400') }}"></span>
-                <span class="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ 'Online' if is_online else ('Offline' if is_offline else 'Unknown') }}</span>
+                <span class="h-3 w-3 rounded-full {{ 'bg-emerald-500' if is_working else 'bg-rose-500' }}"></span>
+                <span class="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ 'Working' if is_working else 'Not working' }}</span>
             </div>
+            <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ signal_info.operational_reason_display }}</div>
             {% if signal_info and signal_info.distance_meters is not none %}
             <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ "{:,}".format(signal_info.distance_meters) }}m from OLT</div>
             {% endif %}
@@ -182,8 +182,8 @@
 
             {# ONT side #}
             <div class="flex flex-col items-center">
-                <div class="flex h-14 w-14 items-center justify-center rounded-xl {{ 'bg-emerald-100 dark:bg-emerald-900/30' if is_online else 'bg-slate-100 dark:bg-slate-800' }}">
-                    <svg class="h-7 w-7 {{ 'text-emerald-600 dark:text-emerald-400' if is_online else 'text-slate-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                <div class="flex h-14 w-14 items-center justify-center rounded-xl {{ 'bg-emerald-100 dark:bg-emerald-900/30' if is_working else 'bg-slate-100 dark:bg-slate-800' }}">
+                    <svg class="h-7 w-7 {{ 'text-emerald-600 dark:text-emerald-400' if is_working else 'text-slate-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 002 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
                 </div>
                 <div class="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">ONT</div>
             </div>

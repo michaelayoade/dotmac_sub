@@ -3,15 +3,14 @@
 {% block title %}Pay Invoice - Customer Portal{% endblock %}
 
 {% block content %}
-{% set pay_options = payment_options|default([
-    {"provider_type": "paystack", "label": "Pay with Paystack"}
-], true) %}
+{% set pay_options = payment_options|default([], true) %}
 {# Default the chooser to the configured provider only if it is actually
    rendered (Flutterwave is omitted unless an active provider row exists),
    otherwise fall back to the first available option so the pre-selected radio
    always matches a visible choice. #}
 {% set pay_provider_values = pay_options|map(attribute="provider_type")|list %}
-{% set default_pay_provider = provider_type if provider_type in pay_provider_values else (pay_options[0].provider_type if pay_options else "paystack") %}
+{% set default_pay_provider = provider_type if provider_type in pay_provider_values else (pay_options[0].provider_type if pay_options else "") %}
+{% set default_payment_choice = ("provider:" ~ default_pay_provider) if default_pay_provider else (("card:" ~ payment_methods[0].id) if payment_methods|default([]) else "") %}
 {% set invoice_currency = invoice.currency or default_currency|default('NGN') %}
 <div class="space-y-6" x-data="paymentPage()">
     <div>
@@ -63,6 +62,12 @@
             {% include "customer/billing/_payment_method_choice.html" %}
             {% endfor %}
         </div>
+        {% if not pay_options and not payment_methods|default([]) %}
+        <div class="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+            <p class="font-semibold">Online payment is temporarily unavailable</p>
+            <p class="mt-1">No validated payment gateway or bank-transfer route is currently enabled. Please try again later or contact support.</p>
+        </div>
+        {% endif %}
 
         <label
             x-show="selectedPaymentChoice === 'provider:paystack'"
@@ -79,7 +84,7 @@
         <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
                 @click="startPayment()"
-                :disabled="processing"
+                :disabled="processing || !selectedPaymentChoice"
                 class="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-700 hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0">
                 <svg x-show="!processing" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
@@ -104,7 +109,7 @@ function paymentPage() {
         processing: false,
         saveCard: false,
         errorMessage: '',
-        selectedPaymentChoice: 'provider:{{ default_pay_provider }}',
+        selectedPaymentChoice: {{ default_payment_choice|tojson }},
         // One idempotency key per page session (not per click): if a saved-card
         // charge succeeds but the response is lost and the customer clicks again,
         // the server replays the original reference instead of charging twice.
@@ -142,9 +147,8 @@ function paymentPage() {
             this.processing = true;
             this.errorMessage = '';
             const self = this;
-            const selectedChoice = this.selectedPaymentChoice || 'provider:{{ default_pay_provider }}';
+            const selectedChoice = this.selectedPaymentChoice || '';
             const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : '';
-            const requestProvider = selectedProvider || 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
 
             let result;
@@ -157,7 +161,7 @@ function paymentPage() {
                     idempotencyKey: this.ensureIdempotencyKey(),
                     body: {
                         invoice: '{{ invoice.id }}',
-                        provider: requestProvider,
+                        provider: selectedProvider || null,
                         payment_method_id: selectedPaymentMethodId,
                     },
                 });

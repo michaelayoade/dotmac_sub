@@ -266,6 +266,7 @@ def _create_direct_transfer_intent(
                 reference=_reference(),
                 provider_type=topup_intents.DIRECT_TRANSFER_PROVIDER,
                 provider_id=None,
+                capability_binding_id=None,
                 expires_at=expires_at,
                 idempotency_key=key,
                 channel=topup_intents.TopupIntentChannel.customer_selfcare,

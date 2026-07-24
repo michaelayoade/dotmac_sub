@@ -28,8 +28,8 @@ from app.services.integrations.connectors.lead_capture_http import (
 )
 from app.services.integrations.connectors.payment_gateway import PaymentGatewayRunner
 from app.services.integrations.connectors.whatsapp_runtime import WhatsAppRuntimeRunner
-from app.services.integrations.manifest import ConnectorManifest
-from app.services.integrations.registry import require_connector_definition
+from app.services.integrations.manifest import ConnectorManifest, ConnectorRuntimeType
+from app.services.integrations.registry import require_pinned_connector_definition
 from app.services.integrations.runtime import (
     ConnectorRunner,
     OperationEnvelope,
@@ -43,6 +43,17 @@ from app.services.secrets import resolve_secret
 
 class RuntimeExecutionError(RuntimeError):
     """Raised before dispatch when a pinned runtime contract is invalid."""
+
+
+class RuntimeTierUnavailableError(RuntimeExecutionError):
+    """Raised when a declared runtime tier has no executor in this deployment.
+
+    Distinct from a misconfigured installation: the manifest is valid and the
+    installation may be correctly configured, but the tier it declares is not
+    executable here. Callers must fail closed rather than substitute another
+    tier — silently running an isolated connector in-process would defeat the
+    isolation the tier exists to provide (ADR 0004).
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +77,87 @@ def default_runner_registry() -> RunnerRegistry:
     return registry
 
 
+ExternalRunnerFactory = Callable[[ConnectorManifest], ConnectorRunner]
+
+
+def external_runner_unavailable(manifest: ConnectorManifest) -> ConnectorRunner:
+    """Factory that refuses every external connector.
+
+    Not the default any more, but kept so a deployment that does not want the
+    out-of-process tier can disable it explicitly rather than by omission.
+    """
+
+    raise RuntimeTierUnavailableError(
+        f"connector {manifest.key!r} declares the {manifest.runtime.type.value} "
+        "runtime, which has no executor in this deployment"
+    )
+
+
+def _podman_external_runner(manifest: ConnectorManifest) -> ConnectorRunner:
+    """Build the out-of-process runner for one external connector.
+
+    Phase 6 of ADR 0004: the tier becomes executable. The connector's own
+    manifest supplies its confinement — the egress allowlist comes from
+    ``EgressPolicy``, and a connector declaring no hosts gets no network and no
+    gateway at all.
+
+    Imported lazily so the container transport is only loaded when an external
+    connector is actually resolved, and so a deployment without Podman fails at
+    execution with a clear transport error rather than at import.
+    """
+
+    from app.services.integrations.egress_gateway import PodmanEgressGateway
+    from app.services.integrations.egress_policy import EgressPolicy
+    from app.services.integrations.external_runner import ExternalOciRunner
+    from app.services.integrations.podman_transport import PodmanTransport
+
+    policy = EgressPolicy.from_manifest(manifest)
+    transport = PodmanTransport(
+        egress=policy,
+        # A connector needing no egress gets no gateway; one that needs egress
+        # is confined by it, and refused outright if it cannot be established.
+        egress_gateway=PodmanEgressGateway() if policy.requires_network else None,
+    )
+    return ExternalOciRunner(manifest, transport)
+
+
+_EXTERNAL_RUNNER_FACTORY: ExternalRunnerFactory = _podman_external_runner
+
+
+def resolve_runner(
+    manifest: ConnectorManifest,
+    *,
+    registry: RunnerRegistry | None = None,
+    external_factory: ExternalRunnerFactory | None = None,
+) -> ConnectorRunner:
+    """Select a runner from the manifest's declared runtime tier.
+
+    Resolution is driven by `manifest.runtime.type` rather than the connector
+    key, so a connector cannot inherit an executor that its declared trust tier
+    does not entitle it to.
+    """
+
+    tier = manifest.runtime.type
+    if tier is ConnectorRuntimeType.catalogue_only:
+        raise RuntimeExecutionError(
+            f"connector {manifest.key!r} is catalogue-only and names no executable code"
+        )
+    if tier in {
+        ConnectorRuntimeType.builtin_worker,
+        ConnectorRuntimeType.legacy_adapter,
+    }:
+        try:
+            return (registry or default_runner_registry()).resolve(manifest.key)
+        except LookupError as exc:
+            raise RuntimeTierUnavailableError(
+                f"connector {manifest.key!r} declares the {tier.value} runtime "
+                "but no runner is registered for it in this process"
+            ) from exc
+    if tier is ConnectorRuntimeType.external_oci:
+        return (external_factory or _EXTERNAL_RUNNER_FACTORY)(manifest)
+    raise RuntimeExecutionError(f"unsupported connector runtime tier: {tier.value}")
+
+
 def build_execution_context(
     db: Session,
     *,
@@ -73,6 +165,7 @@ def build_execution_context(
     allow_disabled: bool = False,
     runner_registry: RunnerRegistry | None = None,
     runner_override: ConnectorRunner | None = None,
+    external_runner_factory: ExternalRunnerFactory | None = None,
     secret_resolver: Callable[[str | None], str | None] = resolve_secret,
 ) -> RuntimeExecutionContext:
     binding = db.get(IntegrationCapabilityBinding, capability_binding_id)
@@ -94,11 +187,16 @@ def build_execution_context(
     revision = installation.current_config_revision
     if revision is None:
         raise RuntimeExecutionError("current configuration revision is missing")
-    manifest = require_connector_definition(installation.connector_key)
-    if manifest.version != installation.connector_version:
-        raise RuntimeExecutionError("connector version pin differs from deployment")
-    if manifest.digest != installation.manifest_digest:
-        raise RuntimeExecutionError("manifest digest pin differs from deployment")
+    try:
+        manifest = require_pinned_connector_definition(
+            installation.connector_key,
+            version=installation.connector_version,
+            manifest_digest=installation.manifest_digest,
+        )
+    except KeyError as exc:
+        raise RuntimeExecutionError(
+            "connector manifest pin is not available in this deployment"
+        ) from exc
     if manifest.capability(binding.capability_id) is None:
         raise RuntimeExecutionError("binding capability is not declared")
 
@@ -108,8 +206,10 @@ def build_execution_context(
         if not resolved:
             raise RuntimeExecutionError(f"secret binding could not be resolved: {name}")
         material[str(name)] = str(resolved)
-    runner = runner_override or (runner_registry or default_runner_registry()).resolve(
-        installation.connector_key
+    runner = runner_override or resolve_runner(
+        manifest,
+        registry=runner_registry,
+        external_factory=external_runner_factory,
     )
     return RuntimeExecutionContext(
         binding=binding,

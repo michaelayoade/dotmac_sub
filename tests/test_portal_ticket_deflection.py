@@ -29,11 +29,40 @@ class _State:
         self.active_outage_id = active_outage_id
 
 
+_UNSET = object()
+
+
+class _Subscription:
+    def __init__(self, subscriber_id=None):
+        self.subscriber_id = subscriber_id or uuid.uuid4()
+
+
+class _Ticket:
+    """Only the field the portal detail route authorises on."""
+
+    def __init__(self, subscriber_id):
+        self.subscriber_id = subscriber_id
+
+
+class _Db:
+    """Enough Session surface for the portal-visibility guard."""
+
+    def __init__(self, ticket=None):
+        self._ticket = ticket
+
+    def get(self, _model, _pk):
+        return self._ticket
+
+
 @pytest.fixture
 def wired(monkeypatch):
     """Stub the owners this module reads; it decides none of them itself."""
 
-    def _install(*, state, subscription=object(), assessment=None):
+    def _install(*, state, subscription=_UNSET, assessment=None):
+        # `subscription=None` must stay meaningful (the unprovisioned case), so
+        # the default is a sentinel rather than None.
+        if subscription is _UNSET:
+            subscription = _Subscription()
         monkeypatch.setattr(
             "app.services.customer_portal_context.resolve_customer_subscription",
             lambda db, s: subscription,
@@ -86,16 +115,73 @@ def test_last_mile_trouble_is_scoped_to_the_customer(wired):
 
 
 def test_existing_infrastructure_ticket_is_offered(wired):
-    ticket = uuid.uuid4()
+    ticket_id = uuid.uuid4()
+    subscription = _Subscription()
     wired(
         state=_State(
             connection_state="outage",
             area_outage=True,
-            open_infrastructure_ticket_id=ticket,
+            open_infrastructure_ticket_id=ticket_id,
+        ),
+        subscription=subscription,
+    )
+    db = _Db(_Ticket(subscriber_id=subscription.subscriber_id))
+
+    result = deflection.assess_ticket_deflection(db, {})
+
+    assert result.existing_ticket_id == str(ticket_id)
+
+
+def test_ticket_the_portal_would_reject_is_not_offered(wired):
+    """The banner promises "updates land there"; a dead link breaks that.
+
+    open_infrastructure_down_ticket matches through any customer field, but the
+    portal detail route authorises on subscriber_id alone.
+    """
+    ticket_id = uuid.uuid4()
+    subscription = _Subscription()
+    wired(
+        state=_State(
+            connection_state="outage",
+            area_outage=True,
+            open_infrastructure_ticket_id=ticket_id,
+        ),
+        subscription=subscription,
+    )
+    # Linked by account/person only — subscriber_id never populated.
+    db = _Db(_Ticket(subscriber_id=None))
+
+    result = deflection.assess_ticket_deflection(db, {})
+
+    assert result.known_issue is True
+    assert result.existing_ticket_id is None
+
+
+def test_another_subscribers_ticket_is_never_offered(wired):
+    ticket_id = uuid.uuid4()
+    wired(
+        state=_State(
+            connection_state="outage",
+            area_outage=True,
+            open_infrastructure_ticket_id=ticket_id,
+        ),
+        subscription=_Subscription(),
+    )
+    db = _Db(_Ticket(subscriber_id=uuid.uuid4()))
+
+    assert deflection.assess_ticket_deflection(db, {}).existing_ticket_id is None
+
+
+def test_a_vanished_ticket_degrades_to_no_offer(wired):
+    wired(
+        state=_State(
+            connection_state="outage",
+            area_outage=True,
+            open_infrastructure_ticket_id=uuid.uuid4(),
         )
     )
-    result = deflection.assess_ticket_deflection(None, {})
-    assert result.existing_ticket_id == str(ticket)
+
+    assert deflection.assess_ticket_deflection(_Db(None), {}).existing_ticket_id is None
 
 
 def test_a_customer_with_no_subscription_gets_the_plain_form(wired):

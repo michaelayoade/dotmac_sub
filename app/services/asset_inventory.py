@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, false, not_, or_
+from sqlalchemy import and_, false, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.field_asset import FieldAsset, FieldAssetCustody
@@ -256,13 +256,17 @@ def _ont_query(db: Session, filters: AssetCatalogFilters):
     if search is not None:
         query = query.filter(search)
     if filters.status:
-        from app.services.network.ont_status import effective_ont_online_clause
+        from app.services.network.ont_status import (
+            operational_ont_not_working_clause,
+            operational_ont_working_clause,
+        )
 
         normalized_status = filters.status.strip().lower()
-        if normalized_status in {"online", "offline"}:
-            online_clause = effective_ont_online_clause()
+        if normalized_status in {"working", "not_working"}:
             query = query.filter(
-                online_clause if normalized_status == "online" else not_(online_clause)
+                operational_ont_working_clause()
+                if normalized_status == "working"
+                else operational_ont_not_working_clause()
             )
     if filters.subscriber_id:
         query = query.filter(false())
@@ -277,36 +281,41 @@ def _ont_rows(db: Session, filters: AssetCatalogFilters, limit: int) -> list[dic
         .all()
     )
     custody = _custody_map(db, "ont", [row.id for row in rows])
-    from app.services.network.ont_status import resolve_effective_ont_status
+    from app.services.device_operational_status import derive_ont_operational_status
 
-    return [
-        {
-            "id": row.id,
-            "source": "ont",
-            "asset_type": "ont",
-            "label": row.name or row.serial_number,
-            "identifier": row.serial_number,
-            "status": resolve_effective_ont_status(row).status.value,
-            "vendor": row.vendor,
-            "model": row.model,
-            "serial_number": row.serial_number,
-            "management_ip": None,
-            "subscriber_id": None,
-            **_custody_fields(custody.get(row.id)),
-            "location": row.address_or_comment,
-            "metadata": {
-                "vendor_serial_number": row.vendor_serial_number,
-                "olt_device_id": str(row.olt_device_id) if row.olt_device_id else None,
-                "pon_port_id": str(row.pon_port_id) if row.pon_port_id else None,
-                "external_id": row.external_id,
-                "uisp_device_id": row.uisp_device_id,
-                "raw_olt_status": _enum_value(row.olt_status),
-                "status_retry_pending": resolve_effective_ont_status(row).retry_pending,
-            },
-            "updated_at": row.updated_at,
-        }
-        for row in rows
-    ]
+    result: list[dict] = []
+    for row in rows:
+        operational = derive_ont_operational_status(row)
+        result.append(
+            {
+                "id": row.id,
+                "source": "ont",
+                "asset_type": "ont",
+                "label": row.name or row.serial_number,
+                "identifier": row.serial_number,
+                "status": operational.status,
+                "vendor": row.vendor,
+                "model": row.model,
+                "serial_number": row.serial_number,
+                "management_ip": None,
+                "subscriber_id": None,
+                **_custody_fields(custody.get(row.id)),
+                "location": row.address_or_comment,
+                "metadata": {
+                    "vendor_serial_number": row.vendor_serial_number,
+                    "olt_device_id": (
+                        str(row.olt_device_id) if row.olt_device_id else None
+                    ),
+                    "pon_port_id": str(row.pon_port_id) if row.pon_port_id else None,
+                    "external_id": row.external_id,
+                    "uisp_device_id": row.uisp_device_id,
+                    "raw_olt_status": _enum_value(row.olt_status),
+                    "operational_reason": operational.reason,
+                },
+                "updated_at": row.updated_at,
+            }
+        )
+    return result
 
 
 def _cpe_query(db: Session, filters: AssetCatalogFilters):

@@ -81,7 +81,9 @@ PostgreSQL transaction-scoped advisory lock, converges by natural key, prunes
 orphans, and emits `device_projection.reconciled` version 1. The Celery task
 owns only session lifecycle, derives stable command/idempotency identity from
 the task delivery ID, and retries transient database-operational failures with
-bounded backoff.
+bounded backoff. Its periodic repair is a permanent scheduler responsibility:
+there is no environment, settings, module, or feature control that can freeze
+canonical-to-projection convergence. Cadence remains configurable.
 
 ## Migration and cutover
 
@@ -112,9 +114,11 @@ boundaries remain indexed debt until their callers and behavior are verified.
 
 Forward-fix the command, manifest, or adapter together. Reintroducing direct
 service or adapter commit is not an accepted rollback because it restores the
-ambiguous transaction path. If the projection command must be disabled, stop
-its schedule and serve the last committed projection while repairing the
-owner; source device records remain authoritative.
+ambiguous transaction path. The projection has no runtime disable control. If
+an emergency worker stop is required to contain a faulty release, roll back or
+forward-fix the owner, treat the projection as stale/unavailable rather than
+current, and resume its permanent schedule after repair; source device records
+remain authoritative.
 
 ## Review and retirement
 

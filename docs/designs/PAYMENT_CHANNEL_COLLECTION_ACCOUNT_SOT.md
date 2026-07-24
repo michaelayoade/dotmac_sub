@@ -43,8 +43,9 @@ It is legitimate configuration and is out of scope for deduplication.
 
 **Presentment — "how can this customer pay right now?"**
 
-- Online gateways: `payment_routing.eligible_routes()` → `get_routing_policy()`
-  (primary/secondary) filtered by live `provider_health()`.
+- Online gateways: `payment_routing.gateway_options()` projects enabled
+  connector capability bindings in explicit presentment-priority order. See
+  `PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md`.
 - Direct bank transfer: appended by `_topup_payment_options()` when enabled, with
   accounts read from `financial.collection_accounts` through the owner reader.
 - Consumers: customer portal top-up, reseller portal (`web_reseller_billing.py:81`),
@@ -56,13 +57,13 @@ It is legitimate configuration and is out of scope for deduplication.
   `_resolve_payment_channel` / `_resolve_collection_account`, on payment
   create/edit and consolidated payments.
 
-**These two never touch.** The customer-facing path does not consult
-`payment_channels` at all — which is the real reason the table was empty. Nothing
-on the presentment path was ever meant to populate it.
+**These two do not share runtime decisions.** Gateway setup may ensure the
+provider-linked channel needed for attribution, but the customer-facing path
+does not consult `payment_channels`.
 
 > **Rule: do NOT route presentment through `payment_channels`.** Gateway
-> presentment stays with `payment_routing`, which is health-aware and
-> policy-ordered. Channels have neither and would be a downgrade. Channels remain
+> presentment stays with `payment_routing`, which is installation-aware and
+> policy-ordered. Channels have neither. Channels remain
 > the classification dimension for *recorded* payments and reporting.
 
 What the two subsystems legitimately share is the **bank account identity**. That

@@ -1,12 +1,12 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import page_header, stats_card, action_button, status_badge, row_action, empty_state, filter_bar, filter_select, search_input, icon_plus, icon_view, icon_edit, icon_cpu, icon_check_circle, icon_warning, icon_server, icon_users, animation_styles %}
+{% from "components/ui/macros.html" import page_header, stats_card, action_button, status_badge, status_presentation_badge, row_action, empty_state, filter_bar, filter_select, search_input, icon_plus, icon_view, icon_edit, icon_cpu, icon_check_circle, icon_warning, icon_server, icon_users, animation_styles %}
 
 {% block title %}ONT Fleet - Admin{% endblock %}
 
 {% block content %}
 <div id="ont-fleet-page" class="relative space-y-4" x-data='{
     view: "{{ filters.view or 'list' }}",
-    filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'all' or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %},
+    filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.operational_status or filters.authorization != 'all' or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %},
     searchLoading: false,
     searchError: false
 }'>
@@ -66,8 +66,8 @@
 
     <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         {{ stats_card("Total ONTs", stats.total_onts, icon=icon_cpu(), color="blue", color2="indigo") }}
-        {{ stats_card("Online", stats.online_count, icon=icon_check_circle(), color="emerald", color2="teal") }}
-        {{ stats_card("Offline", stats.offline_count, icon=icon_server(), color="rose", color2="pink") }}
+        {{ stats_card("Working", stats.working_count, icon=icon_check_circle(), color="emerald", color2="teal") }}
+        {{ stats_card("Not working", stats.not_working_count, icon=icon_server(), color="rose", color2="pink") }}
         {{ stats_card("Low Signal", stats.low_signal_count, icon=icon_warning(), color="amber", color2="orange") }}
         {{ stats_card("CPE Inventory", stats.total_cpes, icon=icon_users(), color="slate", color2="gray") }}
         {{ stats_card("Unconfigured", unconfigured_stats.active_candidates, color="emerald", color2="teal") }}
@@ -131,12 +131,12 @@
                     {% endfor %}
                 </select>
 
-                {# Online status filter #}
-                <select name="online_status" onchange="this.form.submit()"
+                {# Binary operational status filter #}
+                <select name="operational_status" onchange="this.form.submit()"
                         class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
-                    <option value="">All Online Status</option>
-                    <option value="online" {% if filters.online_status == 'online' %}selected{% endif %}>Online</option>
-                    <option value="offline" {% if filters.online_status == 'offline' %}selected{% endif %}>Offline</option>
+                    <option value="">All Status</option>
+                    <option value="working" {% if filters.operational_status == 'working' %}selected{% endif %}>Working</option>
+                    <option value="not_working" {% if filters.operational_status == 'not_working' %}selected{% endif %}>Not working</option>
                 </select>
 
                 {# Signal quality filter #}
@@ -165,7 +165,7 @@
                 </button>
 
                 {# Clear filters #}
-                {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'all' or filters.signal_quality or filters.search or filters.vendor %}
+                {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.operational_status or filters.authorization != 'all' or filters.signal_quality or filters.search or filters.vendor %}
                     <a href="/admin/network/onts?view={{ filters.view or 'list' }}" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50 min-h-[44px]">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     Clear
@@ -478,7 +478,7 @@
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Serial</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT / PON</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
-                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Online</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Signal</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Seen</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
@@ -530,15 +530,8 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">
-                                {% if sd.get("status_display") %}
-                                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
-                                    {% if sd.status_display == "Online" %}
-                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                                    {% else %}
-                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-rose-500"></span>
-                                    {% endif %}
-                                    {{ sd.status_display }}
-                                </span>
+                                {% if sd.get("status_presentation") %}
+                                {{ status_presentation_badge(sd.status_presentation, size="sm") }}
                                 {% if sd.get("reason_display") %}
                                 <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ sd.reason_display }}</p>
                                 {% endif %}
@@ -672,7 +665,7 @@
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">ONU Rx</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Quality</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Distance</th>
-                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Online</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                             <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
                         </tr>
                     </thead>
@@ -740,15 +733,8 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">
-                                {% if sd.get("status_display") %}
-                                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
-                                    {% if sd.status_display == "Online" %}
-                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                                    {% else %}
-                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-rose-500"></span>
-                                    {% endif %}
-                                    {{ sd.status_display }}
-                                </span>
+                                {% if sd.get("status_presentation") %}
+                                {{ status_presentation_badge(sd.status_presentation, size="sm") }}
                                 {% else %}
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}

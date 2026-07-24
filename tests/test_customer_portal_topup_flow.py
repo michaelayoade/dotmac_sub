@@ -38,6 +38,7 @@ from app.services.customer_portal_flow_payments import (
     verify_and_record_payment,
     verify_and_record_topup,
 )
+from app.services.integrations.runtime_execution import RuntimeExecutionError
 from app.services.settings_cache import SettingsCache
 from tests.integration_platform_helpers import enable_payment_provider
 
@@ -228,6 +229,41 @@ def test_get_topup_page_includes_limits_and_public_key(
     ]
 
 
+def test_get_topup_page_degrades_runtime_failure_to_direct_transfer(
+    monkeypatch,
+    db_session,
+    subscriber,
+):
+    def _runtime_unavailable(*_args, **_kwargs):
+        raise RuntimeExecutionError(
+            "connector manifest pin is not available in this deployment"
+        )
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        _runtime_unavailable,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    _patch_topup_settings(monkeypatch)
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["provider_type"] == "direct_bank_transfer"
+    assert page["provider_public_key"] is None
+    assert page["payment_options"] == [
+        {
+            "provider_type": "direct_bank_transfer",
+            "label": "Direct bank transfer",
+        }
+    ]
+
+
 def test_get_topup_page_uses_configured_preset_amounts_within_limits(
     monkeypatch, db_session, subscriber
 ):
@@ -380,11 +416,10 @@ def test_get_topup_page_surfaces_active_flutterwave_provider(
         {"account_id": str(subscriber.id), "username": "customer@example.com"},
     )
 
-    # Paystack (the default) is listed first; an active Flutterwave provider is
-    # now surfaced too. Manual and the inactive Flutterwave row are excluded.
+    # Duplicate finance identities fail closed for that gateway. Paystack
+    # remains available because its installation and finance identity agree.
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
-        {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
     ]
 
 
@@ -1256,7 +1291,7 @@ def test_create_invoice_payment_intent_initializes_flutterwave(
     assert captured["currency"] == "NGN"
 
 
-def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(
+def test_create_invoice_payment_intent_resolves_saved_card_to_paystack(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
@@ -1275,14 +1310,35 @@ def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(
         ),
     )
 
-    with pytest.raises(ValueError, match="Saved cards can only be used with Paystack"):
-        create_invoice_payment_intent(
-            db_session,
-            _invoice_customer(subscriber),
-            str(invoice.id),
-            provider="flutterwave",
-            payment_method_id=str(card.id),
+    selected = {}
+
+    def fake_context(_db, **kwargs):
+        selected.update(kwargs)
+        return SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_pay",
+            reference="pay-ref-card-owner",
         )
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        fake_context,
+    )
+    monkeypatch.setattr(
+        "app.services.integrations.payment_capability.charge_authorization",
+        lambda *_args, **_kwargs: {"status": "success"},
+    )
+
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="flutterwave",
+        payment_method_id=str(card.id),
+    )
+
+    assert selected["provider_type"] == "paystack"
+    assert payload["charged"] is True
 
 
 def test_create_invoice_payment_intent_rejects_paid_invoice(

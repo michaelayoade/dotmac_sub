@@ -60,7 +60,6 @@ financial.import_payment_batch_reversals
 financial.invoices
 financial.ledger
 financial.payment_arrangements
-financial.payment_routing
 financial.payments
 financial.prepaid_funding_reconstruction
 financial.prepaid_plan_change
@@ -77,7 +76,6 @@ network.access_path
 network.connection_health
 network.control_plane_intent
 network.device_groups
-network.device_state
 network.fiber_access_attachments
 network.fiber_asset_changes
 network.fiber_connectivity_coverage

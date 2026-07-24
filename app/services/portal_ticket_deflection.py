@@ -75,6 +75,39 @@ def assess_ticket_deflection(
         return _NONE
 
 
+def _portal_visible_ticket_id(
+    db: Session, ticket_id: object | None, subscription: object
+) -> str | None:
+    """Offer the ticket only when the portal will actually let them open it.
+
+    ``open_infrastructure_down_ticket`` matches a ticket through *any* customer
+    field (``subscriber_id`` / ``customer_account_id`` / ``customer_person_id``,
+    see ``customer_support_links.ticket_customer_link_filter``), but the portal
+    detail route authorises on ``subscriber_id`` alone. A ticket linked only by
+    account or person is therefore surfaced here and then rejected on click.
+
+    The banner's copy promises "we're already tracking this - updates land
+    there", so a dead link breaks that promise at the exact moment the customer
+    is already frustrated - and sends them to WhatsApp, which is the behaviour
+    this feature exists to reduce. Fail closed: with no openable ticket the
+    banner falls back to "Check my connection status".
+    """
+    if not ticket_id:
+        return None
+    subscriber_id = getattr(subscription, "subscriber_id", None)
+    if subscriber_id is None:
+        return None
+
+    from app.models.support import Ticket
+
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None or ticket.subscriber_id is None:
+        return None
+    if str(ticket.subscriber_id) != str(subscriber_id):
+        return None
+    return str(ticket_id)
+
+
 def _assess(db: Session, customer: dict, session_data: dict) -> TicketDeflection:
     from app.services.customer_portal_context import resolve_customer_subscription
     from app.services.customer_service_state import get_customer_service_state
@@ -103,10 +136,8 @@ def _assess(db: Session, customer: dict, session_data: dict) -> TicketDeflection
         headline=assessment.headline,
         message=assessment.message,
         advice=assessment.advice,
-        existing_ticket_id=(
-            str(state.open_infrastructure_ticket_id)
-            if state.open_infrastructure_ticket_id
-            else None
+        existing_ticket_id=_portal_visible_ticket_id(
+            db, state.open_infrastructure_ticket_id, subscription
         ),
         incident_id=(str(state.active_outage_id) if state.active_outage_id else None),
         suggested_title=(

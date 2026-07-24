@@ -70,7 +70,12 @@ def enable_crm_inbound(db, monkeypatch, *, signing_secret: str):
     )
 
 
-def enable_payment_provider(db, provider_type: str):
+def enable_payment_provider(
+    db,
+    provider_type: str,
+    *,
+    presentment_priority: int = 0,
+):
     installation = installations.create_draft(
         db,
         connector_key=provider_type,
@@ -104,7 +109,14 @@ def enable_payment_provider(db, provider_type: str):
             db,
             installation_id=installation.id,
             capability_id=capability_id,
-            policy={"default": True},
+            policy={
+                "default": True,
+                **(
+                    {"presentment_priority": presentment_priority}
+                    if capability_id == "payments.intent.v1"
+                    else {}
+                ),
+            },
         )
     installations.validate_static(db, installation_id=installation.id)
     installations.enable_after_connection_validation(

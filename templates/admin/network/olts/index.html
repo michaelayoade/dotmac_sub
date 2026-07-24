@@ -53,8 +53,8 @@
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {{ stats_card("Fleet", stats.fleet_total, icon=icon_server(), color="violet", color2="purple") }}
         {{ stats_card("Needs Attention", stats.attention, icon=icon_warning(), tone="negative") }}
-        {{ stats_card("Up", stats.up, icon=icon_check_circle(), tone="positive") }}
-        {{ stats_card("Down", stats.down, icon=icon_warning(), tone="negative") }}
+        {{ stats_card("Working", stats.working, icon=icon_check_circle(), tone="positive") }}
+        {{ stats_card("Not working", stats.not_working, icon=icon_warning(), tone="negative") }}
         {{ stats_card("PON Ports", stats.total_pon_ports, icon=icon_server(), color="blue", color2="indigo") }}
     </div>
 
@@ -66,7 +66,7 @@
         </div>
         <div class="min-w-0 flex-1 rounded-xl bg-white/55 px-3 py-2 backdrop-blur-sm dark:bg-slate-900/25">
             <p class="font-semibold text-slate-900 dark:text-white">{{ stats.attention }} OLT{{ 's' if stats.attention != 1 }} need{{ '' if stats.attention != 1 else 's' }} attention</p>
-            <p class="mt-0.5 text-sm text-slate-700 dark:text-slate-200">Failed ping or SNMP telemetry checks</p>
+            <p class="mt-0.5 text-sm text-slate-700 dark:text-slate-200">Confirmed failures or operating impairments</p>
         </div>
         <a href="/admin/network/olts?status=attention" class="shrink-0 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700">View Queue</a>
     </div>
@@ -83,10 +83,8 @@
         <label for="olt_fleet_status" class="sr-only">Filter OLT status</label>
         <select id="olt_fleet_status" name="status" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             <option value="" {% if not filters.status %}selected{% endif %}>All OLTs</option>
-            <option value="up" {% if filters.status in ['up', 'online', 'healthy'] %}selected{% endif %}>Up</option>
-            <option value="degraded" {% if filters.status == 'degraded' %}selected{% endif %}>Degraded</option>
-            <option value="down" {% if filters.status in ['down', 'offline'] %}selected{% endif %}>Down</option>
-            <option value="retry_pending" {% if filters.status == 'retry_pending' %}selected{% endif %}>Refresh pending</option>
+            <option value="working" {% if filters.status == 'working' %}selected{% endif %}>Working</option>
+            <option value="not_working" {% if filters.status == 'not_working' %}selected{% endif %}>Not working</option>
             <option value="attention" {% if filters.status == 'attention' %}selected{% endif %}>Needs Attention</option>
         </select>
         <label for="olt_fleet_per_page" class="sr-only">Rows per page</label>
@@ -137,9 +135,7 @@
                         <dd class="mt-1 text-slate-800 dark:text-slate-200">{{ olt.runtime_source or 'Monitoring' }}</dd>
                     </div>
                 </dl>
-                {% if olt.runtime_retry_pending %}
-                <p class="status-foreground status-tone-warning mt-3 text-xs font-medium">Reachability refresh pending</p>
-                {% elif olt.runtime_health_state == 'attention' %}
+                {% if olt.runtime_health_state in ['attention', 'not_working'] %}
                 <p class="status-foreground status-tone-negative mt-3 text-xs font-medium">{{ olt.runtime_health_reason }}</p>
                 {% endif %}
                 <div class="mt-4 flex gap-2">
@@ -197,10 +193,10 @@
                         </span>
                         <span class="flex items-center gap-1" title="SNMP {{ olt.runtime_snmp_label }}">{{ health_dot(olt.runtime_snmp_state, "SNMP") }}</span>
                     </div>
-                    {% if olt.runtime_retry_pending %}
-                    <p class="status-foreground status-tone-warning mt-1 text-xs font-medium">Refresh pending</p>
-                    {% elif olt.runtime_health_state == 'attention' %}
+                    {% if olt.runtime_health_state == 'attention' %}
                     <p class="status-foreground status-tone-negative mt-1 text-xs font-medium">Needs attention</p>
+                    {% elif olt.runtime_health_state == 'not_working' %}
+                    <p class="status-foreground status-tone-negative mt-1 text-xs font-medium">{{ olt.runtime_health_reason }}</p>
                     {% endif %}
                 </td>
                 <td class="px-6 py-3 whitespace-nowrap text-center">

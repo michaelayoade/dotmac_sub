@@ -4,7 +4,7 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
 from app.services.domain_settings import (
@@ -30,10 +30,61 @@ from app.services.domain_settings import (
     usage_settings,
 )
 from app.services.secrets import is_openbao_ref
-from app.services.settings_spec import get_spec
+from app.services.settings_spec import (
+    DOMAIN_SETTINGS_SERVICE,
+    SCHEDULER_BOOLEAN_SETTING_KEYS,
+    SCHEDULER_ENV_BOOTSTRAP_SETTING_KEYS,
+    coerce_value,
+    get_spec,
+)
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
+
+
+def seed_scheduler_runtime_settings(db: Session) -> None:
+    """Materialize bootstrap values for registered scheduler inputs.
+
+    Runtime scheduling resolves the database row or registered default.
+    Environment variables are consulted only here, and ``ensure_by_key``
+    preserves an existing operator decision instead of overriding it on restart.
+    """
+
+    registered = SCHEDULER_BOOLEAN_SETTING_KEYS | SCHEDULER_ENV_BOOTSTRAP_SETTING_KEYS
+    for domain, key in sorted(
+        registered,
+        key=lambda item: (item[0].value, item[1]),
+    ):
+        spec = get_spec(domain, key)
+        if spec is None or spec.value_type not in {
+            SettingValueType.boolean,
+            SettingValueType.integer,
+            SettingValueType.string,
+        }:
+            raise RuntimeError(f"Invalid scheduler setting: {domain.value}.{key}")
+        raw = os.getenv(spec.env_var) if spec.env_var else None
+        value, error = coerce_value(spec, raw if raw is not None else spec.default)
+        if error or value is None:
+            raise RuntimeError(
+                f"Invalid scheduler bootstrap value: {domain.value}.{key}"
+            )
+        value_text = str(value)
+        value_json: bool | None = None
+        if spec.value_type is SettingValueType.boolean:
+            if not isinstance(value, bool):
+                raise RuntimeError(
+                    f"Invalid scheduler bootstrap boolean: {domain.value}.{key}"
+                )
+            value_text = "true" if value else "false"
+            value_json = value
+        service = DOMAIN_SETTINGS_SERVICE[domain]
+        service.ensure_by_key(
+            db,
+            key=key,
+            value_type=spec.value_type,
+            value_text=value_text,
+            value_json=value_json,
+        )
 
 
 def seed_auth_settings(db: Session) -> None:
@@ -1251,28 +1302,6 @@ def seed_geocoding_settings(db: Session) -> None:
 
 
 def seed_scheduler_settings(db: Session) -> None:
-    broker = (
-        os.getenv("CELERY_BROKER_URL")
-        or os.getenv("REDIS_URL")
-        or "redis://localhost:6379/0"
-    )
-    backend = (
-        os.getenv("CELERY_RESULT_BACKEND")
-        or os.getenv("REDIS_URL")
-        or "redis://localhost:6379/1"
-    )
-    scheduler_settings.ensure_by_key(
-        db,
-        key="broker_url",
-        value_type=SettingValueType.string,
-        value_text=broker,
-    )
-    scheduler_settings.ensure_by_key(
-        db,
-        key="result_backend",
-        value_type=SettingValueType.string,
-        value_text=backend,
-    )
     scheduler_settings.ensure_by_key(
         db,
         key="timezone",
@@ -1289,7 +1318,7 @@ def seed_scheduler_settings(db: Session) -> None:
         db,
         key="beat_refresh_seconds",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("CELERY_BEAT_REFRESH_SECONDS", "30"),
+        value_text=os.getenv("CELERY_BEAT_REFRESH_SECONDS", "300"),
     )
     scheduler_settings.ensure_by_key(
         db,
@@ -1489,18 +1518,6 @@ def seed_radius_settings(db: Session) -> None:
 
 
 def seed_billing_settings(db: Session) -> None:
-    legacy_provider = (
-        db.query(DomainSetting)
-        .filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "default_payment_provider_type",
-            DomainSetting.is_active.is_(True),
-        )
-        .first()
-    )
-    legacy_primary = str(getattr(legacy_provider, "value_text", "") or "").strip()
-    if legacy_primary not in {"paystack", "flutterwave"}:
-        legacy_primary = "paystack"
     billing_settings.ensure_by_key(
         db,
         key="default_currency",
@@ -1531,32 +1548,6 @@ def seed_billing_settings(db: Session) -> None:
         key="default_payment_method_type",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_METHOD_TYPE", "card"),
-    )
-    payment_failover_enabled_raw = os.getenv(
-        "BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true"
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_failover_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=payment_failover_enabled_raw,
-        value_json=payment_failover_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_primary_provider",
-        value_type=SettingValueType.string,
-        value_text=os.getenv(
-            "BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", legacy_primary
-        ),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_secondary_provider",
-        value_type=SettingValueType.string,
-        value_text=os.getenv(
-            "BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"
-        ),
     )
     billing_settings.ensure_by_key(
         db,
@@ -2445,6 +2436,15 @@ def seed_lifecycle_settings(db: Session) -> None:
 
 
 def seed_comms_settings(db: Session) -> None:
+    campaign_processing_enabled = os.getenv("CAMPAIGN_PROCESSING_ENABLED", "false")
+    comms_settings.ensure_by_key(
+        db,
+        key="campaign_processing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=campaign_processing_enabled,
+        value_json=campaign_processing_enabled.strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
     comms_settings.ensure_by_key(
         db,
         key="default_notification_status",

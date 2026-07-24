@@ -741,6 +741,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("scheduler.registry") == (
         "control.feature_registry",
+        "control.settings_spec",
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("access.radius_state") == (
@@ -1044,7 +1045,7 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert outage_presentation.name == "ui.status_presentation"
 
     device_state = sot_relationships.owning_service_for(
-        "device operational status vocabulary"
+        "device operational status vocabulary and reason classification"
     )
     assert device_state is not None
     assert device_state.name == "network.device_state"

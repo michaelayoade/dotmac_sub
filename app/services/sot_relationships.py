@@ -2100,6 +2100,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.account_credit_deposits",
                     "financial.invoices",
                     "financial.topup_intents",
+                    "integration.installations",
                 ),
                 notes=(
                     "This coordinator admits one typed customer creation command, resolves "
@@ -2299,6 +2300,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.billing_accounts",
                     "financial.invoices",
                     "financial.topup_intents",
+                    "integration.installations",
                 ),
                 notes=(
                     "This coordinator admits typed customer or reseller gateway "
@@ -2318,6 +2320,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical gateway lifetime and amount policy",
                                 "canonical deposit intent protocol",
                                 "canonical gateway intent protocol",
+                                "enabled checkout capability binding",
                             ),
                         ),
                         ConcernContract(
@@ -2328,6 +2331,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical reseller billing account",
                                 "canonical gateway lifetime and amount policy",
                                 "canonical gateway intent protocol",
+                                "enabled checkout capability binding",
                             ),
                         ),
                         ConcernContract(
@@ -2414,6 +2418,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="enabled checkout capability binding",
+                            owner="integration.installations",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "enabled payments.intent.v1 binding and enabled parent "
+                                "installation whose connector key matches the selected provider"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="canonical saved-card retry reservation",
                             owner="financial.gateway_topup_intent_commands",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -2456,6 +2469,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.gateway_topup_intent_commands.flow_evidence_invalid",
                             "financial.gateway_topup_intent_commands.invoice_not_found",
                             "financial.gateway_topup_intent_commands.invoice_not_payable",
+                            "financial.gateway_topup_intent_commands.checkout_binding_unavailable",
                             "financial.gateway_topup_intent_commands.deposit_rejected",
                             "financial.gateway_topup_intent_commands.intent_conflict",
                             "financial.gateway_topup_intent_commands.record_invalid",
@@ -2472,6 +2486,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         fail_closed_on=(
                             "invalid amount, flow, lifetime, account, invoice, provider, or "
                             "reference evidence",
+                            "missing, disabled, or provider-mismatched checkout binding",
                             "inactive or wrong-reseller billing account",
                             "deposit policy rejection or concurrent creation conflict",
                             "mismatched or already-bound saved-card retry reservation",
@@ -2518,6 +2533,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="finance operations",
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md",
                         "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
                     ),
                     test_refs=(
@@ -2844,15 +2860,271 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="financial.payment_routing",
                 module="app.services.payment_routing",
                 owns=(
-                    "payment-provider configuration lifecycle",
-                    "health-aware customer gateway eligibility",
+                    "installation-backed customer gateway eligibility",
                     "ordered customer gateway presentment policy",
+                    "checkout provider and binding selection",
+                ),
+                depends_on=(
+                    "financial.payment_gateway_finance",
+                    "integration.installations",
                 ),
                 notes=(
-                    "Payment-provider configuration remains a legacy transaction "
-                    "boundary owned here while its separate typed migration is "
-                    "pending. Payment channels classify recorded settlement and "
-                    "never replace this provider-health-aware presentment owner."
+                    "Enabled payments.intent.v1 bindings are the only online "
+                    "gateway control plane. Payment channels classify recorded "
+                    "settlement and never route checkout."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="installation-backed customer gateway eligibility",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "enabled payment capability installation bundle",
+                                "canonical gateway finance identity",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="ordered customer gateway presentment policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "enabled payment capability installation bundle",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="checkout provider and binding selection",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "enabled payment capability installation bundle",
+                                "canonical gateway finance identity",
+                                "customer checkout provider request",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="enabled payment capability installation bundle",
+                            owner="integration.installations",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "enabled connector installation and complete enabled "
+                                "payments intent, webhook, reconciliation, and refund "
+                                "bindings; intent policy carries presentment priority"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical gateway finance identity",
+                            owner="financial.payment_gateway_finance",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exactly one canonical PaymentProvider identity for "
+                                "the connector type, established during connector setup"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="customer checkout provider request",
+                            owner="financial.payment_routing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "optional requested supported provider type from a "
+                                "customer or reseller checkout adapter"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Eligibility, ordering, health, and selection are computed "
+                            "from one caller-owned read session and write no state."
+                        ),
+                        locking=(
+                            "No locks are taken; a subsequent intent command revalidates "
+                            "the selected binding inside its owned transaction."
+                        ),
+                        idempotency=(
+                            "The same committed installation, binding policy, and finance "
+                            "identity rows produce the same ordered options."
+                        ),
+                        retries=(
+                            "Adapters may repeat the complete read after concurrent "
+                            "configuration changes; intent admission remains authoritative."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="customer, reseller, and payment admin adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing or incomplete capability bundle",
+                            "disabled intent binding or installation",
+                            "missing or duplicate finance identity",
+                            "unsupported or unavailable requested provider",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "billing primary, secondary, and failover settings plus "
+                            "template and route-level Paystack defaults"
+                        ),
+                        new_owner="financial.payment_routing",
+                        verification=(
+                            "Routing, customer portal, connector setup, intent "
+                            "provenance, and shrink-only architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every new checkout option and selection comes from an "
+                            "enabled payments.intent.v1 binding."
+                        ),
+                        fallback_retirement=(
+                            "Routing settings, provider fallback readers, and "
+                            "template or route-level Paystack defaults are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_routing.py",
+                        "tests/test_customer_portal_billing_routes.py",
+                        "tests/architecture/test_payment_gateway_control_plane.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.payment_gateway_finance",
+                module="app.services.payment_gateway_finance",
+                owns=(
+                    "gateway finance provider identity bootstrap",
+                    "gateway settlement-channel bootstrap",
+                ),
+                notes=(
+                    "This flush-only participant ensures finance attribution "
+                    "identities during connector setup. It does not decide "
+                    "gateway availability or presentment."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="gateway finance provider identity bootstrap",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "payment gateway connector manifest",
+                                "payment gateway installation setup",
+                            ),
+                            canonical_writer="financial.payment_gateway_finance",
+                        ),
+                        ConcernContract(
+                            name="gateway settlement-channel bootstrap",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "payment gateway connector manifest",
+                                "payment gateway installation setup",
+                            ),
+                            canonical_writer="financial.payment_gateway_finance",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="payment gateway connector manifest",
+                            owner="integration.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "deployed Paystack or Flutterwave connector "
+                                "identity and capability declaration"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="payment gateway installation setup",
+                            owner="integration.installations",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "operator-approved connector setup transaction "
+                                "with provider type and complete capability bundle"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "integration.installations supplies the transaction; "
+                            "this participant only flushes finance identities and "
+                            "their creation event."
+                        ),
+                        locking=(
+                            "Provider type and canonical provider/channel names "
+                            "are checked before unique constraints arbitrate "
+                            "concurrent setup."
+                        ),
+                        idempotency=(
+                            "An existing unique provider identity and its first "
+                            "provider-linked channel replay without another row "
+                            "or event."
+                        ),
+                        retries=(
+                            "The installation coordinator retries only after a "
+                            "complete rollback."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.payment_gateway_finance.provider_identity_ambiguous",
+                            "financial.payment_gateway_finance.channel_identity_ambiguous",
+                            "financial.payment_gateway_finance.provider_name_conflict",
+                            "financial.payment_gateway_finance.channel_name_conflict",
+                        ),
+                        mapping_owner="payment gateway admin adapter",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "multiple provider identities",
+                            "multiple provider-linked settlement channels",
+                            "canonical provider or channel name collision",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("payment_gateway.finance_identity_ensured",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries provider type and canonical finance "
+                            "identity identifiers without connector secrets."
+                        ),
+                        replay=(
+                            "Provider and channel rows rebuild attribution; event "
+                            "replay never enables a connector."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "billing and integration admin provider CRUD plus "
+                            "payment-provider mutation API"
+                        ),
+                        new_owner="financial.payment_gateway_finance",
+                        verification=(
+                            "Gateway setup, idempotency, secret-reference, routing, "
+                            "and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Connector setup is the only caller that can create "
+                            "Paystack or Flutterwave finance identities."
+                        ),
+                        fallback_retirement=(
+                            "Legacy provider CRUD routes, templates, service "
+                            "methods, and mutation API are removed."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_web_integrations_payment_gateways.py",
+                        "tests/test_payment_routing.py",
+                        "tests/architecture/test_sot_manifest_contracts.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -7710,13 +7982,151 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="network.device_state",
                 module="app.services.device_operational_status",
                 owns=(
-                    "NOC-facing device operational status",
-                    "device operational status vocabulary",
-                    "device retry-pending and alarm classification",
+                    "binary NOC-facing device operational outcome",
+                    "device operational status vocabulary and reason classification",
+                    "device verification-due, impairment, and alarm classification",
                 ),
                 depends_on=(
+                    "network.monitoring_inventory",
                     "runtime.infrastructure_polling",
                     "network.ont_runtime_status",
+                ),
+                notes=(
+                    "Returns exactly working or not_working. Observation age is "
+                    "an internal verification-due input; reason distinguishes "
+                    "confirmed failure, administrative lifecycle, impairment, "
+                    "and inability to verify without adding a public freshness "
+                    "state. Required verification collectors are permanent."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="binary NOC-facing device operational outcome",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "device administrative lifecycle",
+                                "native reachability observations",
+                                "ONT runtime observations",
+                                "monitoring path observations",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "device operational status vocabulary and reason "
+                                "classification"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "device administrative lifecycle",
+                                "native reachability observations",
+                                "ONT runtime observations",
+                                "monitoring path observations",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "device verification-due, impairment, and alarm "
+                                "classification"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "device administrative lifecycle",
+                                "native reachability observations",
+                                "ONT runtime observations",
+                                "monitoring path observations",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="device administrative lifecycle",
+                            owner="network.monitoring_inventory",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "NetworkDevice, OLTDevice, OntUnit, NAS, router, "
+                                "and CPE administrative lifecycle fields"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native reachability observations",
+                            owner="runtime.infrastructure_polling",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "timestamped ping, poll, live-status, and health "
+                                "observations"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ONT runtime observations",
+                            owner="network.ont_runtime_status",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "timestamped OLT status and ACS inform observations"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="monitoring path observations",
+                            owner="external:wireguard",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "timestamped WireGuard handshake and allowed-IP "
+                                "routing facts normalized by monitoring_coverage"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Callers supply already-visible observation models; "
+                            "the resolver performs no writes or transaction completion."
+                        ),
+                        locking=(
+                            "No row locks; one resolution reflects one caller-visible "
+                            "observation snapshot."
+                        ),
+                        idempotency=(
+                            "The same lifecycle, observations, path coverage, and "
+                            "evaluation time produce the same typed outcome."
+                        ),
+                        retries=(
+                            "The resolver has no side effects; permanent collectors "
+                            "retry verification and later projections repair drift."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="web, API, projection, and task adapters",
+                        fail_closed_on=(
+                            "missing verification",
+                            "expired verification",
+                            "unavailable verification path",
+                            "inconclusive verification",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="device UI/API read services",
+                        new_owner="network.device_state",
+                        verification=(
+                            "architecture and behavior tests enforce the binary "
+                            "vocabulary and permanent verifier tasks"
+                        ),
+                        cutover_gate="migration 412 backfills and constrains projections",
+                        fallback_retirement=(
+                            "retry-pending, freshness, degraded, maintenance, and "
+                            "unknown public operational branches removed"
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/DEVICE_OPERATIONAL_STATUS.md",
+                        "docs/designs/SCHEDULER_CONTROL_LIFECYCLE.md",
+                    ),
+                    test_refs=(
+                        "tests/test_device_operational_status.py",
+                        "tests/test_operational_status_per_type.py",
+                        "tests/architecture/test_binary_device_operational_lifecycle.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -7745,7 +8155,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "device_projections materialised table",
                     "unified cross-type device row (OLT/core/ONT/CPE)",
-                    "projected operational status and freshness",
+                    "projected binary operational status and repair evidence",
                     "device projection orphan pruning",
                 ),
                 depends_on=(
@@ -7760,8 +8170,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "list can search/filter/sort/paginate in SQL. The table is a "
                     "rebuildable cache: reconcile is idempotent, stamps "
                     "refreshed_at, and prunes rows whose source device is gone. "
-                    "Readers never write it; they request a reconcile rather than "
-                    "maintaining a parallel derivation path."
+                    "Its scheduled repair is permanent: settings and feature "
+                    "controls may tune cadence but cannot disable convergence. "
+                    "Readers never write it; they request a reconcile rather "
+                    "than maintaining a parallel derivation path."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -7785,7 +8197,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             canonical_writer="network.device_projection",
                         ),
                         ConcernContract(
-                            name="projected operational status and freshness",
+                            name="projected binary operational status and repair evidence",
                             role=OwnerRole.PROJECTION_WRITER,
                             input_names=(
                                 "resolved operational device state",
@@ -7899,9 +8311,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "every row carries reconciled refreshed_at."
                             ),
                             stale_behavior=(
-                                "Readers may show the last committed projection and "
-                                "its refreshed_at; they never synthesize or write a "
-                                "replacement row."
+                                "Readers keep the owner-resolved binary outcome. "
+                                "Projection age may trigger repair or diagnostics "
+                                "but never becomes a public device state."
                             ),
                             drift_signal=(
                                 "Reconcile logs inserted, updated, and pruned counts; "
@@ -7922,12 +8334,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SCHEDULER_CONTROL_LIFECYCLE.md",
                     ),
                     test_refs=(
                         "tests/test_owner_commands.py",
                         "tests/test_device_projection_reconcile.py",
                         "tests/test_device_projection_task.py",
                         "tests/architecture/test_owner_command_boundary.py",
+                        "tests/architecture/test_scheduler_boolean_control_boundary.py",
                     ),
                 ),
             ),
@@ -9329,6 +9743,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.comms_campaigns",
                 owns=(
                     "native communication campaign lifecycle",
+                    "periodic campaign admission decision",
                     "campaign sender and sequence lifecycle",
                     "campaign audience and recipient delivery state",
                 ),
@@ -9340,7 +9755,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "Owns Sub outbound communication campaigns, not external "
                     "advertising campaigns. External provider campaign IDs are "
-                    "lead-origin provenance owned by sales.lead_lifecycle."
+                    "lead-origin provenance owned by sales.lead_lifecycle. The "
+                    "campaign-processing setting gates new periodic campaign "
+                    "admission only; admitted campaign and sequence work drains "
+                    "without a scheduler enablement control."
                 ),
             ),
             SOTService(
@@ -15975,13 +16393,32 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.scheduler_config",
                 owns=(
                     "effective scheduled-task registration",
+                    "registered scheduler boolean control enforcement",
+                    "registered scheduler cadence and tuning resolution",
                     "permanent customer-financial lifecycle task registration",
                     "mandatory account-access reconciliation registration",
+                    "permanent device-projection repair registration",
+                    "permanent accepted-work drainage registration",
                     "event-driven transport exclusion from periodic registration",
                     "optional capability task synchronization",
                     "Celery runtime schedule config",
                 ),
-                depends_on=("control.feature_registry", "runtime.db_sessions"),
+                depends_on=(
+                    "control.feature_registry",
+                    "control.settings_spec",
+                    "runtime.db_sessions",
+                ),
+                notes=(
+                    "Scheduler booleans resolve only through canonical feature "
+                    "controls or registered boolean SettingSpecs. Cadence and "
+                    "tuning resolve through registered typed SettingSpecs; their "
+                    "environment variables are bootstrap inputs, not runtime "
+                    "overrides. Permanent lifecycle, accepted-work drainage, and "
+                    "projection-repair tasks have no mutable enablement control. "
+                    "Broker and result-backend URLs remain deployment transport "
+                    "configuration rather than mutable domain settings. See "
+                    "docs/designs/SCHEDULER_CONTROL_LIFECYCLE.md."
+                ),
             ),
             SOTService(
                 name="scheduler.operations",
@@ -16005,8 +16442,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         rule=(
             "Core lifecycle tasks are always registered and cannot be disabled, "
             "renamed, or deleted. This includes customer-financial lifecycle work "
-            "and durable command dispatch/drainage after acceptance. Optional "
-            "capability scheduling composes through the feature control plane. "
+            "durable command dispatch/drainage after acceptance, and canonical "
+            "projection repair. Optional capability scheduling composes through "
+            "the feature control plane; other mutable scheduler booleans must "
+            "have a registered database-authoritative SettingSpec. Ad-hoc "
+            "environment/database/default fallback is forbidden for every "
+            "registered scheduler scalar. Controls may reject new admission but "
+            "cannot freeze accepted work, expiry cleanup, security/session "
+            "reconciliation, or canonical projection repair. "
             "Event-driven transports remain requestable but cannot register as "
             "independent periodic repair owners; task bodies remain thin adapters."
         ),
@@ -17562,6 +18005,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.integrations.installations",
                 owns=(
                     "version-pinned integration installation lifecycle",
+                    "explicit integration manifest adoption",
                     "immutable integration configuration revisions",
                     "integration capability grants and bindings",
                 ),
@@ -17576,6 +18020,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     concerns=(
                         ConcernContract(
                             name="version-pinned integration installation lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "deployed connector manifest",
+                                "integration installation protocol",
+                                "canonical integration installation aggregate",
+                            ),
+                            canonical_writer="integration.installations",
+                        ),
+                        ConcernContract(
+                            name="explicit integration manifest adoption",
                             role=OwnerRole.COMMAND_WRITER,
                             input_names=(
                                 "deployed connector manifest",
@@ -17651,12 +18105,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "installation commit boundary completes the unit of work."
                         ),
                         locking=(
-                            "Lifecycle transitions resolve one installation and immutable "
+                            "Lifecycle transitions resolve one installation; manifest "
+                            "adoption locks that installation row and immutable "
                             "configuration revisions serialize by installation revision."
                         ),
                         idempotency=(
                             "Configuration digests replay to an existing immutable revision; "
-                            "capability synchronization converges by capability id."
+                            "capability synchronization converges by capability id; manifest "
+                            "adoption converges by exact target version and digest."
                         ),
                         retries=(
                             "Manifest, secret-reference, or lifecycle violations are "
@@ -17670,6 +18126,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "integration.installations.invalid_configuration",
                             "integration.installations.invalid_secret_reference",
                             "integration.installations.invalid_transition",
+                            "integration.installations.manifest_adoption_incompatible",
+                            "integration.installations.manifest_adoption_scope_invalid",
+                            "integration.installations.stale_manifest_pin",
+                            "integration.installations.target_manifest_not_deployed",
                             "integration.installations.invalid_command_context",
                             "integration.installations.command_contract_violation",
                             "integration.installations.nested_owner_command",
@@ -17681,13 +18141,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         fail_closed_on=(
                             "missing deployed connector version or digest",
+                            "unreviewed, stale, or incompatible manifest adoption",
                             "undeclared or materialized secret value",
                             "ambiguous enabled default capability",
                             "retired or quarantined lifecycle mismatch",
                         ),
                     ),
                     events=EventContract(
-                        event_types=("integration.installation.lifecycle.v1",),
+                        event_types=(
+                            "integration.installation.lifecycle.v1",
+                            "integration.installation.manifest_adopted",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
@@ -17709,15 +18173,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         new_owner="integration.installations",
                         verification=(
                             "Manifest pin, immutable revision, secret reference, lifecycle, "
-                            "capability, API, and migration cutover tests."
+                            "explicit adoption, deployment readiness, graceful gateway "
+                            "availability, capability, API, and migration cutover tests."
                         ),
                         cutover_gate=(
-                            "Every executable connector resolves an enabled version-pinned "
-                            "capability binding before runtime execution."
+                            "Every enabled installation pin resolves to a current or bounded "
+                            "historical deployed definition before service replacement; "
+                            "operators explicitly adopt a reviewed current version/digest."
                         ),
                         fallback_retirement=(
                             "Legacy connector configs, hooks, provider secret columns, and "
-                            "arbitrary registration paths are removed by revision 380."
+                            "arbitrary registration paths are removed by revision 380; a "
+                            "historical definition is removed only after the deployment "
+                            "readiness report proves no enabled installation pins it."
                         ),
                     ),
                     steward="platform integrations",
@@ -17728,6 +18196,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_integration_installations.py",
                         "tests/test_integration_installation_api.py",
+                        "tests/test_integration_manifest_deployment_gate.py",
                         "tests/architecture/test_integration_platform_boundary.py",
                     ),
                 ),
@@ -19274,9 +19743,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device_projection_views (SQL search/filter/sort/paginate), the "
                     "rebuildable read model owned by network.device_projection, "
                     "instead of aggregating every device in memory. Projected "
-                    "operational_status is last-known state as of the projection's "
-                    "refreshed_at, surfaced as freshness (not live truth); live "
-                    "status stays on the monitoring/detail views. collect_devices is "
+                    "operational_status is the binary network.device_state outcome; "
+                    "refreshed_at is internal repair evidence and never a client "
+                    "device state. Raw timestamped observations remain available at "
+                    "diagnostic depth. collect_devices is "
                     "retired from the request path and remains the reconciler's "
                     "derivation input. Gated by the existing granular "
                     "network:device:read. Read-only list: no bulk command declared."

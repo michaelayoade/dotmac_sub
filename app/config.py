@@ -124,6 +124,11 @@ class Settings:
     # DEM settings
     dem_data_dir: str = os.getenv("DEM_DATA_DIR", "data/dem/srtm")
 
+    # Tmpfs directory the external connector runtime writes short-lived secret
+    # env files into. XDG_RUNTIME_DIR is tmpfs and user-private on a rootless
+    # host, which is what keeps materialized credentials off durable storage.
+    connector_runtime_dir: str = os.getenv("XDG_RUNTIME_DIR", "")
+
     # Meta Graph API settings
     meta_graph_api_version: str = os.getenv("META_GRAPH_API_VERSION", "v21.0")
     meta_graph_base_url: str = os.getenv(

@@ -12,6 +12,7 @@ from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
+from app.models.auth import ApiKey
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.audit import AuditEventCreate
@@ -223,9 +224,24 @@ def log_audit_event(
         metadata_payload["actor_name"] = actor_name
     if actor_email and not metadata_payload.get("actor_email"):
         metadata_payload["actor_email"] = actor_email
+    # A request only carries a name for interactive user actions. Background
+    # jobs, tasks, event handlers, webhooks and API-key callers have no request,
+    # so without this they would record a bare id. Snapshot a human label at
+    # write time from the id itself, so the log reads correctly even after the
+    # referenced user is later deleted (actor_id is not a foreign key).
+    if not metadata_payload.get("actor_name") and resolved_actor_id:
+        db_label = _resolve_actor_label_from_db(db, resolved_actor_id, actor_type)
+        if db_label:
+            metadata_payload["actor_name"] = db_label
+    # The resolved label is also stored in its own column so audit can be
+    # searched by person without a join and without parsing JSON.
+    actor_label = metadata_payload.get("actor_name") or metadata_payload.get(
+        "actor_email"
+    )
     payload = AuditEventCreate(
         actor_type=actor_type,
         actor_id=resolved_actor_id,
+        actor_label=actor_label,
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -450,30 +466,52 @@ def list_audit_events_for_entities(
 
 
 def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]:
-    """Resolve user actors referenced by the provided audit events."""
-    actor_ids = set()
+    """Resolve the actors referenced by the provided audit events.
+
+    Covers user actors (Subscriber/SystemUser) and api_key actors (ApiKey), so
+    historical events written before the label was snapshotted still display a
+    name at read time instead of a raw id.
+    """
+    user_ids: set[str] = set()
+    api_key_ids: set[str] = set()
     for event in events:
         actor_id = getattr(event, "actor_id", None)
-        if not actor_id or not _is_user_actor(getattr(event, "actor_type", None)):
+        if not actor_id:
             continue
+        actor_type = getattr(event, "actor_type", None)
         try:
-            actor_ids.add(str(UUID(str(actor_id))))
+            normalized = str(UUID(str(actor_id)))
         except (TypeError, ValueError):
             continue
-    if not actor_ids:
-        return {}
-    actors: dict[str, object] = {
-        str(subscriber.id): subscriber
-        for subscriber in db.query(Subscriber)
-        .filter(Subscriber.id.in_(actor_ids))
-        .all()
-    }
-    actors.update(
-        {
-            str(user.id): user
-            for user in db.query(SystemUser).filter(SystemUser.id.in_(actor_ids)).all()
-        }
-    )
+        if _is_user_actor(actor_type):
+            user_ids.add(normalized)
+        elif _is_api_key_actor(actor_type):
+            api_key_ids.add(normalized)
+    actors: dict[str, object] = {}
+    if user_ids:
+        actors.update(
+            {
+                str(subscriber.id): subscriber
+                for subscriber in db.query(Subscriber)
+                .filter(Subscriber.id.in_(user_ids))
+                .all()
+            }
+        )
+        actors.update(
+            {
+                str(user.id): user
+                for user in db.query(SystemUser)
+                .filter(SystemUser.id.in_(user_ids))
+                .all()
+            }
+        )
+    if api_key_ids:
+        actors.update(
+            {
+                str(key.id): key
+                for key in db.query(ApiKey).filter(ApiKey.id.in_(api_key_ids)).all()
+            }
+        )
     return actors
 
 
@@ -542,19 +580,64 @@ def _is_user_actor(actor_type) -> bool:
     return actor_type in {AuditActorType.user, AuditActorType.user.value, "user"}
 
 
+def _is_api_key_actor(actor_type) -> bool:
+    return actor_type in {
+        AuditActorType.api_key,
+        AuditActorType.api_key.value,
+        "api_key",
+    }
+
+
+def _label_from_actor_object(actor: object) -> str | None:
+    """A human label for a resolved actor row (person or API key)."""
+    if actor is None:
+        return None
+    label = getattr(actor, "label", None)  # ApiKey
+    if label:
+        return str(label)
+    display_name = getattr(actor, "display_name", None)
+    if display_name:
+        return str(display_name)
+    first = str(getattr(actor, "first_name", "") or "").strip()
+    last = str(getattr(actor, "last_name", "") or "").strip()
+    full = f"{first} {last}".strip()
+    return full or getattr(actor, "email", None)
+
+
+def _resolve_actor_label_from_db(db, actor_id, actor_type) -> str | None:
+    """Look up a human label for an actor id at write time.
+
+    Handles the actor types whose id is an opaque UUID (user, api_key). Service
+    actors already carry a readable id (e.g. "system:outage-classifier"), so
+    they are left to display as-is.
+    """
+    if db is None or not actor_id:
+        return None
+    try:
+        pk = UUID(str(actor_id))
+    except (TypeError, ValueError):
+        return None
+    if _is_api_key_actor(actor_type):
+        return _label_from_actor_object(db.get(ApiKey, pk))
+    if _is_user_actor(actor_type):
+        return _label_from_actor_object(
+            db.get(SystemUser, pk)
+        ) or _label_from_actor_object(db.get(Subscriber, pk))
+    return None
+
+
 def _resolve_actor_name(event, subscribers: dict[str, object]) -> str:
+    # Prefer the label stored at write time — it is authoritative and survives
+    # deletion of the actor. Live resolution below only backfills older rows.
+    stored_label = getattr(event, "actor_label", None)
+    if stored_label:
+        return str(stored_label)
     actor_id = getattr(event, "actor_id", None)
     actor_type = getattr(event, "actor_type", None)
-    if actor_id and _is_user_actor(actor_type):
-        actor = subscribers.get(str(actor_id))
-        if actor:
-            actor_name = (
-                getattr(actor, "display_name", None)
-                or f"{getattr(actor, 'first_name', '')} {getattr(actor, 'last_name', '')}".strip()
-                or getattr(actor, "email", None)
-            )
-            if actor_name:
-                return actor_name
+    if actor_id and (_is_user_actor(actor_type) or _is_api_key_actor(actor_type)):
+        label = _label_from_actor_object(subscribers.get(str(actor_id)))
+        if label:
+            return label
         metadata = getattr(event, "metadata_", None) or {}
         return (
             metadata.get("actor_name") or metadata.get("actor_email") or str(actor_id)
