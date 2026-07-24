@@ -63,6 +63,7 @@ class GatewayHealth:
     capability_ready: bool
     lifecycle_ready: bool
     missing_capabilities: tuple[str, ...]
+    readiness_errors: tuple[str, ...]
     installation_id: UUID | None
     capability_binding_id: UUID | None
     presentment_priority: int
@@ -165,7 +166,12 @@ def provider_health(db: Session) -> list[GatewayHealth]:
             if len(installation_rows) == 1:
                 installation = installation_rows[0]
         missing_capabilities = _missing_capabilities(db, installation)
-        capability_ready = not missing_capabilities
+        readiness_errors = (
+            installations.runtime_readiness_errors(installation)
+            if installation is not None
+            else ()
+        )
+        capability_ready = not missing_capabilities and not readiness_errors
         lifecycle_missing = [
             capability_id
             for capability_id in missing_capabilities
@@ -175,6 +181,7 @@ def provider_health(db: Session) -> list[GatewayHealth]:
             installation
             and installation.state == IntegrationInstallationState.enabled.value
             and not lifecycle_missing
+            and not readiness_errors
         )
         if len(providers) > 1:
             health = GatewayHealthState.ambiguous
@@ -195,6 +202,13 @@ def provider_health(db: Session) -> list[GatewayHealth]:
         elif installation.state != IntegrationInstallationState.enabled.value:
             health = GatewayHealthState.disabled
             health_label = "Gateway not enabled"
+        elif readiness_errors:
+            health = GatewayHealthState.misconfigured
+            health_label = (
+                "Installation definition changed"
+                if "definition_mismatch" in readiness_errors
+                else "Installation configuration incomplete"
+            )
         elif not capability_ready:
             health = GatewayHealthState.misconfigured
             health_label = "Capability bundle incomplete"
@@ -217,6 +231,7 @@ def provider_health(db: Session) -> list[GatewayHealth]:
                 capability_ready=capability_ready,
                 lifecycle_ready=lifecycle_ready,
                 missing_capabilities=tuple(missing_capabilities),
+                readiness_errors=readiness_errors,
                 installation_id=installation.id if installation else None,
                 capability_binding_id=intent_binding.id if intent_binding else None,
                 presentment_priority=_presentment_priority(intent_binding),
