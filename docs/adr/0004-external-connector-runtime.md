@@ -110,23 +110,55 @@ executable, and says so with a typed error. This is deliberate: a half-connected
 tier that silently degrades to in-process execution would defeat the isolation
 the tier exists to provide.
 
+## Resolved decisions
+
+1. **Container runtime and privilege model** (was blocking Phase 3). *Resolved
+   2026-07-24: rootless Podman supervised by systemd, on the existing prod
+   host.* Each connector operation runs as a short-lived rootless Podman
+   container launched and torn down by a systemd unit acting as the supervisor.
+
+   Rationale. The failure this tier exists to prevent is a connector reaching a
+   privileged container socket and gaining host root. Rootless Podman removes
+   that path structurally rather than by configuration: there is no long-lived
+   root daemon or socket to steal, and container-root maps through a user
+   namespace to an unprivileged host UID, so even a container escape lands
+   unprivileged. A socket-owning supervisor over a root Docker daemon was
+   rejected because it keeps the root daemon and makes our own flag-setting the
+   single point of failure. It fits the current scale: systemd is already
+   present, and "launch, run one operation, tear down" is Podman's model, with
+   no new orchestration layer.
+
+   Scope and escalation. This is sized for **first-party** connectors —
+   Dotmac's own code decoupled from Sub's deploy cycle. It shares a kernel with
+   the payments workload, which is acceptable when the threat is a bug rather
+   than an adversary. Running genuinely untrusted third-party connector code
+   requires escalation recorded as a future decision: a dedicated runner host
+   for blast-radius isolation, and microVM isolation (Kata or Firecracker) so
+   each connector gets its own kernel. Escalation is deliberate, not a default;
+   the same build path supports it by moving the supervising systemd slice to a
+   dedicated host.
+
+   Consequences for later phases. Phase 3 targets the rootless Podman transport
+   directly. Phase 4 egress enforcement must use rootless networking
+   (pasta/slirp4netns) or an egress proxy rather than a bridged Docker network.
+   Secret material is delivered to a container via a tmpfs-backed file
+   descriptor or `podman secret`, never argv and never baked into the image;
+   rootless execution makes any leak far less dangerous because the holder is
+   unprivileged.
+
 ## Open decisions
 
 These are recorded as unresolved rather than assumed, and each blocks a later
 phase rather than Phase 1.
 
-1. **Container runtime and privilege model** (blocks Phase 3). Mounting a
-   Docker socket into any component is root-equivalent on the host and would
-   hand a connector authority over the machine that is meant to contain it.
-   Rootless Podman, a dedicated runner host, and a trusted supervisor that owns
-   the socket are the candidates; they differ materially in operational cost.
-2. **First external connector** (blocks Phase 6). Flutterwave v4 delivers real
+1. **First external connector** (blocks Phase 6). Flutterwave v4 delivers real
    value but couples a payment integration to a new execution path. A trivial
    connector first proves the rails at lower risk.
-3. **SDK scope** (blocks Phase 2). A Python-only SDK matches the current stack.
-   A language-agnostic contract is only worth its cost if Dotmac intends to run
-   connectors it did not write.
-4. **Built-in connectors currently execute in web processes.** The design
+2. **SDK scope** (blocks the SDK half of Phase 2). A Python-only SDK matches the
+   current stack. A language-agnostic contract is only worth its cost if Dotmac
+   intends to run connectors it did not write — the same trust question that
+   sets the escalation ceiling in resolved decision 1.
+3. **Built-in connectors currently execute in web processes.** The design
    states built-in connectors "execute in integration worker processes rather
    than FastAPI web processes". They do not: interactive capability calls such
    as payment public-key retrieval and connection validation run inline in
