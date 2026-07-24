@@ -24,10 +24,8 @@ from app.models.integration_platform import (
     IntegrationInstallation,
     IntegrationInstallationState,
 )
-from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
-from app.services import billing as billing_service
 from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import operational_checks as operational_checks_service
@@ -37,11 +35,6 @@ from app.services.integrations import registry as integration_registry
 from app.services.integrations.runtime_execution import (
     build_execution_context,
     validate_connection,
-)
-from app.services.payment_provider_events import (
-    PaymentProviderEventQuery,
-    ProviderEventOrderBy,
-    ProviderEventOrderDirection,
 )
 from app.validators.forms import parse_uuid
 
@@ -301,7 +294,7 @@ def build_marketplace_data(db) -> dict[str, object]:
                     "/admin/integrations/whatsapp"
                     if entry.key == "whatsapp"
                     else (
-                        "/admin/billing/payment-providers"
+                        f"/admin/integrations/payment-gateways/{entry.key}"
                         if entry.key in {"paystack", "flutterwave"}
                         else None
                     )
@@ -326,7 +319,7 @@ def _installation_manage_url(installation: IntegrationInstallation) -> str:
     if installation.connector_key == "whatsapp":
         return "/admin/integrations/whatsapp"
     if installation.connector_key in {"paystack", "flutterwave"}:
-        return "/admin/billing/payment-providers"
+        return f"/admin/integrations/payment-gateways/{installation.connector_key}"
     return "/admin/integrations/jobs"
 
 
@@ -947,90 +940,3 @@ def create_job(
         is_active=is_active,
     )
     return integration_service.integration_jobs.create(db, payload)
-
-
-def provider_form_options(db) -> dict[str, object]:
-    from app.models.billing import PaymentProviderType
-
-    return {"provider_types": [t.value for t in PaymentProviderType]}
-
-
-def provider_error_state(
-    db,
-    *,
-    name: str,
-    provider_type: str,
-    notes: str | None,
-    is_active: bool,
-) -> dict[str, object]:
-    return {
-        **provider_form_options(db),
-        "form": {
-            "name": name,
-            "provider_type": provider_type,
-            "notes": notes or "",
-            "is_active": is_active,
-        },
-    }
-
-
-def create_provider(
-    db,
-    *,
-    name: str,
-    provider_type: str,
-    notes: str | None,
-    is_active: bool,
-):
-    from app.models.billing import PaymentProviderType
-
-    payload = PaymentProviderCreate(
-        name=name.strip(),
-        provider_type=validate_enum(
-            provider_type, PaymentProviderType, "provider_type"
-        ),
-        notes=notes.strip() if notes else None,
-        is_active=is_active,
-    )
-    return billing_service.payment_providers.create(db, payload)
-
-
-def build_providers_list_data(db) -> dict[str, object]:
-    providers = billing_service.payment_providers.list_all(
-        db=db,
-        order_by="name",
-        order_dir="asc",
-        limit=100,
-        offset=0,
-    )
-    by_type: dict[str, int] = {}
-    stats = {
-        "total": len(providers),
-        "active": sum(1 for p in providers if p.is_active),
-        "by_type": by_type,
-    }
-    for provider in providers:
-        ptype = (
-            provider.provider_type.value
-            if hasattr(provider.provider_type, "value")
-            else str(provider.provider_type or "manual")
-        )
-        by_type[ptype] = by_type.get(ptype, 0) + 1
-    return {
-        "providers": providers,
-        "stats": stats,
-    }
-
-
-def build_provider_detail_data(db, *, provider_id: str) -> dict[str, object]:
-    provider = billing_service.payment_providers.get(db, provider_id)
-    events = billing_service.payment_provider_events.list(
-        db,
-        PaymentProviderEventQuery(
-            provider_id=provider.id,
-            order_by=ProviderEventOrderBy.received_at,
-            order_direction=ProviderEventOrderDirection.descending,
-            limit=50,
-        ),
-    )
-    return {"provider": provider, "events": events}

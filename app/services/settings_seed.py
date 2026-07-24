@@ -4,7 +4,7 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
 from app.services.domain_settings import (
@@ -1479,18 +1479,6 @@ def seed_radius_settings(db: Session) -> None:
 
 
 def seed_billing_settings(db: Session) -> None:
-    legacy_provider = (
-        db.query(DomainSetting)
-        .filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "default_payment_provider_type",
-            DomainSetting.is_active.is_(True),
-        )
-        .first()
-    )
-    legacy_primary = str(getattr(legacy_provider, "value_text", "") or "").strip()
-    if legacy_primary not in {"paystack", "flutterwave"}:
-        legacy_primary = "paystack"
     billing_settings.ensure_by_key(
         db,
         key="default_currency",
@@ -1521,32 +1509,6 @@ def seed_billing_settings(db: Session) -> None:
         key="default_payment_method_type",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_METHOD_TYPE", "card"),
-    )
-    payment_failover_enabled_raw = os.getenv(
-        "BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true"
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_failover_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=payment_failover_enabled_raw,
-        value_json=payment_failover_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_primary_provider",
-        value_type=SettingValueType.string,
-        value_text=os.getenv(
-            "BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", legacy_primary
-        ),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_secondary_provider",
-        value_type=SettingValueType.string,
-        value_text=os.getenv(
-            "BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"
-        ),
     )
     billing_settings.ensure_by_key(
         db,

@@ -141,7 +141,11 @@ def start_consolidated_payment(
     if requested_amount <= Decimal("0.00"):
         raise ValueError("Payment amount must be greater than 0")
 
-    route = select_checkout_provider(db, provider)
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    route = select_checkout_provider(
+        db,
+        "paystack" if selected_payment_method_id else provider,
+    )
     provider_type = route.provider_type.value
 
     # Card ownership (Layer 3 #329): subscriber-backed reseller login keys cards
@@ -149,7 +153,6 @@ def start_consolidated_payment(
     # reseller org.
     use_reseller_cards = not login_subscriber_id
 
-    selected_payment_method_id = str(payment_method_id or "").strip() or None
     selected_payment_token = None
     if selected_payment_method_id:
         if provider_type != "paystack":
@@ -171,7 +174,9 @@ def start_consolidated_payment(
             raise ValueError("Payment method is not chargeable")
 
     gateway_context = payment_gateway_adapter.build_context(
-        db, provider_type=provider_type
+        db,
+        provider_type=provider_type,
+        capability_binding_id=route.capability_binding_id,
     )
 
     billing_account_id = ba.id
@@ -186,7 +191,8 @@ def start_consolidated_payment(
             reseller_id=reseller_uuid,
             reference=gateway_context.reference,
             provider_type=gateway_context.provider_type,
-            provider_id=coerce_uuid(route.provider_id),
+            provider_id=route.provider_id,
+            capability_binding_id=route.capability_binding_id,
             requested_amount=requested_amount,
             payment_method_id=(
                 coerce_uuid(selected_payment_method_id)
@@ -235,6 +241,7 @@ def start_consolidated_payment(
                 ),
                 reference=intent_result.reference,
                 metadata=checkout_metadata,
+                checkout_binding_id=route.capability_binding_id,
             )
         except Exception:
             db_session_adapter.release_read_transaction(db)
@@ -307,7 +314,12 @@ def verify_and_record_consolidated_payment(
         }
 
     tx = payment_gateway_adapter.verify(
-        db, provider_type=provider_type, reference=reference
+        db,
+        provider_type=provider_type,
+        reference=reference,
+        capability_binding_id=(
+            str(intent.capability_binding_id) if intent.capability_binding_id else None
+        ),
     )
     amount = round_money(tx.amount)
     external_id = tx.external_id
