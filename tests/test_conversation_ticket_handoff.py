@@ -30,9 +30,12 @@ def customer_id(db_session) -> uuid.UUID:
         reseller_id=_default_reseller_id(db_session),
     )
     db_session.add(row)
-    db_session.commit()
+    # Capture before commit: expire_on_commit means reading `.id` afterwards
+    # would re-open a transaction, and owner commands refuse a session that is
+    # already in one.
+    db_session.flush()
     captured = row.id
-    db_session.rollback()
+    db_session.commit()
     return captured
 
 
@@ -45,9 +48,9 @@ def _conversation_id(db_session, *, subscriber_id=None, status=None) -> uuid.UUI
         subscriber_id=subscriber_id,
     )
     db_session.add(conversation)
-    db_session.commit()
+    db_session.flush()
     captured = conversation.id
-    db_session.rollback()
+    db_session.commit()
     return captured
 
 
@@ -91,8 +94,6 @@ def test_reissuing_the_same_intent_replays(db_session, customer_id):
 
     first = handoff.issue_ticket(db_session, _command(conversation_id, actor_id=actor))
     first_ticket_id = first.ticket.id
-    db_session.rollback()
-
     second = handoff.issue_ticket(db_session, _command(conversation_id, actor_id=actor))
 
     assert second.replayed is True
@@ -106,7 +107,6 @@ def test_a_different_intent_opens_a_second_ticket(db_session, customer_id):
     actor = uuid.uuid4()
 
     handoff.issue_ticket(db_session, _command(conversation_id, actor_id=actor))
-    db_session.rollback()
     handoff.issue_ticket(
         db_session,
         _command(conversation_id, actor_id=actor, title="Separate billing dispute"),
