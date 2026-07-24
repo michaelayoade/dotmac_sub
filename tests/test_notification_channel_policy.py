@@ -42,6 +42,9 @@ def _setting(db_session, key: str, *, value_text=None, value_json=None) -> None:
 
 
 def test_channel_policy_falls_back_to_caller_defaults(db_session):
+    # An explicit empty policy row overrides the seeded default, so the final
+    # caller-default fallback path is what runs here.
+    _setting(db_session, "notification_channel_policy", value_json={})
     channels = resolve_notification_channels(
         db_session,
         template_code="subscription_activated",
@@ -50,6 +53,30 @@ def test_channel_policy_falls_back_to_caller_defaults(db_session):
     )
 
     assert channels == (NotificationChannel.email, NotificationChannel.sms)
+
+
+def test_seeded_category_default_drives_channels_without_operator_config(db_session):
+    # No policy row: the seeded spec default routes a service event to
+    # email+whatsapp, so a fresh deploy is multi-channel, not email-only, and
+    # channel selection is owned by the policy rather than the event spec.
+    channels = resolve_notification_channels(
+        db_session,
+        template_code="subscription_activated",
+        category="service",
+        default_channels=(NotificationChannel.email,),
+    )
+    assert channels == (NotificationChannel.email, NotificationChannel.whatsapp)
+
+
+def test_seeded_policy_never_routes_to_retired_sms(db_session):
+    for category in ("account", "billing", "service", "support", "usage"):
+        channels = resolve_notification_channels(
+            db_session,
+            template_code="x",
+            category=category,
+            default_channels=(NotificationChannel.email,),
+        )
+        assert NotificationChannel.sms not in channels
 
 
 def test_channel_policy_uses_category_policy(db_session):

@@ -40,6 +40,13 @@ CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
     NotificationChannel.webhook: "webhook",
 }
 
+#: The single system-wide fallback channel. Real routing is owned by
+#: communications.channel_policy (the admin matrix); this is only the last
+#: resort so an unconfigured system still reaches the customer rather than
+#: going silent. Specs declare a notification, NOT its channels.
+SYSTEM_DEFAULT_CHANNELS: tuple[NotificationChannel, ...] = (NotificationChannel.email,)
+
+
 _UNRESOLVED_TEMPLATE_RE = re.compile(r"\{\{?\s*[a-zA-Z0-9_]+\s*\}?\}")
 
 
@@ -65,7 +72,6 @@ def _event_channels(
 class EventNotificationSpec:
     template_code: str
     category: str
-    channels: tuple[NotificationChannel, ...]
     subject: str
     body: str
 
@@ -79,14 +85,12 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.outage_area: EventNotificationSpec(
         template_code="outage_area",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="Service interruption in your area",
         body="Dear {subscriber_name},\n\n{message}",
     ),
     EventType.outage_last_mile: EventNotificationSpec(
         template_code="outage_last_mile",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="About your connection",
         body="Dear {subscriber_name},\n\n{message}",
     ),
@@ -98,7 +102,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.customer_ticket_created: EventNotificationSpec(
         template_code="customer_ticket_created",
         category="support",
-        channels=(NotificationChannel.email,),
         subject="We received your request ({ticket_number})",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -110,7 +113,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscriber_created: EventNotificationSpec(
         template_code="subscriber_created",
         category="account",
-        channels=(NotificationChannel.email,),
         subject="Your customer account is ready",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -122,7 +124,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscriber_updated: EventNotificationSpec(
         template_code="subscriber_updated",
         category="account",
-        channels=(NotificationChannel.email,),
         subject="Your account profile was updated",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -134,7 +135,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_created: EventNotificationSpec(
         template_code="subscription_created",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your new service subscription",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -146,7 +146,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_activated: EventNotificationSpec(
         template_code="subscription_activated",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your service is now active",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -156,7 +155,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_suspended: EventNotificationSpec(
         template_code="subscription_suspended",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Service suspended",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -167,7 +165,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_resumed: EventNotificationSpec(
         template_code="subscription_resumed",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your service has been resumed",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -177,7 +174,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_canceled: EventNotificationSpec(
         template_code="subscription_canceled",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="Subscription canceled",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -188,7 +184,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_expiring: EventNotificationSpec(
         template_code="subscription_expiring",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your subscription is expiring soon",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -199,7 +194,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_expired: EventNotificationSpec(
         template_code="subscription_expired",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your subscription has expired",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -210,7 +204,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_suspension_warning: EventNotificationSpec(
         template_code="suspension_warning",
         category="billing",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="A reminder about invoice #{invoice_number}",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -222,7 +215,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_upgraded: EventNotificationSpec(
         template_code="subscription_upgraded",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your plan has been upgraded",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -232,7 +224,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.subscription_downgraded: EventNotificationSpec(
         template_code="subscription_downgraded",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your plan has been updated",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -242,7 +233,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.invoice_created: EventNotificationSpec(
         template_code="invoice_created",
         category="billing",
-        channels=(NotificationChannel.email,),
         subject="New invoice #{invoice_number}",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -253,7 +243,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.invoice_sent: EventNotificationSpec(
         template_code="invoice_sent",
         category="billing",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Invoice #{invoice_number} — payment due {due_date}",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -264,7 +253,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.invoice_paid: EventNotificationSpec(
         template_code="invoice_paid",
         category="billing",
-        channels=(NotificationChannel.email,),
         subject="Invoice #{invoice_number} has been paid",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -275,7 +263,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.invoice_overdue: EventNotificationSpec(
         template_code="invoice_overdue",
         category="billing",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Invoice #{invoice_number} is now due",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -287,7 +274,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.payment_received: EventNotificationSpec(
         template_code="payment_received",
         category="billing",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Payment receipt {receipt_number}",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -299,7 +285,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.prepaid_service_renewed: EventNotificationSpec(
         template_code="prepaid_service_renewed",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="Your {offer_name} service is renewed",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -311,7 +296,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.payment_failed: EventNotificationSpec(
         template_code="payment_failed",
         category="billing",
-        channels=(NotificationChannel.email,),
         subject="Payment failed — please retry",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -322,7 +306,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.payment_refunded: EventNotificationSpec(
         template_code="payment_refunded",
         category="billing",
-        channels=(NotificationChannel.email,),
         subject="Payment refunded",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -332,7 +315,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.payment_reversed: EventNotificationSpec(
         template_code="payment_reversed",
         category="billing",
-        channels=(NotificationChannel.email,),
         subject="Payment reversed",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -343,7 +325,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.referral_reward_issued: EventNotificationSpec(
         template_code="referral_reward_issued",
         category="billing",
-        channels=(NotificationChannel.push,),
         subject="You earned a referral reward",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -353,7 +334,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.arrangement_defaulted: EventNotificationSpec(
         template_code="arrangement_defaulted",
         category="billing",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Update on your payment arrangement",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -366,7 +346,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.usage_warning: EventNotificationSpec(
         template_code="usage_warning",
         category="usage",
-        channels=(NotificationChannel.push, NotificationChannel.email),
         subject="Data usage warning — {usage_percent}% used",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -376,7 +355,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.usage_exhausted: EventNotificationSpec(
         template_code="usage_exhausted",
         category="usage",
-        channels=(NotificationChannel.push, NotificationChannel.email),
         subject="Data allowance exhausted",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -386,7 +364,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.service_extended: EventNotificationSpec(
         template_code="service_extended",
         category="billing",
-        channels=(NotificationChannel.push, NotificationChannel.email),
         subject="Your service has been extended",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -397,7 +374,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.addon_expiring: EventNotificationSpec(
         template_code="addon_expiring",
         category="usage",
-        channels=(NotificationChannel.push, NotificationChannel.email),
         subject="Your data bundle expires soon",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -408,7 +384,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.usage_topped_up: EventNotificationSpec(
         template_code="usage_topped_up",
         category="usage",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Top-up received",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -418,7 +393,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.provisioning_completed: EventNotificationSpec(
         template_code="provisioning_completed",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Service installation complete",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -428,7 +402,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.provisioning_failed: EventNotificationSpec(
         template_code="provisioning_failed",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="Service installation issue",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -439,7 +412,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.service_order_created: EventNotificationSpec(
         template_code="service_order_created",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your service order has been created",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -449,7 +421,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.service_order_assigned: EventNotificationSpec(
         template_code="service_order_assigned",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your service order is in progress",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -459,7 +430,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.service_order_completed: EventNotificationSpec(
         template_code="service_order_completed",
         category="service",
-        channels=(NotificationChannel.email, NotificationChannel.sms),
         subject="Your service order is complete",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -469,7 +439,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.ont_offline: EventNotificationSpec(
         template_code="ont_offline",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="We've noticed an issue with your connection",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -482,7 +451,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.ont_online: EventNotificationSpec(
         template_code="ont_online",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="Your connection is back online",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -494,7 +462,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.ont_signal_degraded: EventNotificationSpec(
         template_code="ont_signal_degraded",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="We're checking on your connection quality",
         body=(
             "Dear {subscriber_name},\n\n"
@@ -506,7 +473,6 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
     EventType.ont_discovered: EventNotificationSpec(
         template_code="ont_discovered",
         category="service",
-        channels=(NotificationChannel.email,),
         subject="New ONT discovered — {device_serial}",
         body="A new ONT has been discovered on the network (internal notification).",
     ),
@@ -543,7 +509,7 @@ def event_catalogue() -> tuple[EventCatalogueEntry, ...]:
                     event_type=event_type.value,
                     template_code=spec.template_code,
                     category=spec.category,
-                    default_channels=tuple(channel.value for channel in spec.channels),
+                    default_channels=tuple(c.value for c in SYSTEM_DEFAULT_CHANNELS),
                     subject=spec.subject,
                 )
                 for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
@@ -604,7 +570,7 @@ class NotificationHandler:
             db,
             spec.template_code,
             spec.category,
-            spec.channels,
+            SYSTEM_DEFAULT_CHANNELS,
         ):
             template = templates_by_channel.get(channel)
             if template is None:

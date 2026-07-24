@@ -654,7 +654,24 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="notification_channel_policy",
         env_var=None,
         value_type=SettingValueType.json,
-        default={},
+        # Channel selection is owned here (communications.channel_policy), not in
+        # the event specs. This seeded default ships sensible multi-channel
+        # routing per category so a fresh/unconfigured deploy is not email-only;
+        # an operator edit in the admin matrix writes a DB row that overrides it.
+        # SMS is intentionally absent — it is retired and disabled; a future SMS
+        # plugin adds it back here per category. email is the always-available
+        # base; whatsapp is the approved, delivering channel.
+        default={
+            "default": ["email"],
+            "categories": {
+                "account": ["email"],
+                "billing": ["email", "whatsapp"],
+                "service": ["email", "whatsapp"],
+                "support": ["email", "whatsapp", "push"],
+                "usage": ["email", "whatsapp"],
+            },
+            "events": {},
+        },
         label="Notification channel policy: {default: [], categories: {}, events: {}}",
     ),
     SettingSpec(

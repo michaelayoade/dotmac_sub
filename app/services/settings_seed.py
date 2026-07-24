@@ -1053,7 +1053,15 @@ def _seed_missing_notification_templates(db: Session) -> int:
     from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
     from app.services.events.types import EventType
 
+    # Event specs no longer declare channels — channel selection is owned by
+    # communications.channel_policy. Seed an editable template for each channel
+    # the seeded billing-category policy can route this reward to, so a routed
+    # channel is never missing its template. Operators add more via the UI.
     referral_reward_spec = EVENT_NOTIFICATION_SPECS[EventType.referral_reward_issued]
+    referral_template_channels = (
+        NotificationChannel.email,
+        NotificationChannel.whatsapp,
+    )
     templates.extend(
         {
             "code": referral_reward_spec.template_code,
@@ -1062,7 +1070,7 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "subject": referral_reward_spec.subject,
             "body": referral_reward_spec.body,
         }
-        for channel in referral_reward_spec.channels
+        for channel in referral_template_channels
     )
 
     created = 0
