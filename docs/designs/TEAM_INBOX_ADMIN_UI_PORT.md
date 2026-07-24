@@ -1,10 +1,15 @@
 # Team Inbox: CRM import triage and the single build ordering
 
-Status: triage complete. Slices 1, 2 and the read-only two-thirds of slice 3 are
-delivered on `feat/inbox-reconnect-and-context` (not merged, no PR opened).
-The conversation → ticket handoff is the one piece of slice 3 still open; it
-needs a migration and a full SOT registry contract, so it belongs in its own
-branch. See §5 for per-slice status.
+Status: triage complete.
+
+- `feat/inbox-reconnect-and-context` — slices 1, 2 and the two read-only edges
+  of slice 3. Green on seabone. Not merged, no PR opened.
+- `feat/conversation-ticket-handoff` — stacked on the above; the conversation →
+  ticket handoff. Structurally complete and its boundary tests pass, but its
+  behaviour tests are **blocked on an ownership decision** about nesting the
+  Ticket create command. See §5, slice 3.
+
+See §5 for per-slice status.
 
 Two things prompted this document: 21 CRM web files were copied into
 `app/web/admin/`, and the question of what it takes to make sub's inbox the only
@@ -207,15 +212,45 @@ The demo buttons that are actually the edges.
   not accept a foreign writer, so this is built natively rather than ported from
   CRM's `resolve-with-ticket-handoff` / `resolve-with-lead`.
 
-  Deliberately **not** bundled into the current branch. It requires: a migration
-  adding `origin_conversation_id` to `support_tickets` (FK, `ondelete=RESTRICT`,
-  indexed — mirroring `work_order.origin_ticket_id` in migration 382);
-  `Tickets.create` accepting the provenance kwarg the way
-  `work_order_commands.create` accepts `origin_ticket_id`; a ~150-line typed
-  `SOTService` contract in `app/services/sot_relationships.py`; SOT map rows and
-  a numbered note; a boundary test; and the UI swap from `submitDemoTicket()`.
-  That is a PR in its own right, and a half-migrated ownership boundary is
-  exactly what the standard forbids.
+  Built on branch `feat/conversation-ticket-handoff`: migration 418, model
+  column, keyword-only provenance on the create command, coordinator service,
+  registry contract, map rows and note, route, UI swap, 10 behaviour tests and
+  6 boundary tests. **Boundary tests and the registry contract pass. The
+  behaviour tests are blocked**, and not by a bug in the new code:
+
+  > `OwnerCommandError: A public owner command cannot run inside another owner
+  > command.`
+
+  `Tickets.create` is decorated `@ticket_owner_command("create")`, which takes
+  the participant path **only when `support.ticket_lifecycle`'s own command is
+  already active**. A different owner — this coordinator — falls through to
+  `execute_owner_command` and is rejected as nested.
+
+  The `ticket_work_order_handoff` precedent never hits this because
+  `work_order_commands.create` is an undecorated function with a `commit=False`
+  participant flag. `support.ticket_lifecycle` exposes no equivalent.
+
+  Three ways forward; the choice is an ownership decision, not an
+  implementation detail:
+
+  1. **Give `Tickets.create` a participant mode** — a `commit=False` flag, or
+     let the decorator participate when any owner command is active. Cleanest,
+     and matches the work-order precedent. Caveat: the decorator fires
+     `_notify_workqueue` only on the root path, so participating would silently
+     skip the workqueue notification — precisely the "owner command swallows
+     advisory side effects" failure mode. The notification would need to move to
+     a post-commit dispatch.
+  2. **Drop the coordinator's own transaction**, letting `Tickets.create` be the
+     root and staging provenance plus audit via `execute_owner_savepoint`.
+     Smaller blast radius, weaker atomicity story for the audit fact.
+  3. **Two-phase** — create the ticket, then attach provenance in a second
+     committed command. Simplest, but leaves a window where a ticket exists
+     without its origin, which is the drift the standard exists to prevent.
+
+  Recommendation: (1), with `_notify_workqueue` moved to post-commit dispatch —
+  the only option preserving one transaction and one writer. It changes
+  `support.ticket_lifecycle` behaviour, so it wants an explicit decision rather
+  than being slipped in from the communications side.
 
 ### Slice 4 — Remaining demo-to-real workflows
 
