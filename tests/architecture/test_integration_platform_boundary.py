@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 from app.services import sot_relationships
+from app.services.integrations.registry import (
+    connector_definitions,
+    supported_connector_definitions,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_ENV = PROJECT_ROOT / "alembic/env.py"
@@ -13,6 +18,7 @@ ACTIVE_MIGRATIONS = PROJECT_ROOT / "alembic/versions"
 DESIGN = PROJECT_ROOT / "docs/designs/INTEGRATION_PLATFORM_SOT.md"
 SOT_MAP = PROJECT_ROOT / "docs/SOT_RELATIONSHIP_MAP.md"
 CONNECTOR_ROOT = PROJECT_ROOT / "app/services/integrations/connectors"
+MANIFEST_PINS = PROJECT_ROOT / "tests/architecture/connector_manifest_pins.json"
 
 RETIRED_PATHS = (
     "app/api/webhooks.py",
@@ -94,6 +100,67 @@ def test_integration_platform_design_records_the_approved_invariants() -> None:
     )
     for contract in required_contracts:
         assert contract in normalized_design
+
+
+def test_connector_versions_are_immutable_reviewed_manifest_pins() -> None:
+    expected = json.loads(_read(MANIFEST_PINS))
+    current = {
+        (definition.key, definition.version, definition.digest)
+        for definition in connector_definitions()
+    }
+    actual = [
+        {
+            "current": (
+                definition.key,
+                definition.version,
+                definition.digest,
+            )
+            in current,
+            "key": definition.key,
+            "manifest_digest": definition.digest,
+            "version": definition.version,
+        }
+        for definition in supported_connector_definitions()
+    ]
+
+    assert actual == expected
+    version_digests: dict[tuple[str, str], set[str]] = {}
+    for definition in supported_connector_definitions():
+        version_digests.setdefault(
+            (definition.key, definition.version),
+            set(),
+        ).add(definition.digest)
+    legacy_collisions = {
+        identity: digests
+        for identity, digests in version_digests.items()
+        if len(digests) > 1
+    }
+    assert legacy_collisions == {
+        (
+            "paystack",
+            "1.0.0",
+        ): {
+            "53791d3e2e06fe1ca128a0e3e8ced86549392af7b6131f61bd21044d71aafc6e",
+            "9f1e314860294696c825d8d49d300df903ced6c319b406f295047d25585e836c",
+        }
+    }
+
+
+def test_manifest_adoption_has_one_owner_and_a_pre_replacement_gate() -> None:
+    installation_owner = _read(
+        PROJECT_ROOT / "app/services/integrations/installations.py"
+    )
+    runtime = _read(PROJECT_ROOT / "app/services/integrations/runtime_execution.py")
+    deploy = _read(PROJECT_ROOT / "scripts/deploy.sh")
+
+    assert "def adopt_installation_manifest(" in installation_owner
+    assert "with_for_update()" in installation_owner
+    assert "require_pinned_connector_definition" in installation_owner
+    assert "require_pinned_connector_definition" in runtime
+    assert "scripts.integrations.verify_manifest_pins" in deploy
+    assert deploy.index("scripts.integrations.verify_manifest_pins") < deploy.index(
+        "Starting warm candidate"
+    )
 
 
 def test_alembic_registry_does_not_import_retired_integration_models() -> None:

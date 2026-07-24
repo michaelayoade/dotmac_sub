@@ -29,7 +29,7 @@ from app.services.integrations.connectors.lead_capture_http import (
 from app.services.integrations.connectors.payment_gateway import PaymentGatewayRunner
 from app.services.integrations.connectors.whatsapp_runtime import WhatsAppRuntimeRunner
 from app.services.integrations.manifest import ConnectorManifest, ConnectorRuntimeType
-from app.services.integrations.registry import require_connector_definition
+from app.services.integrations.registry import require_pinned_connector_definition
 from app.services.integrations.runtime import (
     ConnectorRunner,
     OperationEnvelope,
@@ -187,11 +187,16 @@ def build_execution_context(
     revision = installation.current_config_revision
     if revision is None:
         raise RuntimeExecutionError("current configuration revision is missing")
-    manifest = require_connector_definition(installation.connector_key)
-    if manifest.version != installation.connector_version:
-        raise RuntimeExecutionError("connector version pin differs from deployment")
-    if manifest.digest != installation.manifest_digest:
-        raise RuntimeExecutionError("manifest digest pin differs from deployment")
+    try:
+        manifest = require_pinned_connector_definition(
+            installation.connector_key,
+            version=installation.connector_version,
+            manifest_digest=installation.manifest_digest,
+        )
+    except KeyError as exc:
+        raise RuntimeExecutionError(
+            "connector manifest pin is not available in this deployment"
+        ) from exc
     if manifest.capability(binding.capability_id) is None:
         raise RuntimeExecutionError("binding capability is not declared")
 

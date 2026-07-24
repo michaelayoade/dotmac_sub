@@ -514,3 +514,81 @@ class OntAssignmentCommands:
             action="moved" if not replayed else "replayed",
             replayed=replayed,
         )
+
+
+# ---------------------------------------------------------------------------
+# assigned_at backfill reconciler
+#
+# Active assignments must carry an assigned_at (the future constraint cutover
+# requires it). Some rows are missing it while their identity is already
+# canonical, so the reviewed identity `canonicalize` path rejects them
+# ("already canonical") and `deactivate` is wrong. This owner-side reconciler
+# backfills assigned_at from the assignment's own created_at (its true
+# assignment time) with a preview and a staged audit event per change; it is
+# idempotent and issues no ad-hoc SQL.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AssignedAtDrift:
+    assignment_id: str
+    ont_unit_id: str | None
+    subscription_id: str | None
+    created_at: str | None
+
+
+def _missing_assigned_at_query(db: Session):
+    return (
+        db.query(OntAssignment)
+        .filter(OntAssignment.active.is_(True))
+        .filter(OntAssignment.assigned_at.is_(None))
+        .filter(OntAssignment.created_at.isnot(None))
+        .order_by(OntAssignment.created_at)
+    )
+
+
+def preview_assigned_at_drift(db: Session) -> list[AssignedAtDrift]:
+    """Read-only: active assignments missing ``assigned_at``."""
+    return [
+        AssignedAtDrift(
+            assignment_id=str(a.id),
+            ont_unit_id=str(a.ont_unit_id) if a.ont_unit_id else None,
+            subscription_id=str(a.subscription_id) if a.subscription_id else None,
+            created_at=a.created_at.isoformat() if a.created_at else None,
+        )
+        for a in _missing_assigned_at_query(db).all()
+    ]
+
+
+def reconcile_assigned_at(
+    db: Session, *, actor: str = "reconcile_assigned_at", apply: bool = False
+) -> dict[str, object]:
+    """Backfill ``assigned_at = created_at`` for active assignments missing it.
+
+    Preview by default. With ``apply=True`` it sets ``assigned_at`` from the
+    assignment's own ``created_at`` and stages a
+    ``network.ont_assignment.backfill_assigned_at`` audit event per change.
+    Idempotent — rows that already have ``assigned_at`` are not returned.
+    """
+    rows = _missing_assigned_at_query(db).all()
+    backfilled = 0
+    if apply:
+        for assignment in rows:
+            if assignment.assigned_at is not None or assignment.created_at is None:
+                continue
+            assignment.assigned_at = assignment.created_at
+            stage_audit_event(
+                db,
+                action="network.ont_assignment.backfill_assigned_at",
+                entity_type="ont_assignment",
+                entity_id=str(assignment.id),
+                actor_type=AuditActorType.service,
+                actor_id=actor,
+                metadata={
+                    "assigned_at": assignment.created_at.isoformat(),
+                    "source": "reconcile_assigned_at",
+                },
+            )
+            backfilled += 1
+        db.commit()
+    return {"applied": apply, "candidates": len(rows), "backfilled": backfilled}

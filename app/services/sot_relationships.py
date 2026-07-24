@@ -17834,6 +17834,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.integrations.installations",
                 owns=(
                     "version-pinned integration installation lifecycle",
+                    "explicit integration manifest adoption",
                     "immutable integration configuration revisions",
                     "integration capability grants and bindings",
                 ),
@@ -17848,6 +17849,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     concerns=(
                         ConcernContract(
                             name="version-pinned integration installation lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "deployed connector manifest",
+                                "integration installation protocol",
+                                "canonical integration installation aggregate",
+                            ),
+                            canonical_writer="integration.installations",
+                        ),
+                        ConcernContract(
+                            name="explicit integration manifest adoption",
                             role=OwnerRole.COMMAND_WRITER,
                             input_names=(
                                 "deployed connector manifest",
@@ -17923,12 +17934,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "installation commit boundary completes the unit of work."
                         ),
                         locking=(
-                            "Lifecycle transitions resolve one installation and immutable "
+                            "Lifecycle transitions resolve one installation; manifest "
+                            "adoption locks that installation row and immutable "
                             "configuration revisions serialize by installation revision."
                         ),
                         idempotency=(
                             "Configuration digests replay to an existing immutable revision; "
-                            "capability synchronization converges by capability id."
+                            "capability synchronization converges by capability id; manifest "
+                            "adoption converges by exact target version and digest."
                         ),
                         retries=(
                             "Manifest, secret-reference, or lifecycle violations are "
@@ -17942,6 +17955,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "integration.installations.invalid_configuration",
                             "integration.installations.invalid_secret_reference",
                             "integration.installations.invalid_transition",
+                            "integration.installations.manifest_adoption_incompatible",
+                            "integration.installations.manifest_adoption_scope_invalid",
+                            "integration.installations.stale_manifest_pin",
+                            "integration.installations.target_manifest_not_deployed",
                             "integration.installations.invalid_command_context",
                             "integration.installations.command_contract_violation",
                             "integration.installations.nested_owner_command",
@@ -17953,13 +17970,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         fail_closed_on=(
                             "missing deployed connector version or digest",
+                            "unreviewed, stale, or incompatible manifest adoption",
                             "undeclared or materialized secret value",
                             "ambiguous enabled default capability",
                             "retired or quarantined lifecycle mismatch",
                         ),
                     ),
                     events=EventContract(
-                        event_types=("integration.installation.lifecycle.v1",),
+                        event_types=(
+                            "integration.installation.lifecycle.v1",
+                            "integration.installation.manifest_adopted",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
@@ -17981,15 +18002,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         new_owner="integration.installations",
                         verification=(
                             "Manifest pin, immutable revision, secret reference, lifecycle, "
-                            "capability, API, and migration cutover tests."
+                            "explicit adoption, deployment readiness, graceful gateway "
+                            "availability, capability, API, and migration cutover tests."
                         ),
                         cutover_gate=(
-                            "Every executable connector resolves an enabled version-pinned "
-                            "capability binding before runtime execution."
+                            "Every enabled installation pin resolves to a current or bounded "
+                            "historical deployed definition before service replacement; "
+                            "operators explicitly adopt a reviewed current version/digest."
                         ),
                         fallback_retirement=(
                             "Legacy connector configs, hooks, provider secret columns, and "
-                            "arbitrary registration paths are removed by revision 380."
+                            "arbitrary registration paths are removed by revision 380; a "
+                            "historical definition is removed only after the deployment "
+                            "readiness report proves no enabled installation pins it."
                         ),
                     ),
                     steward="platform integrations",
@@ -18000,6 +18025,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_integration_installations.py",
                         "tests/test_integration_installation_api.py",
+                        "tests/test_integration_manifest_deployment_gate.py",
                         "tests/architecture/test_integration_platform_boundary.py",
                     ),
                 ),
