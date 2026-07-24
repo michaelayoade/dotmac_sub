@@ -661,20 +661,24 @@ SETTINGS_SPECS: list[SettingSpec] = [
         # SMS is intentionally absent — it is retired and disabled; a future SMS
         # plugin adds it back here per category. email is the always-available
         # base; whatsapp is the approved, delivering channel.
-        # No global "default": a global default would intercept callers that
-        # pass their own sensible fallback channels (e.g. FUP enforcement routes
-        # category="fup" with per-kind push channels) before their default is
-        # reached. Category defaults cover the event-spec categories; event
-        # overrides preserve the handful of push-native events whose channels a
-        # category default cannot express.
+        # EVENT-level seed only — deliberately no global default and no category
+        # defaults. Both of those tiers outrank a caller's own default_channels,
+        # and several services pass deliberate per-call channel sets under
+        # common categories: FUP enforcement (category="fup", per-kind push),
+        # customer_experience_communications and the support resolution
+        # confirmation (category="service", whatsapp+push). A category seed
+        # silently hijacked those and dropped push.
+        #
+        # Event entries are keyed by template_code, so they can only affect the
+        # specific event-spec notifications they name and can never intercept
+        # another caller. These reproduce the exact channels those five
+        # push-native specs declared before channels moved out of the specs, so
+        # behaviour is unchanged. Every other spec event resolves to the email
+        # system fallback until an operator widens it in the admin matrix —
+        # which is where adding WhatsApp broadly belongs, as a deliberate
+        # decision rather than a blanket default. SMS appears nowhere: it is
+        # retired and disabled.
         default={
-            "categories": {
-                "account": ["email"],
-                "billing": ["email", "whatsapp"],
-                "service": ["email", "whatsapp"],
-                "support": ["email", "whatsapp", "push"],
-                "usage": ["email", "whatsapp"],
-            },
             "events": {
                 "referral_reward_issued": ["push"],
                 "usage_warning": ["push", "email"],

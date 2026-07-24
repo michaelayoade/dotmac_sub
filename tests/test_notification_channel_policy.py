@@ -55,17 +55,41 @@ def test_channel_policy_falls_back_to_caller_defaults(db_session):
     assert channels == (NotificationChannel.email, NotificationChannel.sms)
 
 
-def test_seeded_category_default_drives_channels_without_operator_config(db_session):
-    # No policy row: the seeded spec default routes a service event to
-    # email+whatsapp, so a fresh deploy is multi-channel, not email-only, and
-    # channel selection is owned by the policy rather than the event spec.
+def test_seed_preserves_push_native_events(db_session):
+    # The seed carries event-level entries only, reproducing the channels these
+    # specs declared before channels moved out of the specs.
     channels = resolve_notification_channels(
         db_session,
-        template_code="subscription_activated",
-        category="service",
+        template_code="usage_warning",
+        category="usage",
         default_channels=(NotificationChannel.email,),
     )
-    assert channels == (NotificationChannel.email, NotificationChannel.whatsapp)
+    assert channels == (NotificationChannel.push, NotificationChannel.email)
+
+
+def test_seed_never_overrides_a_callers_own_default_channels(db_session):
+    """The seed must not hijack callers that pass deliberate channels.
+
+    FUP enforcement, customer_experience_communications and the support
+    resolution confirmation all supply their own per-call channel sets. A
+    global or category seed outranks caller defaults and silently dropped
+    their push channel; event-level entries cannot.
+    """
+    channels = resolve_notification_channels(
+        db_session,
+        template_code="support_ticket_resolution_confirmation",
+        category="service",
+        default_channels=(
+            NotificationChannel.email,
+            NotificationChannel.whatsapp,
+            NotificationChannel.push,
+        ),
+    )
+    assert channels == (
+        NotificationChannel.email,
+        NotificationChannel.whatsapp,
+        NotificationChannel.push,
+    )
 
 
 def test_seeded_policy_never_routes_to_retired_sms(db_session):
