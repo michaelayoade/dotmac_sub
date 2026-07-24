@@ -23,6 +23,7 @@
           hx-trigger="submit, change from:select"
           hx-push-url="true"
           hx-sync="this:replace"
+          @typeahead:selected="$el.requestSubmit()"
           @htmx:before-request="clearSelection()"
           class="grid gap-3 lg:grid-cols-12 lg:items-end">
         <input type="hidden" name="page" value="1">
@@ -58,7 +59,6 @@
                        placeholder="Search customers..."
                        class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-3 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                 <input type="hidden" name="customer_ref" data-typeahead-hidden
-                           hx-get="/admin/billing/invoices" hx-target="#invoice-list" hx-trigger="change" hx-include="closest form" hx-push-url="true" hx-sync="#invoice-filters:replace"
                        value="{{ customer_ref or '' }}">
                 <div data-typeahead-results></div>
             </div>
