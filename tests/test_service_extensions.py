@@ -108,7 +108,7 @@ def _create(db_session, **values):
     return extension
 
 
-def _apply(db_session, extension_id, *, actor_id: str = "admin-1"):
+def _apply(db_session, extension_id, *, actor_id: str = "approver-1"):
     if db_session.in_transaction():
         db_session.commit()
     return svc.apply_service_extension(
@@ -237,7 +237,7 @@ def test_apply_network_scope_extends_all_active(db_session, subscriber, catalog_
         scope_type=ServiceExtensionScope.network,
         created_by="admin-1",
     )
-    applied = _apply(db_session, ext.id, actor_id="admin-1")
+    applied = _apply(db_session, ext.id, actor_id="approver-1")
 
     assert applied.status == ServiceExtensionStatus.applied
     assert applied.affected_count == 2
@@ -261,6 +261,33 @@ def test_apply_network_scope_extends_all_active(db_session, subscriber, catalog_
     )
     assert _naive(by_subscription[s2.id].grant_starts_at) == datetime(2026, 7, 15)
     assert _naive(by_subscription[s2.id].grant_ends_at) == datetime(2026, 7, 17)
+
+
+def test_apply_rejects_self_approval_by_the_creator(
+    db_session, subscriber, catalog_offer
+):
+    # Two-person control: a service extension grants free service, so the staff
+    # member who created it must not be the one who applies (approves) it.
+    _sub(db_session, subscriber, catalog_offer)
+    ext = _create(
+        db_session,
+        reason="outage",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=1,
+        scope_type=ServiceExtensionScope.network,
+        created_by="maker-1",
+    )
+
+    with pytest.raises(ServiceExtensionError) as exc:
+        _apply(db_session, ext.id, actor_id="maker-1")
+    assert exc.value.code.endswith("self_approval_forbidden")
+
+    # The extension stays pending; a different staff member can approve it.
+    still = svc.get_extension(db_session, ext.id)
+    assert still.status == ServiceExtensionStatus.pending
+    applied = _apply(db_session, ext.id, actor_id="checker-2")
+    assert applied.status == ServiceExtensionStatus.applied
 
 
 def test_stale_anchor_grants_from_application_time(
@@ -290,7 +317,7 @@ def test_stale_anchor_grants_from_application_time(
     assert proposed.grant_ends_at == datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
     assert proposed.anchor_basis == ServiceExtensionAnchorBasis.application_time
 
-    applied = _apply(db_session, ext.id, actor_id="admin-1")
+    applied = _apply(db_session, ext.id, actor_id="approver-1")
 
     db_session.refresh(subscription)
     entry = (
@@ -358,7 +385,7 @@ def test_sequential_extensions_compose_from_latest_grant_end(
             scope_type=ServiceExtensionScope.subscribers,
             subscriber_ids=[str(subscriber.id)],
         )
-        _apply(db_session, extension.id, actor_id="admin-1")
+        _apply(db_session, extension.id, actor_id="approver-1")
         entries.append(
             db_session.query(ServiceExtensionEntry)
             .filter(ServiceExtensionEntry.extension_id == extension.id)
@@ -712,7 +739,7 @@ def test_apply_resumes_billing_suspended_subscription(
         subscriber_ids=[str(subscriber.id)],
         created_by="admin-1",
     )
-    applied = _apply(db_session, ext.id, actor_id="admin-1")
+    applied = _apply(db_session, ext.id, actor_id="approver-1")
 
     assert applied.affected_count == 1
     db_session.refresh(sub)
@@ -745,7 +772,7 @@ def test_apply_does_not_lift_admin_or_fraud_suspension(
         subscriber_ids=[str(subscriber.id)],
         created_by="admin-1",
     )
-    _apply(db_session, ext.id, actor_id="admin-1")
+    _apply(db_session, ext.id, actor_id="approver-1")
 
     db_session.refresh(sub)
     # Validity still extended, but the fraud hold stays.
@@ -767,7 +794,7 @@ def test_extension_shield_covers_window_then_expires(
         subscriber_ids=[str(subscriber.id)],
         created_by="admin-1",
     )
-    _apply(db_session, ext.id, actor_id="admin-1")
+    _apply(db_session, ext.id, actor_id="approver-1")
 
     reason = svc.extension_shield_reason(db_session, subscriber.id)
     assert reason is not None and str(ext.id) in reason
@@ -799,7 +826,7 @@ def test_dunning_shield_includes_extension(db_session, subscriber, catalog_offer
         subscriber_ids=[str(subscriber.id)],
         created_by="admin-1",
     )
-    _apply(db_session, ext.id, actor_id="admin-1")
+    _apply(db_session, ext.id, actor_id="approver-1")
 
     reason = _dunning_shield_reason(db_session, subscriber.id)
     assert reason is not None and "service extension" in reason

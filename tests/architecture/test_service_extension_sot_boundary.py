@@ -76,6 +76,8 @@ def test_lifecycle_owner_uses_one_boundary_per_public_command() -> None:
     assert "stage_audit_event(" in source
     assert 'entity_type="service_extension"' in source
     assert "with_for_update()" in source
+    # Two-person control: the approver must differ from the creator.
+    assert "self_approval_forbidden" in source
 
 
 def test_lifecycle_evidence_and_idempotency_are_database_enforced() -> None:

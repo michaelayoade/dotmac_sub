@@ -5146,6 +5146,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.service_extensions.missing_idempotency_key",
                             "financial.service_extensions.missing_reason",
                             "financial.service_extensions.missing_scope_id",
+                            "financial.service_extensions.self_approval_forbidden",
                             "financial.service_extensions.transition_conflict",
                             "financial.service_extensions.write_conflict",
                             *owner_command_boundary_error_codes(

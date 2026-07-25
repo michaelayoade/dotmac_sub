@@ -25,6 +25,23 @@ Access restoration is not service-extension policy. The financial owner asks
 `access.subscription_lifecycle` to resolve only billing-related locks, and the
 access owner keeps the most-restrictive-wins decision.
 
+## Two-person approval (fraud control)
+
+A service extension grants free service, so applying one is a maker-checker
+decision, not a single-actor action. The owner records the creating staff actor
+in the immutable `created_by` at creation, and `apply` fails closed with
+`self_approval_forbidden` when a **user** approver equals that creator. The
+maker holds `billing:extension:create` and the checker holds
+`billing:extension:apply`; because the applier must be a different person, at
+least two staff are always involved in granting free service. Automated
+service/api-key flows (for example the duplicate-reconciliation corrective path,
+which is created already-applied and never enters `apply`) are not the
+two-person fraud vector and are exempt.
+
+Outage/SLA-data eligibility validation — requiring the extension window to match
+a recorded outage and bounding the granted days by the SLA breach — is tracked
+as a separate follow-up.
+
 ## Transaction boundary
 
 Each create, apply, or cancel command enters `execute_owner_command` once on a

@@ -1847,6 +1847,27 @@ def apply_service_extension(
                 current_status=extension.status.value,
             )
 
+        # Two-person control: a service extension grants free service, so the
+        # staff member who applies (approves) it must be a different person than
+        # the one who created it. Enforced against the immutable created_by actor
+        # recorded at creation, failing closed on a match. Only human (user)
+        # approvers are gated — automated service/api-key flows (e.g. the
+        # duplicate-reconciliation corrective path) are not the two-person fraud
+        # vector and are exempt.
+        approver_type, approver_id = _actor(command.context)
+        if (
+            approver_type == AuditActorType.user
+            and extension.created_by
+            and extension.created_by == approver_id
+        ):
+            _error(
+                "self_approval_forbidden",
+                "A service extension must be approved by a different staff member "
+                "than the one who created it.",
+                extension_id=str(extension.id),
+                created_by=extension.created_by,
+            )
+
         previous_status = extension.status
         now = _now_utc()
         applied = 0
