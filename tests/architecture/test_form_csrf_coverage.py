@@ -131,9 +131,7 @@ HTMX_FORM = '<form hx-post="/admin/x"><button>x</button></form>'
 HTMX_FORM_WITH_METHOD = (
     '<form method="post" hx-post="/admin/x"><button>x</button></form>'
 )
-PREVENTED_FORM = (
-    '<form method="post" @submit.prevent="go()"><button>x</button></form>'
-)
+PREVENTED_FORM = '<form method="post" @submit.prevent="go()"><button>x</button></form>'
 GET_FORM = '<form method="get" action="/admin/x"><button>x</button></form>'
 
 
@@ -164,7 +162,7 @@ def test_misplaced_token_detector_finds_inert_tokens():
 def test_balance_detector_reports_nesting_and_unclosed_forms():
     assert form_tag_balance(MULTILINE_FORM) == (1, 0)
     assert form_tag_balance('<form method="post">') == (1, 1)
-    assert form_tag_balance('<form><form></form></form>') == (2, 0)
+    assert form_tag_balance("<form><form></form></form>") == (2, 0)
 
 
 # --- repository guards --------------------------------------------------
@@ -179,8 +177,12 @@ def test_no_native_post_form_is_missing_a_csrf_token():
         if missing:
             offenders[path.relative_to(ROOT).as_posix()] = missing
 
-    assert not offenders, "form POSTs without a CSRF token (these are rejected):\n" + "\n".join(
-        f"  {name}: {', '.join(actions)}" for name, actions in sorted(offenders.items())
+    assert not offenders, (
+        "form POSTs without a CSRF token (these are rejected):\n"
+        + "\n".join(
+            f"  {name}: {', '.join(actions)}"
+            for name, actions in sorted(offenders.items())
+        )
     )
 
 
