@@ -212,7 +212,7 @@ The demo buttons that are actually the edges.
   not accept a foreign writer, so this is built natively rather than ported from
   CRM's `resolve-with-ticket-handoff` / `resolve-with-lead`.
 
-  Built on branch `feat/conversation-ticket-handoff`: migration 421, model
+  Built on branch `feat/conversation-ticket-handoff`: migration 422, model
   column, keyword-only provenance on the create command, coordinator service,
   registry contract, map rows and note, route, UI swap, 10 behaviour tests and
   6 boundary tests. **Boundary tests and the registry contract pass. The
