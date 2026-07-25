@@ -1,7 +1,7 @@
 """Add native conversation-to-ticket provenance.
 
-Revision ID: 418_conversation_ticket_handoff
-Revises: 417_service_extension_grant_intervals
+Revision ID: 421_conversation_ticket_handoff
+Revises: 420_billing_run_launch_evidence
 
 Before this revision a ticket opened from an inbox conversation left no trace of
 where it came from: the workspace's "Create ticket" control was a demo adapter,
@@ -24,8 +24,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "418_conversation_ticket_handoff"
-down_revision = "417_service_extension_grant_intervals"
+revision = "421_conversation_ticket_handoff"
+down_revision = "420_billing_run_launch_evidence"
 branch_labels = None
 depends_on = None
 
