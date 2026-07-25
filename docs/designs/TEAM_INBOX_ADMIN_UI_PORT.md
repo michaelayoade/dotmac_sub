@@ -295,7 +295,14 @@ more escalation targets, not after.
 
 **Delivered:** direct teammate escalation, macro execution, the combined
 my-team filter (#1604); custom-date snooze and the AI-handling, sent-to-ticket
-and activity-window filters.
+and activity-window filters (#1605); operator attachment upload and
+conversation initiation.
+
+Attachments stage through the shared file-storage participant and stay unbound
+until the reply that carries them is sent, so an abandoned composer leaves
+nothing claiming to belong to a message. Initiation reuses the inbound contact
+resolver, so an operator-started thread resolves like an inbound one; an
+unmatched address still opens a thread and says so.
 
 **Still open, each needing new domain work rather than an adapter:**
 
@@ -303,13 +310,6 @@ and activity-window filters.
   the next inbound message. That is a change to `team_inbox_channel_receive`
   affecting *every* inbound message, so it wants its own change and its own
   regression cover — not a rider on a UI slice.
-- **Attachment upload.** `team_inbox_media.promote_message_attachments` promotes
-  *inbound* provider media; there is no operator upload path.
-  `app/services/file_upload.py` supplies validation and storage primitives, so
-  the work is a media-owner entry point plus an outbound attachment contract.
-- **Conversation initiation.** `team_inbox_outbound` can only reply to an
-  existing conversation; starting one needs a create-and-send command, and a
-  decision about contact resolution for an address with no thread.
 - **Scheduled send.** Needs a queued-send model and a scheduler entry; the
   composer's `scheduledAt` is currently local state only.
 - **Email transcript.** Render the thread and deliver through the canonical
