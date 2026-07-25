@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
@@ -2006,7 +2006,7 @@ def build_customer_detail_snapshot(
     # Communications projection. `communications.team_inbox` owns these rows;
     # the customer record reads its own scoped slice and links back to the
     # workspace to act on one.
-    customer_conversations: tuple = ()
+    customer_conversations: Sequence[Any] = ()
     if include_conversations:
         from app.services import team_inbox_read
 
