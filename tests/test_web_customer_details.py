@@ -584,9 +584,7 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
         "build_customer_detail_snapshot",
         # **kwargs absorbs include_conversations, which the route now decides
         # from the principal's permissions and passes down.
-        lambda db, customer_id, **kwargs: {
-            "customer": SimpleNamespace(id=customer_id)
-        },
+        lambda db, customer_id, **kwargs: {"customer": SimpleNamespace(id=customer_id)},
     )
     monkeypatch.setattr(
         customer_routes.web_notifications_service,
