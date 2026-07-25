@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
@@ -251,7 +252,9 @@ def list_conversations(
     search: str | None = None,
     status: str | None = None,
     channel_type: str | None = None,
+    subscriber_id: str | UUID | None = None,
     service_team_id: str | UUID | None = None,
+    service_team_ids: Sequence[str | UUID] | None = None,
     assigned_person_id: str | UUID | None = None,
     needs_response: bool = False,
     contact_resolution_status: str | None = None,
@@ -262,6 +265,10 @@ def list_conversations(
     unassigned: bool = False,
     operator_person_id: UUID | None = None,
     unread_only: bool = False,
+    ai_handling: bool | None = None,
+    has_ticket: bool | None = None,
+    activity_from: datetime | None = None,
+    activity_to: datetime | None = None,
     order_by: str | None = None,
     order_dir: str = "desc",
     limit: int = 50,
@@ -325,6 +332,59 @@ def list_conversations(
             query = query.filter(InboxConversation.snoozed_until.isnot(None))
         else:
             query = query.filter(InboxConversation.snoozed_until.is_(None))
+
+    # Customer-scoped read: the conversation carries the resolved subscriber, so
+    # the customer record can project its own communications without joining
+    # through the contact link.
+    subscriber_uuid = _optional_uuid(subscriber_id)
+    if subscriber_uuid is not None:
+        query = query.filter(InboxConversation.subscriber_id == subscriber_uuid)
+
+    # Multi-team scope for "my team": an agent may belong to several teams and
+    # the my_team count already spans all of them, so the filter must too or the
+    # badge and the list disagree.
+    team_uuids = [
+        value
+        for value in (_optional_uuid(item) for item in (service_team_ids or ()))
+        if value is not None
+    ]
+    if team_uuids:
+        query = query.join(
+            InboxConversationTeam,
+            InboxConversationTeam.conversation_id == InboxConversation.id,
+        ).filter(
+            InboxConversationTeam.service_team_id.in_(team_uuids),
+            InboxConversationTeam.is_active.is_(True),
+        )
+
+    # Conversations an AI agent is handling, so a human can either stay out of
+    # the way or take over deliberately.
+    if ai_handling is not None:
+        flag = InboxConversation.metadata_["ai_handling"].as_boolean()
+        query = query.filter(flag.is_(True) if ai_handling else flag.isnot(True))
+
+    # Whether a ticket was ever issued from the thread. The provenance link is
+    # owned by communications.conversation_ticket_handoff.
+    if has_ticket is not None:
+        from app.models.support import Ticket
+
+        issued = (
+            select(Ticket.origin_conversation_id)
+            .where(Ticket.origin_conversation_id.isnot(None))
+            .where(Ticket.is_active.is_(True))
+        )
+        query = (
+            query.filter(InboxConversation.id.in_(issued))
+            if has_ticket
+            else query.filter(~InboxConversation.id.in_(issued))
+        )
+
+    # Activity window, on last_message_at so the range means "was this thread
+    # live in that period" rather than when it happened to be created.
+    if activity_from is not None:
+        query = query.filter(InboxConversation.last_message_at >= activity_from)
+    if activity_to is not None:
+        query = query.filter(InboxConversation.last_message_at <= activity_to)
 
     team_uuid = _optional_uuid(service_team_id)
     if team_uuid is not None:
