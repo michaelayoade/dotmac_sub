@@ -25,6 +25,7 @@ import asyncio
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from jinja2 import Environment, FileSystemLoader
@@ -104,8 +105,12 @@ def test_public_path_is_not_gated():
 
 def _render(template_name: str, **context) -> str:
     env = Environment(loader=FileSystemLoader(str(TEMPLATES)), autoescape=True)
-    # csrf_input.html reads `csrf_token` first, falling back to request state.
-    return env.get_template(template_name).render(csrf_token=TOKEN, **context)
+    # csrf_input.html reads `csrf_token` first, then falls back to
+    # request.state.csrf_token, so both must resolve for the render to succeed.
+    request = SimpleNamespace(state=SimpleNamespace(csrf_token=TOKEN))
+    return env.get_template(template_name).render(
+        csrf_token=TOKEN, request=request, **context
+    )
 
 
 def _first_form_body(markup: str, action_fragment: str) -> str:
@@ -147,8 +152,8 @@ def test_rendered_form_carries_a_token_the_middleware_accepts(
     ("template", "action_fragment"),
     [
         # multiline form
-        ("templates/admin/inbox/_contact_drawer.html", "/comments"),
-        # one-line, loop-generated form
+        ("templates/admin/inbox/_contact_drawer.html", "/contact-link"),
+        # one-line, loop-generated form (the status menu emits one per option)
         ("templates/admin/inbox/_conversation.html", "/status"),
         # form reached through an include
         ("templates/components/ui/triage.html", "/retry"),
