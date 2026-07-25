@@ -519,3 +519,163 @@ def retry_outbound_message(
     message.metadata_ = metadata
     db.flush()
     return result
+
+
+SCHEDULED_DELIVERY_STATUS = "scheduled"
+
+
+def schedule_inbox_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    send_after: datetime,
+) -> InboxMessage:
+    """Record a reply to be sent later, without sending it now.
+
+    Stored as a normal outbound ``InboxMessage`` with ``sent_at`` unset and a
+    ``scheduled`` delivery status, so the thread shows what is queued rather
+    than hiding it until it goes. ``release_due_scheduled_replies`` sends it.
+
+    No new table: the message *is* the queue entry, which keeps one row per
+    reply whether it was sent immediately or later, and means a scheduled reply
+    already carries its attachments and provenance.
+    """
+    if send_after.tzinfo is None:
+        send_after = send_after.replace(tzinfo=UTC)
+    if send_after <= datetime.now(UTC):
+        raise ValueError("Choose a send time in the future.")
+
+    metadata = dict(payload.metadata or {})
+    metadata.update(
+        {
+            "source": "team_inbox_reply",
+            "delivery_status": SCHEDULED_DELIVERY_STATUS,
+            "scheduled_for": send_after.isoformat(),
+            "body_text": payload.body_text,
+            "body_html": payload.body_html,
+            "sent_by_person_id": str(payload.sent_by_person_id)
+            if payload.sent_by_person_id
+            else None,
+        }
+    )
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type=conversation.channel_type,
+        direction="outbound",
+        subject=_reply_subject(conversation, payload.subject),
+        body=payload.body_text,
+        from_address=None,
+        sent_at=None,
+        metadata_=metadata,
+    )
+    db.add(message)
+    db.flush()
+    return message
+
+
+def due_scheduled_replies(
+    db: Session, *, now: datetime | None = None, limit: int = 50
+) -> list[InboxMessage]:
+    """Scheduled replies whose send time has passed."""
+    moment = (now or datetime.now(UTC)).isoformat()
+    return (
+        db.query(InboxMessage)
+        .filter(InboxMessage.direction == "outbound")
+        .filter(InboxMessage.sent_at.is_(None))
+        .filter(
+            InboxMessage.metadata_["delivery_status"].as_string()
+            == SCHEDULED_DELIVERY_STATUS
+        )
+        .filter(InboxMessage.metadata_["scheduled_for"].as_string() <= moment)
+        .order_by(InboxMessage.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+
+def send_scheduled_reply(db: Session, *, message: InboxMessage) -> InboxReplyResult:
+    """Send one previously scheduled reply through the normal outbound path."""
+    conversation = db.get(InboxConversation, message.conversation_id)
+    if conversation is None or not conversation.is_active:
+        metadata = dict(message.metadata_ or {})
+        metadata["delivery_status"] = "cancelled"
+        metadata["cancel_reason"] = "conversation is no longer active"
+        message.metadata_ = metadata
+        db.flush()
+        return InboxReplyResult(
+            kind="cancelled",
+            conversation_id=str(message.conversation_id),
+            reason="conversation is no longer active",
+        )
+
+    metadata = dict(message.metadata_ or {})
+    result = send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=InboxReplyPayload(
+            body_html=str(metadata.get("body_html") or ""),
+            body_text=str(metadata.get("body_text") or message.body or ""),
+            subject=message.subject,
+            sent_by_person_id=metadata.get("sent_by_person_id"),
+            metadata={"source": "team_inbox_scheduled_reply"},
+        ),
+        record_failure=True,
+    )
+    # The placeholder has done its job; the send created the real message.
+    metadata["delivery_status"] = (
+        "released" if result.kind in {"sent", "queued"} else "failed"
+    )
+    metadata["released_message_id"] = result.message_id
+    message.metadata_ = metadata
+    message.sent_at = datetime.now(UTC)
+    db.flush()
+    return result
+
+
+def send_transcript(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    recipient: str,
+    subject: str,
+    body_html: str,
+    sent_by_person_id: str | UUID | None = None,
+) -> InboxReplyResult:
+    """Deliver a transcript to an arbitrary address.
+
+    Uses the same communication intent as a reply so the team's sender and
+    delivery handling apply, but records no `InboxMessage`: a transcript is a
+    copy of the conversation, not a new turn in it, and adding it to the thread
+    would make the next transcript include the previous one.
+    """
+    result = submit(
+        db,
+        CommunicationIntent(
+            subscriber_id=conversation.subscriber_id,
+            event_type="team_inbox.transcript",
+            category="service",
+            communication_class=CommunicationClass.transactional,
+            subject=subject,
+            body=body_html,
+            channels=("email",),
+            include_reseller=False,
+            persist_policy_suppressions=False,
+            recipients={"email": recipient},
+            metadata={
+                "source": "team_inbox_transcript",
+                "conversation_id": str(conversation.id),
+                "sent_by_person_id": str(sent_by_person_id)
+                if sent_by_person_id
+                else None,
+            },
+        ),
+    )
+    notification = next(iter(result.notifications), None) if result else None
+    kind = "queued" if notification is not None else "failed"
+    return InboxReplyResult(
+        kind=kind,
+        conversation_id=str(conversation.id),
+        to_email=recipient,
+        reason=None if notification is not None else "transcript was not accepted",
+    )

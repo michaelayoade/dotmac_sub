@@ -160,6 +160,7 @@ def reply(
     macro_id: str | UUID | None = None,
     template_id: str | UUID | None = None,
     attachment_ids: Sequence[str] | None = None,
+    send_after: datetime | None = None,
     idempotency_key: str | None = None,
     reply_to_message_id: str | UUID | None = None,
 ) -> ReplyOutcome:
@@ -280,6 +281,29 @@ def reply(
                     "inbox_template_id": str(template.id),
                 }
 
+        if send_after is not None:
+            scheduled = team_inbox_outbound.schedule_inbox_reply(
+                db,
+                conversation=conversation,
+                payload=team_inbox_outbound.InboxReplyPayload(
+                    body_html=body_html,
+                    body_text=clean_body,
+                    subject=template.subject if template is not None else None,
+                    sent_by_person_id=actor_person_id,
+                    metadata=reply_metadata,
+                ),
+                send_after=send_after,
+            )
+            if attachment_ids:
+                team_inbox_media.bind_assets_to_message(
+                    db, message=scheduled, asset_ids=list(attachment_ids)
+                )
+            team_inbox_operations.record_macro_use(db, macro_id)
+            return ReplyOutcome(
+                conversation_id=str(conversation.id),
+                kind="scheduled",
+                sender="scheduled",
+            )
         result = team_inbox_outbound.send_inbox_reply(
             db,
             conversation=conversation,
@@ -456,12 +480,20 @@ def update_workflow(
     is_muted: bool | None = None,
     snooze_minutes: int | None = None,
     snooze_until: datetime | None = None,
+    snooze_until_reply: bool = False,
     actor_person_id: str | UUID | None = None,
 ) -> None:
     def action() -> None:
+        conversation = _active_conversation(db, conversation_id)
+        if snooze_until_reply:
+            # No wake time — the customer's next message wakes it.
+            team_inbox_operations.snooze_until_reply(
+                db, conversation=conversation, actor_person_id=actor_person_id
+            )
+            return
         team_inbox_operations.update_conversation_workflow(
             db,
-            conversation=_active_conversation(db, conversation_id),
+            conversation=conversation,
             priority=priority,
             is_muted=is_muted,
             snooze_minutes=snooze_minutes,
@@ -972,5 +1004,47 @@ def start_conversation(
             sender=result.from_address or result.sender_key or "team sender",
             contact_status=resolution.status,
         )
+
+    return _commit(db, action)
+
+
+def email_transcript(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    recipient: str,
+    actor_person_id: str | UUID | None = None,
+) -> str:
+    """Email a conversation transcript to a chosen address.
+
+    Sends through the same outbound path a reply uses, so the transcript
+    inherits the team's sender and delivery handling rather than inventing a
+    second way to send mail. Internal notes and comments are excluded by the
+    renderer — a transcript is often forwarded onward.
+    """
+
+    def action() -> str:
+        conversation = _active_conversation(db, conversation_id)
+        clean_recipient = str(recipient or "").strip()
+        if "@" not in clean_recipient:
+            raise InboxCommandError("Enter a valid email address.")
+
+        subject, html = team_inbox_operations.render_conversation_transcript(
+            db, conversation=conversation
+        )
+        result = team_inbox_outbound.send_transcript(
+            db,
+            conversation=conversation,
+            recipient=clean_recipient,
+            subject=subject,
+            body_html=html,
+            sent_by_person_id=actor_person_id,
+        )
+        if result.kind not in {"sent", "queued"}:
+            raise InboxCommandRejected(
+                result.reason or "Could not send the transcript.",
+                conversation_id=conversation.id,
+            )
+        return clean_recipient
 
     return _commit(db, action)
