@@ -658,10 +658,10 @@ def send_transcript(
             communication_class=CommunicationClass.transactional,
             subject=subject,
             body=body_html,
-            channels=("email",),
+            channels=(NotificationChannel.email,),
             include_reseller=False,
             persist_policy_suppressions=False,
-            recipients={"email": recipient},
+            recipients={NotificationChannel.email: recipient},
             metadata={
                 "source": "team_inbox_transcript",
                 "conversation_id": str(conversation.id),
@@ -671,11 +671,20 @@ def send_transcript(
             },
         ),
     )
-    notification = next(iter(result.notifications), None) if result else None
-    kind = "queued" if notification is not None else "failed"
+    notification = next(
+        (item for item in result.queued if item.status == NotificationStatus.queued),
+        None,
+    )
+    if notification is None:
+        return InboxReplyResult(
+            kind="suppressed",
+            conversation_id=str(conversation.id),
+            to_email=recipient,
+            reason=", ".join(result.suppressed)
+            or "Communication policy suppressed the transcript",
+        )
     return InboxReplyResult(
-        kind=kind,
+        kind="queued",
         conversation_id=str(conversation.id),
         to_email=recipient,
-        reason=None if notification is not None else "transcript was not accepted",
     )
