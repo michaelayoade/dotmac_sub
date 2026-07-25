@@ -28,6 +28,7 @@ from app.services import (
     team_inbox_contact_links,
     team_inbox_operations,
     team_inbox_outbound,
+    team_inbox_routing,
 )
 from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
@@ -763,3 +764,57 @@ def run_macro(
         )
 
     return _commit(db, action)
+
+
+def create_email_route(
+    db: Session,
+    *,
+    service_team_id: str | UUID,
+    email_address: str,
+    is_primary: bool = False,
+    priority: int = 100,
+) -> None:
+    """Route an inbound mailbox to a service team.
+
+    `team_inbox_routing` owns the routing table; this is its committed entry
+    point. Until now the table had no writer at all outside direct SQL, which
+    is why production ran six live mailboxes against zero rows.
+    """
+
+    def action() -> None:
+        team_inbox_routing.create_email_route(
+            db,
+            service_team_id=service_team_id,
+            email_address=email_address,
+            is_primary=is_primary,
+            priority=priority,
+        )
+
+    _commit(db, action)
+
+
+def update_email_route(
+    db: Session,
+    *,
+    route_id: str | UUID,
+    is_primary: bool | None = None,
+    priority: int | None = None,
+    is_active: bool | None = None,
+) -> None:
+    def action() -> None:
+        team_inbox_routing.update_email_route(
+            db,
+            route_id,
+            is_primary=is_primary,
+            priority=priority,
+            is_active=is_active,
+        )
+
+    _commit(db, action)
+
+
+def delete_email_route(db: Session, *, route_id: str | UUID) -> None:
+    def action() -> None:
+        team_inbox_routing.delete_email_route(db, route_id)
+
+    _commit(db, action)

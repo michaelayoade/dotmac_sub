@@ -15,8 +15,10 @@ from app.services import (
     conversation_ticket_handoff,
     team_inbox_commands,
     team_inbox_contact_links,
+    team_inbox_metrics,
     team_inbox_operations,
     team_inbox_projection,
+    team_inbox_routing,
     team_inbox_read_state,
 )
 from app.services.auth_dependencies import can, require_permission
@@ -1152,3 +1154,108 @@ def team_inbox_run_macro(
         status="success",
         message=f"Macro applied ({executed} action{'' if executed == 1 else 's'}).",
     )
+
+
+@router.get(
+    "/settings/email-routes",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_email_routes(
+    request: Request,
+    status: str | None = Query(default=None),
+    message: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Which mailbox belongs to which team.
+
+    This table decides where inbound email lands. It is the gate on channel
+    cutover: the SMTP listener only receives what is forwarded to it, and this
+    is where an operator says which team owns each address.
+    """
+    context = _ctx(request, db)
+    context.update(
+        {
+            "email_routes": team_inbox_routing.list_email_routes(db),
+            "service_team_options": team_inbox_metrics.active_service_team_options(db),
+            "notice_status": _query_text(status),
+            "notice_message": _query_text(message),
+        }
+    )
+    return templates.TemplateResponse("admin/inbox/email_routes.html", context)
+
+
+def _routes_redirect(*, status: str, message: str) -> RedirectResponse:
+    return RedirectResponse(
+        url=(
+            "/admin/inbox/settings/email-routes"
+            f"?status={quote_plus(status)}&message={quote_plus(message)}"
+        ),
+        status_code=303,
+    )
+
+
+@router.post(
+    "/settings/email-routes",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_email_route_create(
+    service_team_id: str = Form(...),
+    email_address: str = Form(...),
+    priority: int = Form(default=100),
+    is_primary: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        team_inbox_commands.create_email_route(
+            db,
+            service_team_id=service_team_id,
+            email_address=email_address,
+            is_primary=is_primary,
+            priority=priority,
+        )
+    except (team_inbox_routing.EmailRouteError, ValueError) as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    return _routes_redirect(status="success", message="Mailbox routed.")
+
+
+@router.post(
+    "/settings/email-routes/{route_id}",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_email_route_update(
+    route_id: UUID,
+    priority: int | None = Form(default=None),
+    is_primary: bool | None = Form(default=None),
+    is_active: bool | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        team_inbox_commands.update_email_route(
+            db,
+            route_id=route_id,
+            is_primary=is_primary,
+            priority=priority,
+            is_active=is_active,
+        )
+    except (team_inbox_routing.EmailRouteError, ValueError) as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    return _routes_redirect(status="success", message="Mailbox route updated.")
+
+
+@router.post(
+    "/settings/email-routes/{route_id}/delete",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_email_route_delete(
+    route_id: UUID,
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        team_inbox_commands.delete_email_route(db, route_id=route_id)
+    except (team_inbox_routing.EmailRouteError, ValueError) as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    return _routes_redirect(status="success", message="Mailbox route deactivated.")
