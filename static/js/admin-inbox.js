@@ -437,17 +437,6 @@
         }));
       },
 
-      submitDemoConversation() {
-        if (!this.newConversation.recipient || !this.newConversation.body) {
-          this.newConversation.error = "Recipient and message are required.";
-          return;
-        }
-        this.newConversation.error = "";
-        this.newConversationOpen = false;
-        this.showToast(
-          "Demo conversation prepared. No external message was sent; API mapping is pending.",
-        );
-      },
 
       showDemoNotice(capability) {
         this.showToast(

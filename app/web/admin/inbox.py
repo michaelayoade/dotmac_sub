@@ -1333,3 +1333,45 @@ async def team_inbox_stage_attachments(
     except (team_inbox_media.MediaUploadError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"attachment_ids": staged})
+
+
+@router.post(
+    "/conversations",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_start_conversation(
+    request: Request,
+    channel_type: str = Form(...),
+    contact_address: str = Form(...),
+    body_text: str = Form(...),
+    subject: str | None = Form(default=None),
+    service_team_id: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Open a new conversation and send its first message."""
+    _prepare_mutation(db)
+    try:
+        outcome = team_inbox_commands.start_conversation(
+            db,
+            channel_type=channel_type,
+            contact_address=contact_address,
+            body_text=body_text,
+            subject=_query_text(subject),
+            service_team_id=_query_text(service_team_id),
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
+        return RedirectResponse(
+            url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    message = f"Conversation started from {outcome.sender}."
+    if outcome.contact_status not in {"linked_subscriber", "explicit_subscriber"}:
+        # Say so rather than leave an anonymous thread looking resolved.
+        message += " Contact is unmatched — link it from the contact panel."
+    return _detail_redirect(
+        outcome.conversation_id, status="success", message=message
+    )
