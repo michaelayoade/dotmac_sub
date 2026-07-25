@@ -38,7 +38,7 @@ ACCOUNT_STATUS_WRITE_SCOPE = "customer:account-status:write"
 _IDEMPOTENCY_SCOPE = "account_status"
 _CONFIRM_COMMAND = OwnerCommandDefinition(
     owner="customer.account_status_actions",
-    concern="account-bound idempotent status confirmation",
+    concern="administrative account-bound idempotent status confirmation",
     name="confirm_account_status_change",
 )
 

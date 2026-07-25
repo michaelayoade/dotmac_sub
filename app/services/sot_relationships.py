@@ -1017,7 +1017,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.account_status_commands",
                 owns=(
                     "administrative account-status impact preview",
-                    "account-bound idempotent status confirmation",
+                    "administrative account-bound idempotent status confirmation",
                 ),
                 depends_on=(
                     "customer.accounts",
@@ -1042,7 +1042,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         ConcernContract(
-                            name="account-bound idempotent status confirmation",
+                            name=(
+                                "administrative account-bound idempotent status "
+                                "confirmation"
+                            ),
                             role=OwnerRole.APPLICATION_COORDINATOR,
                             input_names=(
                                 "authenticated administrative status context",
