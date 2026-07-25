@@ -167,6 +167,12 @@ def reply(
     def action() -> ReplyOutcome:
         conversation = _active_conversation(db, conversation_id, for_update=True)
         clean_body = str(body_text or "").strip()
+        scheduled_for = send_after
+        if scheduled_for is not None:
+            if scheduled_for.tzinfo is None:
+                scheduled_for = scheduled_for.replace(tzinfo=UTC)
+            if scheduled_for <= datetime.now(UTC):
+                raise InboxCommandError("Choose a send time in the future.")
         clean_idempotency_key = str(idempotency_key or "").strip()
         reply_to_uuid = coerce_uuid(reply_to_message_id)
         if reply_to_message_id and reply_to_uuid is None:
@@ -281,7 +287,7 @@ def reply(
                     "inbox_template_id": str(template.id),
                 }
 
-        if send_after is not None:
+        if scheduled_for is not None:
             scheduled = team_inbox_outbound.schedule_inbox_reply(
                 db,
                 conversation=conversation,
@@ -292,7 +298,7 @@ def reply(
                     sent_by_person_id=actor_person_id,
                     metadata=reply_metadata,
                 ),
-                send_after=send_after,
+                send_after=scheduled_for,
             )
             if attachment_ids:
                 team_inbox_media.bind_assets_to_message(

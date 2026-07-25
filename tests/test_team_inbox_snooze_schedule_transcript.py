@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy.orm import Query
 
 from app.models.team_inbox import (
     InboxConversation,
@@ -178,6 +179,22 @@ def test_a_past_send_time_is_refused(db_session):
         )
 
 
+def test_a_past_send_time_is_a_command_error(db_session):
+    conversation_id = _conversation_id(db_session)
+
+    with pytest.raises(
+        team_inbox_commands.InboxCommandError,
+        match="Choose a send time in the future",
+    ):
+        team_inbox_commands.reply(
+            db_session,
+            conversation_id=conversation_id,
+            body_text="too late",
+            actor_person_id=None,
+            send_after=datetime.now(UTC) - timedelta(minutes=1),
+        )
+
+
 def test_only_due_replies_are_released(db_session):
     conversation = _conversation(db_session)
     for delta, _label in ((timedelta(hours=-2), "due"), (timedelta(days=2), "later")):
@@ -198,6 +215,81 @@ def test_only_due_replies_are_released(db_session):
     due = team_inbox_outbound.due_scheduled_replies(db_session)
 
     assert len(due) == 1
+
+
+def test_due_replies_are_claimed_with_skip_locked(db_session, monkeypatch):
+    conversation = _conversation(db_session)
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="email",
+            direction="outbound",
+            body="queued",
+            sent_at=None,
+            metadata_={
+                "delivery_status": "scheduled",
+                "scheduled_for": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            },
+        )
+    )
+    db_session.flush()
+
+    original = Query.with_for_update
+    calls: list[dict[str, object]] = []
+
+    def record_lock(query, **kwargs):
+        calls.append(kwargs)
+        return original(query, **kwargs)
+
+    monkeypatch.setattr(Query, "with_for_update", record_lock)
+
+    team_inbox_outbound.due_scheduled_replies(db_session)
+
+    assert calls == [{"skip_locked": True}]
+
+
+def test_scheduled_release_reuses_the_placeholder(db_session, monkeypatch):
+    conversation = _conversation(db_session)
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction="outbound",
+        body="queued",
+        sent_at=None,
+        metadata_={
+            "delivery_status": "scheduled",
+            "scheduled_for": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            "body_html": "<p>queued</p>",
+            "body_text": "queued",
+        },
+    )
+    db_session.add(message)
+    db_session.flush()
+    message_id = message.id
+
+    def fake_send(*args, **kwargs):
+        assert kwargs["existing_message"] is message
+        message.sent_at = datetime.now(UTC)
+        message.metadata_ = {"delivery_status": "queued"}
+        return team_inbox_outbound.InboxReplyResult(
+            kind="queued",
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+        )
+
+    monkeypatch.setattr(team_inbox_outbound, "send_inbox_reply", fake_send)
+
+    result = team_inbox_outbound.send_scheduled_reply(db_session, message=message)
+
+    assert result.message_id == str(message_id)
+    assert (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .count()
+        == 1
+    )
+    assert (message.metadata_ or {})["delivery_status"] == "queued"
+    assert "scheduled_released_at" in (message.metadata_ or {})
 
 
 def test_an_already_sent_reply_is_never_re_released(db_session):

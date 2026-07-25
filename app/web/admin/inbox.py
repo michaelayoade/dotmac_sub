@@ -449,6 +449,8 @@ def team_inbox_reply(
         message=(
             "Reply already submitted."
             if outcome.replayed
+            else "Reply scheduled."
+            if outcome.kind == "scheduled"
             else f"Reply queued from {outcome.sender}."
             if outcome.kind == "queued"
             else f"Reply sent from {outcome.sender}."
