@@ -26,6 +26,7 @@ from app.models.team_inbox import (
 from app.services import (
     team_inbox_assignment,
     team_inbox_contact_links,
+    team_inbox_media,
     team_inbox_operations,
     team_inbox_outbound,
     team_inbox_routing,
@@ -158,6 +159,7 @@ def reply(
     actor_person_id: str | UUID | None,
     macro_id: str | UUID | None = None,
     template_id: str | UUID | None = None,
+    attachment_ids: Sequence[str] | None = None,
     idempotency_key: str | None = None,
     reply_to_message_id: str | UUID | None = None,
 ) -> ReplyOutcome:
@@ -295,6 +297,15 @@ def reply(
                 result.reason or "Reply could not be sent.",
                 conversation_id=conversation.id,
             )
+        # Bind staged uploads to the message that actually carried them, inside
+        # the same command — an attachment must never outlive a reply that
+        # failed to send.
+        if attachment_ids and result.message_id:
+            message = db.get(InboxMessage, coerce_uuid(result.message_id))
+            if message is not None:
+                team_inbox_media.bind_assets_to_message(
+                    db, message=message, asset_ids=list(attachment_ids)
+                )
         team_inbox_operations.record_macro_use(db, macro_id)
         return ReplyOutcome(
             conversation_id=str(conversation.id),
@@ -824,3 +835,35 @@ def delete_email_route(db: Session, *, route_id: str | UUID) -> None:
         team_inbox_routing.delete_email_route(db, route_id)
 
     _commit(db, action)
+
+
+def stage_attachments(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    uploads: Sequence[tuple[str, str | None, bytes]],
+    actor_person_id: str | UUID | None = None,
+) -> list[str]:
+    """Store operator-supplied files against a conversation.
+
+    Returns the staged asset ids so the composer can submit them with the reply
+    they belong to. They stay unbound until that reply is sent, so abandoning
+    the composer leaves no attachment claiming to belong to a message.
+    """
+
+    def action() -> list[str]:
+        conversation = _active_conversation(db, conversation_id, for_update=True)
+        staged: list[str] = []
+        for file_name, content_type, data in uploads:
+            asset = team_inbox_media.stage_outbound_attachment(
+                db,
+                conversation=conversation,
+                file_name=file_name,
+                content_type=content_type,
+                data=data,
+                uploaded_by=str(actor_person_id) if actor_person_id else None,
+            )
+            staged.append(str(asset.id))
+        return staged
+
+    return _commit(db, action)

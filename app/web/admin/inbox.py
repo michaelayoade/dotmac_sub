@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from urllib.parse import quote_plus
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.services import (
     conversation_ticket_handoff,
     team_inbox_commands,
     team_inbox_contact_links,
+    team_inbox_media,
     team_inbox_metrics,
     team_inbox_operations,
     team_inbox_projection,
@@ -394,6 +395,7 @@ def team_inbox_reply(
     body_text: str = Form(default=""),
     macro_id: str | None = Form(default=None),
     template_id: str | None = Form(default=None),
+    attachment_ids: str | None = Form(default=None),
     idempotency_key: str | None = Form(default=None),
     reply_to_message_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
@@ -406,6 +408,11 @@ def team_inbox_reply(
             body_text=body_text,
             macro_id=macro_id,
             template_id=template_id,
+            attachment_ids=[
+                item.strip()
+                for item in (_query_text(attachment_ids) or "").split(",")
+                if item.strip()
+            ],
             idempotency_key=_query_text(idempotency_key),
             reply_to_message_id=_query_text(reply_to_message_id),
             actor_person_id=_actor_id_from_request(request),
@@ -1291,3 +1298,38 @@ def team_inbox_email_route_delete(
     except (team_inbox_routing.EmailRouteError, ValueError) as exc:
         return _routes_redirect(status="error", message=str(exc))
     return _routes_redirect(status="success", message="Mailbox route deactivated.")
+
+
+@router.post(
+    "/{conversation_id}/attachments",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+async def team_inbox_stage_attachments(
+    conversation_id: UUID,
+    request: Request,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Stage operator uploads and return their ids for the composer.
+
+    Reading the uploads is async, so the bytes are collected before entering the
+    owner command — the command boundary is synchronous and must not await.
+    """
+    uploads: list[tuple[str, str | None, bytes]] = []
+    for upload in files:
+        data = await upload.read()
+        uploads.append((upload.filename or "attachment", upload.content_type, data))
+
+    _prepare_mutation(db)
+    try:
+        staged = team_inbox_commands.stage_attachments(
+            db,
+            conversation_id=conversation_id,
+            uploads=uploads,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.ConversationNotFoundError:
+        return JSONResponse({"error": "Conversation not found."}, status_code=404)
+    except (team_inbox_media.MediaUploadError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"attachment_ids": staged})
