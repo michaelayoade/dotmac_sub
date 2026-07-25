@@ -1,7 +1,7 @@
 """Complete service-extension lifecycle and activity evidence.
 
-Revision ID: 418_service_extension_activity_sot
-Revises: 417_service_extension_grant_intervals
+Revision ID: 421_service_extension_activity_sot
+Revises: 420_billing_run_launch_evidence
 Create Date: 2026-07-24
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "418_service_extension_activity_sot"
-down_revision = "417_service_extension_grant_intervals"
+revision = "421_service_extension_activity_sot"
+down_revision = "420_billing_run_launch_evidence"
 branch_labels = None
 depends_on = None
 

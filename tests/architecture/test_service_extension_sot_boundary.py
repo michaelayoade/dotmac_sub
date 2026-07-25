@@ -81,7 +81,7 @@ def test_lifecycle_owner_uses_one_boundary_per_public_command() -> None:
 def test_lifecycle_evidence_and_idempotency_are_database_enforced() -> None:
     owner = _source(OWNER)
     model = _source(ROOT / "app/models/service_extension.py")
-    migration = _source(ROOT / "alembic/versions/418_service_extension_activity_sot.py")
+    migration = _source(ROOT / "alembic/versions/421_service_extension_activity_sot.py")
     events = _source(ROOT / "app/services/events/types.py")
 
     assert "_EXTENSION_ID_NAMESPACE" in owner
