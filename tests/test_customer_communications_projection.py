@@ -94,10 +94,15 @@ def test_customer_detail_renders_communications_behind_permission():
     assert "customer_conversations" in detail
     assert "Communications" in detail
 
+    # Cross-domain assembly belongs in the web_* context builder, not the route,
+    # matching how linked work orders are assembled for ticket detail.
     routes = Path("app/web/admin/customers.py").read_text()
-    # Same gate as the inbox workspace itself.
-    assert 'has_permission(\n        auth, db, "support:ticket:read"\n    )' in routes
-    assert "subscriber_id=customer.id" in routes
+    assert "team_inbox_read" not in routes, "route must stay a thin adapter"
+    assert "include_conversations=show_conversations" in routes
+
+    builder = Path("app/services/web_customer_details.py").read_text()
+    assert "team_inbox_read.list_conversations" in builder
+    assert "subscriber_id=customer.id" in builder
 
 
 def test_ticket_detail_shows_customer_conversation_history():
@@ -108,6 +113,9 @@ def test_ticket_detail_shows_customer_conversation_history():
     assert "Customer conversations" in detail
 
     routes = Path("app/web/admin/support_tickets.py").read_text()
-    assert "team_inbox_read.list_conversations" in routes
+    assert "team_inbox_read" not in routes, "route must stay a thin adapter"
+
+    builder = Path("app/services/web_support_tickets.py").read_text()
+    assert "team_inbox_read.list_conversations" in builder
     # Scoped by subscriber until a conversation->ticket link exists.
-    assert "subscriber_id=subscriber_id" in routes
+    assert "subscriber_id=ticket.subscriber_id" in builder
