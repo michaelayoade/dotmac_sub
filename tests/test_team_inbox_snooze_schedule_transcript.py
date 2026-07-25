@@ -350,3 +350,31 @@ def test_the_transcript_control_is_a_real_form():
     assert "/transcript" in CONVERSATION
     assert 'name="recipient"' in CONVERSATION
     assert "Internal notes and comments are not included." in CONVERSATION
+
+
+def test_until_reply_snooze_still_applies_priority_and_mute(db_session):
+    """Both arrived in one submit; honouring only the snooze loses half of it."""
+    conversation_id = _conversation_id(db_session)
+
+    team_inbox_commands.update_workflow(
+        db_session,
+        conversation_id=conversation_id,
+        priority=10,
+        is_muted=True,
+        snooze_until_reply=True,
+    )
+    conversation = db_session.get(InboxConversation, conversation_id)
+
+    assert conversation.priority == 10
+    assert conversation.is_muted is True
+    assert conversation.status == "snoozed"
+    assert conversation.snoozed_until is None
+
+
+def test_an_unsubmitted_until_reply_flag_does_not_snooze(db_session):
+    """`Form(default=False)` is a truthy sentinel until FastAPI resolves it."""
+    from app.web.admin import inbox as inbox_web
+
+    assert inbox_web._form_flag(inbox_web.Form(default=False)) is False
+    assert inbox_web._form_flag(True) is True
+    assert inbox_web._form_flag("") is False

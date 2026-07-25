@@ -30,6 +30,16 @@ router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
 
 
+def _form_flag(value: object) -> bool:
+    """Read a checkbox flag, treating anything that is not a real boolean as off.
+
+    FastAPI resolves `Form(default=False)` before the handler runs, but a direct
+    call leaves the `FieldInfo` sentinel in place — and that object is truthy,
+    which would turn an ordinary workflow submit into an until-reply snooze.
+    """
+    return value is True
+
+
 def _parse_datetime_field(value: object) -> datetime | None:
     """Parse a browser `datetime-local` value (snooze time, activity range).
 
@@ -686,7 +696,7 @@ def team_inbox_workflow_action(
             is_muted=is_muted,
             snooze_minutes=snooze_minutes,
             snooze_until=_parse_datetime_field(snooze_until),
-            snooze_until_reply=bool(snooze_until_reply),
+            snooze_until_reply=_form_flag(snooze_until_reply),
             actor_person_id=_actor_id_from_request(request),
         )
     except team_inbox_commands.ConversationNotFoundError:

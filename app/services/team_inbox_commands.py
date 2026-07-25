@@ -486,7 +486,17 @@ def update_workflow(
     def action() -> None:
         conversation = _active_conversation(db, conversation_id)
         if snooze_until_reply:
-            # No wake time — the customer's next message wakes it.
+            # No wake time — the customer's next message wakes it. Priority and
+            # mute still apply; they arrived in the same submit and dropping
+            # them would silently discard half the operator's action.
+            if priority is not None or is_muted is not None:
+                team_inbox_operations.update_conversation_workflow(
+                    db,
+                    conversation=conversation,
+                    priority=priority,
+                    is_muted=is_muted,
+                    actor_person_id=actor_person_id,
+                )
             team_inbox_operations.snooze_until_reply(
                 db, conversation=conversation, actor_person_id=actor_person_id
             )
