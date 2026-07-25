@@ -1229,10 +1229,7 @@ def render_conversation_transcript(
     if not rows:
         rows.append("<p><em>No messages were exchanged.</em></p>")
 
-    html = (
-        f"<h2 style='margin:0 0 16px'>{_escape(subject)}</h2>"
-        + "".join(rows)
-    )
+    html = f"<h2 style='margin:0 0 16px'>{_escape(subject)}</h2>" + "".join(rows)
     return subject, html
 
 

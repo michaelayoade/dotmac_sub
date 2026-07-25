@@ -5,7 +5,6 @@ See docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md §5, slice 4.
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 

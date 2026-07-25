@@ -122,9 +122,7 @@ def release_scheduled_replies(
     def operation() -> MaintenanceOutcome:
         from app.services import team_inbox_outbound
 
-        due = team_inbox_outbound.due_scheduled_replies(
-            db, limit=max(1, command.limit)
-        )
+        due = team_inbox_outbound.due_scheduled_replies(db, limit=max(1, command.limit))
         sent = 0
         skipped = 0
         for message in due:

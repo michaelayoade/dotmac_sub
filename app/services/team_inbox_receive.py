@@ -16,8 +16,11 @@ from app.models.team_inbox import (
     InboxMessageDirection,
     InboxTeamSource,
 )
-from app.services import team_inbox_assignment, team_inbox_routing
-from app.services import team_inbox_operations
+from app.services import (
+    team_inbox_assignment,
+    team_inbox_operations,
+    team_inbox_routing,
+)
 
 _MESSAGE_ID_RE = re.compile(r"<[^<>]+>")
 _AUTO_ASSIGN_METADATA_KEYS = (
