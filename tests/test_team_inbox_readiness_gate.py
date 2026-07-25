@@ -13,11 +13,13 @@ have to hold before that changes:
 3. **Volume** — the queue read stays correct and bounded as the table grows.
 
 On audit: neither `team_inbox_commands` nor `execute_owner_command` writes
-`audit_events`. Provenance lives on the rows themselves —
-`InboxMessage.sent_by_person_id`, `InboxComment.author_person_id`,
+`audit_events`. Provenance is split: the relational rows carry proper actor
+columns (`InboxComment.author_person_id`,
 `InboxConversationLabel.applied_by_person_id`,
-`InboxConversationAssignment.assigned_by_person_id`, and the conversation's
-`workflow_history` metadata. `communications.conversation_ticket_handoff` is
+`InboxConversationAssignment.assigned_by_person_id`), while **everything
+written to `InboxMessage` puts the actor in JSON metadata instead** — replies
+as `sent_by_person_id`, internal notes as `actor_id` — and conversation
+workflow changes live in `workflow_history` metadata. `communications.conversation_ticket_handoff` is
 the exception and does stage an audit event. That split is deliberate enough to
 pin, so a future change cannot quietly drop attribution.
 
@@ -146,6 +148,8 @@ def _conversation_id(db_session, *, team_id=None):
 
 
 def test_a_private_note_records_its_author(db_session, actor):
+    """A note is an InboxMessage with direction='internal', and its author is
+    in metadata rather than a column."""
     conversation_id = _conversation_id(db_session)
 
     team_inbox_commands.create_internal_note(
@@ -155,8 +159,26 @@ def test_a_private_note_records_its_author(db_session, actor):
         actor_person_id=actor,
     )
 
-    note = db_session.query(InboxComment).one()
-    assert note.author_person_id == actor
+    note = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.direction == "internal")
+        .one()
+    )
+    assert (note.metadata_ or {}).get("actor_id") == str(actor)
+
+
+def test_a_team_comment_records_its_author_in_a_column(db_session, actor):
+    """Comments are the relational side and do carry a real column."""
+    conversation_id = _conversation_id(db_session)
+
+    team_inbox_commands.create_comment(
+        db_session,
+        conversation_id=conversation_id,
+        body_text="Needs a field visit.",
+        actor_person_id=actor,
+    )
+
+    assert db_session.query(InboxComment).one().author_person_id == actor
 
 
 def test_a_status_change_records_the_actor_in_workflow_history(db_session, actor):
@@ -211,21 +233,26 @@ def test_attribution_columns_still_exist_on_every_operator_row():
     assert hasattr(InboxConversationAssignment, "assigned_by_person_id")
 
 
-def test_reply_attribution_is_only_in_metadata_not_a_column():
+def test_message_attribution_is_only_in_metadata_not_a_column():
     """Known weakness, pinned rather than assumed.
 
-    `InboxMessage` has no actor column: an outbound reply records the team
-    `from_address`, and the operator who sent it survives only as
-    `metadata["sent_by_person_id"]`. So "what did agent X send" is not a
-    queryable question — it needs a JSON scan.
+    `InboxMessage` has no actor column at all. An outbound reply records the
+    team `from_address` and keeps the operator in
+    `metadata["sent_by_person_id"]`; an internal note keeps it in
+    `metadata["actor_id"]`. So "what did agent X send" is not a queryable
+    question — it needs a JSON scan, and no index helps.
 
-    This is fine while volume is 84 conversations. It is worth deciding before
-    ~37k arrive, which is exactly what this gate exists to surface.
+    Tolerable at 84 conversations. Worth deciding before ~37k arrive, which is
+    exactly what this gate exists to surface.
     """
     columns = {c.name for c in InboxMessage.__table__.columns}
     assert "sent_by_person_id" not in columns
+    assert "actor_person_id" not in columns
+
     outbound = Path("app/services/team_inbox_outbound.py").read_text()
+    operations = Path("app/services/team_inbox_operations.py").read_text()
     assert '"sent_by_person_id": str(payload.sent_by_person_id)' in outbound
+    assert '"actor_id": str(actor_person_id)' in operations
 
 
 def test_the_absence_of_a_central_audit_trail_is_deliberate_and_visible():
