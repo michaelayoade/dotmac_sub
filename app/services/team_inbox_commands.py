@@ -773,7 +773,7 @@ def create_email_route(
     email_address: str,
     is_primary: bool = False,
     priority: int = 100,
-) -> None:
+) -> str:
     """Route an inbound mailbox to a service team.
 
     `team_inbox_routing` owns the routing table; this is its committed entry
@@ -781,16 +781,20 @@ def create_email_route(
     is why production ran six live mailboxes against zero rows.
     """
 
-    def action() -> None:
-        team_inbox_routing.create_email_route(
+    def action() -> str:
+        route = team_inbox_routing.create_email_route(
             db,
             service_team_id=service_team_id,
             email_address=email_address,
             is_primary=is_primary,
             priority=priority,
         )
+        # Captured inside the transaction: reading it afterwards would re-open
+        # one and the next owner command refuses a session already in a
+        # transaction.
+        return str(route.id)
 
-    _commit(db, action)
+    return _commit(db, action)
 
 
 def update_email_route(

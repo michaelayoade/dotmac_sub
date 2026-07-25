@@ -98,13 +98,14 @@ def test_only_one_primary_survives_per_team(db_session):
 
 def test_deactivating_a_route_clears_primary_and_stops_resolution(db_session):
     team_id = _team(db_session, "Support")
-    team_inbox_commands.create_email_route(
+    # The command returns the id so no read is needed between commands: a read
+    # would leave the session in a transaction and the next command refuses it.
+    route_id = team_inbox_commands.create_email_route(
         db_session,
         service_team_id=team_id,
         email_address="support@dotmac.ng",
         is_primary=True,
     )
-    route_id = team_inbox_routing.list_email_routes(db_session)[0].id
 
     team_inbox_commands.delete_email_route(db_session, route_id=route_id)
 
@@ -120,10 +121,9 @@ def test_deactivating_a_route_clears_primary_and_stops_resolution(db_session):
 
 def test_a_deactivated_route_can_be_reactivated(db_session):
     team_id = _team(db_session, "Support")
-    team_inbox_commands.create_email_route(
+    route_id = team_inbox_commands.create_email_route(
         db_session, service_team_id=team_id, email_address="support@dotmac.ng"
     )
-    route_id = team_inbox_routing.list_email_routes(db_session)[0].id
     team_inbox_commands.delete_email_route(db_session, route_id=route_id)
 
     team_inbox_commands.update_email_route(
