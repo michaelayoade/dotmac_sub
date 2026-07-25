@@ -1081,7 +1081,7 @@ def team_inbox_assign(
                 status="error",
                 message="Assign the conversation to a team before an agent.",
             )
-        team_inbox_commands.assign_conversation(
+        outcome = team_inbox_commands.assign_conversation(
             db,
             conversation_id=conversation_id,
             service_team_id=team_id,
@@ -1099,6 +1099,16 @@ def team_inbox_assign(
         team_inbox_operations.InboxOperationError,
     ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
+    # The assignment owner reports refusals in the result rather than raising —
+    # an agent who is not an active member of the target team comes back as
+    # `invalid_agent`. Reporting success here would tell the operator the
+    # conversation moved when it did not.
+    if outcome.kind != "assigned":
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message=outcome.reason or "Could not assign this conversation.",
+        )
     return _detail_redirect(
         conversation_id, status="success", message="Conversation assigned."
     )

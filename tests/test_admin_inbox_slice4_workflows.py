@@ -26,11 +26,20 @@ JAVASCRIPT = Path("static/js/admin-inbox.js").read_text()
 ROUTES = Path("app/web/admin/inbox.py").read_text()
 
 
-def _team(db_session, name="Support"):
+def _team(db_session, name="Support", *, member_id=None):
+    """A team, optionally with an active member.
+
+    Membership matters: assign_conversation_to_agent refuses an agent who is
+    not an active member of the target team.
+    """
     team = ServiceTeam(name=name, team_type=ServiceTeamType.support.value)
     db_session.add(team)
     db_session.flush()
     captured = team.id
+    if member_id is not None:
+        db_session.add(
+            ServiceTeamMember(team_id=captured, person_id=member_id, is_active=True)
+        )
     db_session.commit()
     return captured
 
@@ -54,9 +63,9 @@ def _conversation(db_session, *, team_id=None):
 
 
 def test_assign_conversation_records_the_assignment(db_session):
-    team_id = _team(db_session)
-    conversation_id = _conversation(db_session, team_id=team_id)
     agent = uuid.uuid4()
+    team_id = _team(db_session, member_id=agent)
+    conversation_id = _conversation(db_session, team_id=team_id)
 
     result = team_inbox_commands.assign_conversation(
         db_session,
@@ -70,6 +79,24 @@ def test_assign_conversation_records_the_assignment(db_session):
     timeline = team_inbox_read.get_conversation_timeline(db_session, conversation_id)
     active = [a for a in timeline.assignments if a.is_active]
     assert [str(a.person_id) for a in active] == [str(agent)]
+
+
+def test_assigning_a_non_member_is_refused_not_silently_dropped(db_session):
+    """The owner reports this in the result instead of raising, so the route
+    must inspect `kind` — otherwise the operator is told it worked."""
+    team_id = _team(db_session)  # no members
+    conversation_id = _conversation(db_session, team_id=team_id)
+
+    outcome = team_inbox_commands.assign_conversation(
+        db_session,
+        conversation_id=conversation_id,
+        service_team_id=team_id,
+        person_id=uuid.uuid4(),
+    )
+
+    assert outcome.kind == "invalid_agent"
+    assert "member" in (outcome.reason or "")
+    assert 'outcome.kind != "assigned"' in ROUTES
 
 
 def test_assign_rejects_an_unknown_conversation(db_session):
