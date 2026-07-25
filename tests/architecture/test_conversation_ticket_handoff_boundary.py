@@ -45,9 +45,7 @@ def test_provenance_is_keyword_only_on_the_ticket_create_command():
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
         and node.name == "create"
-        and any(
-            arg.arg == "origin_conversation_id" for arg in node.args.kwonlyargs
-        )
+        and any(arg.arg == "origin_conversation_id" for arg in node.args.kwonlyargs)
     ]
     assert len(creates) == 1, "Ticket create must take provenance keyword-only"
     # And never positionally.
