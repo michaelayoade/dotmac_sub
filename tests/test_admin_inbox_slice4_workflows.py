@@ -123,9 +123,10 @@ def test_run_macro_is_wired_and_distinct_from_inserting_text():
     """Inserting a macro body is text; running it applies its actions."""
     assert "/run-macro" in CONVERSATION
     assert "team_inbox_commands.run_macro" in ROUTES
-    assert "execute_macro_actions" in Path(
-        "app/services/team_inbox_commands.py"
-    ).read_text()
+    assert (
+        "execute_macro_actions"
+        in Path("app/services/team_inbox_commands.py").read_text()
+    )
     # The insert path must still exist and still carry identity.
     assert "inbox-insert-text" in CONVERSATION
     assert "macroId" in CONVERSATION
