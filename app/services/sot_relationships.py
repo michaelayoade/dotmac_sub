@@ -47,6 +47,8 @@ def _team_inbox_contract(
     event_types: tuple[str, ...] = (),
     projections: tuple[str, ...] = (),
     mapping_owner: str = "Team Inbox transport and web adapters",
+    design_refs: tuple[str, ...] | None = None,
+    test_refs: tuple[str, ...] | None = None,
 ) -> ServiceContract:
     """Build the uniformly complete contract shared by the Inbox owner family."""
 
@@ -180,12 +182,14 @@ def _team_inbox_contract(
             ),
         ),
         steward="customer experience platform",
-        design_refs=(
+        design_refs=design_refs
+        or (
             "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
             "docs/SOT_RELATIONSHIP_MAP.md",
             "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
         ),
-        test_refs=(
+        test_refs=test_refs
+        or (
             "tests/test_team_inbox_sot_completion.py",
             "tests/architecture/test_team_inbox_boundaries.py",
             "tests/architecture/test_team_inbox_sot_contracts.py",
@@ -11846,6 +11850,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     transaction_mode=TransactionMode.COORDINATOR_MANAGED,
                     projections=("conversation-to-ticket provenance link",),
+                    design_refs=(
+                        "docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_conversation_ticket_handoff.py",
+                        "tests/architecture/test_conversation_ticket_handoff_boundary.py",
+                    ),
                 ),
             ),
         ),
