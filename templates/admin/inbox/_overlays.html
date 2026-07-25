@@ -74,6 +74,7 @@
            key from conversation + actor + title, so a double submit replays
            instead of opening a second ticket. #}
         <form method="post" :action="`/admin/inbox/${selectedId}/tickets`" class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+            {% include "components/forms/csrf_input.html" %}
             <label class="block text-xs font-semibold">Title<input name="title" x-model.trim="ticketDraft.title" required maxlength="255" class="mt-1 h-11 w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950"></label>
             <label class="block text-xs font-semibold">Priority<select name="priority" x-model="ticketDraft.priority" class="mt-1 h-11 w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950"><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
             <label class="block text-xs font-semibold">Description<textarea name="description" x-model.trim="ticketDraft.description" rows="8" class="mt-1 w-full rounded-lg border-slate-300 dark:border-slate-700 dark:bg-slate-950"></textarea></label>
