@@ -22,7 +22,11 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
+from app.models.prepaid_funding import (
+    PrepaidFundingBaseline,
+    PrepaidFundingReconstructionBatch,
+    PrepaidOpeningFundingConsumption,
+)
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_draft_reconciliation import (
@@ -127,29 +131,56 @@ def test_concurrent_opening_funding_confirmations_converge_on_one_consumption(
             effective_at=effective_at,
         )
         setup.commit()
+        account_id = account.id
         invoice_id = invoice.id
 
-    barrier = Barrier(2)
+    try:
+        barrier = Barrier(2)
 
-    def reconcile() -> tuple[uuid.UUID | None, bool]:
-        with session_factory() as worker:
-            barrier.wait(timeout=10)
-            result = reconcile_prepaid_draft_invoice(worker, command)
-            return result.opening_funding_consumption_id, result.replayed
+        def reconcile() -> tuple[uuid.UUID | None, bool]:
+            with session_factory() as worker:
+                barrier.wait(timeout=10)
+                result = reconcile_prepaid_draft_invoice(worker, command)
+                return result.opening_funding_consumption_id, result.replayed
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _index: reconcile(), range(2)))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _index: reconcile(), range(2)))
 
-    assert len({consumption_id for consumption_id, _replayed in results}) == 1
-    assert sorted(replayed for _consumption_id, replayed in results) == [False, True]
-    with session_factory() as check:
-        invoice = check.get(Invoice, invoice_id)
-        assert invoice is not None
-        assert invoice.status is InvoiceStatus.paid
-        assert invoice.balance_due == Decimal("0.00")
-        assert (
-            check.query(PrepaidOpeningFundingConsumption)
-            .filter_by(invoice_id=invoice_id)
-            .count()
-            == 1
-        )
+        assert len({consumption_id for consumption_id, _replayed in results}) == 1
+        assert sorted(replayed for _consumption_id, replayed in results) == [
+            False,
+            True,
+        ]
+        with session_factory() as check:
+            invoice = check.get(Invoice, invoice_id)
+            assert invoice is not None
+            assert invoice.status is InvoiceStatus.paid
+            assert invoice.balance_due == Decimal("0.00")
+            assert (
+                check.query(PrepaidOpeningFundingConsumption)
+                .filter_by(invoice_id=invoice_id)
+                .count()
+                == 1
+            )
+    finally:
+        # This test needs independent committed sessions to exercise PostgreSQL
+        # row locks. Remove its one-time authority record so the session-scoped
+        # integration database retains the same empty native-install state for
+        # the tests that follow.
+        with session_factory() as cleanup:
+            baseline = (
+                cleanup.query(PrepaidFundingBaseline)
+                .filter_by(account_id=account_id)
+                .one_or_none()
+            )
+            cleanup.query(PrepaidOpeningFundingConsumption).filter_by(
+                invoice_id=invoice_id
+            ).delete(synchronize_session=False)
+            if baseline is not None:
+                batch_id = baseline.batch_id
+                cleanup.delete(baseline)
+                cleanup.flush()
+                cleanup.query(PrepaidFundingReconstructionBatch).filter_by(
+                    id=batch_id
+                ).delete(synchronize_session=False)
+            cleanup.commit()
