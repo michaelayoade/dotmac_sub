@@ -699,10 +699,17 @@ def person_detail(
 ):
     """View customer details (unified — person and org members)."""
     usage_period = _normalize_usage_period(usage_period)
+    request_auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    # Same gate the inbox workspace uses, decided here and honoured by the
+    # snapshot builder so unpermitted conversation data is never assembled.
+    show_conversations = bool(request_auth) and has_permission(
+        request_auth, db, "support:ticket:read"
+    )
     try:
         detail_data = web_customer_details_service.build_customer_detail_snapshot(
             db=db,
             customer_id=customer_id,
+            include_conversations=show_conversations,
         )
     except HTTPException:
         return templates.TemplateResponse(
@@ -1374,8 +1381,6 @@ def person_update(
     region: str | None = Form(None),
     postal_code: str | None = Form(None),
     country_code: str | None = Form(None),
-    status: str | None = Form(None),
-    is_active: str | None = Form(None),
     marketing_opt_in: str | None = Form(None),
     notes: str | None = Form(None),
     account_start_date: str | None = Form(None),
@@ -1415,8 +1420,6 @@ def person_update(
             region=region,
             postal_code=postal_code,
             country_code=country_code,
-            status=status,
-            is_active=is_active,
             marketing_opt_in=marketing_opt_in,
             notes=notes,
             account_start_date=account_start_date,
@@ -1672,6 +1675,7 @@ def person_deactivate(
     before, after = web_customer_actions_service.deactivate_person_customer(
         db=db,
         customer_id=customer_id,
+        actor_id=_get_actor_id(request),
     )
     metadata_payload = build_changes_metadata(before, after)
     from app.web.admin import get_current_user
@@ -1707,6 +1711,7 @@ def business_deactivate(
     web_customer_actions_service.deactivate_business_customer(
         db=db,
         customer_id=customer_id,
+        actor_id=_get_actor_id(request),
     )
     from app.web.admin import get_current_user
 

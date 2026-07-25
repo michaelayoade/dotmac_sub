@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -55,6 +56,10 @@ INBOX_LIST_DEFINITION = ListDefinition(
         ListFieldDefinition("assigned_person_id", "Assignee", filterable=True),
         ListFieldDefinition("contact_resolution_status", "Contact", filterable=True),
         ListFieldDefinition("needs_response", "Needs response", filterable=True),
+        ListFieldDefinition("ai_handling", "AI handling", filterable=True),
+        ListFieldDefinition("has_ticket", "Sent to ticket", filterable=True),
+        ListFieldDefinition("activity_from", "Active from", filterable=True),
+        ListFieldDefinition("activity_to", "Active to", filterable=True),
         ListFieldDefinition("muted", "Muted", filterable=True),
         ListFieldDefinition("snoozed", "Snoozed", filterable=True),
         ListFieldDefinition("open_only", "Open only", filterable=True),
@@ -78,6 +83,9 @@ class InboxQueueRequest:
     status: str | None = None
     channel_type: str | None = None
     service_team_id: str | UUID | None = None
+    # Multi-team scope for "My team": an agent may belong to several teams and
+    # the my_team count spans all of them, so the filter must select the same set.
+    service_team_ids: tuple[str, ...] = ()
     assigned_person_id: str | UUID | None = None
     needs_response: bool = False
     contact_resolution_status: str | None = None
@@ -87,6 +95,10 @@ class InboxQueueRequest:
     open_only: bool = False
     unassigned: bool = False
     unread: bool = False
+    ai_handling: bool | None = None
+    has_ticket: bool | None = None
+    activity_from: datetime | None = None
+    activity_to: datetime | None = None
     sort_by: str | None = None
     sort_dir: str | None = None
     page: int = 1
@@ -166,8 +178,13 @@ class InboxAssignmentCounts:
     my_team: int
     ai_handling: int
     unassigned: int
+    # The teams the actor belongs to, so the "My team" filter can select exactly
+    # the cohort my_team counted rather than approximating it.
+    my_team_ids: tuple[str, ...]
+    # One cohort, one name. This was previously also exposed as `needs_attention`
+    # with an identical value, which rendered as two sidebar filters that always
+    # showed the same count and applied the same `needs_response=true` filter.
     unreplied: int
-    needs_attention: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +207,10 @@ class InboxQueueProjection:
     open_only: bool
     unassigned: bool
     unread: bool
+    ai_handling: bool | None
+    has_ticket: bool | None
+    activity_from: str | None
+    activity_to: str | None
     service_team_options: tuple[InboxServiceTeamOption, ...]
     agent_options: tuple[InboxAgentOption, ...]
     assignment_counts: InboxAssignmentCounts
@@ -257,6 +278,7 @@ def _assignment_counts(
         else 0
     )
     my_team = 0
+    my_team_ids: tuple[str, ...] = ()
     if actor_person_id is not None:
         team_ids = [
             row[0]
@@ -265,6 +287,7 @@ def _assignment_counts(
             .filter(ServiceTeamMember.is_active.is_(True))
             .all()
         ]
+        my_team_ids = tuple(str(value) for value in team_ids)
         if team_ids:
             my_team = int(
                 db.query(func.count(func.distinct(InboxConversation.id)))
@@ -293,9 +316,9 @@ def _assignment_counts(
         assigned_to_me=assigned_to_me,
         my_team=my_team,
         ai_handling=ai_handling,
+        my_team_ids=my_team_ids,
         unassigned=queue_metrics.unassigned_open,
         unreplied=queue_metrics.needs_response,
-        needs_attention=queue_metrics.needs_response,
     )
 
 
@@ -480,6 +503,11 @@ def build_queue_projection(
             status=status,
             channel_type=channel,
             service_team_id=team_id,
+            service_team_ids=request.service_team_ids,
+            ai_handling=request.ai_handling,
+            has_ticket=request.has_ticket,
+            activity_from=request.activity_from,
+            activity_to=request.activity_to,
             assigned_person_id=assignee_id,
             needs_response=needs_response,
             contact_resolution_status=contact_status,
@@ -567,6 +595,14 @@ def build_queue_projection(
         open_only=open_only,
         unassigned=unassigned,
         unread=unread,
+        ai_handling=request.ai_handling,
+        has_ticket=request.has_ticket,
+        activity_from=request.activity_from.strftime("%Y-%m-%dT%H:%M")
+        if request.activity_from
+        else None,
+        activity_to=request.activity_to.strftime("%Y-%m-%dT%H:%M")
+        if request.activity_to
+        else None,
         service_team_options=tuple(
             InboxServiceTeamOption(id=team.id, name=team.name) for team in service_teams
         ),

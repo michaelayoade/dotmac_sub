@@ -47,6 +47,8 @@ def _team_inbox_contract(
     event_types: tuple[str, ...] = (),
     projections: tuple[str, ...] = (),
     mapping_owner: str = "Team Inbox transport and web adapters",
+    design_refs: tuple[str, ...] | None = None,
+    test_refs: tuple[str, ...] | None = None,
 ) -> ServiceContract:
     """Build the uniformly complete contract shared by the Inbox owner family."""
 
@@ -180,12 +182,14 @@ def _team_inbox_contract(
             ),
         ),
         steward="customer experience platform",
-        design_refs=(
+        design_refs=design_refs
+        or (
             "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
             "docs/SOT_RELATIONSHIP_MAP.md",
             "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
         ),
-        test_refs=(
+        test_refs=test_refs
+        or (
             "tests/test_team_inbox_sot_completion.py",
             "tests/architecture/test_team_inbox_boundaries.py",
             "tests/architecture/test_team_inbox_sot_contracts.py",
@@ -1009,6 +1013,194 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_customer_financial_ledger.py",
                         "tests/architecture/test_prepaid_funding_reconstruction_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="customer.account_status_actions",
+                module="app.services.account_status_commands",
+                owns=(
+                    "administrative account-status impact preview",
+                    "administrative account-bound idempotent status confirmation",
+                ),
+                depends_on=(
+                    "customer.accounts",
+                    "customer.identity_scope",
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Generic identity and contact edits cannot carry lifecycle state. "
+                    "Administrative account overrides require a reviewed, stale-safe "
+                    "confirmation; subscription locks remain independently authoritative."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="administrative account-status impact preview",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "authenticated administrative status context",
+                                "canonical account and subscription lifecycle state",
+                                "account-status action protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "administrative account-bound idempotent status "
+                                "confirmation"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated administrative status context",
+                                "canonical account and subscription lifecycle state",
+                                "signed account-status preview evidence",
+                                "account-bound status idempotency evidence",
+                                "account-status action protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated administrative status context",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated actor, lifecycle write scope, reason, "
+                                "command, correlation, and idempotency identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical account and subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked Subscriber lifecycle override and every locked "
+                                "Subscription identity, status, and active EnforcementLock "
+                                "for the account"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="signed account-status preview evidence",
+                            owner="customer.account_status_actions",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "SHA-256 fingerprint over account, billing approval, "
+                                "override, subscription, target, and projected status"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="account-bound status idempotency evidence",
+                            owner="customer.account_status_actions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked IdempotencyKey scope, key, account binding, and "
+                                "persisted result reference"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="account-status action protocol",
+                            owner="customer.account_status_actions",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed activate, suspend, block, or disable action"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "A confirmed command enters execute_owner_command once on a "
+                            "clean session, stages lifecycle, audit, event, and replay "
+                            "evidence, then commits the complete decision once."
+                        ),
+                        locking=(
+                            "The Subscriber, all account Subscription identities, active "
+                            "EnforcementLock rows, and existing idempotency evidence are "
+                            "selected FOR UPDATE in stable identity order before the "
+                            "preview is rechecked."
+                        ),
+                        idempotency=(
+                            "Action scope, caller key, and account identity replay the "
+                            "stored outcome without reapplying the lifecycle transition."
+                        ),
+                        retries=(
+                            "Completed commands replay; a concurrent unique-key conflict "
+                            "rolls back the whole command and is safe to retry."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "customer.account_status_actions.account_not_found",
+                            "customer.account_status_actions.invalid_idempotency_key",
+                            "customer.account_status_actions.idempotency_account_mismatch",
+                            "customer.account_status_actions.idempotency_conflict",
+                            "customer.account_status_actions.invalid_replay_evidence",
+                            "customer.account_status_actions.command_scope_mismatch",
+                            "customer.account_status_actions.invalid_reason",
+                            "customer.account_status_actions.invalid_preview_fingerprint",
+                            "customer.account_status_actions.stale_preview",
+                            "customer.account_status_actions.action_not_allowed",
+                            "customer.account_status_actions.billing_approval_required",
+                            "customer.account_status_actions.invalid_command_context",
+                            "customer.account_status_actions.command_contract_violation",
+                            "customer.account_status_actions.nested_owner_command",
+                            "customer.account_status_actions.active_caller_transaction",
+                            "customer.account_status_actions.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.api.subscribers",
+                        retryable_codes=(
+                            "customer.account_status_actions.idempotency_conflict",
+                        ),
+                        fail_closed_on=(
+                            "missing actor, reason, preview, or idempotency evidence",
+                            "stale account or subscription lifecycle state",
+                            "billing-unapproved activation",
+                            "cross-account idempotency reuse",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscriber.updated",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "The event retains subscriber identity and adds typed account-"
+                            "status command, prior/current status, override, reason, and "
+                            "preview evidence."
+                        ),
+                        replay=(
+                            "The outbox replays delivery; command idempotency prevents "
+                            "duplicate authoritative lifecycle mutation."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "generic SubscriberUpdate and admin customer forms that "
+                            "created or cleared account lifecycle overrides"
+                        ),
+                        new_owner="customer.account_status_actions",
+                        verification=(
+                            "Generic edit rejection, read-only form, preview, stale "
+                            "confirmation, lock, replay, audit, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "All post-creation administrative status changes use the "
+                            "dedicated preview and confirmation owner."
+                        ),
+                        fallback_retirement=(
+                            "Subscriber.update ignores no lifecycle fields and contains "
+                            "no override writer; adapters cannot submit status or is_active."
+                        ),
+                    ),
+                    steward="customer operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_account_status_commands.py",
+                        "tests/architecture/test_generic_lifecycle_edit_boundary.py",
                     ),
                 ),
             ),
@@ -4959,24 +5151,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.service_extensions",
                 owns=(
                     "service-extension lifecycle and exact grant intervals",
+                    "immutable applied service-extension entry evidence",
                     "service-extension billing-anchor projection",
                 ),
                 depends_on=(
                     "access.subscription_lifecycle",
                     "auth.permission_gate",
                     "control.settings_spec",
+                    "customer.accounts",
                     "events.dispatcher",
                     "observability.audit_log",
                 ),
                 notes=(
-                    "The owner records one immutable grant interval per affected "
-                    "subscription. Its start is the later of the existing billing "
-                    "anchor and application time; next_billing_at, coverage, "
-                    "enforcement shielding, audit, events, and UI projections consume "
-                    "that interval rather than maintaining parallel clocks. A "
-                    "fingerprint-gated historical repair collapses exact duplicate "
-                    "rows and preserves an approved chained interval as a separately "
-                    "audited corrective extension without shortening customer service."
+                    "Typed create, apply, cancel, and anchor-repair commands are the "
+                    "only lifecycle writers. They stage immutable extension evidence, "
+                    "exact entity-linked audit records, and aggregate/per-subscription "
+                    "domain events in the same owner transaction. The owner records one "
+                    "immutable grant interval per affected subscription, starting at the "
+                    "later of the existing billing anchor and application time; "
+                    "next_billing_at, coverage, enforcement shielding, audit, events, "
+                    "and UI projections consume that interval rather than maintaining "
+                    "parallel clocks. A fingerprint-gated historical repair collapses "
+                    "exact duplicate rows and preserves an approved chained interval as "
+                    "a separately audited corrective extension without shortening "
+                    "customer service. Access restoration remains a request to "
+                    "access.subscription_lifecycle."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -4985,6 +5184,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.COMMAND_WRITER,
                             input_names=(
                                 "authenticated extension command",
+                                "canonical service-extension aggregate",
+                                "canonical subscriber scope",
                                 "canonical subscription lifecycle and billing anchor",
                                 "service-extension duration policy",
                                 "reviewed historical duplicate reconciliation command",
@@ -4992,11 +5193,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             canonical_writer="financial.service_extensions",
                         ),
                         ConcernContract(
+                            name="immutable applied service-extension entry evidence",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical service-extension aggregate",
+                                "canonical subscription lifecycle and billing anchor",
+                            ),
+                            canonical_writer="financial.service_extensions",
+                        ),
+                        ConcernContract(
                             name="service-extension billing-anchor projection",
                             role=OwnerRole.PROJECTION_WRITER,
                             input_names=(
-                                "exact service-extension grant interval",
+                                "canonical service-extension aggregate",
                                 "canonical subscription lifecycle and billing anchor",
+                                "immutable applied service-extension entry evidence",
                             ),
                             canonical_writer="financial.service_extensions",
                         ),
@@ -5007,8 +5218,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="auth.permission_gate",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "authorized create, apply, or cancel command with actor "
-                                "and reason"
+                                "CreateServiceExtensionCommand, "
+                                "ApplyServiceExtensionCommand, "
+                                "CancelServiceExtensionCommand, or "
+                                "RepairServiceExtensionAnchorProjectionCommand with "
+                                "CommandContext actor and reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical service-extension aggregate",
+                            owner="financial.service_extensions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="service_extensions lifecycle and command evidence",
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber scope",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "validated subscriber, site, zone, or network scope "
+                                "resolved at command execution"
                             ),
                         ),
                         AuthorityInput(
@@ -5017,7 +5246,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
                                 "locked Subscription identity, lifecycle status, "
-                                "enforcement locks, and next_billing_at projection"
+                                "enforcement locks, and next_billing_at before the "
+                                "extension consequence"
                             ),
                         ),
                         AuthorityInput(
@@ -5038,129 +5268,142 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="exact service-extension grant interval",
+                            name="immutable applied service-extension entry evidence",
                             owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
-                                "applied ServiceExtensionEntry grant_starts_at, "
-                                "grant_ends_at, and anchor_basis"
+                                "unique ServiceExtensionEntry grant_starts_at, "
+                                "grant_ends_at, and anchor_basis with its previous and "
+                                "resulting billing-anchor interval"
                             ),
                         ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "Each create, apply, cancel, or historical duplicate "
-                            "reconciliation command enters "
-                            "execute_owner_command once; nested lifecycle, event, and "
-                            "audit helpers are flush-only."
+                            "Each public create, apply, cancel, anchor-repair, or historical "
+                            "duplicate reconciliation command enters execute_owner_command "
+                            "exactly once on a transaction-free session. Internal mutation, "
+                            "access-restoration, audit, and event helpers are flush-only."
                         ),
                         locking=(
-                            "Apply and cancel lock the ServiceExtension transition row; "
-                            "restoration locks each affected subscription, and a unique "
-                            "extension/subscription entry prevents duplicate grants. "
-                            "Historical repair locks and re-fingerprints the complete "
-                            "duplicate cohort before changing evidence."
+                            "Apply and cancel select the extension FOR UPDATE. Apply "
+                            "locks its resolved subscriptions in stable UUID order, and "
+                            "database primary and unique keys arbitrate create and entry "
+                            "races so a duplicate extension/subscription grant is "
+                            "database-rejected. Historical repair locks and re-fingerprints "
+                            "the complete duplicate cohort before changing evidence."
                         ),
                         idempotency=(
-                            "An extension may transition from pending once; apply uses "
-                            "the extension id as its idempotency identity and duplicate "
-                            "entry evidence is database-rejected. Historical repair "
-                            "reserves one bounded idempotency key against the reviewed "
-                            "cohort fingerprint."
+                            "Create derives its extension UUID from the form key and "
+                            "compares a complete material-input fingerprint. Apply and "
+                            "cancel persist command evidence and replay the stable "
+                            "outcome without duplicate entries, audits, or events. "
+                            "Historical repair reserves one bounded idempotency key "
+                            "against the reviewed cohort fingerprint."
                         ),
                         retries=(
-                            "Adapters retry only after rollback; a completed transition "
-                            "returns a stable invalid-transition outcome rather than "
-                            "granting service twice. A repair retry returns its recorded "
-                            "counts and never creates another corrective extension."
+                            "Adapters retry only after complete rollback. A reused key "
+                            "with changed evidence or an incompatible terminal transition "
+                            "fails closed rather than granting service twice. A repair "
+                            "retry returns its recorded counts and never creates another "
+                            "corrective extension."
                         ),
                     ),
                     errors=ErrorContract(
                         domain_codes=(
-                            "access.service_extensions.ambiguous_customer_identifier",
-                            "access.service_extensions.blank_customer_identifier",
-                            "access.service_extensions.customer_not_found",
-                            "access.service_extensions.empty_subscriber_scope",
-                            "access.service_extensions.extension_not_found",
-                            "access.service_extensions.invalid_customer_identifier",
-                            "access.service_extensions.invalid_days",
-                            "access.service_extensions.invalid_extension_id",
-                            "access.service_extensions.invalid_transition",
-                            "access.service_extensions.invalid_window",
-                            "access.service_extensions.missing_reason",
-                            "access.service_extensions.missing_scope_id",
-                            (
-                                "access.service_extensions."
-                                "duplicate_reconciliation_empty_cohort"
-                            ),
-                            (
-                                "access.service_extensions."
-                                "duplicate_reconciliation_idempotency_conflict"
-                            ),
-                            (
-                                "access.service_extensions."
-                                "duplicate_reconciliation_manual_review"
-                            ),
-                            (
-                                "access.service_extensions."
-                                "duplicate_reconciliation_missing_idempotency_key"
-                            ),
-                            (
-                                "access.service_extensions."
-                                "duplicate_reconciliation_resolution_required"
-                            ),
-                            (
-                                "access.service_extensions."
-                                "duplicate_reconciliation_stale_preview"
-                            ),
+                            "financial.service_extensions.access_restoration_failed",
+                            "financial.service_extensions.ambiguous_customer_identifier",
+                            "financial.service_extensions.blank_customer_identifier",
+                            "financial.service_extensions.customer_not_found",
+                            "financial.service_extensions.duplicate_reconciliation_empty_cohort",
+                            "financial.service_extensions."
+                            "duplicate_reconciliation_idempotency_conflict",
+                            "financial.service_extensions.duplicate_reconciliation_manual_review",
+                            "financial.service_extensions."
+                            "duplicate_reconciliation_missing_idempotency_key",
+                            "financial.service_extensions."
+                            "duplicate_reconciliation_resolution_required",
+                            "financial.service_extensions.duplicate_reconciliation_stale_preview",
+                            "financial.service_extensions.empty_subscriber_scope",
+                            "financial.service_extensions.extension_not_found",
+                            "financial.service_extensions.idempotency_conflict",
+                            "financial.service_extensions.invalid_customer_identifier",
+                            "financial.service_extensions.invalid_days",
+                            "financial.service_extensions.invalid_extension_id",
+                            "financial.service_extensions.invalid_idempotency_key",
+                            "financial.service_extensions.invalid_scope",
+                            "financial.service_extensions.invalid_transition_action",
+                            "financial.service_extensions.invalid_window",
+                            "financial.service_extensions.missing_idempotency_key",
+                            "financial.service_extensions.missing_reason",
+                            "financial.service_extensions.missing_scope_id",
+                            "financial.service_extensions.self_approval_forbidden",
+                            "financial.service_extensions.transition_conflict",
+                            "financial.service_extensions.write_conflict",
                             *owner_command_boundary_error_codes(
                                 "financial.service_extensions"
                             ),
                         ),
-                        mapping_owner="admin billing and CRM adapters",
+                        mapping_owner="admin billing and CRM service-extension adapters",
                         retryable_codes=(),
                         fail_closed_on=(
-                            "stale or missing billing anchor",
-                            "duplicate lifecycle transition",
-                            "ambiguous customer scope",
-                            "incomplete restoration evidence",
+                            "changed idempotency evidence",
+                            "stale or incompatible lifecycle transition",
+                            "ambiguous subscriber scope",
+                            "failed access-restoration consequence",
                             "stale, referenced, or unsupported historical duplicates",
                         ),
                     ),
                     events=EventContract(
-                        event_types=("billing.service_extended",),
+                        event_types=(
+                            "billing.service_extension_created",
+                            "billing.service_extension_applied",
+                            "billing.service_extension_canceled",
+                            "billing.service_extension_anchor_repaired",
+                            "billing.service_extended",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
-                            "Grant interval and anchor-basis fields are additive within "
-                            "schema version 1."
+                            "Version 1 carries stable extension, command, correlation, "
+                            "scope, status, and bounded outcome evidence without customer "
+                            "contact data or full subscriber lists. Grant interval and "
+                            "anchor-basis fields are additive within schema version 1."
                         ),
                         replay=(
-                            "Consumers deduplicate by event identity and extension-entry "
-                            "identity."
+                            "Consumers deduplicate aggregate events by deterministic "
+                            "extension action ID and subscription consequences by "
+                            "extension-entry ID."
                         ),
                     ),
                     projections=(
                         ProjectionContract(
                             name="service-extension billing-anchor projection",
                             input_names=(
-                                "exact service-extension grant interval",
+                                "canonical service-extension aggregate",
                                 "canonical subscription lifecycle and billing anchor",
+                                "immutable applied service-extension entry evidence",
                             ),
                             writer="financial.service_extensions",
-                            freshness="Atomic with each applied extension entry.",
+                            freshness=(
+                                "Atomic with each immutable ServiceExtensionEntry and "
+                                "the applied aggregate transition."
+                            ),
                             stale_behavior=(
-                                "Coverage and enforcement trust the exact interval and "
-                                "report anchor drift."
+                                "Access restoration fails closed and the entire owner "
+                                "transaction rolls back when the anchor consequence "
+                                "cannot be completed. Coverage and enforcement trust the "
+                                "exact interval and report anchor drift."
                             ),
                             drift_signal=(
-                                "ServiceExtensionEntry grant end differs from its "
-                                "subscription billing-anchor projection."
+                                "An applied entry whose grant end or resulting anchor "
+                                "differs from the visible subscription billing anchor."
                             ),
                             rebuild_operation=(
-                                "Project next_billing_at from ordered immutable applied "
-                                "grant evidence under operator reconciliation."
+                                "Run the bounded financial.service_extensions anchor "
+                                "repair command over ordered immutable applied grant "
+                                "evidence."
                             ),
                             repair_owner="financial.service_extensions",
                         ),
@@ -5168,33 +5411,46 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     migration=MigrationContract(
                         state=AuthorityMigrationState.COMPLETE,
                         old_owner=(
-                            "unregistered service_extensions direct commits, stale-anchor "
-                            "addition, and created_at-based enforcement shield"
+                            "app.services.service_extensions internal commits, deferred "
+                            "apply auditing, overloaded applied_by cancellation evidence, "
+                            "route/template lifecycle presentation, stale-anchor "
+                            "addition, and the created_at-based enforcement shield"
                         ),
                         new_owner="financial.service_extensions",
                         verification=(
-                            "Effective-interval behavior, exact coverage, CRM, migration, "
+                            "Lifecycle atomicity, idempotency, concurrency, "
+                            "effective-interval behavior, exact coverage, CRM, "
+                            "projection, audit provenance, route delegation, migration, "
                             "historical duplicate preview/apply, candidate preflight, "
                             "and architecture boundary tests."
                         ),
                         cutover_gate=(
-                            "All grant consumers read grant_starts_at/grant_ends_at and "
-                            "public transitions use the owner command executor."
+                            "All create, apply, cancel, and repair adapters invoke typed "
+                            "owner commands, detail reads use the registered UI "
+                            "projection, and all grant consumers read "
+                            "grant_starts_at/grant_ends_at."
                         ),
                         fallback_retirement=(
+                            "Internal commits, deferred lifecycle audit, path-based "
+                            "history, and the legacy writer baseline entry are absent. "
                             "previous_next_billing_at plus days and created_at plus days "
                             "are historical evidence only, never current decisions."
                         ),
                     ),
                     steward="billing and customer operations",
                     design_refs=(
+                        "docs/designs/SERVICE_EXTENSION_LIFECYCLE_SOT.md",
                         "docs/designs/SERVICE_EXTENSION_EFFECTIVE_INTERVALS.md",
+                        "docs/runbooks/SERVICE_EXTENSION_ACTIVITY_CUTOVER.md",
                         "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
                         "tests/test_service_extensions.py",
+                        "tests/test_web_billing_service_extensions.py",
                         "tests/test_prepaid_service_coverage.py",
+                        "tests/integration/test_service_extension_concurrency.py",
+                        "tests/architecture/test_service_extension_sot_boundary.py",
                         "tests/architecture/test_service_extension_boundary.py",
                     ),
                 ),
@@ -5208,8 +5464,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=(
                     "access.subscription_lifecycle",
-                    "financial.service_extensions",
                     "financial.prepaid_service_renewals",
+                    "financial.service_extensions",
                     "financial.subscription_billing_grants",
                 ),
                 notes=(
@@ -11710,6 +11966,88 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                 ),
             ),
+            SOTService(
+                name="communications.conversation_ticket_handoff",
+                module="app.services.conversation_ticket_handoff",
+                owns=(
+                    "conversation-to-ticket issuance eligibility",
+                    "native conversation-to-ticket provenance",
+                ),
+                depends_on=(
+                    "communications.team_inbox_threads",
+                    "support.ticket_lifecycle",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "An agent holding support:ticket:update explicitly issues a "
+                    "ticket from an active conversation. Ticket identity, state "
+                    "and official timeline stay owned by "
+                    "support.ticket_lifecycle; this owner writes only "
+                    "Ticket.origin_conversation_id, through the keyword-only "
+                    "provenance argument on the Ticket create command. One "
+                    "conversation may issue many tickets. Issuance never "
+                    "transitions the conversation — opening a ticket and "
+                    "resolving a thread are separate decisions and conversation "
+                    "status belongs to communications.team_inbox. Replay is "
+                    "keyed on conversation, actor and title rather than the "
+                    "transport request id, so a double-submitted form replays "
+                    "instead of opening a second ticket."
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.conversation_ticket_handoff",
+                    concerns=(
+                        (
+                            "conversation-to-ticket issuance eligibility",
+                            OwnerRole.APPLICATION_COORDINATOR,
+                        ),
+                        (
+                            "native conversation-to-ticket provenance",
+                            OwnerRole.COMMAND_WRITER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="canonical conversation state",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Active InboxConversation identity, status, "
+                                "channel, resolved subscriber and primary "
+                                "service team."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed issuance request",
+                            owner="communications.conversation_ticket_handoff",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "ConversationTicketIssueCommand with explicit "
+                                "actor, permission keys, title, reason and "
+                                "derived idempotency key."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="ticket command result",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Ticket created by the canonical Ticket create "
+                                "command, including number and status defaults."
+                            ),
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                    projections=("conversation-to-ticket provenance link",),
+                    design_refs=(
+                        "docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_conversation_ticket_handoff.py",
+                        "tests/architecture/test_conversation_ticket_handoff_boundary.py",
+                    ),
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.events.handlers.notification",
@@ -11719,6 +12057,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.notifications",
             "app.web.admin.inbox",
             "app.services.team_inbox_*",
+            "app.services.conversation_ticket_handoff",
         ),
         rule=(
             "Domain services request communication outcomes; channel choice, "
@@ -21870,15 +22209,187 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.payment_proofs",
                 ),
             ),
+            SOTService(
+                name="ui.service_extension_detail_projection",
+                module="app.services.web_billing_service_extensions",
+                owns=(
+                    "admin service-extension detail projection",
+                    "exact service-extension activity presentation",
+                    "service-extension status and action presentation",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "auth.staff_provisioning",
+                    "financial.service_extensions",
+                    "observability.audit_log",
+                    "ui.display_formatting",
+                ),
+                notes=(
+                    "One typed read owner composes lifecycle facts, exact entity-linked "
+                    "audit evidence, actor labels, defensible legacy provenance, impact, "
+                    "status presentation, and permission-aware transition visibility. "
+                    "It never treats request-path audits as entity history and never "
+                    "exposes raw audit metadata through the billing-read page."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin service-extension detail projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical service-extension lifecycle facts",
+                                "canonical service-extension activity evidence",
+                                "canonical staff display identity",
+                                "service-extension permission result",
+                                "application display-timezone policy",
+                                "service-extension presentation policy",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="exact service-extension activity presentation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical service-extension lifecycle facts",
+                                "canonical service-extension activity evidence",
+                                "canonical staff display identity",
+                                "application display-timezone policy",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="service-extension status and action presentation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical service-extension lifecycle facts",
+                                "service-extension permission result",
+                                "service-extension presentation policy",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical service-extension lifecycle facts",
+                            owner="financial.service_extensions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "ServiceExtension aggregate, immutable entries, selected "
+                                "scope, and sampled affected subscriptions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical service-extension activity evidence",
+                            owner="observability.audit_log",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "AuditEvent rows filtered by exact "
+                                "entity_type=service_extension and exact extension UUID"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff display identity",
+                            owner="auth.staff_provisioning",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "write-time audit actor-label snapshot, with canonical "
+                                "SystemUser lookup only for legacy lifecycle columns"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="service-extension permission result",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "billing:extension:read and billing:extension:apply "
+                                "request authorization"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="application display-timezone policy",
+                            owner="ui.display_formatting",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="application timezone and timestamp display formatter",
+                        ),
+                        AuthorityInput(
+                            name="service-extension presentation policy",
+                            owner="ui.service_extension_detail_projection",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed status, action, activity-label, ordering, and "
+                                "legacy-provenance policy"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "The projection reads on the adapter-owned session and never "
+                            "mutates, flushes, commits, or rolls back."
+                        ),
+                        locking=(
+                            "No mutation lock is acquired; state-changing command owners "
+                            "lock and recheck lifecycle eligibility."
+                        ),
+                        idempotency=(
+                            "The same extension, exact audit cohort, staff identities, "
+                            "permissions, and evaluation time produce the same typed "
+                            "projection and deterministic activity order."
+                        ),
+                        retries="The bounded read-only projection is safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="admin billing service-extension adapter",
+                        fail_closed_on=(
+                            "missing lifecycle permission",
+                            "ambiguous or absent canonical extension identity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "admin billing route audit queries, template-local status "
+                            "mapping, lifecycle eligibility, and path-based activity"
+                        ),
+                        new_owner="ui.service_extension_detail_projection",
+                        verification=(
+                            "Exact filtering, activity provenance, actor snapshot, "
+                            "permission, deterministic ordering, template, mobile layout, "
+                            "and route-delegation tests."
+                        ),
+                        cutover_gate=(
+                            "The detail route passes one typed projection and the template "
+                            "renders owner-provided status and action eligibility."
+                        ),
+                        fallback_retirement=(
+                            "Route/template audit queries, actor lookup, status maps, "
+                            "eligibility decisions, and misleading broad audit links are "
+                            "absent."
+                        ),
+                    ),
+                    steward="billing operations UI",
+                    design_refs=(
+                        "docs/designs/SERVICE_EXTENSION_LIFECYCLE_SOT.md",
+                        "docs/FRONTEND_SPEC.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_web_billing_service_extensions.py",
+                        "tests/architecture/test_service_extension_sot_boundary.py",
+                    ),
+                ),
+            ),
         ),
         entrypoints=(
             "app.web.admin.billing_invoice_batch",
             "app.web.admin.billing_invoice_bulk",
             "app.web.admin.billing_payment_proofs",
+            "app.web.admin.billing_extensions",
             "templates.admin.billing.invoice_batch",
             "templates.admin.billing.invoice_bulk_review",
             "templates.admin.billing.payment_proof_detail",
+            "templates.admin.billing.service_extension_detail",
             "templates.components.forms.action_form",
+            "templates.components.ui.timeline_item",
         ),
         rule=(
             "Action forms render owner-provided eligibility, impact, confirmation, "
