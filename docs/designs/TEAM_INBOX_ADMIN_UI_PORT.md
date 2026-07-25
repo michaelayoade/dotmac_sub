@@ -235,11 +235,22 @@ The demo buttons that are actually the edges.
 
   1. **Give `Tickets.create` a participant mode** — a `commit=False` flag, or
      let the decorator participate when any owner command is active. Cleanest,
-     and matches the work-order precedent. Caveat: the decorator fires
-     `_notify_workqueue` only on the root path, so participating would silently
-     skip the workqueue notification — precisely the "owner command swallows
-     advisory side effects" failure mode. The notification would need to move to
-     a post-commit dispatch.
+     and matches the work-order precedent.
+
+     An earlier revision of this document called the root-path-only
+     `_notify_workqueue` call a lost *notification* and treated it as a blocking
+     caveat. That was wrong. `_notify_workqueue` calls
+     `workqueue.events.emit_item_change`, which the module documents as
+     *"Realtime workqueue invalidations … neither [WebSocket nor SSE adapter]
+     becomes workqueue state authority."* It is a cache-invalidation ping for a
+     live pane, already best-effort (it swallows every exception so realtime can
+     never fail a write), and workqueue holds no authority. Notification is a
+     different domain entirely — `communications.notification_service` and
+     `communications.staff_notifications`. Missing an invalidation means a
+     workqueue pane refreshes on its next aggregate instead of instantly; it
+     loses no business fact. The coordinator can simply emit the invalidation
+     itself after its own commit. No restructuring of ticket-lifecycle side
+     effects is required.
   2. **Drop the coordinator's own transaction**, letting `Tickets.create` be the
      root and staging provenance plus audit via `execute_owner_savepoint`.
      Smaller blast radius, weaker atomicity story for the audit fact.
@@ -247,10 +258,38 @@ The demo buttons that are actually the edges.
      committed command. Simplest, but leaves a window where a ticket exists
      without its origin, which is the drift the standard exists to prevent.
 
-  Recommendation: (1), with `_notify_workqueue` moved to post-commit dispatch —
-  the only option preserving one transaction and one writer. It changes
-  `support.ticket_lifecycle` behaviour, so it wants an explicit decision rather
-  than being slipped in from the communications side.
+  Recommendation: (1) — the only option preserving one transaction and one
+  writer. With the workqueue point corrected above, its blast radius is a
+  participant flag on the create command plus a post-commit invalidation from
+  the coordinator. It still changes `support.ticket_lifecycle`'s command
+  surface, so it wants an explicit decision rather than being slipped in from
+  the communications side.
+
+#### Open design question: work in sub is not ticket-gated
+
+The demo button assumed every escalation becomes a ticket. The codebase does
+not agree, and this shapes what the handoff should ultimately offer.
+
+- `work_order.origin_ticket_id` is **nullable**, and three of the four
+  work-order creation paths never involve a ticket: `app/services/dispatch.py`
+  (direct admin dispatch), `app/services/subscription_change_execution.py`
+  (a subscription change spawning field work), and
+  `app/services/network/fiber_field_verification_job_plans.py`. Only
+  `ticket_work_order_handoff` starts from a ticket.
+- `project_tasks.ticket_id` is **nullable** too — project tasks exist without
+  tickets.
+
+So conversation → ticket is one legitimate escalation, not the only one. A
+thread that is plainly "my fibre is cut, send someone" would today have to mint
+a ceremonial ticket purely to reach a work order, which the architecture does
+not otherwise require.
+
+This does **not** block the ticket handoff — a tracked incident is the right
+outcome for most inbound threads, and the ticket path is the one the workspace
+already promises. It is flagged because the eventual shape may be a second
+edge (conversation → work order, with its own provenance column and owner)
+rather than routing all field work through a ticket. Decide that before adding
+more escalation targets, not after.
 
 ### Slice 4 — Remaining demo-to-real workflows
 
