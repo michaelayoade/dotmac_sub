@@ -174,7 +174,7 @@ def test_a_team_comment_records_its_author_in_a_column(db_session, actor):
     team_inbox_commands.create_comment(
         db_session,
         conversation_id=conversation_id,
-        body_text="Needs a field visit.",
+        body="Needs a field visit.",
         actor_person_id=actor,
     )
 
