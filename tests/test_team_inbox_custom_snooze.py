@@ -21,6 +21,12 @@ from app.web.admin.inbox import _parse_snooze_until
 CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
 
 
+
+def _aware(value):
+    """SQLite drops the timezone on read; Postgres preserves it."""
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
 def _conversation_id(db_session):
     conversation = InboxConversation(
         channel_type="email",
@@ -45,7 +51,7 @@ def test_snoozing_to_an_explicit_time_sets_that_time(db_session):
 
     row = db_session.get(InboxConversation, conversation_id)
     assert row.status == "snoozed"
-    assert abs((row.snoozed_until - wake).total_seconds()) < 2
+    assert abs((_aware(row.snoozed_until) - wake).total_seconds()) < 2
 
 
 def test_an_explicit_time_wins_over_a_duration(db_session):
@@ -61,7 +67,7 @@ def test_an_explicit_time_wins_over_a_duration(db_session):
     )
 
     row = db_session.get(InboxConversation, conversation_id)
-    assert (row.snoozed_until - datetime.now(UTC)) > timedelta(days=4)
+    assert (_aware(row.snoozed_until) - datetime.now(UTC)) > timedelta(days=4)
 
 
 def test_a_past_time_is_refused_rather_than_waking_immediately(db_session):
@@ -84,7 +90,7 @@ def test_fixed_durations_still_work(db_session):
 
     row = db_session.get(InboxConversation, conversation_id)
     assert row.status == "snoozed"
-    assert row.snoozed_until > datetime.now(UTC)
+    assert _aware(row.snoozed_until) > datetime.now(UTC)
 
 
 def test_zero_minutes_still_clears_a_snooze(db_session):
