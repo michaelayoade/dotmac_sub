@@ -28,6 +28,33 @@ ROUTES = Path("app/web/admin/inbox.py").read_text()
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 
+@pytest.fixture(autouse=True)
+def _stub_object_storage(monkeypatch):
+    """Object storage is not reachable from the unit suite.
+
+    Patched at the source module because the media owner imports
+    `file_uploads` inside the function, so a module-attribute patch on the
+    caller would not be seen.
+    """
+    from types import SimpleNamespace
+
+    from app.services import file_storage
+
+    def _fake_stage_upload(**kwargs):
+        return SimpleNamespace(
+            id="stored-file-1",
+            original_filename=kwargs["original_filename"],
+            content_type=kwargs["content_type"],
+            file_size=len(kwargs["data"]),
+            storage_key_or_relative_path=(
+                f"attachments/inbox_conversation/{kwargs['entity_id']}/"
+                f"{kwargs['original_filename']}"
+            ),
+        )
+
+    monkeypatch.setattr(file_storage.file_uploads, "stage_upload", _fake_stage_upload)
+
+
 def _conversation_id(db_session):
     conversation = InboxConversation(
         channel_type="email",
