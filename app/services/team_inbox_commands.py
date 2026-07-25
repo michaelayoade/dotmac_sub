@@ -444,6 +444,7 @@ def update_workflow(
     priority: int | None = None,
     is_muted: bool | None = None,
     snooze_minutes: int | None = None,
+    snooze_until: datetime | None = None,
     actor_person_id: str | UUID | None = None,
 ) -> None:
     def action() -> None:
@@ -453,6 +454,7 @@ def update_workflow(
             priority=priority,
             is_muted=is_muted,
             snooze_minutes=snooze_minutes,
+            snooze_until=snooze_until,
             actor_person_id=actor_person_id,
         )
 

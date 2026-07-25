@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from urllib.parse import quote_plus
 from uuid import UUID
 
@@ -26,6 +27,23 @@ from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
+
+
+def _parse_snooze_until(value: object) -> "datetime | None":
+    """Parse the datetime-local field the snooze menu submits.
+
+    The browser sends local wall-clock without a zone; it is read as UTC so the
+    stored wake time is unambiguous, and an unparsable value is treated as
+    absent rather than silently snoozing to the wrong moment.
+    """
+    text = _query_text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _prepare_mutation(db: Session) -> None:
@@ -634,6 +652,7 @@ def team_inbox_workflow_action(
     priority: int | None = Form(default=None),
     is_muted: bool | None = Form(default=None),
     snooze_minutes: int | None = Form(default=None),
+    snooze_until: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
@@ -644,6 +663,7 @@ def team_inbox_workflow_action(
             priority=priority,
             is_muted=is_muted,
             snooze_minutes=snooze_minutes,
+            snooze_until=_parse_snooze_until(snooze_until),
             actor_person_id=_actor_id_from_request(request),
         )
     except team_inbox_commands.ConversationNotFoundError:
