@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
@@ -103,6 +104,7 @@ from app.services.status_presentation import (
     payment_status_presentation,
     subscription_status_presentation,
 )
+from app.services.subscription_lifecycle import is_subscription_restore_candidate
 from app.services.subscription_lifecycle_policy import (
     is_customer_impact_service_status,
     is_mrr_countable_service_status,
@@ -1455,6 +1457,7 @@ def _build_network_access_cards(
     traces_by_subscription: dict[str, dict[str, object] | None] | None = None,
     access_state_by_subscription: dict[str, dict[str, object] | None] | None = None,
     incident_by_subscription: dict[str, dict[str, object] | None] | None = None,
+    service_health_by_subscription: Mapping[str, object] | None = None,
 ) -> list[dict]:
     """Build network access info cards from subscriptions with live access."""
     cards = []
@@ -1463,6 +1466,7 @@ def _build_network_access_cards(
     traces_by_subscription = traces_by_subscription or {}
     access_state_by_subscription = access_state_by_subscription or {}
     incident_by_subscription = incident_by_subscription or {}
+    service_health_by_subscription = service_health_by_subscription or {}
     for sub in subscriptions:
         raw_status = getattr(sub, "status", None)
         status_value = getattr(raw_status, "value", None)
@@ -1501,6 +1505,7 @@ def _build_network_access_cards(
                 "topology_trace": traces_by_subscription.get(sub_id),
                 "access_state": access_state_by_subscription.get(sub_id),
                 "known_incident": incident_by_subscription.get(sub_id),
+                "service_health": service_health_by_subscription.get(sub_id),
             }
         )
         cards[-1]["ticket_prefill_url"] = _ticket_prefill_url(sub, cards[-1])
@@ -1925,6 +1930,10 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     except Exception as exc:
         customer_user_access = {"error": str(exc)}
 
+    account_health = build_portal_account_health(db, customer.id).for_active_services()
+    service_health_by_subscription = {
+        str(service.subscription_id): service for service in account_health.services
+    }
     pppoe_access = _build_pppoe_access_snapshot(db, account_ids)
     network_connection_status, connection_by_subscription = (
         _build_network_connection_snapshot(db, subscriptions)
@@ -1964,8 +1973,16 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         traces_by_subscription,
         access_state_by_subscription,
         incident_by_subscription,
+        service_health_by_subscription,
     )
-    account_health = build_portal_account_health(db, customer.id).for_active_services()
+    network_access_active_count = sum(
+        1
+        for card in network_access_cards
+        if card["status"] == SubscriptionStatus.active.value
+    )
+    network_access_inactive_count = (
+        len(network_access_cards) - network_access_active_count
+    )
     pending_location_request = (
         db.query(CustomerLocationChangeRequest)
         .filter(CustomerLocationChangeRequest.subscriber_id == customer.id)
@@ -1996,6 +2013,11 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
             for account in accounts
         },
         "subscriptions": subscriptions,
+        "restorable_subscription_ids": {
+            str(subscription.id)
+            for subscription in subscriptions
+            if is_subscription_restore_candidate(subscription.status)
+        },
         "subscription_status_presentations": {
             str(subscription.id): subscription_status_presentation(subscription.status)
             for subscription in subscriptions
@@ -2025,7 +2047,10 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "network_connection_status": network_connection_status,
         "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
+        "network_access_active_count": network_access_active_count,
+        "network_access_inactive_count": network_access_inactive_count,
         "account_health": account_health,
+        "service_health_by_subscription": service_health_by_subscription,
         "access_repair_state": _build_access_repair_state(
             db,
             customer,

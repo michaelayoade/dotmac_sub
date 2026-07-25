@@ -2285,9 +2285,6 @@ class PaymentChannel(Base):
     provider_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_providers.id")
     )
-    default_collection_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("collection_accounts.id")
-    )
     fee_rules: Mapped[dict | None] = mapped_column(JSON)
     # External accounting-system mapping code; see CollectionAccount.accounting_code.
     accounting_code: Mapped[str | None] = mapped_column(String(64))
@@ -2305,7 +2302,6 @@ class PaymentChannel(Base):
     )
 
     provider = relationship("PaymentProvider")
-    default_collection_account = relationship("CollectionAccount")
     channel_accounts = relationship("PaymentChannelAccount", back_populates="channel")
     payments = relationship("Payment", back_populates="payment_channel")
     payment_methods = relationship("PaymentMethod", back_populates="payment_channel")
@@ -2431,6 +2427,15 @@ class BillingRun(Base):
     )
     run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     billing_cycle: Mapped[str | None] = mapped_column(String(40))
+    launch_kind: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="scheduled"
+    )
+    requested_by: Mapped[str | None] = mapped_column(String(120))
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_runs.id", ondelete="SET NULL"),
+    )
     status: Mapped[BillingRunStatus] = mapped_column(
         Enum(BillingRunStatus), default=BillingRunStatus.running
     )
@@ -2447,29 +2452,6 @@ class BillingRun(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-
-
-class BillingRunSchedule(Base):
-    __tablename__ = "billing_run_schedules"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    run_day: Mapped[int] = mapped_column(Integer, default=1)
-    run_time: Mapped[str] = mapped_column(String(8), default="02:00")
-    timezone: Mapped[str] = mapped_column(String(64), default="Africa/Lagos")
-    billing_cycle: Mapped[str] = mapped_column(String(40), default="monthly")
-    partner_ids: Mapped[list | None] = mapped_column(JSON, default=list)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
     )
 
 

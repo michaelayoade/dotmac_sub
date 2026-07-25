@@ -62,7 +62,9 @@ def test_lifecycle_owner_uses_one_boundary_per_public_command() -> None:
         "CancelServiceExtensionOutcome",
     ):
         assert f"class {command}:" in source
-    assert source.count("execute_owner_command(") == 4
+    # create, apply, cancel, anchor-projection repair, and duplicate-entry
+    # reconciliation (the last landed on main via #1593).
+    assert source.count("execute_owner_command(") == 5
     for forbidden in (
         "HTTPException",
         ".commit(",

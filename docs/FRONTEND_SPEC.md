@@ -688,6 +688,7 @@ Dashboard implementation notes:
     "subscribers": list[Subscriber],
     "accounts": list[Subscriber],
     "subscriptions": list[Subscription],
+    "restorable_subscription_ids": set[str], # lifecycle-owner restore candidates
     "account_lookup": dict[str, Subscriber],  # account_id → Subscriber
     "invoices": list[Invoice],
     "payments": list[Payment],
@@ -728,9 +729,20 @@ Dashboard implementation notes:
     "has_any_subscribers": bool,
     "activity_items": list[dict],       # [{type, title, description, timestamp}]
     "customer_user_access": dict,       # portal login state
+    "can_activate_subscriptions": bool, # RBAC-owned visibility for restore actions
+    "can_suspend_subscriptions": bool,  # RBAC-owned visibility for suspend actions
     "active_page": "customers",
 }
 ```
+
+The **All Subscriptions** work surface exposes one visible `Restore` row action
+for blocked, suspended, stopped, or disabled services only when the authenticated
+operator has `catalog:write` or `subscription:activate`. The action consumes the
+canonical subscription-lifecycle preview, shows the exact billing, access, and
+session impact, captures an operational reason, and confirms against the
+reviewed state head before execution. The lifecycle endpoint rechecks the
+kind-specific permission and current eligibility; the template is visibility,
+not authorization.
 
 #### `GET /admin/customers/{type}/{id}` (Organization Detail)
 Same shape as person, plus:
@@ -1135,9 +1147,22 @@ Page contract: this is the Sub finance-admin source-fact plane for moving WHT
 receivables through evidence-backed transitions. `financial.tax_accounting`
 owns both the read/context contract and commands; billing tax RBAC owns access.
 The WHT queue has server-side status/search filtering, newest-first ordering,
-counts, and pagination. Search covers reseller name, record ID, billing account
-ID, and certificate reference. Account mapping and journal operations belong in
-Dotmac ERP and are not presented here.
+counts, and pagination. Search covers reseller name, direct-customer identity,
+record ID, customer/billing account ID, and certificate reference. Rows may
+represent either a direct customer account or a consolidated billing account.
+Account mapping and journal operations belong in Dotmac ERP and are not
+presented here.
+
+For invoice-linked direct bank-transfer payments where the customer WHT policy
+is enabled, the customer portal receives a read-only server-owned snapshot with
+invoice total, VAT-exclusive WHT basis, VAT amount, configured WHT percentage,
+WHT deduction, exact bank-transfer amount, gross credit after verification, and
+the certificate amount that remains outstanding. Templates and clients must not
+ask the customer for a WHT rate, must not recalculate VAT-exclusive basis from
+gross or net values, and must not offer automatic WHT for arbitrary
+account-credit deposits or online/card checkout. When WHT is disabled or the
+payment method is not direct bank transfer, the portal preserves the existing
+full-value payment experience.
 
 ---
 
@@ -1581,6 +1606,9 @@ Each follows the same pattern — context dict with list data, form helpers, and
 | `/admin/system/users/{id}` | User detail | user, roles, permissions, activity |
 | `/admin/system/roles` | Role list | roles, permission_groups |
 | `/admin/system/settings` | Settings hub | domains, settings_by_domain |
+| `/admin/settings/billing/collection-accounts` | Receiving accounts and customer transfer destinations | accounts, account_types, show_inactive |
+| `/admin/settings/billing/payment-channels` | Recorded settlement-channel attribution | channels, providers, channel_types, show_inactive |
+| `/admin/settings/billing/payment-channel-accounts` | Channel-to-collection-account attribution | mappings, channels, collection_accounts, show_inactive |
 | `/admin/system/audit` | Audit log | events, filters, page |
 | `/admin/system/health` | System health | cpu, memory, disk, services |
 
@@ -1761,6 +1789,13 @@ Template listens:
 
 ### Server-owned action forms
 
+High-impact action contracts may carry owner-produced hidden values such as a
+state-preview fingerprint. The shared renderer emits those values unchanged and
+uses a required, labeled confirmation checkbox when confirmation is declared.
+Do not use `window.confirm`, `onclick`/`onsubmit` confirmation handlers, or
+template-generated fingerprints. The command owner must recheck the fingerprint
+and confirmation under its transaction lock.
+
 High-impact and lifecycle action forms use
 `app.services.action_forms.ActionForm` and the shared
 `components/forms/action_form.html` renderer. The resource projection composes
@@ -1775,6 +1810,21 @@ duplicate-reference policy, payment/WHT consequences, validation, locking, and
 execution. Unauthorized verify/reject forms are absent. An unavailable verify
 action may remain visible with the owner-provided duplicate reason when reject
 is still valid.
+
+Payment-arrangement review and dunning-case staff actions use the same
+server-owned form contract. Dunning bulk actions always preview an explicit set
+of case identifiers, disclose every eligible and skipped case, bind that exact
+scope and current owner state into a fingerprint, and revalidate it while the
+cases are locked. Templates must not infer transition eligibility or submit
+page-filter criteria as an implicit bulk scope.
+
+Invoice batch launch/retry and invoice bulk actions also use server-rendered
+review forms. A manual batch preview lists exact postpaid subscription
+membership and carries its current fingerprint; a retry is available only from
+a failed run and produces a new linked run. Invoice list and AR-aging actions
+submit explicit invoice IDs to a review page and carry the owner-produced
+resolved count and scope token. Client JavaScript may collect visible-page IDs,
+but it does not display confirmation dialogs or execute the financial command.
 
 Failed submissions re-render the detail page with the operator's declared
 values and `aria-invalid` field errors or one `role="alert"` general error.

@@ -347,6 +347,11 @@ if ! validate_image_revision "${IMAGE}" "${TAG}" "${FULL_SHA}"; then
   exit 1
 fi
 
+log "Verifying pre-migration service-extension identity state"
+APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+  "${COMPOSE[@]}" run --rm --no-deps app \
+  python -m scripts.migration.reconcile_service_extension_duplicates --check
+
 log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
 set_env_value APP_IMAGE "${IMAGE}"
 set_env_value GIT_SHA "${FULL_SHA}"
@@ -363,6 +368,10 @@ log "Verifying database schema contracts"
 log "Verifying enabled integration manifest pins"
 "${COMPOSE[@]}" run --rm --no-deps app \
   python -m scripts.integrations.verify_manifest_pins
+
+log "Verifying CRM ticket capability readiness"
+"${COMPOSE[@]}" run --rm --no-deps app \
+  python -m scripts.integrations.verify_crm_ticket_readiness
 
 log "Starting warm candidate on 127.0.0.1:${CANDIDATE_PORT}"
 docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true

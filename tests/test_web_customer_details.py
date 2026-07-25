@@ -201,17 +201,19 @@ def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
     assert context["account_health"].account_id == subscriber.id
 
 
-def test_customer_360_renders_canonical_service_health() -> None:
+def test_customer_360_rehomes_canonical_service_health() -> None:
     template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
 
     assert (
         'from "components/portal/account_health.html" import service_health_strip'
-        in template
+        not in template
     )
     assert (
         'service_health_strip(account_health, "/admin/catalog/subscriptions/")'
-        in template
+        not in template
     )
+    assert "service_health_by_subscription" in template
+    assert "{% set card_health = card.service_health %}" in template
 
 
 def test_customer_360_service_health_contains_only_active_services(
@@ -236,6 +238,7 @@ def test_customer_360_service_health_contains_only_active_services(
     assert previous_service.id not in {
         service.subscription_id for service in context["account_health"].services
     }
+    assert context["restorable_subscription_ids"] == {str(previous_service.id)}
 
 
 def test_customer_360_places_contact_and_portal_access_side_by_side() -> None:
@@ -249,6 +252,27 @@ def test_customer_360_places_contact_and_portal_access_side_by_side() -> None:
         'class="order-4 rounded-2xl border border-slate-200/60 bg-white shadow-sm'
     ) in template
     assert "lg:col-span-2" in template
+
+
+def test_customer_360_restore_action_is_permission_gated_and_reviewed() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+
+    assert (
+        "{% if can_activate_subscriptions and subscription.id|string in "
+        "restorable_subscription_ids %}"
+    ) in template
+    assert "@click=\"restoreSubscription('{{ subscription.id }}')\"" in template
+    assert (
+        "showAllSubscriptions: {{ ((stats.active_subscriptions | default(0)) == 0) "
+        "| tojson }}"
+    ) in template
+    assert "Reason for restoring this subscription:" in template
+    assert "`${lifecycleUrl}/preview`" in template
+    assert "customer access will remain blocked" in template
+    assert "preview.access_impact?.block_reason_after" in template
+    assert "body.set('expected_head', preview.expected_head)" in template
+    assert "'Idempotency-Key': idempotencyKey" in template
+    assert "`${lifecycleUrl}/execute`" in template
 
 
 def test_customer_dashboard_welcome_card_keeps_content_inset() -> None:
@@ -513,6 +537,30 @@ def test_normalize_usage_period_tolerates_trailing_punctuation():
     assert customer_routes._normalize_usage_period("unexpected") == "current"
 
 
+def test_customer_subscription_action_context_hides_unauthorized_actions(
+    monkeypatch,
+) -> None:
+    request = SimpleNamespace(
+        state=SimpleNamespace(auth={"principal_id": "operator-1"})
+    )
+    granted = {"subscription:activate"}
+    monkeypatch.setattr(
+        customer_routes,
+        "has_permission",
+        lambda auth, db, permission: permission in granted,
+    )
+
+    context = customer_routes._subscription_action_permission_context(
+        request,
+        object(),
+    )
+
+    assert context == {
+        "can_activate_subscriptions": True,
+        "can_suspend_subscriptions": False,
+    }
+
+
 def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
     captured: dict[str, object] = {}
 
@@ -568,6 +616,8 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
     assert captured["context"]["customer_type"] == "person"
     assert captured["context"]["bulk_notification_channels"] == []
     assert captured["context"]["bulk_notification_templates"] == []
+    assert captured["context"]["can_activate_subscriptions"] is False
+    assert captured["context"]["can_suspend_subscriptions"] is False
     assert captured["context"]["detail_config"] == {
         "statsUrl": (
             "/admin/customers/person/cust-123/stats"

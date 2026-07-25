@@ -2097,6 +2097,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "control.settings_spec",
                     "customer.accounts",
+                    "financial.customer_tax_policies",
                     "financial.account_credit_deposits",
                     "financial.invoices",
                     "financial.topup_intents",
@@ -2104,8 +2105,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "This coordinator admits one typed customer creation command, resolves "
-                    "configuration and invoice/deposit policy from their owners, and "
-                    "commits the selected canonical intent participant exactly once."
+                    "configuration plus customer-specific WHT policy from their owners, "
+                    "fails closed when invoice-linked WHT lacks an authoritative VAT-"
+                    "exclusive basis, and commits the selected canonical intent "
+                    "participant exactly once."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -2116,6 +2119,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "authenticated direct-transfer creation command",
                                 "canonical customer account",
                                 "canonical payable invoice",
+                                "canonical customer WHT policy",
                                 "canonical direct-transfer configuration",
                                 "canonical direct-transfer lifetime and amount policy",
                                 "canonical deposit intent protocol",
@@ -2149,6 +2153,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="canonical customer WHT policy",
+                            owner="financial.customer_tax_policies",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked customer withholding-tax eligibility, version, "
+                                "and operator provenance"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="canonical direct-transfer configuration",
                             owner="financial.topup_intents",
                             kind=AuthorityKind.CONTROL_INPUT,
@@ -2161,8 +2174,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="control.settings_spec",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "typed top-up minimum/maximum and direct-transfer intent "
-                                "lifetime settings with checked-in defaults and bounds"
+                                "typed top-up minimum/maximum, direct-transfer lifetime, "
+                                "and global WHT percentage settings with checked-in "
+                                "defaults and bounds"
                             ),
                         ),
                         AuthorityInput(
@@ -2229,9 +2243,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         retryable_codes=(),
                         fail_closed_on=(
                             "disabled feature or no enabled configured bank",
-                            "invalid lifetime or amount policy",
+                            "invalid lifetime, amount, or WHT rate policy",
                             "missing, wrong-account, draft, terminal, zero-balance, or "
                             "unsupported-currency invoice",
+                            "missing customer WHT policy, missing authoritative VAT-exclusive "
+                            "invoice basis, partial settlement, or inconsistent invoice tax "
+                            "evidence for an enabled WHT customer",
                             "deposit policy rejection or concurrent intent conflict",
                             "active caller transaction or manifest mismatch",
                         ),
@@ -2282,6 +2299,123 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_direct_transfer_intents.py",
                         "tests/test_customer_portal_topup_flow.py",
                         "tests/architecture/test_topup_intent_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.customer_tax_policies",
+                module="app.services.customer_tax_policies",
+                owns=("customer withholding-tax eligibility policy",),
+                depends_on=("customer.accounts", "events.dispatcher"),
+                notes=(
+                    "This owner persists per-customer WHT eligibility as an audited "
+                    "financial policy. It does not own the global WHT rate, invoice tax "
+                    "basis, payment intent snapshot, or WHT lifecycle."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="customer withholding-tax eligibility policy",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "customer WHT policy command context",
+                                "canonical customer account",
+                                "canonical customer WHT policy record",
+                            ),
+                            canonical_writer="financial.customer_tax_policies",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="customer WHT policy command context",
+                            owner="financial.customer_tax_policies",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed actor, scope, reason, command, correlation, and "
+                                "idempotency evidence for a customer WHT policy change"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer account",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked customer account identity and existence",
+                        ),
+                        AuthorityInput(
+                            name="canonical customer WHT policy record",
+                            owner="financial.customer_tax_policies",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique per-account WHT enablement flag, version, actor, and "
+                                "updated timestamp"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "set_customer_withholding_tax_policy enters "
+                            "execute_owner_command once on a transaction-free session, "
+                            "locks the target customer and policy row, stages one "
+                            "versioned update, and commits or rolls back once."
+                        ),
+                        locking=(
+                            "The owner locks the target Subscriber first, then the unique "
+                            "CustomerTaxPolicy row for that account."
+                        ),
+                        idempotency=(
+                            "Repeated commands with the same target enabled state replay the "
+                            "existing policy version. State changes increment the policy "
+                            "version exactly once."
+                        ),
+                        retries=(
+                            "Adapters retry only the full command after rollback with the "
+                            "same context and idempotency evidence."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.customer_tax_policies.actor_required",
+                            "financial.customer_tax_policies.account_not_found",
+                            "financial.customer_tax_policies.invalid_command_context",
+                            "financial.customer_tax_policies.command_contract_violation",
+                            "financial.customer_tax_policies.nested_owner_command",
+                            "financial.customer_tax_policies.active_caller_transaction",
+                            "financial.customer_tax_policies.nested_transaction_completion",
+                        ),
+                        mapping_owner="admin customer billing adapters",
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing actor, missing customer account, or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("customer_tax_policy.updated",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries account identity, enabled state, policy "
+                            "version, and actor provenance only."
+                        ),
+                        replay=(
+                            "Replay may refresh projections or audit consumers only; it "
+                            "never re-enters the policy command."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="financial.customer_tax_policies",
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/FRONTEND_SPEC.md",
+                        "docs/ACCOUNT_CREDIT_DEPOSITS.md",
+                    ),
+                    test_refs=(
+                        "tests/test_subscriber_billing_config.py",
+                        "tests/test_direct_transfer_intents.py",
+                        "tests/test_customer_wht_policy_migration.py",
                     ),
                 ),
             ),
@@ -2567,6 +2701,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "A deposit preview may include current eligible invoices and "
                     "the exact oldest-debt application before any checkout starts. "
+                    "The same policy owner supplies the customer-facing active-request "
+                    "phase, observation/expiry facts, and closed next-action hint so "
+                    "portal adapters do not reinterpret pending intent state. "
                     "The deposit first records the whole confirmed receipt as "
                     "unallocated account credit, grants no service duration, and "
                     "then asks the canonical applicator to settle eligible debt. "
@@ -2663,7 +2800,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "typed purpose, allocation/application policy, version, "
                                 "supported currency, amount bounds, reviewed-preview rule, "
-                                "and pending-intent rule"
+                                "pending-intent rule, and typed customer next-action read model"
                             ),
                         ),
                         AuthorityInput(
@@ -2854,6 +2991,147 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "attribution adapters carry this identity and never maintain "
                     "parallel bank-detail copies. Legacy settings are only a "
                     "frozen rollback snapshot during A1 verification."
+                ),
+            ),
+            SOTService(
+                name="financial.payment_configuration_staff_actions",
+                module="app.services.payment_configuration_staff_actions",
+                owns=(
+                    "reviewed payment configuration lifecycle and audit coordination",
+                ),
+                depends_on=(
+                    "financial.collection_accounts",
+                    "financial.payment_routing",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Settings adapters preview and submit only. This coordinator "
+                    "locks and rechecks collection-account, payment-channel, and "
+                    "channel-mapping state, applies lifecycle/default changes, and "
+                    "stages the decision audit atomically. It never selects a "
+                    "customer checkout gateway."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "reviewed payment configuration lifecycle and "
+                                "audit coordination"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "payment configuration staff command",
+                                "canonical collection-account state",
+                                "canonical settlement-attribution state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="payment configuration staff command",
+                            owner="financial.payment_configuration_staff_actions",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed resource, action, actor, permission scope, "
+                                "review fingerprint, confirmation, and command context"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical collection-account state",
+                            owner="financial.collection_accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked CollectionAccount identity, currency, "
+                                "presentment priority, and lifecycle"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical settlement-attribution state",
+                            owner="financial.payment_configuration_staff_actions",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked PaymentChannel and PaymentChannelAccount "
+                                "identity, provider, currency, priority, default, "
+                                "and lifecycle facts"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "confirm_payment_configuration_staff_action enters "
+                            "execute_owner_command exactly once on a transaction-free "
+                            "session and commits configuration plus audit atomically."
+                        ),
+                        locking=(
+                            "The target and affected same-provider, same-currency, "
+                            "collection-account, and mapping rows are locked before "
+                            "the preview fingerprint is rechecked."
+                        ),
+                        idempotency=(
+                            "The command context carries the resource, action, and "
+                            "review fingerprint; a stale fingerprint fails closed."
+                        ),
+                        retries=(
+                            "Contention or stale-preview failures return to review; "
+                            "adapters do not replay an unreviewed decision."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes(
+                                "financial.payment_configuration_staff_actions"
+                            ),
+                            "financial.payment_configuration_staff_actions.not_found",
+                            "financial.payment_configuration_staff_actions.invalid_action",
+                            "financial.payment_configuration_staff_actions.invalid_mapping",
+                            "financial.payment_configuration_staff_actions.invalid_scope",
+                            "financial.payment_configuration_staff_actions.invalid_actor",
+                            "financial.payment_configuration_staff_actions.confirmation_required",
+                            "financial.payment_configuration_staff_actions.stale_preview",
+                            "financial.payment_configuration_staff_actions.action_not_available",
+                        ),
+                        mapping_owner="Settings payment-configuration web adapter",
+                        retryable_codes=(
+                            "financial.payment_configuration_staff_actions.stale_preview",
+                        ),
+                        fail_closed_on=(
+                            "missing actor or scope",
+                            "stale reviewed state",
+                            "last customer transfer destination",
+                            "inactive mapping dependencies",
+                            "default mapping replacement not selected",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "Billing templates, form booleans, direct toggle routes, "
+                            "and PaymentChannel.default_collection_account_id"
+                        ),
+                        new_owner="financial.payment_configuration_staff_actions",
+                        verification=(
+                            "Owner behavior, stale-preview, route, template, migration, "
+                            "and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Canonical Settings routes use reviewed actions and "
+                            "payment_channel_accounts is the sole channel-to-account map."
+                        ),
+                        fallback_retirement=(
+                            "Old Billing routes, browser confirmation toggles, lifecycle "
+                            "form fields, and the duplicate default pointer are absent."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/PAYMENT_CONFIGURATION_SETTINGS_SAFE_ACTIONS.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_configuration_staff_actions.py",
+                        "tests/test_payment_configuration_settings_ui.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -3429,8 +3707,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "The proof owner records submitted transfer evidence and review "
                     "state, then composes the canonical payment, WHT lifecycle, staff "
                     "work-item, audit, customer-intent, and event participants in one "
-                    "owner-managed transaction. HTTP adapters only map typed results "
-                    "and domain errors."
+                    "owner-managed transaction. Customer-entered WHT is admitted only "
+                    "through a server-issued invoice intent snapshot; consolidated "
+                    "arbitrary credit fails closed for automatic WHT. HTTP adapters only "
+                    "map typed results and domain errors."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -3488,8 +3768,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="external:bank-transfer-submitter",
                             kind=AuthorityKind.EXTERNAL_OBSERVATION,
                             source=(
-                                "receipt file, claimed net/gross/WHT values, currency, "
-                                "bank, reference, and transfer timestamp"
+                                "receipt file, claimed net cash, currency, bank, reference, "
+                                "transfer timestamp, and optional receipt-side evidence; WHT "
+                                "money fields remain server-owned when admitted"
                             ),
                         ),
                         AuthorityInput(
@@ -3536,7 +3817,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "locked pending intent validation plus participant staging "
                                 "of the submitted status, exact proof/configured-bank link, "
-                                "and versioned intent event"
+                                "versioned intent event, and immutable invoice WHT snapshot "
+                                "metadata when present"
                             ),
                         ),
                         AuthorityInput(
@@ -3633,6 +3915,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.payment_proofs.duplicate_transfer_reference",
                             "financial.payment_proofs.deposit_settlement_rejected",
                             "financial.payment_proofs.billing_account_not_found",
+                            "financial.payment_proofs.withholding_tax_basis_unavailable",
+                            "financial.payment_proofs.verified_amount_conflict",
                             "financial.payment_proofs.verified_net_exceeds_gross",
                             "financial.payment_proofs.rejection_reason_required",
                             "financial.payment_proofs.invalid_command_context",
@@ -3647,7 +3931,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "missing or malformed transfer evidence",
                             "non-submitted or concurrently reviewed proof state",
                             "duplicate verified transfer references",
-                            "unreconciled withholding-tax values",
+                            "customer-entered WHT for arbitrary customer or consolidated "
+                            "bank-transfer proofs",
+                            "missing or conflicting server-owned WHT snapshot values",
                             "failure to stage an eligible payment, tax source, review work "
                             "item, top-up intent link, audit, notification, or event "
                             "consequence",
@@ -3853,9 +4139,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="financial.payment_proofs",
                             kind=AuthorityKind.OBSERVATION,
                             source=(
-                                "typed billing-account, reseller, payment, proof, gross, net, "
-                                "WHT, rate, currency, actor, and correlation evidence admitted "
-                                "by the payment-proof coordinator"
+                                "typed subscriber-or-billing-account target, reseller, "
+                                "payment, proof, authoritative gross, net cash, WHT, VAT-"
+                                "exclusive basis, VAT, source invoice, policy version, "
+                                "currency, actor, and correlation evidence admitted by the "
+                                "payment-proof coordinator"
                             ),
                         ),
                         AuthorityInput(
@@ -3967,7 +4255,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         fail_closed_on=(
                             "missing or malformed currency, date, filter, page, actor, or record "
                             "identity",
-                            "non-positive or unreconciled gross/net/WHT source evidence",
+                            "non-positive, dual-target, or unreconciled gross/net/WHT source "
+                            "evidence",
                             "illegal, unexplained, uncertified, or conflicting lifecycle evidence",
                             "active caller transaction or manifest mismatch",
                         ),
@@ -4690,7 +4979,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "later of the existing billing anchor and application time; "
                     "next_billing_at, coverage, enforcement shielding, audit, events, "
                     "and UI projections consume that interval rather than maintaining "
-                    "parallel clocks. Access restoration remains a request to "
+                    "parallel clocks. A fingerprint-gated historical repair collapses "
+                    "exact duplicate rows and preserves an approved chained interval as "
+                    "a separately audited corrective extension without shortening "
+                    "customer service. Access restoration remains a request to "
                     "access.subscription_lifecycle."
                 ),
                 contract=ServiceContract(
@@ -4704,6 +4996,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical subscriber scope",
                                 "canonical subscription lifecycle and billing anchor",
                                 "service-extension duration policy",
+                                "reviewed historical duplicate reconciliation command",
                             ),
                             canonical_writer="financial.service_extensions",
                         ),
@@ -4772,6 +5065,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source="billing.service_extension_max_days",
                         ),
                         AuthorityInput(
+                            name=(
+                                "reviewed historical duplicate reconciliation command"
+                            ),
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact cohort fingerprint, actor, reason, timestamp, "
+                                "idempotency key, and chained-entitlement decision"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="immutable applied service-extension entry evidence",
                             owner="financial.service_extensions",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -4785,9 +5089,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "Each public create, apply, cancel, or anchor-repair command "
-                            "enters execute_owner_command exactly once on a "
-                            "transaction-free session. Internal mutation, "
+                            "Each public create, apply, cancel, anchor-repair, or historical "
+                            "duplicate reconciliation command enters execute_owner_command "
+                            "exactly once on a transaction-free session. Internal mutation, "
                             "access-restoration, audit, and event helpers are flush-only."
                         ),
                         locking=(
@@ -4795,18 +5099,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "locks its resolved subscriptions in stable UUID order, and "
                             "database primary and unique keys arbitrate create and entry "
                             "races so a duplicate extension/subscription grant is "
-                            "database-rejected."
+                            "database-rejected. Historical repair locks and re-fingerprints "
+                            "the complete duplicate cohort before changing evidence."
                         ),
                         idempotency=(
                             "Create derives its extension UUID from the form key and "
                             "compares a complete material-input fingerprint. Apply and "
                             "cancel persist command evidence and replay the stable "
-                            "outcome without duplicate entries, audits, or events."
+                            "outcome without duplicate entries, audits, or events. "
+                            "Historical repair reserves one bounded idempotency key "
+                            "against the reviewed cohort fingerprint."
                         ),
                         retries=(
                             "Adapters retry only after complete rollback. A reused key "
                             "with changed evidence or an incompatible terminal transition "
-                            "fails closed rather than granting service twice."
+                            "fails closed rather than granting service twice. A repair "
+                            "retry returns its recorded counts and never creates another "
+                            "corrective extension."
                         ),
                     ),
                     errors=ErrorContract(
@@ -4815,6 +5124,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.service_extensions.ambiguous_customer_identifier",
                             "financial.service_extensions.blank_customer_identifier",
                             "financial.service_extensions.customer_not_found",
+                            "financial.service_extensions.duplicate_reconciliation_empty_cohort",
+                            "financial.service_extensions."
+                            "duplicate_reconciliation_idempotency_conflict",
+                            "financial.service_extensions.duplicate_reconciliation_manual_review",
+                            "financial.service_extensions."
+                            "duplicate_reconciliation_missing_idempotency_key",
+                            "financial.service_extensions."
+                            "duplicate_reconciliation_resolution_required",
+                            "financial.service_extensions.duplicate_reconciliation_stale_preview",
                             "financial.service_extensions.empty_subscriber_scope",
                             "financial.service_extensions.extension_not_found",
                             "financial.service_extensions.idempotency_conflict",
@@ -4841,6 +5159,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "stale or incompatible lifecycle transition",
                             "ambiguous subscriber scope",
                             "failed access-restoration consequence",
+                            "stale, referenced, or unsupported historical duplicates",
                         ),
                     ),
                     events=EventContract(
@@ -4909,6 +5228,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "Lifecycle atomicity, idempotency, concurrency, "
                             "effective-interval behavior, exact coverage, CRM, "
                             "projection, audit provenance, route delegation, migration, "
+                            "historical duplicate preview/apply, candidate preflight, "
                             "and architecture boundary tests."
                         ),
                         cutover_gate=(
@@ -6372,6 +6692,132 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.payment_arrangement_staff_actions",
+                module="app.services.payment_arrangement_staff_actions",
+                owns=("atomic staff arrangement transition and audit coordination",),
+                depends_on=(
+                    "financial.payment_arrangements",
+                    "auth.permission_gate",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "The arrangement owner supplies eligibility, impact facts, "
+                    "fingerprints, locking, and transition participants. This "
+                    "coordinator binds explicit staff confirmation to that preview "
+                    "and stages audit evidence in the same transaction."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "atomic staff arrangement transition and audit "
+                                "coordination"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical payment-arrangement action preview",
+                                "authorized staff command context",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical payment-arrangement action preview",
+                            owner="financial.payment_arrangements",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked arrangement lifecycle, installment schedule, "
+                                "collection-shield consequence, and preview fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authorized staff command context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "billing:arrangement:write principal, command identity, "
+                                "scope, reason, and explicit impact confirmation"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "confirm_staff_action enters execute_owner_command once; "
+                            "the arrangement and audit owners only stage and flush."
+                        ),
+                        locking=(
+                            "The coordinator locks the arrangement and its active "
+                            "installments, then recomputes eligibility and impact."
+                        ),
+                        idempotency=(
+                            "The preview fingerprint binds the exact action, lifecycle "
+                            "state, schedule state, and target installment; duplicate "
+                            "or changed submissions fail closed and require a new preview."
+                        ),
+                        retries=(
+                            "Adapters retry only after complete rollback and must obtain "
+                            "a fresh owner-authored preview after any stale-state result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes(
+                                "financial.payment_arrangement_staff_actions"
+                            ),
+                            "financial.payment_arrangement_staff_actions.invalid_scope",
+                            "financial.payment_arrangement_staff_actions.invalid_actor",
+                            "financial.payment_arrangement_staff_actions.confirmation_required",
+                            "financial.payment_arrangement_staff_actions.invalid_note",
+                            "financial.payment_arrangement_staff_actions.stale_preview",
+                            "financial.payment_arrangements.not_found",
+                            "financial.payment_arrangements.action_not_available",
+                            "financial.payment_arrangements.incomplete_evidence",
+                        ),
+                        mapping_owner="admin payment-arrangement adapter",
+                        retryable_codes=(
+                            "financial.payment_arrangement_staff_actions.stale_preview",
+                        ),
+                        fail_closed_on=(
+                            "missing explicit confirmation",
+                            "changed arrangement or installment state",
+                            "missing authorized actor",
+                            "missing target installment evidence",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "payment-arrangement admin routes, web helpers, Jinja status "
+                            "branches, browser confirmation dialogs, and post-commit audit"
+                        ),
+                        new_owner="financial.payment_arrangement_staff_actions",
+                        verification=(
+                            "Owner preview, stale-state, atomic audit, adapter, shared "
+                            "action-form, accessibility, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every staff approve, cancel, and manual installment action "
+                            "submits an exact preview fingerprint and explicit confirmation."
+                        ),
+                        fallback_retirement=(
+                            "Direct admin lifecycle commits, post-commit audit, raw action "
+                            "forms, and browser confirmation dialogs are removed."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/designs/PAYMENT_ARRANGEMENT_SAFE_ACTIONS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_payment_arrangement_safe_actions.py",
+                        "tests/test_payment_arrangements.py",
+                        "tests/architecture/test_action_form_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.access_resolution",
                 module="app.services.access_resolution",
                 owns=(
@@ -6581,6 +7027,339 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.prepaid_enforcement_state",
                     "access.subscription_lifecycle",
                     "access.walled_garden_policy",
+                ),
+            ),
+            SOTService(
+                name="financial.dunning_staff_actions",
+                module="app.services.dunning_staff_actions",
+                owns=("atomic staff dunning-case transition and audit coordination",),
+                depends_on=(
+                    "financial.dunning",
+                    "auth.permission_gate",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "The dunning owner supplies exact selected-scope eligibility, "
+                    "receivable impact, fingerprints, locked transitions, action-log "
+                    "evidence, and account projection updates. This coordinator binds "
+                    "staff confirmation and audit to that owner result."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "atomic staff dunning-case transition and audit "
+                                "coordination"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical dunning staff-action impact",
+                                "authorized dunning staff command context",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical dunning staff-action impact",
+                            owner="financial.dunning",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "exact selected case membership, current lifecycle "
+                                "state, canonical collectible receivables, eligibility, "
+                                "resulting state, and deterministic fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authorized dunning staff command context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "billing:dunning:write principal, command identity, "
+                                "scope, reason, explicit selected IDs, and confirmation"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "confirm_staff_action enters execute_owner_command once; "
+                            "dunning lifecycle, action-log, event, account projection, "
+                            "and audit participants only stage or flush."
+                        ),
+                        locking=(
+                            "Selected cases and their subscriber accounts are locked in "
+                            "stable UUID order before eligibility and receivables are "
+                            "recomputed."
+                        ),
+                        idempotency=(
+                            "The fingerprint binds action, exact selected membership, "
+                            "case lifecycle versions, eligible/skipped results, and "
+                            "close-time receivables. A replay after transition fails "
+                            "closed and requires a new preview."
+                        ),
+                        retries=(
+                            "Adapters retry only after complete rollback and obtain a "
+                            "fresh preview after any membership, state, or eligibility "
+                            "conflict."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes(
+                                "financial.dunning_staff_actions"
+                            ),
+                            "financial.dunning_staff_actions.invalid_selection",
+                            "financial.dunning_staff_actions.invalid_scope",
+                            "financial.dunning_staff_actions.invalid_actor",
+                            "financial.dunning_staff_actions.confirmation_required",
+                            "financial.dunning_staff_actions.stale_preview",
+                            "financial.dunning_staff_actions.no_eligible_cases",
+                        ),
+                        mapping_owner="admin dunning adapter",
+                        retryable_codes=(
+                            "financial.dunning_staff_actions.stale_preview",
+                        ),
+                        fail_closed_on=(
+                            "empty, invalid, or oversized selected scope",
+                            "missing explicit confirmation",
+                            "changed membership, lifecycle, or receivable eligibility",
+                            "no eligible selected case",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "dunning admin routes, web helpers, raw Jinja forms, "
+                            "browser dialogs, per-case commits, swallowed bulk failures, "
+                            "and post-commit audit"
+                        ),
+                        new_owner="financial.dunning_staff_actions",
+                        verification=(
+                            "Individual and bulk preview, exact scope, stale-state, "
+                            "atomic rollback/audit, adapter, shared form, UI, and "
+                            "architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every staff pause, resume, or close confirmation carries "
+                            "the exact owner preview fingerprint and explicit selected "
+                            "membership."
+                        ),
+                        fallback_retirement=(
+                            "Direct web mutations, per-case bulk commits, generic "
+                            "exception swallowing, post-commit audit, and browser "
+                            "confirmation dialogs are removed."
+                        ),
+                    ),
+                    steward="collections operations",
+                    design_refs=(
+                        "docs/designs/DUNNING_STAFF_SAFE_ACTIONS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_dunning_staff_safe_actions.py",
+                        "tests/test_web_billing_dunning.py",
+                        "tests/architecture/test_action_form_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.billing_automation",
+                module="app.services.billing_automation",
+                owns=(
+                    "postpaid invoice batch execution",
+                    "durable billing-run lifecycle and retry lineage",
+                    "billing-run audit projection and repair",
+                ),
+                depends_on=(
+                    "financial.invoices",
+                    "financial.prepaid_service_renewals",
+                    "financial.billing_accounts",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Scheduled execution may compose the independently owned prepaid "
+                    "renewal pass. Confirmed manual invoice batches disable it. "
+                    "BillingRun is authoritative operational evidence for the "
+                    "resumable workflow; invoice period keys make retries convergent."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="postpaid invoice batch execution",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical billable subscription facts",
+                                "confirmed staff batch evidence",
+                            ),
+                            canonical_writer="financial.billing_automation",
+                        ),
+                        ConcernContract(
+                            name="durable billing-run lifecycle and retry lineage",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=("confirmed staff batch evidence",),
+                            canonical_writer="financial.billing_automation",
+                        ),
+                        ConcernContract(
+                            name="billing-run audit projection and repair",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=("canonical billing-run record",),
+                            canonical_writer="financial.billing_automation",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical billable subscription facts",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "native active or pending postpaid Subscription rows, "
+                                "billing anchors, offer prices, billing treatments, "
+                                "account state, and existing canonical invoice lines"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="confirmed staff batch evidence",
+                            owner="ui.invoice_batch_action_projection",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "normalized cycle/date, exact current fingerprint, "
+                                "staff principal, explicit confirmation, and optional "
+                                "failed source run"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical billing-run record",
+                            owner="financial.billing_automation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "BillingRun lifecycle, counters, launch kind, actor, "
+                                "preview fingerprint, failure, and retry lineage"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Billing automation persists a running launch before work, "
+                            "commits canonical invoice-owner results, and records the "
+                            "terminal run state. This is a durable resumable workflow, "
+                            "not one database transaction."
+                        ),
+                        locking=(
+                            "Invoice and subscription period idempotency keys prevent "
+                            "duplicate documents; account and invoice participants "
+                            "apply their own canonical locks."
+                        ),
+                        idempotency=(
+                            "Exact subscription/period invoice-line keys and owner "
+                            "checks make a failed-run retry converge without duplicate "
+                            "billing. Retry creates a new BillingRun linked to its "
+                            "failed source."
+                        ),
+                        retries=(
+                            "Only failed or abandoned runs are eligible for reviewed "
+                            "retry. Transient database retries rerun owner checks; a "
+                            "changed staff preview requires new confirmation."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes(
+                                "financial.billing_automation"
+                            ),
+                            "financial.billing_automation.invalid_cycle",
+                            "financial.billing_automation.invalid_date",
+                            "financial.billing_automation.execution_failed",
+                            "financial.billing_automation.retry_ineligible",
+                            "financial.billing_automation.audit_projection_failed",
+                        ),
+                        mapping_owner=(
+                            "scheduled billing and administrative batch adapters"
+                        ),
+                        retryable_codes=(
+                            "financial.billing_automation.execution_failed",
+                            "financial.billing_automation.audit_projection_failed",
+                        ),
+                        fail_closed_on=(
+                            "invalid cycle/date",
+                            "changed confirmed membership",
+                            "non-failed retry source",
+                            "missing canonical price or treatment authority",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("invoice_created",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 identifies the canonical invoice, account, "
+                            "amount, currency, period, due date, and billing-run ID."
+                        ),
+                        replay=(
+                            "Replay rebuilds invoice-created delivery projections; "
+                            "invoice and BillingRun rows remain authoritative."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="billing-run audit projection",
+                            input_names=("canonical billing-run record",),
+                            writer="financial.billing_automation",
+                            freshness=(
+                                "Written after terminal BillingRun state; a missing "
+                                "row never changes the authoritative run outcome."
+                            ),
+                            stale_behavior=(
+                                "BillingRun history remains visible and explicitly "
+                                "identifies the missing secondary audit projection."
+                            ),
+                            drift_signal=(
+                                "A terminal BillingRun has no billing_run AuditEvent "
+                                "with the same run identifier."
+                            ),
+                            rebuild_operation=(
+                                "Re-run reconcile_billing_run_audit for the canonical "
+                                "BillingRun identifier."
+                            ),
+                            repair_owner="financial.billing_automation",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "batch-page forms and JavaScript launched mutable work "
+                            "without exact evidence; retry was available for every "
+                            "historical status and carried no lineage; an unused "
+                            "BillingRunSchedule plus shadow DomainSetting falsely "
+                            "presented itself as scheduler configuration"
+                        ),
+                        new_owner="financial.billing_automation",
+                        verification=(
+                            "dry-run scope, fingerprint drift, launch evidence, "
+                            "failed-only retry, lineage, idempotency, audit repair, "
+                            "adapter, UI, and architecture tests"
+                        ),
+                        cutover_gate=(
+                            "Manual and retry launches persist exact preview and actor "
+                            "evidence; only failed runs can be retry sources."
+                        ),
+                        fallback_retirement=(
+                            "Unpreviewed manual launch, implicit prepaid renewal, "
+                            "unlinked retry, browser confirmation, and the unwired "
+                            "schedule facade are absent. scheduler.registry remains "
+                            "the only cadence and enablement owner."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/designs/INVOICE_BATCH_AND_REMINDER_SAFE_ACTIONS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_invoice_batch_web.py",
+                        "tests/test_billing_automation_services.py",
+                        "tests/architecture/test_action_form_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -9101,6 +9880,197 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
+                name="network.ip_assignment_service_ownership",
+                module="app.services.ip_assignment_repair",
+                owns=("exact service ownership of active IPv4 assignments",),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "IPAssignment remains the address-allocation authority. This "
+                    "migration owner repairs only a missing subscription_id when "
+                    "one active assignment, one active service, the subscriber, "
+                    "and the served-address compatibility projection agree. It "
+                    "never creates, moves, releases, reclaims, or deactivates an "
+                    "address and never writes Subscription.ipv4_address or RADIUS."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="exact service ownership of active IPv4 assignments",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "served IPv4 compatibility projection",
+                                "reviewed ownership repair command",
+                            ),
+                            canonical_writer=(
+                                "network.ip_assignment_service_ownership"
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical active IPv4 assignment",
+                            owner="network.ip_assignment_service_ownership",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active IPAssignment identity, address, subscriber, "
+                                "and exact subscription bridge"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical active subscription identity",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active Subscription identity and Subscriber ownership"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="served IPv4 compatibility projection",
+                            owner="network.ip_assignment_service_ownership",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "Subscription.ipv4_address used only to verify an "
+                                "existing assignment-to-service link; never to "
+                                "manufacture or move an allocation"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed ownership repair command",
+                            owner="network.ip_assignment_service_ownership",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact assignment cohort, preview SHA-256, actor, "
+                                "reason, and idempotency key"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The public reconciliation command enters "
+                            "execute_owner_command once on a transaction-free "
+                            "session; the operator adapter owns session lifecycle."
+                        ),
+                        locking=(
+                            "Selected IPAssignment, Subscriber, and proposed "
+                            "Subscription rows are locked in stable identifier "
+                            "order before evidence is recomputed."
+                        ),
+                        idempotency=(
+                            "A durable audit row binds the idempotency key to the "
+                            "exact preview fingerprint; changed evidence conflicts."
+                        ),
+                        retries=(
+                            "Retry only after complete rollback using the same "
+                            "fingerprint and idempotency key; stale evidence requires "
+                            "a new preview."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.ip_assignment_service_ownership.active_caller_transaction",
+                            "network.ip_assignment_service_ownership.assignment_not_found",
+                            "network.ip_assignment_service_ownership.command_contract_violation",
+                            "network.ip_assignment_service_ownership.duplicate_assignment",
+                            "network.ip_assignment_service_ownership.empty_cohort",
+                            "network.ip_assignment_service_ownership.idempotency_conflict",
+                            "network.ip_assignment_service_ownership.invalid_command_context",
+                            "network.ip_assignment_service_ownership.missing_idempotency_key",
+                            "network.ip_assignment_service_ownership.nested_owner_command",
+                            "network.ip_assignment_service_ownership.nested_transaction_completion",
+                            "network.ip_assignment_service_ownership.stale_preview",
+                            "network.ip_assignment_service_ownership.unsafe_cohort",
+                        ),
+                        mapping_owner="operator CLI and future administrative adapters",
+                        fail_closed_on=(
+                            "ambiguous service ownership",
+                            "multiple active services or assignments",
+                            "subscriber or served-address disagreement",
+                            "changed preview evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("ip_assignment.service_ownership_reconciled",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries only the exact assignment cohort, "
+                            "preview fingerprint, and linked count."
+                        ),
+                        replay=(
+                            "The durable batch audit row and item audit rows "
+                            "reconstruct the ownership-only outcome."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="IPAssignment exact-service ownership bridge",
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "served IPv4 compatibility projection",
+                                "reviewed ownership repair command",
+                            ),
+                            writer="network.ip_assignment_service_ownership",
+                            freshness=(
+                                "A linked active assignment is current only while "
+                                "its active service, subscriber, and address "
+                                "compatibility evidence still agree."
+                            ),
+                            stale_behavior=(
+                                "Ambiguous, missing, or conflicting links remain "
+                                "visible blockers and are never inferred at runtime."
+                            ),
+                            drift_signal=(
+                                "The exhaustive preview classifies every active IPv4 "
+                                "assignment and fingerprints the exact cohort."
+                            ),
+                            rebuild_operation=(
+                                "Re-run the dry-run preview and confirm only the "
+                                "reviewed repairable cohort with its exact SHA-256."
+                            ),
+                            repair_owner=("network.ip_assignment_service_ownership"),
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "subscriber-level ip_assignment_repair that treated "
+                            "Subscription.ipv4_address as allocation authority"
+                        ),
+                        new_owner="network.ip_assignment_service_ownership",
+                        verification=(
+                            "Full-fleet classification plus focused contract, "
+                            "stale-preview, idempotency, and sole-writer tests."
+                        ),
+                        cutover_gate=(
+                            "Every active assignment has an exact service link or "
+                            "reviewed blocker, and safe ownership-only backfill is "
+                            "verified before exact-service runtime cutover."
+                        ),
+                        fallback_retirement=(
+                            "Legacy create, repoint, reclaim, deactivate, and "
+                            "per-item commit behavior is removed."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_ip_assignment_repair.py",
+                        "tests/architecture/test_ip_assignment_service_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="network.ip_pool_utilization",
                 module="app.services.ip_pool_utilization_snapshot",
                 owns=(
@@ -9615,8 +10585,127 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="communications.customer_policy",
                 module="app.services.customer_notification_policy",
-                owns=("customer notification eligibility",),
-                depends_on=("customer.identity_scope",),
+                owns=(
+                    "customer notification eligibility",
+                    "cohort-batched customer notification eligibility",
+                ),
+                depends_on=(
+                    "communications.channel_policy",
+                    "communications.eligibility",
+                    "customer.accounts",
+                    "customer.identity_scope",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="customer notification eligibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "customer notification identity and preferences",
+                                "account notification status",
+                                "channel configuration",
+                                "recipient suppression ledger",
+                                "recent notification history",
+                                "evaluation time",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="cohort-batched customer notification eligibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "customer notification identity and preferences",
+                                "account notification status",
+                                "channel configuration",
+                                "recipient suppression ledger",
+                                "recent notification history",
+                                "evaluation time",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="customer notification identity and preferences",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscriber and SubscriberContact identity, recipient, "
+                                "and notification-preference fields"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="account notification status",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscriber lifecycle status",
+                        ),
+                        AuthorityInput(
+                            name="channel configuration",
+                            owner="communications.channel_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="canonical channel enablement configuration",
+                        ),
+                        AuthorityInput(
+                            name="recipient suppression ledger",
+                            owner="communications.eligibility",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="normalized active communication suppression entries",
+                        ),
+                        AuthorityInput(
+                            name="recent notification history",
+                            owner="communications.notification_service",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "persisted recipient, event, category, status, and "
+                                "creation time used by the dedupe window"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="evaluation time",
+                            owner="external:system_clock",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="explicit UTC cohort evaluation time",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "The caller owns the session. Individual and cohort policy "
+                            "queries read canonical inputs and never write or complete "
+                            "a transaction."
+                        ),
+                        locking=(
+                            "No row locks are acquired. The notification intent owner "
+                            "rechecks policy when materializing a delivery."
+                        ),
+                        idempotency=(
+                            "The same typed candidates, evaluation time, and visible "
+                            "canonical evidence produce the same ordered decisions."
+                        ),
+                        retries=(
+                            "Transient reads may be retried; malformed typed inputs fail "
+                            "before policy evaluation."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="calling notification adapter or intent owner",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="communications.customer_policy",
+                    ),
+                    steward="customer communications",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/CODING_STANDARD.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_customer_bulk_actions.py",
+                        "tests/test_communication_eligibility.py",
+                        "tests/architecture/test_customer_notification_policy_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="communications.eligibility",
@@ -18410,6 +19499,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "integration.installations.invalid_transition",
                             "integration.installations.manifest_adoption_incompatible",
                             "integration.installations.manifest_adoption_scope_invalid",
+                            "integration.installations.capability_provisioning_scope_invalid",
+                            "integration.installations.invalid_capability",
+                            "integration.installations.stale_capability_binding",
+                            "integration.installations.connection_validation_failed",
                             "integration.installations.stale_manifest_pin",
                             "integration.installations.target_manifest_not_deployed",
                             "integration.installations.invalid_command_context",
@@ -18433,6 +19526,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         event_types=(
                             "integration.installation.lifecycle.v1",
                             "integration.installation.manifest_adopted",
+                            "integration.installation.capability_provisioned",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
@@ -19010,10 +20104,167 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="integration.jobs",
                 module="app.services.integration",
                 owns=("integration targets", "integration jobs", "integration runs"),
-                depends_on=("integration.registry",),
+                depends_on=(
+                    "integration.registry",
+                    "integration.installations",
+                    "scheduler.registry",
+                ),
                 notes=(
                     "Jobs bind directly to versioned connector capabilities; "
-                    "adapter/action transport selection is not a runtime input."
+                    "adapter/action transport selection is not a runtime input. "
+                    "The CRM ticket cutover activates its historical job only "
+                    "through the exact-state owner command."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=concern,
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "deployed capability contract",
+                                "enabled integration capability binding",
+                                "integration job lifecycle protocol",
+                                "scheduler-owned cadence",
+                            ),
+                            canonical_writer="integration.jobs",
+                        )
+                        for concern in (
+                            "integration targets",
+                            "integration jobs",
+                            "integration runs",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="deployed capability contract",
+                            owner="integration.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "registered capability identity, supported modes, "
+                                "and connector contract version"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="enabled integration capability binding",
+                            owner="integration.installations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "enabled version-pinned installation binding selected "
+                                "for one exact integration job"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="integration job lifecycle protocol",
+                            owner="integration.jobs",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "target, inactive or active job, exact capability "
+                                "binding, run identity, and terminal run evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="scheduler-owned cadence",
+                            owner="scheduler.registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "canonical feature enablement and cadence; a manual "
+                                "capability job does not create a second schedule"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each migrated public job command completes one exact "
+                            "target/job/run aggregate transaction."
+                        ),
+                        locking=(
+                            "Capability activation locks the selected job, target, and "
+                            "binding in stable order before changing executable state."
+                        ),
+                        idempotency=(
+                            "An already active job on the reviewed binding replays; "
+                            "changed reviewed job state fails closed."
+                        ),
+                        retries=(
+                            "Stale state and lifecycle conflicts require a new preview; "
+                            "database conflicts retry the complete command."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "integration.jobs.job_activation_scope_invalid",
+                            "integration.jobs.invalid_capability",
+                            "integration.jobs.job_not_found",
+                            "integration.jobs.target_not_found",
+                            "integration.jobs.target_type_mismatch",
+                            "integration.jobs.target_disabled",
+                            "integration.jobs.job_type_mismatch",
+                            "integration.jobs.binding_not_found",
+                            "integration.jobs.binding_capability_mismatch",
+                            "integration.jobs.binding_disabled",
+                            "integration.jobs.stale_job_state",
+                            "integration.jobs.binding_conflict",
+                            "integration.jobs.invalid_command_context",
+                            "integration.jobs.command_contract_violation",
+                            "integration.jobs.nested_owner_command",
+                            "integration.jobs.active_caller_transaction",
+                            "integration.jobs.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "integration admin API and reviewed integration cutover CLI"
+                        ),
+                        fail_closed_on=(
+                            "missing or disabled capability binding",
+                            "inactive or wrong-type target",
+                            "stale reviewed job state",
+                            "a second scheduler cadence path",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("integration.job.capability_activated",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 identifies the job, target, connector, "
+                            "capability binding, actor, and command without secrets."
+                        ),
+                        replay=(
+                            "The authoritative job and binding rows rebuild executable "
+                            "state; replay does not emit another activation event."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "legacy adapter/action jobs disabled without explicit "
+                            "capability reactivation"
+                        ),
+                        new_owner="integration.jobs",
+                        verification=(
+                            "Exact-state activation, replay, stale-state, scheduler "
+                            "readiness, deployment-gate, and CRM sync tests."
+                        ),
+                        cutover_gate=(
+                            "Enabled crm.ticket_pull requires exactly one enabled "
+                            "ticket-observation binding and one active bound manual job."
+                        ),
+                        fallback_retirement=(
+                            "Unbound active jobs and independent interval scheduling "
+                            "remain prohibited."
+                        ),
+                    ),
+                    steward="platform integrations",
+                    design_refs=(
+                        "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                        "docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_integration_capability_sync.py",
+                        "tests/test_crm_ticket_capability_cutover.py",
+                        "tests/architecture/test_integration_platform_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -20094,6 +21345,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "admin invoice bulk action visibility",
                     "admin invoice page-selection presentation",
                     "admin invoice bulk eligibility presentation",
+                    "admin invoice exact-scope review form presentation",
                 ),
                 depends_on=(
                     "ui.bulk_action_contracts",
@@ -20102,7 +21354,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "app.services.web_billing_invoice_bulk remains the command "
-                    "eligibility, preview, mutation, audit, and outcome owner."
+                    "eligibility, preview, mutation, audit, and outcome owner. "
+                    "Mutation and PDF actions submit explicit page IDs to a "
+                    "server-rendered shared review form; client JavaScript collects "
+                    "selection only."
                 ),
             ),
             SOTService(
@@ -20263,11 +21518,137 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "action visibility and disabled-reason projection",
                     "action impact and confirmation presentation",
                     "action field and option metadata",
+                    "owner-produced hidden action evidence transport",
                     "submitted action values and structured error binding",
                 ),
                 notes=(
                     "Domain command services still own authorization, eligibility, "
                     "validation, locking, execution, and audit consequences."
+                ),
+            ),
+            SOTService(
+                name="ui.invoice_batch_action_projection",
+                module="app.services.web_billing_invoice_batch",
+                owns=(
+                    "admin invoice batch exact-scope preview",
+                    "admin invoice batch fingerprint and confirmation projection",
+                    "admin billing-run retry eligibility presentation",
+                ),
+                depends_on=(
+                    "ui.action_form_contracts",
+                    "financial.billing_automation",
+                    "auth.permission_gate",
+                ),
+                notes=(
+                    "The projection performs a side-effect-free billing-owner dry "
+                    "resolution and renders its exact membership and evidence. "
+                    "Billing automation remains the execution and BillingRun owner."
+                ),
+                contract=ServiceContract(
+                    concerns=tuple(
+                        ConcernContract(
+                            name=name,
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical invoice batch dry-run facts",
+                                "authorized billing staff scope",
+                            ),
+                        )
+                        for name in (
+                            "admin invoice batch exact-scope preview",
+                            (
+                                "admin invoice batch fingerprint and confirmation "
+                                "projection"
+                            ),
+                            "admin billing-run retry eligibility presentation",
+                        )
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical invoice batch dry-run facts",
+                            owner="financial.billing_automation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "exact postpaid subscription/account/period/currency/"
+                                "amount membership and BillingRun lifecycle facts"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authorized billing staff scope",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="billing:batch:read/write principal and visibility",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Preview, fingerprint, retry eligibility, and ActionForm "
+                            "projection do not commit or retain ORM mutation."
+                        ),
+                        locking=(
+                            "No projection locks; billing automation recomputes the "
+                            "fingerprint immediately before durable launch."
+                        ),
+                        idempotency=(
+                            "Equivalent owner facts and normalized scope produce the "
+                            "same deterministic fingerprint and form."
+                        ),
+                        retries=(
+                            "Read failures may be retried; stale fingerprints require "
+                            "a fresh operator review."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ui.invoice_batch_action_projection.invalid_cycle",
+                            "ui.invoice_batch_action_projection.invalid_date",
+                            "ui.invoice_batch_action_projection.retry_ineligible",
+                            "ui.invoice_batch_action_projection.stale_preview",
+                            "ui.invoice_batch_action_projection.empty_scope",
+                            "ui.invoice_batch_action_projection.unauthorized",
+                        ),
+                        mapping_owner="administrative invoice batch adapter",
+                        retryable_codes=(
+                            "ui.invoice_batch_action_projection.stale_preview",
+                        ),
+                        fail_closed_on=(
+                            "missing permission",
+                            "changed exact membership",
+                            "empty current scope",
+                            "non-failed retry source",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "invoice batch Jinja/Alpine confirmation, incomplete JSON "
+                            "preview, and raw all-status retry form"
+                        ),
+                        new_owner="ui.invoice_batch_action_projection",
+                        verification=(
+                            "exact preview, fingerprint drift, confirmation, retry "
+                            "eligibility, template, route, and architecture tests"
+                        ),
+                        cutover_gate=(
+                            "Every manual/retry launch renders the shared ActionForm "
+                            "with current exact owner evidence."
+                        ),
+                        fallback_retirement=(
+                            "Browser dialogs, direct execute form, incomplete JSON "
+                            "preview, and non-failed retry controls are absent."
+                        ),
+                    ),
+                    steward="billing operations UI",
+                    design_refs=(
+                        "docs/designs/INVOICE_BATCH_AND_REMINDER_SAFE_ACTIONS.md",
+                        "docs/FRONTEND_SPEC.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_invoice_batch_web.py",
+                        "tests/test_billing_invoice_templates.py",
+                        "tests/architecture/test_action_form_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -20455,8 +21836,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
         ),
         entrypoints=(
+            "app.web.admin.billing_invoice_batch",
+            "app.web.admin.billing_invoice_bulk",
             "app.web.admin.billing_payment_proofs",
             "app.web.admin.billing_extensions",
+            "templates.admin.billing.invoice_batch",
+            "templates.admin.billing.invoice_bulk_review",
             "templates.admin.billing.payment_proof_detail",
             "templates.admin.billing.service_extension_detail",
             "templates.components.forms.action_form",

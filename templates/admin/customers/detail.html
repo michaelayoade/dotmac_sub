@@ -1,7 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
 {% from "components/ui/record.html" import subscriber_hero %}
-{% from "components/portal/account_health.html" import service_health_strip %}
 
 {% block title %}{{ customer_name }} - Customer - Admin{% endblock %}
 
@@ -63,9 +62,6 @@
         </a>
     {% endcall %}
     {% endif %}
-
-    {# Canonical first-line support view shared with Customer and Reseller portals. #}
-    {{ service_health_strip(account_health, "/admin/catalog/subscriptions/") }}
 
     <!-- Tab Navigation -->
     <div class="border-b border-slate-200 dark:border-slate-700">
@@ -1294,6 +1290,7 @@
                 {% set sub_status = subscription.status.value if subscription.status is not string and subscription.status else (subscription.status | default('pending')) %}
                 {% set show_service_assignments = sub_status != 'disabled' %}
                 {% set account = account_lookup.get(subscription.subscriber_id|string) %}
+                {% set service_health = (service_health_by_subscription or {}).get(subscription.id|string) %}
                 <div x-show="showAllSubscriptions || '{{ sub_status }}' === 'active'" x-cloak class="px-5 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
                     <div class="flex items-start justify-between">
                         <div class="flex items-start gap-4">
@@ -1305,6 +1302,7 @@
                                     <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
                                     {{ status_presentation_badge(subscription_status_presentations.get(subscription.id|string), pulse=(sub_status == 'active'), size="sm") }}
                                 </div>
+                                <p class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">Subscription ID: {{ subscription.id }}</p>
                                 <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                                     {% if account and account.account_number %}
                                     <span class="flex items-center gap-1">
@@ -1343,6 +1341,22 @@
                                     </span>
                                     {% endif %}
                                 </div>
+                                {% if service_health and service_health.pending_change %}
+                                {% set pending_change = service_health.pending_change %}
+                                <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-900/20">
+                                    <p class="text-xs font-semibold text-amber-900 dark:text-amber-100">
+                                        {% if pending_change.delivery_mode == 'field_migration' %}Field migration{% elif pending_change.delivery_mode == 'remote_reprovision' %}Remote service change{% else %}Plan change{% endif %}
+                                        {{ pending_change.status | replace('_', ' ') }}
+                                        &middot; {{ pending_change.delivery_state | replace('_', ' ') }}
+                                    </p>
+                                    <p class="mt-1 text-xs text-amber-800 dark:text-amber-200">
+                                        Target: {{ pending_change.target_offer_name }}
+                                        &middot; Effective {{ pending_change.effective_date.strftime('%b %d, %Y') }}
+                                        {% if pending_change.target_service_address %}<br>Relocating to {{ pending_change.target_service_address }}{% endif %}
+                                        {% if pending_change.field_fee_amount %}<br>One-time field charge: {{ pending_change.field_fee_currency }} {{ '{:,.2f}'.format(pending_change.field_fee_amount) }}{% endif %}
+                                    </p>
+                                </div>
+                                {% endif %}
                             </div>
                         </div>
                         <div class="flex items-start gap-3">
@@ -1356,6 +1370,16 @@
                                 <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="mt-2 inline-flex text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">View details</a>
                             </div>
                             <div class="flex flex-col items-end gap-2">
+                                {% if can_activate_subscriptions and subscription.id|string in restorable_subscription_ids %}
+                                <button type="button"
+                                        @click="restoreSubscription('{{ subscription.id }}')"
+                                        :disabled="restoringSubscriptionId === '{{ subscription.id }}'"
+                                        class="inline-flex w-24 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-wait disabled:opacity-70 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+                                        title="Review and restore this subscription">
+                                    <svg class="h-3.5 w-3.5" :class="restoringSubscriptionId === '{{ subscription.id }}' ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8"/></svg>
+                                    <span x-text="restoringSubscriptionId === '{{ subscription.id }}' ? 'Restoring…' : 'Restore'">Restore</span>
+                                </button>
+                                {% endif %}
                                 {% if sub_status == 'active' %}
                                 <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">
                                     {% include "components/forms/csrf_input.html" %}
@@ -1717,9 +1741,17 @@
                             <h3 class="font-semibold text-slate-900 dark:text-white">Network Access</h3>
                         </div>
                     </div>
-                    <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    <div class="space-y-4 p-5">
+                        {% if (network_access_active_count | default(0)) == 0 %}
+                        <div x-show="!showAllNetworkAccess" class="rounded-xl border border-dashed border-slate-300 px-5 py-8 text-center dark:border-slate-700">
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">No active network access</p>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Use View more to see cancelled, hidden, and other inactive subscriptions.</p>
+                        </div>
+                        {% endif %}
                         {% for card in network_access_cards %}
-                        <div class="px-5 py-4">
+                        {% set card_health = card.service_health %}
+                        {% set health_connection = card_health.connection.value if card_health and card_health.connection.is_present else none %}
+                        <div x-show="showAllNetworkAccess || '{{ card.status }}' === 'active'" x-cloak class="rounded-xl border border-slate-200 p-4 shadow-sm dark:border-slate-700">
                             <div class="mb-3 flex items-center justify-between">
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ card.offer_name }}</p>
                                 <div class="flex flex-wrap items-center justify-end gap-2">
@@ -1735,6 +1767,14 @@
                                     <p class="text-xs text-slate-500 dark:text-slate-400">Connection</p>
                                     <p class="font-mono font-medium text-slate-900 dark:text-white">
                                         {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at | app_datetime('%b %d, %H:%M')) }}
+                                    </p>
+                                </div>
+                                {% endif %}
+                                {% if health_connection and health_connection.medium %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Access Type</p>
+                                    <p class="font-medium text-slate-900 dark:text-white">
+                                        {% if health_connection.medium in ['fiber', 'fibre'] %}Fibre{% else %}{{ health_connection.medium | replace('_', ' ') | title }}{% endif %}
                                     </p>
                                 </div>
                                 {% endif %}
@@ -1802,13 +1842,15 @@
                                 </div>
                                 {% endif %}
                             </div>
-                            {% if card.known_incident %}
+                            {% set has_known_outage = card.known_incident or (health_connection and health_connection.area_outage) %}
+                            {% if has_known_outage %}
                             <div class="mt-4 rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/25">
                                 <div class="flex flex-wrap items-start justify-between gap-2">
                                     <div class="min-w-0">
                                         <p class="text-xs uppercase tracking-wide text-red-700 dark:text-red-300">
-                                            {% if card.known_incident.area_outage %}Known area outage{% else %}Known incident{% endif %}
+                                            {% if card.known_incident and not card.known_incident.area_outage %}Known incident{% else %}Known area outage{% endif %}
                                         </p>
+                                        {% if card.known_incident %}
                                         <p class="font-medium text-red-900 dark:text-red-100">
                                             This customer is already covered &mdash; do not raise a duplicate.
                                         </p>
@@ -1816,9 +1858,16 @@
                                         <p class="mt-1 text-xs text-slate-700 dark:text-slate-300">{{ card.known_incident.customer_message }}</p>
                                         {% endif %}
                                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                                            Connection: {{ card.known_incident.connection_state }}{% if card.known_incident.checked_at %} &middot; checked {{ card.known_incident.checked_at }}{% endif %}
+                                            Connection: {{ card.known_incident.connection_state }}
                                         </p>
+                                        {% endif %}
+                                        {% if health_connection and health_connection.checked_at %}
+                                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Last checked {{ health_connection.checked_at | app_datetime('%b %d, %Y at %I:%M %p') }}</p>
+                                        {% elif card.known_incident and card.known_incident.checked_at %}
+                                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Last checked {{ card.known_incident.checked_at | app_datetime('%b %d, %Y at %I:%M %p') }}</p>
+                                        {% endif %}
                                     </div>
+                                    {% if card.known_incident %}
                                     <div class="flex flex-wrap gap-2">
                                         {% if card.known_incident.infrastructure_ticket_id %}
                                         <a href="/admin/support/tickets/{{ card.known_incident.infrastructure_ticket_id }}" class="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700">Open the covering ticket</a>
@@ -1827,8 +1876,14 @@
                                         <a href="/admin/network/outages/{{ card.known_incident.incident_id }}" class="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40">View incident</a>
                                         {% endif %}
                                     </div>
+                                    {% endif %}
                                 </div>
                             </div>
+                            {% elif health_connection %}
+                            <p class="mt-4 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                                No known outage
+                                {% if health_connection.checked_at %}<span class="font-normal text-slate-500 dark:text-slate-400">&middot; Last checked {{ health_connection.checked_at | app_datetime('%b %d, %Y at %I:%M %p') }}</span>{% endif %}
+                            </p>
                             {% endif %}
                             {% if card.access_state %}
                             <div class="mt-4 rounded-lg border {% if card.access_state.radius_blocked %}border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-900/20{% else %}border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-800/40{% endif %} p-3">
@@ -1837,6 +1892,9 @@
                                     {{ card.access_state.radius_state or 'not provisioned' }}
                                     <span class="text-xs font-normal text-slate-500 dark:text-slate-400">&middot; {{ card.access_state.radius_mode }}</span>
                                 </p>
+                                {% if card_health and card_health.access_reason %}
+                                <p class="mt-1 text-xs text-slate-600 dark:text-slate-400">{{ card_health.access_reason }}</p>
+                                {% endif %}
                                 {% if card.access_state.access_block_reason %}
                                 <p class="text-xs text-slate-600 dark:text-slate-400">Access blocked: {{ card.access_state.access_block_reason }}</p>
                                 {% endif %}
@@ -1882,6 +1940,16 @@
                         </div>
                         {% endfor %}
                     </div>
+                    {% if (network_access_inactive_count | default(0)) > 0 %}
+                    <div class="border-t border-slate-100 px-5 py-4 text-center dark:border-slate-700">
+                        <button type="button"
+                                @click="showAllNetworkAccess = !showAllNetworkAccess"
+                                class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-700 dark:focus:ring-offset-slate-800">
+                            <span x-text="showAllNetworkAccess ? 'Show active only' : 'View more'">View more</span>
+                            <svg class="h-4 w-4 transition" :class="showAllNetworkAccess ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                    </div>
+                    {% endif %}
                 </div>
                 {% endif %}
 
@@ -2683,7 +2751,9 @@ function customerDetail(config = {}) {
         activeTab: 'overview',
         billingSubTab: 'overview',
         serviceSubTab: 'subscriptions',
-        showAllSubscriptions: false,
+        showAllSubscriptions: {{ ((stats.active_subscriptions | default(0)) == 0) | tojson }},
+        showAllNetworkAccess: false,
+        restoringSubscriptionId: '',
         showAddressModal: false,
         showContactModal: false,
         networkDetailModal: false,
@@ -2712,6 +2782,104 @@ function customerDetail(config = {}) {
         convertOpen: false,
         convertId: null,
         convertName: "",
+
+        async restoreSubscription(subscriptionId) {
+            if (!subscriptionId || this.restoringSubscriptionId) return;
+            const requestedReason = window.prompt(
+                'Reason for restoring this subscription:',
+                'Temporary restoration for service configuration'
+            );
+            if (requestedReason === null) return;
+            const reason = requestedReason.trim();
+            if (!reason) {
+                window.alert('Enter a reason before restoring the subscription.');
+                return;
+            }
+
+            this.restoringSubscriptionId = subscriptionId;
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
+                || decodeURIComponent((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
+            const body = new URLSearchParams({
+                kind: 'restore',
+                effective_timing: 'immediate',
+                reason,
+                _csrf_token: csrfToken
+            });
+            const lifecycleUrl = `/admin/catalog/subscriptions/${subscriptionId}/lifecycle`;
+            const readResponse = async (response) => {
+                const raw = await response.text();
+                try {
+                    return raw ? JSON.parse(raw) : {};
+                } catch (_error) {
+                    return {};
+                }
+            };
+            const humanize = (value) => String(value || 'none')
+                .replaceAll('_', ' ')
+                .replace(/\b\w/g, (character) => character.toUpperCase());
+
+            try {
+                const previewResponse = await fetch(`${lifecycleUrl}/preview`, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-Token': csrfToken
+                    },
+                    body
+                });
+                const preview = await readResponse(previewResponse);
+                if (!previewResponse.ok) {
+                    throw new Error(preview.message || `Restore preview failed (HTTP ${previewResponse.status}).`);
+                }
+                if (!preview.eligible) {
+                    const reasons = (preview.eligibility_reasons || []).map(humanize).join(', ');
+                    throw new Error(reasons || 'This subscription is not eligible for restoration.');
+                }
+
+                const currentStatus = humanize(preview.current?.status);
+                const proposedStatus = humanize(preview.proposed?.status);
+                const billingImpact = humanize(preview.billing_impact?.action);
+                const accessImpact = `${humanize(preview.access_impact?.current_state)} → ${humanize(preview.access_impact?.proposed_state)}`;
+                const sessionAction = humanize(preview.access_impact?.session_action);
+                const confirmationLines = [
+                    `Restore this subscription from ${currentStatus} to ${proposedStatus}?`,
+                    `Billing impact: ${billingImpact}.`,
+                    `Access impact: ${accessImpact}.`,
+                    `Session action: ${sessionAction}.`
+                ];
+                if (!preview.access_impact?.allowed_after) {
+                    confirmationLines.push(
+                        `Warning: customer access will remain blocked (${humanize(preview.access_impact?.block_reason_after)}).`
+                    );
+                }
+                const confirmed = window.confirm(confirmationLines.join('\n'));
+                if (!confirmed) return;
+
+                body.set('expected_head', preview.expected_head);
+                const idempotencyKey = window.crypto?.randomUUID?.()
+                    || `${Date.now()}-customer-restore-${subscriptionId}`;
+                const executeResponse = await fetch(`${lifecycleUrl}/execute`, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-Token': csrfToken,
+                        'Idempotency-Key': idempotencyKey
+                    },
+                    body
+                });
+                const outcome = await readResponse(executeResponse);
+                if (!executeResponse.ok) {
+                    throw new Error(outcome.message || `Restore failed (HTTP ${executeResponse.status}).`);
+                }
+
+                window.location.hash = 'subscriptions';
+                window.location.reload();
+            } catch (error) {
+                window.alert(error.message || 'The subscription could not be restored.');
+            } finally {
+                this.restoringSubscriptionId = '';
+            }
+        },
 
         openConvert(id, name) {
             this.convertId = id;
@@ -2958,14 +3126,19 @@ function customerDetail(config = {}) {
                     `Send ${selectedChannelMeta().label} template "${template.label || template.name}" to this customer?`,
                     `Queue ${preview.queued_count || 0} message(s).`
                 ];
+                const previewRecipient = (preview.recipient_summary || [])[0];
+                if (previewRecipient) {
+                    previewMessageParts.push(`Recipient: ${previewRecipient.name}${previewRecipient.account_number ? ` (${previewRecipient.account_number})` : ''}${previewRecipient.recipient ? ` at ${previewRecipient.recipient}` : ''}.`);
+                }
                 if (previewOpenTicketExcluded.length) {
                     previewMessageParts.push(`Exclude ${previewOpenTicketExcluded.length} customer(s) with open tickets.`);
                 }
                 if (previewOtherSuppressed) {
                     previewMessageParts.push(`Suppress ${previewOtherSuppressed} other customer(s).`);
                 }
-                if ((preview.skipped || []).length) {
-                    previewMessageParts.push(`Skip ${(preview.skipped || []).length} customer(s) with missing contact details.`);
+                const previewSkippedCount = preview.skipped_count ?? (preview.skipped || []).length;
+                if (previewSkippedCount) {
+                    previewMessageParts.push(`Skip ${previewSkippedCount} customer(s) with missing contact details.`);
                 }
                 if (!confirm(previewMessageParts.join(' '))) return;
 
@@ -2983,6 +3156,7 @@ function customerDetail(config = {}) {
                             expected_count: preview.matched_count || 0,
                             expected_scope_token: preview.scope_token
                         },
+                        expected_impact_token: preview.impact_token,
                         confirmed: true
                     })
                 });
@@ -2996,10 +3170,12 @@ function customerDetail(config = {}) {
                     this.closeSendMessageModal();
                     const suppressed = result.suppressed || [];
                     const openTicketExcluded = suppressed.filter((item) => item.reason_code === 'open_ticket');
-                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcluded.length, 0);
+                    const openTicketExcludedCount = result.suppression_counts?.open_ticket ?? openTicketExcluded.length;
+                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcludedCount, 0);
                     const openTicketNames = openTicketExcluded.slice(0, 10).map((item) => item.name).join(', ');
-                    const openTicketMore = openTicketExcluded.length > 10 ? `, and ${openTicketExcluded.length - 10} more` : '';
-                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${openTicketExcluded.length ? ` ${openTicketExcluded.length} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
+                    const openTicketMore = openTicketExcludedCount > openTicketExcluded.length ? `, and ${openTicketExcludedCount - openTicketExcluded.length} more` : '';
+                    const skippedCount = result.skipped_count ?? result.skipped?.length ?? 0;
+                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${openTicketExcludedCount ? ` ${openTicketExcludedCount} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}${skippedCount ? ` ${skippedCount} customer(s) were skipped due to missing contact details.` : ''}`);
                 } else {
                     const error = await response.json().catch(() => ({}));
                     alert(error.detail || 'Failed to queue the message. Please try again.');

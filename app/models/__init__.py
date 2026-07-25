@@ -32,7 +32,6 @@ from app.models.billing import (  # noqa: F401
     BillingAccountCreditAllocationItem,
     BillingAccountLedgerEntry,
     BillingRun,
-    BillingRunSchedule,
     BillingRunStatus,
     ConsolidatedCreditConsumptionReconciliationEvidence,
     ConsolidatedPaymentReturnDocumentReconstructionEvidence,
@@ -182,6 +181,7 @@ from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoffStatus,
 )
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
+from app.models.customer_tax_policy import CustomerTaxPolicy  # noqa: F401
 from app.models.cutover import CutoverBalanceVariance  # noqa: F401
 from app.models.device_token import DeviceToken  # noqa: F401
 from app.models.dispatch import (  # noqa: F401

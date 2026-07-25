@@ -62,6 +62,10 @@ class EventType(enum.Enum):
     integration_installation_manifest_adopted = (
         "integration.installation.manifest_adopted"
     )
+    integration_installation_capability_provisioned = (
+        "integration.installation.capability_provisioned"
+    )
+    integration_job_capability_activated = "integration.job.capability_activated"
     account_credit_deposited = "account_credit.deposited"
     prepaid_service_renewed = "prepaid_service.renewed"
     subscription_billing_treatment_changed = "subscription_billing_treatment.changed"
@@ -91,6 +95,9 @@ class EventType(enum.Enum):
     prepaid_enforcement_timer_changed = "prepaid_enforcement.timer_changed"
     prepaid_coverage_reconciled = "prepaid_coverage.reconciled"
     prepaid_draft_reconciled = "prepaid_draft.reconciled"
+    ip_assignment_service_ownership_reconciled = (
+        "ip_assignment.service_ownership_reconciled"
+    )
 
     # Billing - Outage compensation
     service_extension_created = "billing.service_extension_created"

@@ -92,7 +92,7 @@ be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 234 existing
+persistence-like mutation must name a declared owner. The 231 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
@@ -162,7 +162,8 @@ do not hand-edit these rows.
 | `financial.topup_intents` | saved-card top-up intent failure projection | `command_writer` | canonical top-up intent projection target ← `financial.topup_intents`<br>typed saved-card failure evidence ← `financial.gateway_topup_intent_commands`<br>top-up intent transition protocol ← `financial.topup_intents` | `participant` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_payment_proofs.py`<br>`tests/test_direct_transfer_intents.py`<br>`tests/test_topup_intent_projection.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/test_topup_intent_status.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
 | `financial.topup_intents` | top-up intent completed-payment projection | `command_writer` | canonical top-up intent projection target ← `financial.topup_intents`<br>canonical succeeded payment evidence ← `financial.payments`<br>typed top-up intent completion evidence ← `financial.topup_intents` | `participant` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_payment_proofs.py`<br>`tests/test_direct_transfer_intents.py`<br>`tests/test_topup_intent_projection.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/test_topup_intent_status.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
 | `financial.topup_intents` | gateway top-up intent expiry decision | `command_writer` | canonical top-up intent projection target ← `financial.topup_intents`<br>canonical top-up reconciliation expiry policy ← `control.settings_spec`<br>typed gateway expiry observation ← `external:payment_provider` | `participant` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_payment_proofs.py`<br>`tests/test_direct_transfer_intents.py`<br>`tests/test_topup_intent_projection.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/test_topup_intent_status.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
-| `financial.direct_transfer_intent_commands` | customer direct-transfer intent creation coordination | `application_coordinator` | authenticated direct-transfer creation command ← `financial.direct_transfer_intent_commands`<br>canonical customer account ← `customer.accounts`<br>canonical payable invoice ← `financial.invoices`<br>canonical direct-transfer configuration ← `financial.topup_intents`<br>canonical direct-transfer lifetime and amount policy ← `control.settings_spec`<br>canonical deposit intent protocol ← `financial.account_credit_deposits`<br>canonical invoice direct-transfer intent protocol ← `financial.topup_intents` | `coordinator_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_direct_transfer_intents.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
+| `financial.direct_transfer_intent_commands` | customer direct-transfer intent creation coordination | `application_coordinator` | authenticated direct-transfer creation command ← `financial.direct_transfer_intent_commands`<br>canonical customer account ← `customer.accounts`<br>canonical payable invoice ← `financial.invoices`<br>canonical customer WHT policy ← `financial.customer_tax_policies`<br>canonical direct-transfer configuration ← `financial.topup_intents`<br>canonical direct-transfer lifetime and amount policy ← `control.settings_spec`<br>canonical deposit intent protocol ← `financial.account_credit_deposits`<br>canonical invoice direct-transfer intent protocol ← `financial.topup_intents` | `coordinator_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_direct_transfer_intents.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
+| `financial.customer_tax_policies` | customer withholding-tax eligibility policy | `command_writer` | customer WHT policy command context ← `financial.customer_tax_policies`<br>canonical customer account ← `customer.accounts`<br>canonical customer WHT policy record ← `financial.customer_tax_policies` | `owner_managed` | `native` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FRONTEND_SPEC.md`<br>`docs/ACCOUNT_CREDIT_DEPOSITS.md`<br>`tests/test_subscriber_billing_config.py`<br>`tests/test_direct_transfer_intents.py`<br>`tests/test_customer_wht_policy_migration.py` |
 | `financial.gateway_topup_intent_commands` | customer gateway top-up intent creation coordination | `application_coordinator` | authenticated customer gateway creation command ← `financial.gateway_topup_intent_commands`<br>canonical payable invoice ← `financial.invoices`<br>canonical gateway lifetime and amount policy ← `control.settings_spec`<br>canonical deposit intent protocol ← `financial.account_credit_deposits`<br>canonical gateway intent protocol ← `financial.topup_intents`<br>enabled checkout capability binding ← `integration.installations` | `coordinator_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_gateway_topup_intents.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
 | `financial.gateway_topup_intent_commands` | reseller gateway top-up intent creation coordination | `application_coordinator` | authenticated reseller gateway creation command ← `financial.gateway_topup_intent_commands`<br>canonical reseller billing account ← `financial.billing_accounts`<br>canonical gateway lifetime and amount policy ← `control.settings_spec`<br>canonical gateway intent protocol ← `financial.topup_intents`<br>enabled checkout capability binding ← `integration.installations` | `coordinator_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_gateway_topup_intents.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
 | `financial.gateway_topup_intent_commands` | saved-card charge failure coordination | `application_coordinator` | typed saved-card failure command ← `financial.gateway_topup_intent_commands`<br>canonical gateway intent protocol ← `financial.topup_intents`<br>canonical saved-card retry reservation ← `financial.gateway_topup_intent_commands` | `coordinator_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_gateway_topup_intents.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/architecture/test_topup_intent_ownership.py` |
@@ -171,6 +172,7 @@ do not hand-edit these rows.
 | `financial.account_credit_deposits` | verified Deposit Account Credit settlement command | `command_writer` | typed verified deposit settlement evidence ← `financial.account_credit_deposits`<br>canonical typed deposit intent ← `financial.account_credit_deposits`<br>canonical subscriber payment settlement protocol ← `financial.payments`<br>canonical account-credit application protocol ← `financial.account_credit_applications`<br>canonical top-up intent completion protocol ← `financial.topup_intents` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/ACCOUNT_CREDIT_DEPOSITS.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_credit_deposits.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/test_payment_proofs.py`<br>`tests/architecture/test_account_credit_deposit_ownership.py` |
 | `financial.account_credit_deposits` | deposit-to-payment evidence link | `authoritative_record` | canonical typed deposit intent ← `financial.account_credit_deposits`<br>canonical subscriber payment settlement protocol ← `financial.payments` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/ACCOUNT_CREDIT_DEPOSITS.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_credit_deposits.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/test_payment_proofs.py`<br>`tests/architecture/test_account_credit_deposit_ownership.py` |
 | `financial.account_credit_deposits` | post-application funding-change outbox event | `event_policy` | typed verified deposit settlement evidence ← `financial.account_credit_deposits`<br>canonical typed deposit intent ← `financial.account_credit_deposits`<br>canonical subscriber payment settlement protocol ← `financial.payments` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/ACCOUNT_CREDIT_DEPOSITS.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_credit_deposits.py`<br>`tests/test_customer_portal_topup_flow.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/test_payment_proofs.py`<br>`tests/architecture/test_account_credit_deposit_ownership.py` |
+| `financial.payment_configuration_staff_actions` | reviewed payment configuration lifecycle and audit coordination | `application_coordinator` | payment configuration staff command ← `financial.payment_configuration_staff_actions`<br>canonical collection-account state ← `financial.collection_accounts`<br>canonical settlement-attribution state ← `financial.payment_configuration_staff_actions` | `coordinator_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PAYMENT_CONFIGURATION_SETTINGS_SAFE_ACTIONS.md`<br>`tests/test_payment_configuration_staff_actions.py`<br>`tests/test_payment_configuration_settings_ui.py` |
 | `financial.payment_routing` | installation-backed customer gateway eligibility | `resolver` | enabled payment capability installation bundle ← `integration.installations`<br>canonical gateway finance identity ← `financial.payment_gateway_finance` | `read_only` | `complete` | finance operations | `docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_payment_routing.py`<br>`tests/test_customer_portal_billing_routes.py`<br>`tests/architecture/test_payment_gateway_control_plane.py` |
 | `financial.payment_routing` | ordered customer gateway presentment policy | `policy` | enabled payment capability installation bundle ← `integration.installations` | `read_only` | `complete` | finance operations | `docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_payment_routing.py`<br>`tests/test_customer_portal_billing_routes.py`<br>`tests/architecture/test_payment_gateway_control_plane.py` |
 | `financial.payment_routing` | checkout provider and binding selection | `policy` | enabled payment capability installation bundle ← `integration.installations`<br>canonical gateway finance identity ← `financial.payment_gateway_finance`<br>customer checkout provider request ← `financial.payment_routing` | `read_only` | `complete` | finance operations | `docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_payment_routing.py`<br>`tests/test_customer_portal_billing_routes.py`<br>`tests/architecture/test_payment_gateway_control_plane.py` |
@@ -216,10 +218,15 @@ do not hand-edit these rows.
 | `financial.prepaid_enforcement_state` | funded and terminal prepaid timer cleanup | `command_writer` | resolved prepaid enforcement transition ← `financial.prepaid_enforcement`<br>resolved account lifecycle transition ← `access.subscription_lifecycle`<br>canonical prepaid enforcement timers ← `financial.prepaid_enforcement_state` | `participant` | `complete` | billing operations | `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_prepaid_enforcement_state_owner.py`<br>`tests/architecture/test_prepaid_enforcement_state_boundary.py`<br>`tests/test_prepaid_balance_sweep.py`<br>`tests/test_account_lifecycle.py` |
 | `financial.prepaid_draft_reconciliation` | stranded prepaid draft classification | `resolver` | canonical prepaid draft invoice ← `financial.invoices`<br>canonical payment-backed account credit ← `financial.account_credit_applications`<br>canonical funded service entitlement ← `financial.prepaid_service_renewals`<br>canonical direct-renewal debit ← `financial.prepaid_service_renewals` | `owner_managed` | `cut_over` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/designs/PREPAID_DRAFT_RECONCILIATION.md`<br>`tests/test_prepaid_draft_reconciliation.py`<br>`tests/test_prepaid_service_renewals.py`<br>`tests/architecture/test_prepaid_draft_reconciliation_ownership.py` |
 | `financial.prepaid_draft_reconciliation` | stranded prepaid draft invoice reconciliation | `reconciler` | reviewed reconciliation command ← `financial.prepaid_draft_reconciliation`<br>canonical prepaid draft invoice ← `financial.invoices`<br>canonical payment-backed account credit ← `financial.account_credit_applications`<br>canonical funded service entitlement ← `financial.prepaid_service_renewals`<br>canonical direct-renewal debit ← `financial.prepaid_service_renewals`<br>invoice and payment participant protocols ← `financial.invoices` | `owner_managed` | `cut_over` | billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/designs/PREPAID_DRAFT_RECONCILIATION.md`<br>`tests/test_prepaid_draft_reconciliation.py`<br>`tests/test_prepaid_service_renewals.py`<br>`tests/architecture/test_prepaid_draft_reconciliation_ownership.py` |
+| `financial.payment_arrangement_staff_actions` | atomic staff arrangement transition and audit coordination | `application_coordinator` | canonical payment-arrangement action preview ← `financial.payment_arrangements`<br>authorized staff command context ← `auth.permission_gate` | `coordinator_managed` | `complete` | billing operations | `docs/designs/PAYMENT_ARRANGEMENT_SAFE_ACTIONS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_payment_arrangement_safe_actions.py`<br>`tests/test_payment_arrangements.py`<br>`tests/architecture/test_action_form_ownership.py` |
 | `financial.access_resolution` | billable service classification | `policy` | canonical subscriber account state ← `customer.accounts`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical billing profile ← `financial.billing_profile` | `read_only` | `complete` | billing and network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_customer_service_state.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_access_resolution_boundary.py` |
 | `financial.access_resolution` | RADIUS access decision | `policy` | canonical subscriber account state ← `customer.accounts`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical access restriction intent ← `access.walled_garden_policy` | `read_only` | `complete` | billing and network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_customer_service_state.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_access_resolution_boundary.py` |
 | `financial.access_resolution` | financial suspension/restoration eligibility | `policy` | canonical subscriber account state ← `customer.accounts`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical billing profile ← `financial.billing_profile`<br>currency-bound customer financial position ← `customer.financial_position`<br>canonical prepaid threshold ← `financial.prepaid_threshold` | `read_only` | `complete` | billing and network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_customer_service_state.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_access_resolution_boundary.py` |
 | `financial.access_resolution` | currency-bound prepaid funding decision | `policy` | currency-bound customer financial position ← `customer.financial_position`<br>canonical prepaid threshold ← `financial.prepaid_threshold`<br>prepaid enforcement currency setting ← `financial.prepaid_currency` | `read_only` | `complete` | billing and network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_access_resolution.py`<br>`tests/test_customer_service_state.py`<br>`tests/test_prepaid_threshold_resolver.py`<br>`tests/architecture/test_access_resolution_boundary.py` |
+| `financial.dunning_staff_actions` | atomic staff dunning-case transition and audit coordination | `application_coordinator` | canonical dunning staff-action impact ← `financial.dunning`<br>authorized dunning staff command context ← `auth.permission_gate` | `coordinator_managed` | `complete` | collections operations | `docs/designs/DUNNING_STAFF_SAFE_ACTIONS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_dunning_staff_safe_actions.py`<br>`tests/test_web_billing_dunning.py`<br>`tests/architecture/test_action_form_ownership.py` |
+| `financial.billing_automation` | postpaid invoice batch execution | `command_writer` | canonical billable subscription facts ← `access.subscription_lifecycle`<br>confirmed staff batch evidence ← `ui.invoice_batch_action_projection` | `owner_managed` | `complete` | billing operations | `docs/designs/INVOICE_BATCH_AND_REMINDER_SAFE_ACTIONS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_billing_invoice_batch_web.py`<br>`tests/test_billing_automation_services.py`<br>`tests/architecture/test_action_form_ownership.py` |
+| `financial.billing_automation` | durable billing-run lifecycle and retry lineage | `authoritative_record` | confirmed staff batch evidence ← `ui.invoice_batch_action_projection` | `owner_managed` | `complete` | billing operations | `docs/designs/INVOICE_BATCH_AND_REMINDER_SAFE_ACTIONS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_billing_invoice_batch_web.py`<br>`tests/test_billing_automation_services.py`<br>`tests/architecture/test_action_form_ownership.py` |
+| `financial.billing_automation` | billing-run audit projection and repair | `projection_writer` | canonical billing-run record ← `financial.billing_automation` | `owner_managed` | `complete` | billing operations | `docs/designs/INVOICE_BATCH_AND_REMINDER_SAFE_ACTIONS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_billing_invoice_batch_web.py`<br>`tests/test_billing_automation_services.py`<br>`tests/architecture/test_action_form_ownership.py` |
 | `financial.payment_provider_events` | payment-provider event ingestion | `observation_collector` | verified external provider observation ← `external:payment_provider`<br>administrative provider observation ← `financial.payment_provider_events`<br>active provider identity ← `financial.payment_routing`<br>provider-event command context ← `financial.payment_provider_events` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_payment_provider_events.py`<br>`tests/test_api_billing_webhooks.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/architecture/test_payment_provider_event_ownership.py`<br>`tests/architecture/test_payment_settlement_participants.py`<br>`tests/integration/test_payment_provider_event_concurrency.py` |
 | `financial.payment_provider_events` | normalized provider monetary observations | `authoritative_record` | verified external provider observation ← `external:payment_provider`<br>active provider identity ← `financial.payment_routing` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_payment_provider_events.py`<br>`tests/test_api_billing_webhooks.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/architecture/test_payment_provider_event_ownership.py`<br>`tests/architecture/test_payment_settlement_participants.py`<br>`tests/integration/test_payment_provider_event_concurrency.py` |
 | `financial.payment_provider_events` | provider-event idempotency | `authoritative_record` | canonical provider-event record ← `financial.payment_provider_events`<br>provider-event command context ← `financial.payment_provider_events` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_payment_provider_events.py`<br>`tests/test_api_billing_webhooks.py`<br>`tests/test_payment_webhook_settlement.py`<br>`tests/architecture/test_payment_provider_event_ownership.py`<br>`tests/architecture/test_payment_settlement_participants.py`<br>`tests/integration/test_payment_provider_event_concurrency.py` |
@@ -244,10 +251,13 @@ do not hand-edit these rows.
 | `network.tr069_commands` | TR-069 command admission coordination | `application_coordinator` | authenticated TR-069 command evidence ← `auth.permission_gate`<br>canonical TR-069 device and ACS binding ← `network.identity`<br>TR-069 command admission capability ← `control.feature_registry`<br>canonical network operation lifecycle ← `network.operation_ledger`<br>durable network command dispatch ← `network.operation_dispatch` | `coordinator_managed` | `complete` | network operations | `docs/designs/TR069_COMMAND_LIFECYCLE.md`<br>`docs/runbooks/TR069_COMMAND_CUTOVER.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`tests/test_tr069_job_commands.py`<br>`tests/architecture/test_tr069_job_lifecycle_boundary.py` |
 | `network.tr069_commands` | TR-069 command execution coordination | `application_coordinator` | canonical TR-069 device and ACS binding ← `network.identity`<br>canonical network operation lifecycle ← `network.operation_ledger`<br>durable network command dispatch ← `network.operation_dispatch` | `coordinator_managed` | `complete` | network operations | `docs/designs/TR069_COMMAND_LIFECYCLE.md`<br>`docs/runbooks/TR069_COMMAND_CUTOVER.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`tests/test_tr069_job_commands.py`<br>`tests/architecture/test_tr069_job_lifecycle_boundary.py` |
 | `network.tr069_commands` | TR-069 command outcome coordination | `application_coordinator` | canonical network operation lifecycle ← `network.operation_ledger`<br>durable network command dispatch ← `network.operation_dispatch`<br>normalized GenieACS command observation ← `external:genieacs` | `coordinator_managed` | `complete` | network operations | `docs/designs/TR069_COMMAND_LIFECYCLE.md`<br>`docs/runbooks/TR069_COMMAND_CUTOVER.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`tests/test_tr069_job_commands.py`<br>`tests/architecture/test_tr069_job_lifecycle_boundary.py` |
+| `network.ip_assignment_service_ownership` | exact service ownership of active IPv4 assignments | `reconciler` | canonical active IPv4 assignment ← `network.ip_assignment_service_ownership`<br>canonical active subscription identity ← `access.subscription_lifecycle`<br>served IPv4 compatibility projection ← `network.ip_assignment_service_ownership`<br>reviewed ownership repair command ← `network.ip_assignment_service_ownership` | `owner_managed` | `shadowing` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`tests/test_ip_assignment_repair.py`<br>`tests/architecture/test_ip_assignment_service_ownership.py` |
 | `network.outage_auto_notify` | automation eligibility for customer outage notification | `policy` | classifier outage incident ← `network.outage_lifecycle`<br>automation gate configuration ← `control.settings_spec` | `owner_managed` | `native` | Network operations | `docs/adr/0004-automated-outage-notification-dispatch.md`<br>`docs/designs/OUTAGE_CLASSIFIER.md`<br>`tests/test_outage_auto_notify.py` |
 | `network.outage_auto_notify` | automated dispatch trigger and its transaction | `application_coordinator` | classifier outage incident ← `network.outage_lifecycle`<br>affected subscription set ← `network.outage_impact`<br>automation gate configuration ← `control.settings_spec` | `owner_managed` | `native` | Network operations | `docs/adr/0004-automated-outage-notification-dispatch.md`<br>`docs/designs/OUTAGE_CLASSIFIER.md`<br>`tests/test_outage_auto_notify.py` |
 | `sessions.radius_resolution` | customer online-now resolution | `resolver` | active RADIUS session projection ← `sessions.radius_reconciliation` | `read_only` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md`<br>`tests/test_network_sot_services.py`<br>`tests/test_sot_relationships.py` |
 | `sessions.radius_resolution` | primary NAS session resolution | `resolver` | active RADIUS session projection ← `sessions.radius_reconciliation`<br>network identity registry ← `network.identity` | `read_only` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md`<br>`tests/test_network_sot_services.py`<br>`tests/test_sot_relationships.py` |
+| `communications.customer_policy` | customer notification eligibility | `policy` | customer notification identity and preferences ← `customer.accounts`<br>account notification status ← `customer.accounts`<br>channel configuration ← `communications.channel_policy`<br>recipient suppression ledger ← `communications.eligibility`<br>recent notification history ← `communications.notification_service`<br>evaluation time ← `external:system_clock` | `read_only` | `native` | customer communications | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_customer_bulk_actions.py`<br>`tests/test_communication_eligibility.py`<br>`tests/architecture/test_customer_notification_policy_boundary.py` |
+| `communications.customer_policy` | cohort-batched customer notification eligibility | `policy` | customer notification identity and preferences ← `customer.accounts`<br>account notification status ← `customer.accounts`<br>channel configuration ← `communications.channel_policy`<br>recipient suppression ledger ← `communications.eligibility`<br>recent notification history ← `communications.notification_service`<br>evaluation time ← `external:system_clock` | `read_only` | `native` | customer communications | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_customer_bulk_actions.py`<br>`tests/test_communication_eligibility.py`<br>`tests/architecture/test_customer_notification_policy_boundary.py` |
 | `operations.sla_escalation` | operational SLA event policy lifecycle | `authoritative_record` | validated SLA policy command ← `operations.sla_escalation_commands`<br>current operational SLA records ← `operations.sla_escalation` | `participant` | `complete` | operations platform | `docs/ARCHITECTURE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_operational_escalation.py`<br>`tests/test_operational_sla_policy_ui.py`<br>`tests/architecture/test_operational_sla_policy_ownership.py` |
 | `operations.sla_escalation` | event-scoped escalation timing and channel policy | `event_policy` | current operational SLA records ← `operations.sla_escalation`<br>validated operational event observation ← `operations.sla_escalation` | `participant` | `complete` | operations platform | `docs/ARCHITECTURE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_operational_escalation.py`<br>`tests/test_operational_sla_policy_ui.py`<br>`tests/architecture/test_operational_sla_policy_ownership.py` |
 | `operations.sla_escalation` | operational escalation event and delivery planning | `authoritative_record` | current operational SLA records ← `operations.sla_escalation`<br>validated operational event observation ← `operations.sla_escalation`<br>operational participant records ← `operations.sla_escalation` | `participant` | `complete` | operations platform | `docs/ARCHITECTURE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_operational_escalation.py`<br>`tests/test_operational_sla_policy_ui.py`<br>`tests/architecture/test_operational_sla_policy_ownership.py` |
@@ -409,6 +419,9 @@ do not hand-edit these rows.
 | `integration.inbox` | verified provider event receipt identity | `observation_collector` | verified external provider event ← `external:integration_provider`<br>enabled inbound capability binding ← `integration.installations`<br>integration inbox protocol ← `integration.inbox` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installation_api.py`<br>`tests/test_integration_whatsapp_capability.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
 | `integration.inbox` | integration inbox deduplication lifecycle | `authoritative_record` | verified external provider event ← `external:integration_provider`<br>enabled inbound capability binding ← `integration.installations`<br>integration inbox protocol ← `integration.inbox` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installation_api.py`<br>`tests/test_integration_whatsapp_capability.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
 | `integration.inbox` | inbound consequence processing evidence | `command_writer` | canonical domain consequence result ← `integration.runtime`<br>integration inbox protocol ← `integration.inbox` | `owner_managed` | `complete` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_installation_api.py`<br>`tests/test_integration_whatsapp_capability.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.jobs` | integration targets | `authoritative_record` | deployed capability contract ← `integration.registry`<br>enabled integration capability binding ← `integration.installations`<br>integration job lifecycle protocol ← `integration.jobs`<br>scheduler-owned cadence ← `scheduler.registry` | `owner_managed` | `cutover_ready` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_capability_sync.py`<br>`tests/test_crm_ticket_capability_cutover.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.jobs` | integration jobs | `authoritative_record` | deployed capability contract ← `integration.registry`<br>enabled integration capability binding ← `integration.installations`<br>integration job lifecycle protocol ← `integration.jobs`<br>scheduler-owned cadence ← `scheduler.registry` | `owner_managed` | `cutover_ready` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_capability_sync.py`<br>`tests/test_crm_ticket_capability_cutover.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
+| `integration.jobs` | integration runs | `authoritative_record` | deployed capability contract ← `integration.registry`<br>enabled integration capability binding ← `integration.installations`<br>integration job lifecycle protocol ← `integration.jobs`<br>scheduler-owned cadence ← `scheduler.registry` | `owner_managed` | `cutover_ready` | platform integrations | `docs/designs/INTEGRATION_PLATFORM_SOT.md`<br>`docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_integration_capability_sync.py`<br>`tests/test_crm_ticket_capability_cutover.py`<br>`tests/architecture/test_integration_platform_boundary.py` |
 | `integration.dotmac_erp_payables_adapter` | Dotmac ERP purchase-invoice payload mapping | `projection_writer` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>ERP purchase-invoice origination response ← `external:dotmac_erp`<br>ERP purchase-invoice flow controls ← `control.settings_spec` | `owner_managed` | `cut_over` | vendor finance integrations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_dotmac_erp_outbox.py` |
 | `integration.dotmac_erp_payables_adapter` | Dotmac ERP attachment delivery | `projection_writer` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>ERP purchase-invoice attachment response ← `external:dotmac_erp`<br>ERP purchase-invoice flow controls ← `control.settings_spec` | `owner_managed` | `cut_over` | vendor finance integrations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_dotmac_erp_outbox.py` |
 | `integration.dotmac_erp_payables_adapter` | timestamped Dotmac ERP payables-status observation | `reconciler` | canonical vendor purchase-invoice records ← `operations.vendor_purchase_invoice_records`<br>ERP accounts-payable status observation ← `external:dotmac_erp`<br>ERP purchase-invoice flow controls ← `control.settings_spec` | `owner_managed` | `cut_over` | vendor finance integrations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_vendor_payment_visibility.py`<br>`tests/test_dotmac_erp_outbox.py` |
@@ -712,13 +725,15 @@ detailed security and delivery boundary is
    active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
    invoice/credit-note line, not to a second tax-rate vocabulary.
 4. `financial.payment_proofs` owns proof review, supplies typed verified
-   gross/net/WHT evidence to the tax owner when a reseller pays net cash against
-   a gross obligation, and decides that a submitted proof requires
-   confirmation. `financial.tax_accounting` alone constructs the source WHT
-   record and initial timeline as a flush-only participant of that proof
-   transaction. The proof owner requests one reviewer work item from
-   `communications.staff_notifications`; it does not select staff recipients,
-   construct WHT rows, or construct inbox/delivery rows.
+   gross/net/WHT evidence to the tax owner when a direct customer or reseller
+   payment carries server-owned WHT facts, and decides that a submitted proof
+   requires confirmation. Customer-entered WHT is rejected unless it matches a
+   server-issued invoice direct-transfer snapshot, and arbitrary consolidated
+   credit fails closed for automatic WHT. `financial.tax_accounting` alone
+   constructs the source WHT record and initial timeline as a flush-only
+   participant of that proof transaction. The proof owner requests one reviewer
+   work item from `communications.staff_notifications`; it does not select
+   staff recipients, construct WHT rows, or construct inbox/delivery rows.
 5. `financial.tax_accounting` owns tax-report meaning, periods, currency
    separation, issued-output-tax and credit-note adjustment projection, net
    output-tax liability, WHT-receivable projection and lifecycle, its immutable
@@ -971,6 +986,16 @@ detailed security and delivery boundary is
    rollback snapshot during A1 verification, not a runtime fallback, and are
    deleted at the contract gate. `accounting_code` fields are external mappings,
    not a Sub chart of accounts or ledger.
+24. `financial.payment_configuration_staff_actions`
+   (`app.services.payment_configuration_staff_actions`) owns reviewed staff
+   lifecycle/default decisions across collection accounts, settlement channels,
+   and channel-to-account attribution mappings. Settings routes render its
+   exact impact preview and submit its command; confirmation locks and
+   recomputes state, rejects a stale fingerprint, applies configuration plus
+   audit atomically, and never changes connector-backed checkout routing.
+   `payment_channel_accounts` is the sole channel-to-account mapping after
+   migration `418_payment_channel_mapping_sot`; the duplicate channel pointer,
+   direct toggle routes, and lifecycle/default form fields are retired.
 
 Account adjustments and add-on purchase debits use one evidenced contract:
 
@@ -1725,10 +1750,18 @@ Tax-accounting migration record:
   mutating posted lines.
 - Operator control: `/admin/billing/tax-accounting` is the permission-protected
   source-fact and WHT evidence console with server-side search, status filters,
-  counts, and pagination. It does not offer account mapping or journal controls.
+  counts, and pagination. It lists direct-customer and consolidated-account WHT
+  records without assuming every row belongs to a reseller. It does not offer
+  account mapping or journal controls.
 - WHT lifecycle: payment-proof verification submits exact typed evidence to the
   tax owner's flush-only participant, which creates the pending source record,
   initial timeline, and versioned receivable event in the proof transaction.
+- Customer WHT policy and basis: `financial.customer_tax_policies` owns
+  per-customer WHT enablement, `control.settings_spec` owns the global admin
+  rate, and invoice-linked direct bank transfer uses the invoice owner's
+  authoritative VAT-exclusive subtotal as the only automatic WHT basis.
+  Arbitrary account-credit deposits and online/card gateway checkout remain
+  non-WHT and collect the full invoice amount.
   The tax owner alone permits pending -> certified -> reclaimed and
   pending/certified -> written_off, requires certificate evidence or a write-off
   reason, and appends `withholding_tax_transitions`. The public transition owner
@@ -2140,8 +2173,8 @@ separate.
 
 1. `ui.action_form_contracts` owns the code-native interaction projection for
    an action: visibility, disabled reason, semantic tone, impact preview,
-   confirmation requirement, declared fields/options, submitted values, and
-   structured field/general errors.
+   confirmation requirement, declared fields/options, owner-produced hidden
+   action evidence, submitted values, and structured field/general errors.
 2. Domain command and transition services still own authorization, business
    eligibility, validation, locking, mutation, audit, and consequences. A form
    contract is a read projection, not an execution bypass. The command owner
@@ -2185,6 +2218,125 @@ Rule: UI action projections explain and collect a command; they do not decide or
 execute it. Routes pass submissions to the named owner, templates render only
 declared controls, and the owner rechecks permission and eligibility under the
 same lock or transaction that protects the mutation.
+
+### Payment-arrangement staff safe actions
+
+`financial.payment_arrangements` owns arrangement eligibility, lifecycle and
+installment facts. `financial.payment_arrangement_staff_actions` owns the
+staff-only approve, cancel and manual-installment confirmation workflow. It
+locks the arrangement and schedule, recomputes the owner preview, rejects a
+changed fingerprint, stages the owner transition, and stages audit evidence in
+one coordinator transaction.
+
+The admin projection renders only owner-available actions through
+`ui.action_form_contracts`. The exact installment and collection-shield
+consequence are visible before submission. A required labeled checkbox replaces
+browser confirmation dialogs. Manual installment recording is described as
+external evidence and does not claim to create a billing Payment or ledger
+entry.
+
+Migration record:
+
+- Old owners: payment-arrangement routes, web helpers and Jinja status branches
+  committed lifecycle changes, selected installment targets and wrote audit
+  after the state commit.
+- New owner: `financial.payment_arrangement_staff_actions`, consuming locked
+  preview and transition participants from `financial.payment_arrangements`.
+- Cutover gate: all three staff actions carry explicit confirmation and the
+  current deterministic preview fingerprint.
+- Fallback retirement: direct admin mutation helpers, raw action forms,
+  template-local action eligibility, money formatting and browser confirmation
+  JavaScript are removed.
+
+Rule: adapters may explain a typed failure, but may not retry an old
+payment-arrangement preview. A changed schedule or lifecycle requires a fresh
+owner projection and new operator confirmation.
+
+### Dunning staff safe actions
+
+`financial.dunning` owns case eligibility, lifecycle state, canonical
+collectible-receivable checks, action-log/event evidence, account projection,
+and every service-access consequence. `financial.dunning_staff_actions` owns
+the staff-only pause, resume, and close confirmation workflow.
+
+The staff preview binds one action to explicit selected case IDs and reports
+each row as eligible or skipped. Its fingerprint includes case existence,
+lifecycle version, current step, resulting state, and close-time collectible
+receivables by currency. Confirmation locks cases and accounts in stable order,
+recomputes the preview, applies the exact eligible subset, and stages audit in
+one transaction. Changed scope or eligibility returns a conflict; any staging
+failure rolls back the cohort.
+
+The list uses page-only `ui.bulk_action_contracts` selection and always opens a
+server preview before bulk pause/resume. Individual actions live on the detail
+page and use `ui.action_form_contracts`. Close remains disabled while canonical
+collectible receivables exist. Closing a case does not restore service or clear
+financial access locks.
+
+Migration record:
+
+- Old owners: dunning routes, web helpers and Jinja forms selected actions,
+  committed each case independently, swallowed bulk exceptions, and wrote
+  audit after state commits.
+- New owner: `financial.dunning_staff_actions`, consuming locked preview and
+  lifecycle participants from `financial.dunning`.
+- Cutover gate: every pause, resume, and close confirmation carries exact
+  membership, an owner fingerprint, and explicit operator confirmation.
+- Fallback retirement: direct row mutation forms/routes, browser dialogs,
+  per-case bulk commits, generic exception swallowing, post-commit audit, and
+  the web-only direct lifecycle helpers are removed.
+
+Rule: skipped rows are a previewed owner result, not a caught execution
+exception. A confirmed dunning cohort is atomic for every eligible row shown.
+
+### Invoice batch and reminder safe actions
+
+`financial.billing_automation` owns the durable billing-run workflow and
+postpaid invoice-cycle execution. `financial.prepaid_service_renewals` remains
+the independent owner for funded prepaid periods. A confirmed manual invoice
+batch disables prepaid renewal so its execution matches its stated and
+previewed scope.
+
+The batch review projects exact billable subscription IDs, accounts, periods,
+currencies and base charges. Its fingerprint binds that membership to the
+normalized cycle/date and optional failed source run. Confirmation recomputes
+the preview before launch. `BillingRun` persists `running/success/failed`,
+launch kind, staff principal, confirmed fingerprint and retry lineage. Only a
+failed run can start a reviewed retry; retry creates a new linked run.
+
+Invoice-list issue/send/mark-paid/PDF actions and AR-aging reminders submit
+explicit invoice IDs to `ui.invoice_bulk_action_projection`. The existing
+invoice bulk command owner returns eligible/skipped membership and a scope
+token; `ui.action_form_contracts` renders the required confirmation. Changed
+membership or eligibility fails closed.
+
+Billing execution is an owner-managed, resumable workflow rather than one
+database transaction. Per-subscription/period invoice-line keys repair partial
+work on retry. `BillingRun` is authoritative operational evidence; the
+post-status `AuditEvent` is a rebuildable projection and cannot reverse
+already-created invoices.
+
+Migration record:
+
+- Old owners: batch-page JavaScript and raw forms confirmed launches, retry was
+  offered for every run state, manual generation implicitly invoked prepaid
+  renewal, and AR aging bypassed the required invoice scope token.
+- New owners: billing automation supplies dry-run/execution facts and durable
+  run state; the batch and invoice bulk projections build exact shared review
+  forms.
+- Cutover gate: every manual/retry launch carries the current fingerprint,
+  actor and explicit confirmation; every invoice bulk action carries exact
+  membership evidence.
+- Fallback retirement: browser dialogs, direct batch execution, success/running
+  retry, JSON-only batch preview, direct issue/send/mark-paid/PDF routes, and
+  AR-aging send bypass are removed. The unused `BillingRunSchedule` table,
+  shadow `billing.billing_run_schedule_config`, save route, and form are also
+  retired because no scheduler consumed their values; `scheduler.registry`
+  remains the sole cadence and enablement owner.
+
+Rule: a retry is a new traceable run, never a mutation of history. Manual
+invoice generation does not silently invoke another financial workflow.
+
 ## UI Semantic Presentation
 
 1. Account, subscription, invoice, payment, outage-incident, support-ticket, and
@@ -2278,7 +2430,15 @@ in forms, or rotate key material directly.
    transactional-versus-marketing send decision.
 4. `communications.intents` owns communication intent lifecycle, recipient and
    channel expansion, including authorized subscriber contacts, and
-   delivery-outcome projection.
+   delivery-outcome projection. Customer bulk-message previews query
+   `communications.customer_policy` through its typed, bounded-query cohort
+   interface. Execution remains on the established notification/intent owner,
+   which rechecks current policy; the admin route does not become a second
+   canonical writer. Preview evaluates supported template conditions in bounded
+   cohort queries, validates a bounded render sample, shows a bounded recipient
+   sample with masked destinations, and returns full impact counts. Confirmation
+   is bound to the resolved destinations, template content, variable mapping,
+   condition outcome, and suppression decision; drift requires a fresh preview.
 5. `communications.customer_experience_intents`
    (`app/services/customer_experience_communications.py`) owns the named
    project/task/field/ticket customer communication requests, their content,
@@ -2832,7 +2992,21 @@ writers are retired; historical rows remain readable evidence.
    do not create operations or decide a parallel retry policy. Delayed bootstrap
    attempts are separate immutable dispatch rows on the same child operation,
    while Inform-driven completion uses the same parent projection.
-48. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
+48. `network.ip_assignment_service_ownership`
+   (`app/services/ip_assignment_repair.py`): owns the exact
+   `IPAssignment.subscription_id` bridge for active IPv4 assignments during
+   the service-ownership migration. Its full-fleet preview classifies every
+   active IPv4 assignment. Confirmation requires the exact assignment cohort,
+   preview SHA-256, actor, reason, and idempotency key; locks and recomputes the
+   evidence; and fills only a missing service link when there is one active
+   assignment, one active service, matching subscriber identity, and matching
+   served-address compatibility evidence. It never creates, moves, releases,
+   reclaims, or deactivates an address and never changes
+   `Subscription.ipv4_address`, RADIUS, or sessions. Ambiguous and conflicting
+   rows remain report-only. The retired subscriber-level repair treated the
+   served projection as allocation authority and committed each item
+   independently; those paths cannot return.
+49. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
    owns IP-pool utilization reads — the daily utilization snapshots and the
    live per-pool used/total counts consumed by the network report. The live
    count (assignment-join basis) is deliberately distinct from the snapshot's
@@ -3518,6 +3692,14 @@ Migration `380_integration_platform_cutover` removes the retired tables,
 columns, settings, and enums and has no downgrade path. Disabling or correcting
 the current binding is the recovery mechanism; retired transports are not a
 fallback.
+
+The CRM ticket-observation cutover is explicit and fail-closed. The
+installation owner adds and connection-validates
+`crm.ticket_observation.v1`; the jobs owner binds and activates the reviewed
+manual `Pull CRM Tickets` job; the scheduler owner supplies cadence. An enabled
+`crm.ticket_pull` control is executable only when exactly one enabled binding
+and one active job agree. Deployment, scheduler, and webhook adapters reject
+the incomplete state rather than generating an unbound task loop.
 
 Rule: integration routes and webhooks validate and enqueue. Connectors translate
 bounded, typed contracts; they never write Sub domain tables or decide payment,
