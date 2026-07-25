@@ -21,7 +21,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -206,7 +206,7 @@ def issue_ticket(
     # the Ticket afterwards: attributes expire on commit, so a post-commit read
     # would re-open a transaction and leave the session unusable for the next
     # owner command.
-    invalidation: dict[str, object] = {}
+    invalidation: dict[str, Any] = {}
 
     def run() -> ConversationTicketIssueResult:
         outcome = _issue_ticket(db, command)
@@ -232,7 +232,10 @@ def issue_ticket(
 
 
 def _emit_workqueue_invalidation(
-    *, item_id: object, assignee_id: object, service_team_id: object
+    *,
+    item_id: UUID,
+    assignee_id: UUID | None,
+    service_team_id: UUID | None,
 ) -> None:
     """Best-effort realtime ping. Workqueue holds no authority."""
     try:
