@@ -26,6 +26,22 @@ CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
 JAVASCRIPT = Path("static/js/admin-inbox.js").read_text()
 
 
+def _conversation_id(db_session):
+    """Owner commands refuse a session already in a transaction, and touching an
+    ORM object after commit re-opens one — so capture the id at flush."""
+    conversation = InboxConversation(
+        channel_type="email",
+        subject="Line fault",
+        contact_address="customer@example.com",
+        status=InboxConversationStatus.open.value,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    captured = conversation.id
+    db_session.commit()
+    return captured
+
+
 def _conversation(db_session, *, status=None):
     conversation = InboxConversation(
         channel_type="email",
@@ -81,13 +97,13 @@ def test_waking_records_why_it_woke(db_session):
 
 def test_a_time_snoozed_conversation_keeps_sleeping(db_session):
     """The operator picked that time knowing the customer might write again."""
-    conversation = _conversation(db_session)
+    conversation_id = _conversation_id(db_session)
     team_inbox_commands.update_workflow(
         db_session,
-        conversation_id=conversation.id,
+        conversation_id=conversation_id,
         snooze_until=datetime.now(UTC) + timedelta(days=2),
     )
-    db_session.refresh(conversation)
+    conversation = db_session.get(InboxConversation, conversation_id)
 
     woke = team_inbox_operations.wake_on_inbound(db_session, conversation=conversation)
 
@@ -322,11 +338,11 @@ def test_a_transcript_escapes_message_bodies(db_session):
 
 
 def test_an_invalid_recipient_is_refused(db_session):
-    conversation = _conversation(db_session)
+    conversation_id = _conversation_id(db_session)
 
     with pytest.raises(team_inbox_commands.InboxCommandError):
         team_inbox_commands.email_transcript(
-            db_session, conversation_id=conversation.id, recipient="not-an-address"
+            db_session, conversation_id=conversation_id, recipient="not-an-address"
         )
 
 
