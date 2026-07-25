@@ -202,9 +202,7 @@ def test_an_assignment_records_who_assigned_it(db_session, actor):
     team = ServiceTeam(name="Readiness", team_type=ServiceTeamType.support.value)
     db_session.add(team)
     db_session.flush()
-    db_session.add(
-        ServiceTeamMember(team_id=team.id, person_id=agent, is_active=True)
-    )
+    db_session.add(ServiceTeamMember(team_id=team.id, person_id=agent, is_active=True))
     team_id = team.id
     db_session.commit()
     conversation_id = _conversation_id(db_session, team_id=team_id)
@@ -303,9 +301,7 @@ def test_paging_does_not_repeat_or_skip_rows(db_session):
 
     seen: list[str] = []
     for offset in range(0, 120, 25):
-        page = team_inbox_read.list_conversations(
-            db_session, limit=25, offset=offset
-        )
+        page = team_inbox_read.list_conversations(db_session, limit=25, offset=offset)
         seen.extend(row.id for row in page.items)
 
     assert len(seen) == 120
@@ -317,9 +313,7 @@ def test_a_filtered_read_stays_responsive_at_volume(db_session):
     _seed(db_session, 500)
 
     started = time.perf_counter()
-    result = team_inbox_read.list_conversations(
-        db_session, open_only=True, limit=25
-    )
+    result = team_inbox_read.list_conversations(db_session, open_only=True, limit=25)
     elapsed = time.perf_counter() - started
 
     assert len(result.items) == 25
@@ -345,8 +339,6 @@ def test_customer_scoped_read_stays_selective_at_volume(db_session):
     _seed(db_session, 400)
     _seed(db_session, 3, subscriber_id=subscriber_id)
 
-    result = team_inbox_read.list_conversations(
-        db_session, subscriber_id=subscriber_id
-    )
+    result = team_inbox_read.list_conversations(db_session, subscriber_id=subscriber_id)
 
     assert result.count == 3

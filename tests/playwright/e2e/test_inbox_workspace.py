@@ -54,8 +54,7 @@ class TestFormsCarryCsrfWhenRendered:
                 f"{form.get_attribute('action')}"
             )
             assert (token.first.get_attribute("value") or "").strip(), (
-                "CSRF token rendered empty for "
-                f"{form.get_attribute('action')}"
+                f"CSRF token rendered empty for {form.get_attribute('action')}"
             )
 
     def test_mailbox_routing_form_has_a_csrf_token(self, admin_page, settings):
@@ -85,9 +84,7 @@ class TestAMailboxRouteRoundTrips:
 
         address = "readiness-gate@example.test"
         admin_page.fill('input[name="email_address"]', address)
-        admin_page.select_option(
-            'select[name="service_team_id"]', index=1
-        )
+        admin_page.select_option('select[name="service_team_id"]', index=1)
         admin_page.click('button:has-text("Add route")')
 
         admin_page.wait_for_load_state("domcontentloaded")
