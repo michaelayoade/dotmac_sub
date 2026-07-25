@@ -29,8 +29,8 @@ router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
 
 
-def _parse_snooze_until(value: object) -> "datetime | None":
-    """Parse the datetime-local field the snooze menu submits.
+def _parse_datetime_field(value: object) -> "datetime | None":
+    """Parse a browser `datetime-local` value (snooze time, activity range).
 
     The browser sends local wall-clock without a zone; it is read as UTC so the
     stored wake time is unambiguous, and an unparsable value is treated as
@@ -136,6 +136,10 @@ def team_inbox_queue(
             open_only=_query_bool(open_only),
             unassigned=_query_bool(unassigned),
             unread=_query_bool(unread),
+            ai_handling=_query_optional_bool(ai_handling),
+            has_ticket=_query_optional_bool(has_ticket),
+            activity_from=_parse_datetime_field(activity_from),
+            activity_to=_parse_datetime_field(activity_to),
             sort_by=_query_text(sort_by),
             sort_dir=_query_text(sort_dir),
             page=_query_int(page, default=1) or 1,
@@ -172,6 +176,10 @@ def team_inbox_queue(
             "open_only": projection.open_only,
             "unassigned": projection.unassigned,
             "unread": projection.unread,
+            "ai_handling": projection.ai_handling,
+            "has_ticket": projection.has_ticket,
+            "activity_from": projection.activity_from,
+            "activity_to": projection.activity_to,
             "service_team_options": projection.service_team_options,
             "agent_options": projection.agent_options,
             "assignment_counts": projection.assignment_counts,
@@ -663,7 +671,7 @@ def team_inbox_workflow_action(
             priority=priority,
             is_muted=is_muted,
             snooze_minutes=snooze_minutes,
-            snooze_until=_parse_snooze_until(snooze_until),
+            snooze_until=_parse_datetime_field(snooze_until),
             actor_person_id=_actor_id_from_request(request),
         )
     except team_inbox_commands.ConversationNotFoundError:

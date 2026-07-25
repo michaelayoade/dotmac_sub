@@ -16,7 +16,7 @@ import pytest
 
 from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import team_inbox_commands, team_inbox_operations
-from app.web.admin.inbox import _parse_snooze_until
+from app.web.admin.inbox import _parse_datetime_field
 
 CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
 
@@ -110,7 +110,7 @@ def test_zero_minutes_still_clears_a_snooze(db_session):
 
 
 def test_naive_browser_input_is_read_as_utc():
-    parsed = _parse_snooze_until("2026-08-01T09:30")
+    parsed = _parse_datetime_field("2026-08-01T09:30")
     assert parsed is not None
     assert parsed.tzinfo is UTC
     assert parsed.hour == 9
@@ -118,9 +118,9 @@ def test_naive_browser_input_is_read_as_utc():
 
 def test_unparsable_input_is_treated_as_absent():
     """Better to ignore it than snooze to a moment nobody chose."""
-    assert _parse_snooze_until("not-a-date") is None
-    assert _parse_snooze_until("") is None
-    assert _parse_snooze_until(None) is None
+    assert _parse_datetime_field("not-a-date") is None
+    assert _parse_datetime_field("") is None
+    assert _parse_datetime_field(None) is None
 
 
 def test_the_menu_posts_a_real_form():

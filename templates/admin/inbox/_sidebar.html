@@ -142,7 +142,17 @@
             <div class="flex flex-wrap gap-2">
                 <label class="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"><input type="checkbox" name="needs_response" value="true" {% if needs_response %}checked{% endif %} @change="$el.form.requestSubmit()" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Needs reply</label>
                 <label class="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"><input type="checkbox" name="unread" value="true" {% if unread %}checked{% endif %} @change="$el.form.requestSubmit()" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Unread</label>
+                <label class="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"><input type="checkbox" name="ai_handling" value="true" {% if ai_handling %}checked{% endif %} @change="$el.form.requestSubmit()" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">AI handling</label>
+                <label class="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300"><input type="checkbox" name="has_ticket" value="true" {% if has_ticket %}checked{% endif %} @change="$el.form.requestSubmit()" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Sent to ticket</label>
                 <a href="/admin/inbox" class="inline-flex min-h-10 items-center rounded-lg px-2.5 text-xs font-semibold text-slate-500 hover:text-amber-700">Clear</a>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+                <label class="block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Active from
+                    <input type="datetime-local" name="activity_from" value="{{ activity_from or '' }}" @change="$el.form.requestSubmit()" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">
+                </label>
+                <label class="block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Active to
+                    <input type="datetime-local" name="activity_to" value="{{ activity_to or '' }}" @change="$el.form.requestSubmit()" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">
+                </label>
             </div>
 
         </div>
