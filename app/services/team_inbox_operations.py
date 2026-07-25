@@ -724,7 +724,7 @@ def update_conversation_workflow(
         elif int(snooze_minutes or 0) <= 0:
             target = None
         else:
-            target = datetime.now(UTC) + timedelta(minutes=int(snooze_minutes))
+            target = datetime.now(UTC) + timedelta(minutes=int(snooze_minutes or 0))
         event["snoozed_until"] = {
             "from": conversation.snoozed_until.isoformat()
             if conversation.snoozed_until
