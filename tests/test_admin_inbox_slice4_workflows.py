@@ -177,7 +177,9 @@ def test_list_conversations_scopes_to_several_teams(db_session):
 def test_multi_team_filter_is_additive(db_session):
     _conversation(db_session, team_id=_team(db_session))
     assert team_inbox_read.list_conversations(db_session).count == 1
-    assert team_inbox_read.list_conversations(db_session, service_team_ids=[]).count == 1
+    assert (
+        team_inbox_read.list_conversations(db_session, service_team_ids=[]).count == 1
+    )
 
 
 def test_my_team_filter_uses_the_counted_team_set():
