@@ -1140,7 +1140,7 @@ def _replay_result(
             "idempotency_conflict",
             "Idempotency key belongs to another invoice.",
         )
-    invoice = db.get(Invoice, command.invoice_id)
+    invoice = db.get(Invoice, command.invoice_id, populate_existing=True)
     metadata = (
         dict(invoice.metadata_ or {}).get(_METADATA_KEY)
         if invoice is not None
