@@ -96,11 +96,16 @@ class ConversationTicketIssueResult:
 
 
 def _actor_type(actor_type: HandoffActorType) -> AuditActorType:
+    """Map the transport principal onto the audit actor vocabulary.
+
+    Matches `ticket_work_order_handoff`: a staff principal audits as `user`;
+    there is no `system_user` member.
+    """
     if actor_type is HandoffActorType.API_KEY:
         return AuditActorType.api_key
     if actor_type is HandoffActorType.SERVICE:
-        return AuditActorType.system
-    return AuditActorType.system_user
+        return AuditActorType.service
+    return AuditActorType.user
 
 
 def _normalize_actor(actor_id: object | None) -> UUID:
