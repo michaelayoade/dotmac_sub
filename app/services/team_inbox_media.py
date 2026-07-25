@@ -238,7 +238,9 @@ def stage_outbound_attachment(
     from app.services.file_storage import file_uploads
 
     clean_name = _text(file_name, max_length=255) or "attachment"
-    mime_type = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    mime_type = (
+        (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    )
 
     if not data:
         raise MediaUploadError(f"{clean_name} is empty.")

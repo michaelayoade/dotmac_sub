@@ -1372,6 +1372,4 @@ def team_inbox_start_conversation(
     if outcome.contact_status not in {"linked_subscriber", "explicit_subscriber"}:
         # Say so rather than leave an anonymous thread looking resolved.
         message += " Contact is unmatched — link it from the contact panel."
-    return _detail_redirect(
-        outcome.conversation_id, status="success", message=message
-    )
+    return _detail_redirect(outcome.conversation_id, status="success", message=message)
