@@ -88,15 +88,28 @@ def test_every_inbox_route_declares_a_permission():
     assert not ungated, f"inbox routes without require_permission: {ungated}"
 
 
+# Saving a personal view is a preference, not a conversation mutation, so it is
+# deliberately gated on :read. Anything else posting under :read is a mistake.
+READ_GATED_POSTS = {"/filters/save"}
+
+
 def test_mutating_routes_require_update_and_reads_require_read():
     wrong = []
     for method, path, permission in _inbox_routes():
-        expected = (
-            "support:ticket:read" if method == "GET" else "support:ticket:update"
-        )
+        if method == "GET":
+            expected = "support:ticket:read"
+        elif path in READ_GATED_POSTS:
+            expected = "support:ticket:read"
+        else:
+            expected = "support:ticket:update"
         if permission != expected:
             wrong.append(f"{method} {path} -> {permission} (expected {expected})")
     assert not wrong, "inbox route permissions are inconsistent:\n" + "\n".join(wrong)
+
+
+def test_the_read_gated_post_allowlist_stays_small():
+    """Each entry weakens the write gate, so it must be justified and few."""
+    assert READ_GATED_POSTS == {"/filters/save"}
 
 
 def test_the_drawer_keeps_its_own_gates_for_sensitive_fields():
@@ -138,7 +151,7 @@ def test_a_private_note_records_its_author(db_session, actor):
     team_inbox_commands.create_internal_note(
         db_session,
         conversation_id=conversation_id,
-        body_text="Checked the ONT.",
+        body="Checked the ONT.",
         actor_person_id=actor,
     )
 
@@ -192,11 +205,27 @@ def test_an_assignment_records_who_assigned_it(db_session, actor):
 
 
 def test_attribution_columns_still_exist_on_every_operator_row():
-    """These columns are the entire audit story for the inbox; if one is
-    dropped, attribution silently disappears."""
-    assert hasattr(InboxMessage, "sent_by_person_id")
+    """These columns are the audit story for the inbox; if one is dropped,
+    attribution silently disappears."""
     assert hasattr(InboxComment, "author_person_id")
     assert hasattr(InboxConversationAssignment, "assigned_by_person_id")
+
+
+def test_reply_attribution_is_only_in_metadata_not_a_column():
+    """Known weakness, pinned rather than assumed.
+
+    `InboxMessage` has no actor column: an outbound reply records the team
+    `from_address`, and the operator who sent it survives only as
+    `metadata["sent_by_person_id"]`. So "what did agent X send" is not a
+    queryable question — it needs a JSON scan.
+
+    This is fine while volume is 84 conversations. It is worth deciding before
+    ~37k arrive, which is exactly what this gate exists to surface.
+    """
+    columns = {c.name for c in InboxMessage.__table__.columns}
+    assert "sent_by_person_id" not in columns
+    outbound = Path("app/services/team_inbox_outbound.py").read_text()
+    assert '"sent_by_person_id": str(payload.sent_by_person_id)' in outbound
 
 
 def test_the_absence_of_a_central_audit_trail_is_deliberate_and_visible():
