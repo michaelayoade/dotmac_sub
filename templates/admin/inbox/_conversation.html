@@ -204,6 +204,7 @@
                     <button type="button" @click="saveKind = 'template'" :class="saveKind === 'template' ? 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100' : 'text-slate-500'" class="min-h-8 rounded-md px-2 text-[11px] font-semibold">Template</button>
                 </div>
                 <form method="post" x-bind:action="saveKind === 'macro' ? '/admin/inbox/{{ timeline.id }}/macros/create' : '/admin/inbox/{{ timeline.id }}/templates/create'" class="flex gap-1.5">
+                    {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="body_text" :value="draft">
                     <template x-if="saveKind === 'template'"><input type="hidden" name="channel_type" value="{{ timeline.channel_type }}"></template>
                     <label class="sr-only" for="inbox-save-name-{{ timeline.id }}">Name</label>
