@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber
 from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import conversation_ticket_handoff, team_inbox_read
@@ -129,7 +128,9 @@ def test_activity_window_filters_on_last_activity(db_session):
     """The range means 'was this thread live then', not when it was created."""
     now = datetime.now(UTC)
     _conversation(db_session, subject="Old", last_message_at=now - timedelta(days=30))
-    _conversation(db_session, subject="Recent", last_message_at=now - timedelta(hours=2))
+    _conversation(
+        db_session, subject="Recent", last_message_at=now - timedelta(hours=2)
+    )
 
     result = team_inbox_read.list_conversations(
         db_session, activity_from=now - timedelta(days=1)
@@ -142,7 +143,9 @@ def test_activity_window_is_bounded_at_both_ends(db_session):
     now = datetime.now(UTC)
     _conversation(db_session, subject="Old", last_message_at=now - timedelta(days=30))
     _conversation(db_session, subject="Mid", last_message_at=now - timedelta(days=10))
-    _conversation(db_session, subject="Recent", last_message_at=now - timedelta(hours=2))
+    _conversation(
+        db_session, subject="Recent", last_message_at=now - timedelta(hours=2)
+    )
 
     result = team_inbox_read.list_conversations(
         db_session,

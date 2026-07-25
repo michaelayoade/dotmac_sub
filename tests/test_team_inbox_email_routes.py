@@ -92,7 +92,9 @@ def test_only_one_primary_survives_per_team(db_session):
         is_primary=True,
     )
 
-    primaries = [r for r in team_inbox_routing.list_email_routes(db_session) if r.is_primary]
+    primaries = [
+        r for r in team_inbox_routing.list_email_routes(db_session) if r.is_primary
+    ]
     assert [r.email_address for r in primaries] == ["second@dotmac.ng"]
 
 

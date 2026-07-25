@@ -19,8 +19,8 @@ from app.services import (
     team_inbox_metrics,
     team_inbox_operations,
     team_inbox_projection,
-    team_inbox_routing,
     team_inbox_read_state,
+    team_inbox_routing,
 )
 from app.services.auth_dependencies import can, require_permission
 from app.services.owner_commands import CommandContext
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
 
 
-def _parse_datetime_field(value: object) -> "datetime | None":
+def _parse_datetime_field(value: object) -> datetime | None:
     """Parse a browser `datetime-local` value (snooze time, activity range).
 
     The browser sends local wall-clock without a zone; it is read as UTC so the

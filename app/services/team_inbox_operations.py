@@ -718,7 +718,11 @@ def update_conversation_workflow(
     # not an interval, and a past moment is the same as "do not snooze".
     if snooze_until is not None or snooze_minutes is not None:
         if snooze_until is not None:
-            target = snooze_until if snooze_until.tzinfo else snooze_until.replace(tzinfo=UTC)
+            target = (
+                snooze_until
+                if snooze_until.tzinfo
+                else snooze_until.replace(tzinfo=UTC)
+            )
             if target <= datetime.now(UTC):
                 raise InboxOperationError("Choose a snooze time in the future.")
         elif int(snooze_minutes or 0) <= 0:

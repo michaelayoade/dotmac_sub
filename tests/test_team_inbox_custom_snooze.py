@@ -21,7 +21,6 @@ from app.web.admin.inbox import _parse_datetime_field
 CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
 
 
-
 def _aware(value):
     """SQLite drops the timezone on read; Postgres preserves it."""
     return value if value.tzinfo else value.replace(tzinfo=UTC)

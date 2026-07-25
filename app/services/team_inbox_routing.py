@@ -229,7 +229,9 @@ class EmailRouteRow:
     is_active: bool
 
 
-def list_email_routes(db: Session, *, include_inactive: bool = True) -> list[EmailRouteRow]:
+def list_email_routes(
+    db: Session, *, include_inactive: bool = True
+) -> list[EmailRouteRow]:
     """Every configured inbound mailbox, newest team grouping first.
 
     This table decides which service team owns an inbound email. It had a model
