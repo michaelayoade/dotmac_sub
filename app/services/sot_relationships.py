@@ -21013,17 +21013,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "admin project searchable fields",
                     "admin project filter and stable sort semantics",
                     "admin project list pagination normalization",
+                    "admin project and task detail field-work composition",
+                    "admin project-task work-order creation action projection",
                 ),
                 depends_on=(
                     "ui.list_contracts",
                     "operations.project_lifecycle",
+                    "operations.work_order_commands",
+                    "operations.work_orders",
                 ),
                 notes=(
                     "projects_service.projects.list (operations.project_lifecycle) "
                     "owns the canonical filtered/sorted project query; this "
                     "projection declares the list capabilities and normalizes "
                     "request state, then delegates the read. It issues no query of "
-                    "its own. Gated by the existing granular project:read."
+                    "its own. Detail projections compose the native project/task "
+                    "scope with operations.work_orders and expose a secondary "
+                    "work-order creation action; operations.work_order_commands "
+                    "revalidates the exact subscriber/project/task scope. Gated by "
+                    "project:read or project:task:read, with the creation action "
+                    "separately gated by operations:dispatch:write."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -21048,6 +21057,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.POLICY,
                             input_names=("shared list contract",),
                         ),
+                        ConcernContract(
+                            name="admin project and task detail field-work composition",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical project detail facts",
+                                "native linked field-work facts",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project-task work-order creation action projection",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical project detail facts",
+                                "work-order creation protocol",
+                            ),
+                        ),
                     ),
                     authoritative_inputs=(
                         AuthorityInput(
@@ -21061,6 +21086,33 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="ui.list_contracts",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source="typed search, filters, stable sort, pagination, permission scope, and action eligibility request",
+                        ),
+                        AuthorityInput(
+                            name="canonical project detail facts",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "native active Project and ProjectTask identity, "
+                                "relationship, lifecycle, and subscriber scope"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native linked field-work facts",
+                            owner="operations.work_orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "native WorkOrder rows selected by authoritative "
+                                "project_id or project_task_id"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="work-order creation protocol",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "subscriber/project/task consistency requirements and "
+                                "operations:dispatch:write permission"
+                            ),
                         ),
                     ),
                     transaction=TransactionContract(
@@ -21099,6 +21151,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     test_refs=(
                         "tests/test_web_projects_service.py",
+                        "tests/test_web_admin_projects_render.py",
+                        "tests/test_web_dispatch_work_orders.py",
                         "tests/test_projects_api.py",
                         "tests/architecture/test_projects_sot_boundary.py",
                     ),

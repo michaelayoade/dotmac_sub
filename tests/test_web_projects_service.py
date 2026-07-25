@@ -13,7 +13,7 @@ from app.models.project import (
     ProjectType,
 )
 from app.schemas.project import ProjectCreate, ProjectTaskCreate
-from app.services import web_projects
+from app.services import web_dispatch_work_orders, web_projects
 from app.services.project_filters import (
     serialize_project_filter_schema,
     serialize_project_task_filter_schema,
@@ -301,6 +301,27 @@ class TestDetailContext:
         assert context["fiber_stages"] == []
         assert context["comments"] == []
 
+    def test_project_detail_composes_native_linked_work_orders(
+        self, db_session, subscriber
+    ):
+        project = _create_project(db_session, subscriber)
+        work_order = web_dispatch_work_orders.create_from_form(
+            db_session,
+            {
+                "public_id": "sub-project-panel",
+                "subscriber_id": str(subscriber.id),
+                "project_id": str(project.id),
+                "title": "Project survey",
+                "status": "scheduled",
+            },
+        )
+
+        context = web_projects.build_project_detail_context(db_session, project=project)
+
+        assert [row["public_id"] for row in context["project_work_orders"]] == [
+            work_order.public_id
+        ]
+
 
 class TestTasksContext:
     def test_tasks_list_and_quick_status(self, db_session, subscriber):
@@ -380,6 +401,64 @@ class TestTasksContext:
         assert [row["title"] for row in survey_detail["dependencies"]["blocks"]] == [
             "Install"
         ]
+
+    def test_task_detail_exposes_eligible_one_to_many_field_work(
+        self, db_session, subscriber
+    ):
+        project = _create_project(db_session, subscriber)
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Splice distribution box"),
+        )
+        first = web_dispatch_work_orders.create_from_form(
+            db_session,
+            {
+                "public_id": "sub-task-panel-1",
+                "subscriber_id": str(subscriber.id),
+                "project_task_id": str(task.id),
+                "title": "First visit",
+                "status": "scheduled",
+            },
+        )
+        second = web_dispatch_work_orders.create_from_form(
+            db_session,
+            {
+                "public_id": "sub-task-panel-2",
+                "subscriber_id": str(subscriber.id),
+                "project_task_id": str(task.id),
+                "title": "Follow-up visit",
+                "status": "scheduled",
+            },
+        )
+
+        context = web_projects.build_task_detail_context(db_session, task=task)
+
+        assert context["create_work_order_action"].allowed is True
+        assert (
+            context["create_work_order_action"].permission
+            == "operations:dispatch:write"
+        )
+        assert context["work_order_create_url"].endswith(f"project_task_id={task.id}")
+        assert {row["public_id"] for row in context["task_work_orders"]} == {
+            first.public_id,
+            second.public_id,
+        }
+
+    def test_task_detail_blocks_field_work_without_subscriber(self, db_session):
+        project = projects.create(
+            db_session,
+            ProjectCreate(name="Unscoped project"),
+        )
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Unscoped task"),
+        )
+
+        context = web_projects.build_task_detail_context(db_session, task=task)
+
+        assert context["create_work_order_action"].allowed is False
+        assert "subscriber" in context["create_work_order_action"].reason
+        assert context["work_order_create_url"] is None
 
 
 class TestTemplateEditor:

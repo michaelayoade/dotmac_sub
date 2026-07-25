@@ -57,7 +57,11 @@ from app.schemas.project import (
     ProjectTemplateUpdate,
     ProjectUpdate,
 )
-from app.services import customer_experience_lifecycle, project_filters
+from app.services import (
+    customer_experience_lifecycle,
+    project_filters,
+    work_order_views,
+)
 from app.services import projects as projects_service
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
@@ -66,6 +70,7 @@ from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import FilterValidationError
 from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
+from app.services.ui_contracts import Action
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +389,49 @@ def project_url(project: Project) -> str:
 
 def task_url(task: ProjectTask) -> str:
     return f"/admin/projects/tasks/{task.number or task.id}"
+
+
+def _task_work_order_create_url(task: ProjectTask) -> str:
+    return "/admin/dispatch/work-orders?" + urlencode({"project_task_id": str(task.id)})
+
+
+def _task_work_order_create_action(
+    task: ProjectTask, project: Project
+) -> tuple[Action, str | None]:
+    if not task.is_active:
+        allowed, reason = False, "Archived tasks cannot create field work"
+    elif not project.is_active:
+        allowed, reason = False, "Archived projects cannot create field work"
+    elif project.subscriber_id is None:
+        allowed = False
+        reason = "Link a subscriber to the project before creating field work"
+    else:
+        allowed, reason = True, None
+    action = Action(
+        key="create_work_order",
+        label="Create Work Order",
+        allowed=allowed,
+        reason=reason,
+        permission="operations:dispatch:write",
+    )
+    return action, _task_work_order_create_url(task) if allowed else None
+
+
+def _linked_work_orders(
+    db: Session,
+    *,
+    project_id: UUID | None = None,
+    project_task_id: UUID | None = None,
+) -> list[dict[str, object]]:
+    result = work_order_views.list_work_orders(
+        db,
+        work_order_views.WorkOrderListFilters(
+            project_id=str(project_id) if project_id else None,
+            project_task_id=str(project_task_id) if project_task_id else None,
+            limit=200,
+        ),
+    )
+    return result["work_orders"]
 
 
 # ── shared option helpers ────────────────────────────────────────────────────
@@ -1013,6 +1061,7 @@ def build_project_detail_context(db: Session, *, project: Project) -> dict:
         "project": project,
         "project_url": project_url(project),
         "tasks": tasks,
+        "project_work_orders": _linked_work_orders(db, project_id=project.id),
         "comments": comments,
         "activities": build_audit_activities(db, "project", str(project.id), limit=20),
         "fiber_stages": build_fiber_stage_rows(tasks),
@@ -1361,11 +1410,17 @@ def build_task_detail_context(db: Session, *, task: ProjectTask) -> dict:
     ]
     staff = staff_options(db, include_ids=_non_empty_ids(assignment_ids))
     metadata = task.metadata_ if isinstance(task.metadata_, dict) else {}
+    create_work_order_action, work_order_create_url = _task_work_order_create_action(
+        task, project
+    )
     return {
         "task": task,
         "task_url": task_url(task),
         "project": project,
         "project_href": project_url(project),
+        "task_work_orders": _linked_work_orders(db, project_task_id=task.id),
+        "create_work_order_action": create_work_order_action,
+        "work_order_create_url": work_order_create_url,
         "comments": comments,
         "activities": build_audit_activities(
             db, "project_task", str(task.id), limit=20

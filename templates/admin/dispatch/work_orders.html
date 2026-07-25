@@ -56,7 +56,24 @@
     </div>
 
     {% call card("Create Work Order", color="cyan") %}
+    {% if create_prefill_error %}
+    <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+        {{ create_prefill_error }}
+    </div>
+    {% endif %}
     <form method="post" action="/admin/dispatch/work-orders" class="grid gap-4 lg:grid-cols-12">
+        {% if create_prefill %}
+        <input type="hidden" name="subscriber_id" value="{{ create_prefill.subscriber_id }}">
+        <input type="hidden" name="project_id" value="{{ create_prefill.project_id }}">
+        <input type="hidden" name="project_task_id" value="{{ create_prefill.project_task_id }}">
+        <div class="lg:col-span-6">
+            <p class="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Execution scope</p>
+            <div class="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-slate-700 dark:border-cyan-800 dark:bg-cyan-950/30 dark:text-slate-200">
+                <p class="font-semibold">{{ create_prefill.project_task_label }}</p>
+                <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">{{ create_prefill.project_label }} · {{ create_prefill.subscriber_label }}</p>
+            </div>
+        </div>
+        {% else %}
         <div class="lg:col-span-3">
             <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Subscriber</label>
             <select name="subscriber_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
@@ -75,9 +92,10 @@
                 {% endfor %}
             </select>
         </div>
+        {% endif %}
         <div class="lg:col-span-3">
             <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Title</label>
-            <input name="title" required maxlength="200" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white" placeholder="Fibre install">
+            <input name="title" value="{{ create_prefill.title if create_prefill else '' }}" required maxlength="200" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white" placeholder="Fibre install">
         </div>
         <div class="lg:col-span-2">
             <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Type</label>

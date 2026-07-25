@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.models.project import Project
+from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber, UserType
 from app.models.support import Ticket
 from app.models.system_user import SystemUser
@@ -119,6 +119,67 @@ def test_list_page_counts_filters_and_options(db_session):
     assert page["subscriber_options"]
     assert {item["id"] for item in page["project_options"]} == {str(project.id)}
     assert page["technician_options"]
+
+
+def test_task_deep_link_prefills_and_creates_authoritative_bindings(db_session):
+    sub = _subscriber(db_session)
+    project = Project(name="Gudu install", subscriber_id=sub.id)
+    db_session.add(project)
+    db_session.flush()
+    task = ProjectTask(
+        project_id=project.id,
+        number="TASK-GUDU-1",
+        title="Install drop fibre",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    page = web_dispatch.list_page(
+        db_session,
+        project_task_id=str(task.id),
+    )
+    prefill = page["create_prefill"]
+
+    assert page["create_prefill_error"] is None
+    assert prefill.subscriber_id == sub.id
+    assert prefill.project_id == project.id
+    assert prefill.project_task_id == task.id
+    assert prefill.project_task_label == "TASK-GUDU-1"
+    assert prefill.title == task.title
+
+    work_order = web_dispatch.create_from_form(
+        db_session,
+        {
+            "public_id": "sub-task-prefill",
+            "subscriber_id": str(prefill.subscriber_id),
+            "project_id": str(prefill.project_id),
+            "project_task_id": str(prefill.project_task_id),
+            "title": prefill.title,
+            "status": "scheduled",
+        },
+    )
+
+    assert work_order.project_id == project.id
+    assert work_order.project_task_id == task.id
+
+
+def test_task_deep_link_fails_closed_without_project_subscriber(db_session):
+    project = Project(name="Unscoped install")
+    db_session.add(project)
+    db_session.flush()
+    task = ProjectTask(project_id=project.id, title="Survey")
+    db_session.add(task)
+    db_session.commit()
+
+    page = web_dispatch.list_page(
+        db_session,
+        project_task_id=str(task.id),
+    )
+
+    assert page["create_prefill"] is None
+    assert page["create_prefill_error"] == (
+        "Link a subscriber to the project before creating field work"
+    )
 
 
 def test_update_and_queue_from_form(db_session):

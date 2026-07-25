@@ -131,3 +131,6 @@ def test_template_consumes_the_kpi_and_action_contracts():
     # The shared helper combines owner eligibility with the cached RBAC keys.
     assert "item.actions.queue" in source
     assert "action_permitted(request, queue_action)" in source
+    # Task-originated creation locks the validated subscriber/project/task scope.
+    assert 'name="project_task_id"' in source
+    assert "create_prefill.project_task_id" in source

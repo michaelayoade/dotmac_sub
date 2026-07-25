@@ -8,14 +8,14 @@ drift that a compile-only check misses.
 import pytest
 
 from app.schemas.project import ProjectCreate, ProjectTaskCreate
-from app.services import web_projects
+from app.services import web_dispatch_work_orders, web_projects
 from app.services.projects import project_tasks, projects
 from app.web.admin.projects import templates
 
 
 class _State:
     csrf_token = "test-csrf-token"
-    auth: dict = {}
+    auth: dict = {"permission_keys": {"*"}}
 
 
 class _URL:
@@ -93,12 +93,23 @@ def test_render_index_and_table(db_session, base_context, fiber_project):
 
 
 def test_render_project_detail_with_stages(db_session, base_context, fiber_project):
+    work_order = web_dispatch_work_orders.create_from_form(
+        db_session,
+        {
+            "public_id": "sub-render-project-work",
+            "subscriber_id": str(fiber_project.subscriber_id),
+            "project_id": str(fiber_project.id),
+            "title": "Render project visit",
+            "status": "scheduled",
+        },
+    )
     context = web_projects.build_project_detail_context(
         db_session, project=fiber_project
     )
     html = _render("admin/projects/project_detail.html", base_context, context)
     assert "Fiber Installation Stages" in html
     assert "Project Plan" in html
+    assert work_order.public_id in html
 
 
 def test_render_project_forms(db_session, base_context, fiber_project):
@@ -134,8 +145,22 @@ def test_render_tasks_pages(db_session, base_context, fiber_project):
     html = _render("admin/projects/tasks.html", base_context, list_ctx)
     assert "Render task" in html
 
+    work_order = web_dispatch_work_orders.create_from_form(
+        db_session,
+        {
+            "public_id": "sub-render-task-work",
+            "subscriber_id": str(fiber_project.subscriber_id),
+            "project_task_id": str(task.id),
+            "title": "Render task visit",
+            "status": "scheduled",
+        },
+    )
     detail_ctx = web_projects.build_task_detail_context(db_session, task=task)
-    _render("admin/projects/project_task_detail.html", base_context, detail_ctx)
+    detail_html = _render(
+        "admin/projects/project_task_detail.html", base_context, detail_ctx
+    )
+    assert "Create Work Order" in detail_html
+    assert work_order.public_id in detail_html
 
     form_ctx = web_projects.build_task_form_context(db_session)
     form_ctx.update({"page_title": "New Task", "form_mode": "create"})

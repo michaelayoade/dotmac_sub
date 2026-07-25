@@ -25,6 +25,27 @@ scope, search fields, filters, status vocabulary, stable sorting, pagination,
 freshness, and action eligibility. Routes serialize inputs and templates render
 the returned model without redefining these rules.
 
+The project and task detail pages compose field work through
+`operations.work_orders`. A project detail shows every native work order whose
+authoritative `project_id` matches the project. A task detail shows zero or many
+work orders whose authoritative `project_task_id` matches the task and offers a
+task-originated create deep-link only when the project has a native subscriber.
+The dispatch web adapter resolves the task deep-link back to the authoritative
+task, project, and subscriber rows, locks those identifiers into the create
+form, and delegates creation to `operations.work_order_commands`; URL-supplied
+duplicate scope is never trusted. The command owner revalidates subscriber,
+project, and task consistency at execution time.
+
+Page contract: service-delivery and field-operations staff use the project/task
+detail screens to determine whether field work has been issued and to open or
+issue the next visit. `app.services.web_projects` owns the detail projection;
+`operations.work_orders` owns linked work-order facts; and
+`operations.work_order_commands` owns creation eligibility enforcement and the
+write. The task panel is a secondary work surface, preserves one-to-many visits,
+hides unauthorized creation, explains missing subscriber scope, renders an
+empty state, and stacks without losing the task identity or next action on
+mobile.
+
 Project SLA clocks and normalized task-assignee rows are synchronous derived
 projections. Drift is a missing, duplicate, or mismatched derived row. The
 project lifecycle reconciler locks the native aggregate, reports drift, and

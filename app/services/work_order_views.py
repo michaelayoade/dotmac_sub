@@ -32,6 +32,8 @@ class WorkOrderListFilters:
     priority: str | None = None
     work_type: str | None = None
     subscriber_id: str | None = None
+    project_id: str | None = None
+    project_task_id: str | None = None
     crm_ticket_id: str | None = None
     crm_project_id: str | None = None
     assigned_to_crm_person_id: str | None = None
@@ -143,6 +145,12 @@ def _apply_filters(query, filters: WorkOrderListFilters):
     if filters.subscriber_id:
         query = query.filter(
             WorkOrder.subscriber_id == coerce_uuid(filters.subscriber_id)
+        )
+    if filters.project_id:
+        query = query.filter(WorkOrder.project_id == coerce_uuid(filters.project_id))
+    if filters.project_task_id:
+        query = query.filter(
+            WorkOrder.project_task_id == coerce_uuid(filters.project_task_id)
         )
     if filters.crm_ticket_id:
         query = query.filter(WorkOrder.crm_ticket_id == filters.crm_ticket_id)
