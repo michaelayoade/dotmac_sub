@@ -203,9 +203,7 @@ def test_an_already_sent_asset_cannot_be_reattached(db_session):
     db_session.add_all([first, second])
     db_session.flush()
 
-    team_inbox_media.bind_assets_to_message(
-        db_session, message=first, asset_ids=staged
-    )
+    team_inbox_media.bind_assets_to_message(db_session, message=first, asset_ids=staged)
     rebound = team_inbox_media.bind_assets_to_message(
         db_session, message=second, asset_ids=staged
     )
