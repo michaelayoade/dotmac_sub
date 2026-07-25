@@ -9,7 +9,6 @@ from __future__ import annotations
 import enum
 import hashlib
 import json
-import logging
 import secrets
 import uuid
 from collections.abc import Sequence
