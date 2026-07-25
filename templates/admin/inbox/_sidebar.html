@@ -164,6 +164,7 @@
                         <button type="button" @click='applySavedView({{ view.filter_payload | tojson }})' class="min-h-10 px-2.5 text-xs font-medium text-slate-700 hover:bg-amber-50 dark:text-slate-200 dark:hover:bg-slate-700">{{ view.name }}</button>
                         {% if view.owner_person_id == actor_person_id %}
                         <form method="post" action="/admin/inbox/filters/{{ view.id }}/delete" class="contents" onsubmit="return confirm('Delete this saved view?')">
+                            {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="min-h-10 border-l border-slate-200 px-2 text-xs text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:border-slate-700" aria-label="Delete saved view {{ view.name }}">✕</button>
                         </form>
                         {% endif %}
