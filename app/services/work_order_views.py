@@ -9,9 +9,11 @@ layer admin, dispatch, and field APIs use without fanning out to CRM.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -46,6 +48,86 @@ class WorkOrderListFilters:
     scheduled_to: datetime | None = None
     limit: int = DEFAULT_LIMIT
     offset: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedWorkOrderSummary:
+    """Typed native work-order identity projected into project UI surfaces."""
+
+    id: UUID
+    public_id: str
+    title: str
+    status: str
+    project_id: UUID | None
+    project_task_id: UUID | None
+
+
+def _linked_summary(row: WorkOrder) -> LinkedWorkOrderSummary:
+    return LinkedWorkOrderSummary(
+        id=row.id,
+        public_id=row.public_id,
+        title=row.title,
+        status=row.status,
+        project_id=row.project_id,
+        project_task_id=row.project_task_id,
+    )
+
+
+def list_project_work_order_summaries(
+    db: Session, project_id: UUID
+) -> tuple[LinkedWorkOrderSummary, ...]:
+    """Return every active native work order linked to one project."""
+
+    rows = (
+        db.query(WorkOrder)
+        .filter(
+            WorkOrder.is_active.is_(True),
+            WorkOrder.project_id == project_id,
+        )
+        .order_by(WorkOrder.created_at.desc(), WorkOrder.id.asc())
+        .all()
+    )
+    return tuple(_linked_summary(row) for row in rows)
+
+
+def list_task_work_order_summaries_bulk(
+    db: Session, project_task_ids: Collection[UUID]
+) -> dict[UUID, tuple[LinkedWorkOrderSummary, ...]]:
+    """Load active native work-order summaries for a task page in one query."""
+
+    task_ids = tuple(dict.fromkeys(project_task_ids))
+    if not task_ids:
+        return {}
+    grouped: dict[UUID, list[LinkedWorkOrderSummary]] = {
+        task_id: [] for task_id in task_ids
+    }
+    rows = (
+        db.query(WorkOrder)
+        .filter(
+            WorkOrder.is_active.is_(True),
+            WorkOrder.project_task_id.in_(task_ids),
+        )
+        .order_by(
+            WorkOrder.project_task_id.asc(),
+            WorkOrder.created_at.desc(),
+            WorkOrder.id.asc(),
+        )
+        .all()
+    )
+    for row in rows:
+        if row.project_task_id in grouped:
+            grouped[row.project_task_id].append(_linked_summary(row))
+    return {task_id: tuple(grouped[task_id]) for task_id in task_ids}
+
+
+def list_task_work_order_summaries(
+    db: Session, project_task_id: UUID
+) -> tuple[LinkedWorkOrderSummary, ...]:
+    """Return active native work orders linked to one project task."""
+
+    return list_task_work_order_summaries_bulk(db, (project_task_id,)).get(
+        project_task_id, ()
+    )
 
 
 def _dt(value: datetime | None) -> str | None:

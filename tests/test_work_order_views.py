@@ -139,6 +139,51 @@ def test_native_project_and_task_filters_use_authoritative_bindings(db_session):
     ]
 
 
+def test_bulk_task_summaries_preserve_zero_one_and_many_native_links(db_session):
+    subscriber = _subscriber(db_session)
+    project = Project(name="Bulk summary project", subscriber_id=subscriber.id)
+    db_session.add(project)
+    db_session.flush()
+    zero = ProjectTask(project_id=project.id, title="Zero")
+    one = ProjectTask(project_id=project.id, title="One")
+    many = ProjectTask(project_id=project.id, title="Many")
+    db_session.add_all([zero, one, many])
+    db_session.flush()
+    only = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-bulk-one",
+        project_id=project.id,
+        project_task_id=one.id,
+    )
+    first = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-bulk-many-1",
+        project_id=project.id,
+        project_task_id=many.id,
+    )
+    second = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-bulk-many-2",
+        project_id=project.id,
+        project_task_id=many.id,
+    )
+    db_session.commit()
+
+    grouped = work_order_views.list_task_work_order_summaries_bulk(
+        db_session, (zero.id, one.id, many.id)
+    )
+
+    assert grouped[zero.id] == ()
+    assert [item.public_id for item in grouped[one.id]] == [only.public_id]
+    assert {item.public_id for item in grouped[many.id]} == {
+        first.public_id,
+        second.public_id,
+    }
+
+
 def test_summary_counts_terminal_and_overdue(db_session):
     subscriber = _subscriber(db_session)
     _work_order(

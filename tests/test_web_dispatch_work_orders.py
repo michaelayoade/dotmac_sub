@@ -130,6 +130,8 @@ def test_task_deep_link_prefills_and_creates_authoritative_bindings(db_session):
         project_id=project.id,
         number="TASK-GUDU-1",
         title="Install drop fibre",
+        description="Splice, test, and document the drop fibre.",
+        priority="high",
     )
     db_session.add(task)
     db_session.commit()
@@ -137,6 +139,7 @@ def test_task_deep_link_prefills_and_creates_authoritative_bindings(db_session):
     page = web_dispatch.list_page(
         db_session,
         project_task_id=str(task.id),
+        can_create=True,
     )
     prefill = page["create_prefill"]
 
@@ -146,6 +149,9 @@ def test_task_deep_link_prefills_and_creates_authoritative_bindings(db_session):
     assert prefill.project_task_id == task.id
     assert prefill.project_task_label == "TASK-GUDU-1"
     assert prefill.title == task.title
+    assert prefill.description == task.description
+    assert prefill.priority == "high"
+    assert prefill.work_type == "install"
 
     work_order = web_dispatch.create_from_form(
         db_session,
@@ -174,12 +180,147 @@ def test_task_deep_link_fails_closed_without_project_subscriber(db_session):
     page = web_dispatch.list_page(
         db_session,
         project_task_id=str(task.id),
+        can_create=True,
     )
 
     assert page["create_prefill"] is None
     assert page["create_prefill_error"] == (
         "Link a subscriber to the project before creating field work"
     )
+    assert page["create_work_order_action"].allowed is False
+
+
+def test_task_filter_applies_native_scope_with_search_status_and_pagination(
+    db_session,
+):
+    sub = _subscriber(db_session)
+    selected_project = Project(name="Selected project", subscriber_id=sub.id)
+    other_project = Project(name="Other project", subscriber_id=sub.id)
+    db_session.add_all([selected_project, other_project])
+    db_session.flush()
+    selected_task = ProjectTask(
+        project_id=selected_project.id,
+        title="Selected task",
+    )
+    other_task = ProjectTask(project_id=other_project.id, title="Other task")
+    db_session.add_all([selected_task, other_task])
+    db_session.flush()
+
+    for index in range(11):
+        web_dispatch.create_from_form(
+            db_session,
+            {
+                "public_id": f"sub-filter-selected-{index:02d}",
+                "subscriber_id": str(sub.id),
+                "project_task_id": str(selected_task.id),
+                "title": f"Needle visit {index:02d}",
+                "status": "scheduled",
+            },
+        )
+    web_dispatch.create_from_form(
+        db_session,
+        {
+            "public_id": "sub-filter-selected-completed",
+            "subscriber_id": str(sub.id),
+            "project_task_id": str(selected_task.id),
+            "title": "Needle completed",
+            "status": "draft",
+        },
+    )
+    web_dispatch.create_from_form(
+        db_session,
+        {
+            "public_id": "sub-filter-other",
+            "subscriber_id": str(sub.id),
+            "project_task_id": str(other_task.id),
+            "title": "Needle other task",
+            "status": "scheduled",
+        },
+    )
+
+    first = web_dispatch.list_page(
+        db_session,
+        project_task_id=str(selected_task.id),
+        q="Needle",
+        status="scheduled",
+        page=1,
+        per_page=10,
+        can_create=False,
+    )
+    second = web_dispatch.list_page(
+        db_session,
+        project_task_id=str(selected_task.id),
+        q="Needle",
+        status="scheduled",
+        page=2,
+        per_page=10,
+        can_create=False,
+    )
+
+    assert first["total"] == 11
+    assert first["total_pages"] == 2
+    assert len(first["items"]) == 10
+    assert len(second["items"]) == 1
+    assert first["project_task_filter"] == str(selected_task.id)
+    assert first["create_prefill"] is None
+    assert all(
+        item["work_order"].project_task_id == selected_task.id
+        and item["work_order"].status == "scheduled"
+        and "Needle" in item["work_order"].title
+        for item in [*first["items"], *second["items"]]
+    )
+    assert first["counts"]["total"] >= 13
+
+
+def test_task_filter_rejects_invalid_identifier(db_session):
+    with pytest.raises(HTTPException) as exc:
+        web_dispatch.list_page(db_session, project_task_id="not-a-uuid")
+
+    assert exc.value.status_code == 404
+
+
+def test_archived_task_filter_remains_readable_but_creation_fails_closed(db_session):
+    sub = _subscriber(db_session)
+    project = Project(name="Archived task project", subscriber_id=sub.id)
+    db_session.add(project)
+    db_session.flush()
+    task = ProjectTask(project_id=project.id, title="Archive after issue")
+    db_session.add(task)
+    db_session.flush()
+    work_order = web_dispatch.create_from_form(
+        db_session,
+        {
+            "public_id": "sub-archived-task-filter",
+            "subscriber_id": str(sub.id),
+            "project_task_id": str(task.id),
+            "title": "Existing visit",
+            "status": "scheduled",
+        },
+    )
+    task.is_active = False
+    db_session.commit()
+
+    page = web_dispatch.list_page(
+        db_session,
+        project_task_id=str(task.id),
+        can_create=True,
+    )
+
+    assert [item["work_order"].public_id for item in page["items"]] == [
+        work_order.public_id
+    ]
+    assert page["create_prefill"] is None
+    assert page["create_work_order_action"].allowed is False
+    assert page["create_prefill_error"] == "Project task not found"
+
+
+def test_generic_creation_state_is_unchanged_without_task_filter(db_session):
+    page = web_dispatch.list_page(db_session, can_create=True)
+
+    assert page["project_task_filter"] == ""
+    assert page["create_prefill"] is None
+    assert page["create_prefill_error"] is None
+    assert page["create_work_order_action"].allowed is True
 
 
 def test_update_and_queue_from_form(db_session):

@@ -74,6 +74,9 @@ class WorkOrderCreatePrefill:
     project_task_id: UUID
     project_task_label: str
     title: str
+    description: str | None
+    priority: str
+    work_type: str
 
 
 def _subscriber_label(subscriber: Subscriber | None) -> str:
@@ -300,6 +303,28 @@ def _task_create_prefill(db: Session, project_task_id: str) -> WorkOrderCreatePr
         project_task_id=task.id,
         project_task_label=task.number or task.title,
         title=task.title,
+        description=task.description,
+        priority=task.priority if task.priority in PRIORITY_OPTIONS else "normal",
+        work_type="install",
+    )
+
+
+def _project_task_filter_id(project_task_id: str | None) -> UUID | None:
+    if not project_task_id:
+        return None
+    try:
+        return coerce_uuid(project_task_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Project task not found") from exc
+
+
+def _create_action(*, error: str | None = None) -> Action:
+    return Action(
+        key="create_work_order",
+        label="Create Work Order",
+        allowed=error is None,
+        reason=error,
+        permission="operations:dispatch:write",
     )
 
 
@@ -352,17 +377,20 @@ def list_page(
     q: str | None = None,
     active: bool | None = None,
     project_task_id: str | None = None,
+    can_create: bool = False,
     page: int = 1,
     per_page: int = 25,
 ) -> dict[str, Any]:
+    task_filter_id = _project_task_filter_id(project_task_id)
     list_query = build_work_order_list_query(
         search=q, status=status, page=page, per_page=per_page
     )
     filters = WorkOrderListFilters(
         status=list_query.filter_value("status"),
         q=list_query.search,
-        is_active=None,
+        is_active=True if task_filter_id else None,
         active=active,
+        project_task_id=str(task_filter_id) if task_filter_id else None,
         limit=list_query.per_page,
         offset=list_query.offset,
     )
@@ -405,17 +433,19 @@ def list_page(
     counts = _work_order_counts(db)
     create_prefill = None
     create_prefill_error = None
-    if project_task_id:
+    if task_filter_id and can_create:
         try:
-            create_prefill = _task_create_prefill(db, project_task_id)
+            create_prefill = _task_create_prefill(db, str(task_filter_id))
         except HTTPException as exc:
             create_prefill_error = str(exc.detail)
+    create_work_order_action = _create_action(error=create_prefill_error)
     return {
         "items": items,
         "counts": counts,
         "kpis": _work_order_kpis(counts),
         "status_filter": list_query.filter_value("status"),
         "active_filter": bool(active),
+        "project_task_filter": str(task_filter_id) if task_filter_id else "",
         "q": list_query.search or "",
         "page": list_query.page,
         "per_page": list_query.per_page,
@@ -430,6 +460,7 @@ def list_page(
         "technician_options": _technician_options(db),
         "create_prefill": create_prefill,
         "create_prefill_error": create_prefill_error,
+        "create_work_order_action": create_work_order_action,
     }
 
 

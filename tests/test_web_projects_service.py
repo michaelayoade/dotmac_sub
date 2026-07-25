@@ -305,7 +305,11 @@ class TestDetailContext:
         self, db_session, subscriber
     ):
         project = _create_project(db_session, subscriber)
-        work_order = web_dispatch_work_orders.create_from_form(
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Project field task"),
+        )
+        direct = web_dispatch_work_orders.create_from_form(
             db_session,
             {
                 "public_id": "sub-project-panel",
@@ -315,12 +319,50 @@ class TestDetailContext:
                 "status": "scheduled",
             },
         )
+        via_task = web_dispatch_work_orders.create_from_form(
+            db_session,
+            {
+                "public_id": "sub-project-task-panel",
+                "subscriber_id": str(subscriber.id),
+                "project_task_id": str(task.id),
+                "title": "Task survey",
+                "status": "scheduled",
+            },
+        )
+        unrelated_project = _create_project(
+            db_session, subscriber, name="Unrelated project"
+        )
+        web_dispatch_work_orders.create_from_form(
+            db_session,
+            {
+                "public_id": "sub-unrelated-project-panel",
+                "subscriber_id": str(subscriber.id),
+                "project_id": str(unrelated_project.id),
+                "title": "Unrelated survey",
+                "status": "scheduled",
+            },
+        )
 
-        context = web_projects.build_project_detail_context(db_session, project=project)
+        context = web_projects.build_project_detail_context(
+            db_session, project=project, can_read_work_orders=True
+        )
 
-        assert [row["public_id"] for row in context["project_work_orders"]] == [
-            work_order.public_id
-        ]
+        assert {row.public_id for row in context["project_work_orders"]} == {
+            direct.public_id,
+            via_task.public_id,
+        }
+
+    def test_project_detail_field_work_is_hidden_without_dispatch_read(
+        self, db_session, subscriber
+    ):
+        project = _create_project(db_session, subscriber)
+
+        context = web_projects.build_project_detail_context(
+            db_session, project=project, can_read_work_orders=False
+        )
+
+        assert context["show_field_work"] is False
+        assert context["project_work_orders"] == ()
 
 
 class TestTasksContext:
@@ -355,6 +397,98 @@ class TestTasksContext:
         )
         assert updated.status == "done"
         assert updated.completed_at is not None
+
+    def test_task_list_bulk_projects_zero_one_and_many_work_order_actions(
+        self, db_session, subscriber, monkeypatch
+    ):
+        project = _create_project(db_session, subscriber)
+        zero = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="No visit"),
+        )
+        one = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="One visit"),
+        )
+        many = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Many visits"),
+        )
+        for public_id, task in (
+            ("sub-task-list-one", one),
+            ("sub-task-list-many-1", many),
+            ("sub-task-list-many-2", many),
+        ):
+            web_dispatch_work_orders.create_from_form(
+                db_session,
+                {
+                    "public_id": public_id,
+                    "subscriber_id": str(subscriber.id),
+                    "project_task_id": str(task.id),
+                    "title": public_id,
+                    "status": "scheduled",
+                },
+            )
+
+        original = web_projects.work_order_views.list_task_work_order_summaries_bulk
+        calls: list[tuple[uuid.UUID, ...]] = []
+
+        def counted(db, task_ids):
+            calls.append(tuple(task_ids))
+            return original(db, task_ids)
+
+        monkeypatch.setattr(
+            web_projects.work_order_views,
+            "list_task_work_order_summaries_bulk",
+            counted,
+        )
+        context = web_projects.build_tasks_list_context(
+            db_session,
+            project_id=str(project.id),
+            status=None,
+            priority=None,
+            assigned_to_me=False,
+            actor_id=None,
+            filters=None,
+            page=1,
+            per_page=25,
+            can_read_work_orders=True,
+        )
+
+        assert len(calls) == 1
+        assert set(calls[0]) == {zero.id, one.id, many.id}
+        projected = context["task_work_order_projections"]
+        assert projected[str(zero.id)].action.label == "Create Work Order"
+        assert projected[str(zero.id)].action.permission == "operations:dispatch:write"
+        assert projected[str(one.id)].action.label == "Open Work Order"
+        assert "q=sub-task-list-one" in projected[str(one.id)].action_url
+        assert projected[str(many.id)].action.label == "View 2 Work Orders"
+        assert f"project_task_id={many.id}" in projected[str(many.id)].action_url
+
+    def test_task_list_without_dispatch_read_exposes_no_field_work_projection(
+        self, db_session, subscriber
+    ):
+        project = _create_project(db_session, subscriber)
+        project_tasks.create(
+            db_session,
+            ProjectTaskCreate(project_id=project.id, title="Hidden field work"),
+        )
+
+        context = web_projects.build_tasks_list_context(
+            db_session,
+            project_id=str(project.id),
+            status=None,
+            priority=None,
+            assigned_to_me=False,
+            actor_id=None,
+            filters=None,
+            page=1,
+            per_page=25,
+            can_read_work_orders=False,
+        )
+
+        assert context["show_field_work"] is False
+        assert context["task_work_order_projections"] == {}
 
     def test_assigned_to_me_requires_actor(self, db_session):
         with pytest.raises(ProjectProjectionError) as exc_info:
@@ -431,7 +565,9 @@ class TestTasksContext:
             },
         )
 
-        context = web_projects.build_task_detail_context(db_session, task=task)
+        context = web_projects.build_task_detail_context(
+            db_session, task=task, can_read_work_orders=True
+        )
 
         assert context["create_work_order_action"].allowed is True
         assert (
@@ -439,7 +575,7 @@ class TestTasksContext:
             == "operations:dispatch:write"
         )
         assert context["work_order_create_url"].endswith(f"project_task_id={task.id}")
-        assert {row["public_id"] for row in context["task_work_orders"]} == {
+        assert {row.public_id for row in context["task_work_orders"]} == {
             first.public_id,
             second.public_id,
         }

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_dispatch_work_orders as work_orders_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import can, require_permission
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -52,6 +52,7 @@ def dispatch_work_orders(
         q=q,
         active=active,
         project_task_id=project_task_id,
+        can_create=can(request, "operations:dispatch:write"),
         page=page,
         per_page=per_page,
     )
