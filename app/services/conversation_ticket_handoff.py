@@ -202,37 +202,53 @@ def issue_ticket(
         reason=command.reason or "issue ticket from inbox conversation",
         idempotency_key=_stable_request_id(command),
     )
+    # The invalidation payload is captured inside the transaction, not read off
+    # the Ticket afterwards: attributes expire on commit, so a post-commit read
+    # would re-open a transaction and leave the session unusable for the next
+    # owner command.
+    invalidation: dict[str, object] = {}
+
+    def run() -> ConversationTicketIssueResult:
+        outcome = _issue_ticket(db, command)
+        if not outcome.replayed:
+            invalidation.update(
+                item_id=outcome.ticket.id,
+                assignee_id=outcome.ticket.assigned_to_person_id,
+                service_team_id=outcome.ticket.service_team_id,
+            )
+        return outcome
+
     result = execute_owner_command(
         db,
         definition=_ISSUE_DEFINITION,
         context=context,
-        operation=lambda: _issue_ticket(db, command),
+        operation=run,
     )
-    # The Ticket create ran as a participant in the command above, so its own
-    # post-commit workqueue invalidation was skipped. Emit it here, now that the
-    # transaction has landed. Best-effort by contract: workqueue is a realtime
-    # projection with no authority, and a live pane refreshing late is not a
-    # reason to fail an issued ticket.
-    if not result.replayed:
-        _emit_workqueue_invalidation(result.ticket)
+    # The Ticket create ran as a participant, so its own post-commit workqueue
+    # invalidation was skipped. Emit it here, now the transaction has landed.
+    if invalidation:
+        _emit_workqueue_invalidation(**invalidation)
     return result
 
 
-def _emit_workqueue_invalidation(ticket: Ticket) -> None:
+def _emit_workqueue_invalidation(
+    *, item_id: object, assignee_id: object, service_team_id: object
+) -> None:
+    """Best-effort realtime ping. Workqueue holds no authority."""
     try:
         from app.services.workqueue.events import emit_item_change
         from app.services.workqueue.types import ItemKind
 
         emit_item_change(
             item_kind=ItemKind.ticket,
-            item_id=ticket.id,
+            item_id=item_id,
             change="added",
-            assignee_id=ticket.assigned_to_person_id,
-            service_team_id=ticket.service_team_id,
+            assignee_id=assignee_id,
+            service_team_id=service_team_id,
         )
     except Exception:  # pragma: no cover — realtime must never fail a write
         logger.debug(
-            "workqueue_notify_failed conversation_ticket_id=%s", ticket.id, exc_info=True
+            "workqueue_notify_failed conversation_ticket_id=%s", item_id, exc_info=True
         )
 
 
