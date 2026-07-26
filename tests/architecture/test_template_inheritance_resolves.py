@@ -34,7 +34,7 @@ def _iter_directives():
 
 def test_every_literal_template_target_exists() -> None:
     missing = [
-        f"{template.relative_to(TEMPLATES_DIR)} {kind}s '{target}' which does not exist"
+        f"{template.relative_to(TEMPLATES_DIR)} {kind} '{target}', which does not exist"
         for template, kind, target in _iter_directives()
         if not (TEMPLATES_DIR / target).is_file()
     ]
