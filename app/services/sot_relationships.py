@@ -6681,23 +6681,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "stranded prepaid draft classification",
                     "stranded prepaid draft invoice reconciliation",
+                    "reviewed opening funding invoice consumption",
+                    "prepaid draft reconciliation exceptions and operator alerts",
                 ),
                 depends_on=(
                     "financial.account_credit_applications",
                     "financial.invoices",
+                    "financial.ledger",
                     "financial.payments",
+                    "financial.prepaid_funding_reconstruction",
                     "financial.prepaid_service_renewals",
+                    "communications.staff_notifications",
                     "observability.audit_log",
                 ),
                 notes=(
-                    "The read-only classifier distinguishes exact native payment "
-                    "funding, insufficient funding, legacy/unbacked credit, exact "
-                    "direct-renewal overlap, and ambiguity. Confirmation either "
-                    "fully settles from exact payment-backed credit or voids a "
-                    "duplicate direct-renewal draft at zero economic delta. During "
-                    "cutover, the funding-change owner invokes the same flush-only "
-                    "classification/action participant before any invoice-less "
-                    "renewal; every existing draft blocks that parallel path."
+                    "The invoice-first classifier distinguishes exact settlement-"
+                    "backed payments, reviewed opening funding, insufficient or "
+                    "unbacked funding, direct-renewal overlap, and ambiguity. "
+                    "Reviewed confirmation consumes payment settlements first and "
+                    "then records only the exact remainder as typed opening-funding "
+                    "consumption; opening funding is never represented as a Payment. "
+                    "Automatic funding changes create a durable operator exception "
+                    "instead of silently leaving an authoritatively funded draft. "
+                    "Every existing draft blocks the parallel invoice-less renewal "
+                    "path, and generic Restore cannot bypass an unresolved prepaid "
+                    "financial lock."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -6718,9 +6726,34 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "reviewed reconciliation command",
                                 "canonical prepaid draft invoice",
                                 "canonical payment-backed account credit",
+                                "reviewed opening funding",
                                 "canonical funded service entitlement",
                                 "canonical direct-renewal debit",
                                 "invoice and payment participant protocols",
+                            ),
+                            canonical_writer="financial.prepaid_draft_reconciliation",
+                        ),
+                        ConcernContract(
+                            name="reviewed opening funding invoice consumption",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "reviewed reconciliation command",
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "reviewed opening funding",
+                            ),
+                            canonical_writer="financial.prepaid_draft_reconciliation",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "prepaid draft reconciliation exceptions and "
+                                "operator alerts"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "reviewed opening funding",
                             ),
                             canonical_writer="financial.prepaid_draft_reconciliation",
                         ),
@@ -6757,6 +6790,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="reviewed opening funding",
+                            owner="financial.prepaid_funding_reconstruction",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active typed opening baseline, signed reviewed "
+                                "manifest, approval evidence, prior immutable "
+                                "invoice consumptions, and current verified prepaid "
+                                "funding position"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="canonical funded service entitlement",
                             owner="financial.prepaid_service_renewals",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -6789,20 +6833,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         boundary=(
                             "Reviewed confirmation enters execute_owner_command once "
                             "on a transaction-free session and commits or rolls back "
-                            "the invoice lifecycle, exact payment applications, audit, "
-                            "and idempotency evidence together. The funding-change "
-                            "cutover caller uses the same required flush-only "
-                            "participant inside its existing owner transaction."
+                            "the invoice lifecycle, exact payment applications, typed "
+                            "opening-funding consumption and structural ledger link, "
+                            "entitlement, billing anchor, access restoration, audit, "
+                            "event, exception resolution, and idempotency evidence "
+                            "together. The funding-change caller uses the same "
+                            "flush-only classifier inside its existing transaction."
                         ),
                         locking=(
-                            "Lock account first, then invoice, then re-read payment, "
-                            "entitlement, adjustment, and allocation evidence. A "
-                            "multiple-draft account is not automatically repaired."
+                            "Lock account first, then invoice, eligible payment and "
+                            "settlement records, and the opening-funding baseline; "
+                            "re-read consumption, entitlement, adjustment, and "
+                            "allocation evidence before writing. A multiple-draft "
+                            "account is not automatically repaired."
                         ),
                         idempotency=(
                             "A caller-supplied key is reserved per invoice; invoice "
-                            "metadata and participant idempotency keys replay the same "
-                            "paid or void result and reject changed evidence."
+                            "metadata, one-per-invoice opening-consumption uniqueness, "
+                            "and participant idempotency keys replay the same paid or "
+                            "void result and reject changed evidence."
                         ),
                         retries=(
                             "Retry transient database failures with the same key and "
@@ -6820,6 +6869,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.prepaid_draft_reconciliation.not_actionable",
                             "financial.prepaid_draft_reconciliation.participant_rejected",
                             "financial.prepaid_draft_reconciliation.incomplete_repair",
+                            "financial.prepaid_draft_reconciliation.opening_funding_unavailable",
+                            "financial.prepaid_draft_reconciliation.opening_funding_changed",
+                            "financial.prepaid_draft_reconciliation.review_required",
                             "financial.prepaid_draft_reconciliation.invalid_command_context",
                             "financial.prepaid_draft_reconciliation.command_contract_violation",
                             "financial.prepaid_draft_reconciliation.nested_owner_command",
@@ -6833,7 +6885,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "legacy or unbacked account credit",
                             "multiple drafts or positive lines",
                             "partial or ambiguous entitlement overlap",
-                            "stale preview or changed payment capacity",
+                            "stale preview, changed payment capacity, or already "
+                            "consumed opening funding",
                         ),
                     ),
                     events=EventContract(
@@ -6857,6 +6910,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical prepaid draft invoice",
                                 "canonical payment-backed account credit",
+                                "reviewed opening funding",
                                 "canonical funded service entitlement",
                                 "canonical direct-renewal debit",
                             ),
@@ -6868,8 +6922,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             drift_signal=(
                                 "An active prepaid draft classified as exact-payment "
-                                "fundable, already renewed, legacy-unbacked, insufficient, "
-                                "or manual review remains visible in the cohort."
+                                "fundable, reviewed-opening-fundable, already renewed, "
+                                "legacy-unbacked, insufficient, or manual review "
+                                "remains visible in the cohort; a durable open "
+                                "exception signals automatic review work."
                             ),
                             rebuild_operation=(
                                 "preview_prepaid_draft_cohort deterministically "
@@ -6886,9 +6942,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.prepaid_draft_reconciliation",
                         verification=(
-                            "Exact-funding, fifty-kobo shortfall, unbacked credit, "
-                            "direct-renewal overlap, stale preview, replay, funding-"
-                            "change, and architecture tests."
+                            "Exact mixed funding, partial funding, fifty-kobo "
+                            "shortfall, unbacked or reversed payment evidence, "
+                            "direct-renewal overlap, multiple drafts, stale preview, "
+                            "replay, concurrency, lapsed re-anchoring, opening-funding "
+                            "double-spend, Restore guard, and architecture tests."
                         ),
                         cutover_gate=(
                             "Funding-change handling checks the authoritative draft "
@@ -6909,6 +6967,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_prepaid_draft_reconciliation.py",
                         "tests/test_prepaid_service_renewals.py",
+                        "tests/test_subscription_lifecycle_commands.py",
+                        "tests/integration/test_prepaid_draft_reconciliation_concurrency.py",
                         "tests/architecture/test_prepaid_draft_reconciliation_ownership.py",
                     ),
                 ),
@@ -12406,6 +12466,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "poll heartbeat result counters",
                 ),
                 depends_on=("runtime.db_sessions",),
+                notes=(
+                    "Polling and topology warming use reserved monitoring-queue "
+                    "capacity. Bulk ingestion, including independently bounded "
+                    "per-OLT MAC harvests, does not share that worker; queue "
+                    "placement does not change observation ownership."
+                ),
             ),
             SOTService(
                 name="runtime.infrastructure_health",
