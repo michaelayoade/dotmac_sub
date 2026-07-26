@@ -1,7 +1,7 @@
 """Shared branding context for customer portal templates."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from threading import Lock
 from time import monotonic
@@ -83,9 +83,29 @@ def _format_portal_datetime(
     return f"{dt.strftime(fmt)}{suffix}"
 
 
+def _format_portal_date(
+    value: object,
+    fmt: str = "%b %d, %Y",
+    fallback: str = "-",
+) -> str:
+    """Format a customer-facing calendar date without timezone decoration."""
+    if isinstance(value, datetime):
+        localized = _coerce_datetime(value)
+        return localized.strftime(fmt) if localized is not None else fallback
+    if isinstance(value, date):
+        return value.strftime(fmt)
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value).strftime(fmt)
+        except ValueError:
+            return fallback
+    return fallback
+
+
 def register_customer_portal_filters(templates: Jinja2Templates) -> Jinja2Templates:
     """Register filters used by shared customer portal templates."""
     templates.env.filters["currency_amount"] = _format_currency_amount
+    templates.env.filters["portal_date"] = _format_portal_date
     templates.env.filters["portal_datetime"] = _format_portal_datetime
     return templates
 

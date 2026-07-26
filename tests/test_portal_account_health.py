@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -19,6 +20,10 @@ from app.models.subscription_change import (
 from app.schemas.portal_account_health import PortalAccountHealthRead
 from app.services import portal_account_health
 from app.services.portal_account_health import build_portal_account_health
+from app.web.customer.branding import (
+    _format_portal_date,
+    register_customer_portal_filters,
+)
 
 
 def _invoice(db_session, account_id, *, currency: str, balance: str) -> Invoice:
@@ -128,6 +133,41 @@ def test_portal_account_health_does_not_treat_plan_family_as_network_migration(
     assert wire.services[0].pending_change.delivery_mode == "commercial_only"
 
 
+def test_pending_service_change_renders_effective_date(
+    db_session, subscriber_account, subscription
+):
+    change = SubscriptionChangeRequest(
+        subscription_id=subscription.id,
+        current_offer_id=subscription.offer_id,
+        requested_offer_id=subscription.offer_id,
+        status=SubscriptionChangeStatus.pending,
+        effective_date=date(2026, 7, 31),
+    )
+    db_session.add(change)
+    db_session.commit()
+    health = build_portal_account_health(db_session, subscriber_account.id)
+    templates = register_customer_portal_filters(Jinja2Templates(directory="templates"))
+
+    rendered = templates.env.get_template(
+        "components/portal/account_health.html"
+    ).module.service_health_strip(health)
+
+    assert "Effective Jul 31, 2026" in rendered
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (date(2026, 7, 31), "Jul 31, 2026"),
+        ("2026-07-31", "Jul 31, 2026"),
+        ("not-a-date", "N/A"),
+        (None, "N/A"),
+    ],
+)
+def test_portal_date_formats_calendar_dates(value, expected):
+    assert _format_portal_date(value, fallback="N/A") == expected
+
+
 def test_portal_account_health_has_an_explicit_single_service_query_budget(
     db_session, subscriber_account, subscription
 ):
@@ -171,6 +211,7 @@ def test_portal_templates_share_owner_projection_and_remove_generic_balance():
 def test_portal_account_health_templates_compile():
     env = Jinja2Templates(directory="templates").env
     env.filters["money"] = str
+    env.filters["portal_date"] = str
     env.filters["portal_datetime"] = str
     env.get_template("components/portal/account_health.html")
     env.get_template("customer/dashboard/index.html")
