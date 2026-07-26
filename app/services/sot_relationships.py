@@ -15467,6 +15467,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="vendor operations",
                     design_refs=(
                         "docs/designs/UI_PROJECTION_CONTRACTS.md",
+                        "docs/designs/VENDOR_ROUTE_REVISION_AUTHORING.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
@@ -15475,6 +15476,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_vendor_submission_proposals.py",
                         "tests/test_vendor_project_review.py",
                         "tests/test_vendor_as_built_review.py",
+                        "tests/test_vendor_route_revision_authoring.py",
                         "tests/architecture/test_vendor_project_workspace_boundary.py",
                         "tests/test_vendor_action_eligibility.py",
                     ),
@@ -15649,6 +15651,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="vendor operations",
                     design_refs=(
+                        "docs/designs/VENDOR_ROUTE_REVISION_AUTHORING.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
@@ -15656,6 +15659,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_vendor_project_workspace.py",
                         "tests/test_vendor_submission_proposals.py",
                         "tests/test_vendor_as_built_review.py",
+                        "tests/test_vendor_route_revision_authoring.py",
                         "tests/architecture/test_vendor_project_workspace_boundary.py",
                     ),
                 ),
