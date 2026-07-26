@@ -53,13 +53,13 @@ from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUSES,
 )
 from app.services.customer_financial_position import prepaid_available_balances
-from app.services.prepaid_funding_reconstruction import (
-    PrepaidFundingBaselineMissingError,
-)
 from app.services.job_heartbeat import (
     PAYMENT_RECONCILIATION_TASK,
     get_last_result,
     get_last_success,
+)
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
 )
 
 # Alert thresholds. Conservative defaults; tune via ops experience.

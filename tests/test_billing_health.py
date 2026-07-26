@@ -312,8 +312,10 @@ def test_missing_funding_baseline_degrades_one_signal_not_the_snapshot(
     assert "negative_prepaid_balances" not in snap.anomalies
 
     signals = {
-        signal for signal, _scope, *_ in (
-            (o.signal, o.scope) for o in billing_health.billing_health_observations(snap)
+        signal
+        for signal, _scope, *_ in (
+            (o.signal, o.scope)
+            for o in billing_health.billing_health_observations(snap)
         )
     }
     # The unmeasurable signal is omitted rather than reported as a false zero...
