@@ -742,18 +742,8 @@ def test_user_credentials_duplicate_username_is_409_not_500(db_session, person):
     assert excinfo.value.status_code == 409
     assert "username" in str(excinfo.value.detail).lower()
 
-    # The session must be usable afterwards; an un-rolled-back failed flush
-    # poisons every later query on the same session.
-    assert (
-        auth_service.user_credentials.list(
-            db_session,
-            person_id=str(person.id),
-            provider=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=25,
-            offset=0,
-        )
-        is not None
-    )
+    # The session must still be usable: an un-rolled-back failed flush poisons
+    # every later query on it with PendingRollbackError. Deliberately not a
+    # query about `person` -- the rollback discarded the transaction the
+    # fixture created that row in.
+    assert db_session.query(UserCredential).count() >= 0
