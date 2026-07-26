@@ -459,6 +459,11 @@ fi
 log "Deploying ${IMAGE} (currently pinned: ${PREV_IMAGE:-none})"
 log "Compose files: ${COMPOSE_FILES_DESC}"
 
+# Cheap, local preconditions first: this gate must be able to refuse without
+# having touched anything, including read-only queries.
+log "Verifying Nginx warm-handoff contract"
+assert_proxy_handoff_contract
+
 log "Resolving declared Compose services"
 load_declared_services
 mapfile -t APP_SERVICES < <(declared_subset "${APP_SERVICES[@]}")
@@ -468,9 +473,6 @@ if ((${#APP_SERVICES[@]} == 0)); then
   exit 1
 fi
 log "Services this deploy will recreate: ${APP_SERVICES[*]}"
-
-log "Verifying Nginx warm-handoff contract"
-assert_proxy_handoff_contract
 
 log "Verifying image exists on registry"
 docker manifest inspect "${IMAGE}" >/dev/null
