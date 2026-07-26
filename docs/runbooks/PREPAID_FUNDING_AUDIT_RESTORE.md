@@ -110,8 +110,9 @@ scripts/one_off/prepaid_funding_audit_restore.sh destroy
 ```
 
 Removes the container, the volume (and with it the restored copy of production
-data), and the network. Exported artifacts are kept. **Do not leave the audit
-stack running** — it is a full copy of production.
+data), and the network. Exported artifacts are kept.
+
+**Do not leave the audit stack running** — it is a full copy of production.
 
 ---
 
