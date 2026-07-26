@@ -151,7 +151,10 @@ API: an unenforced gate with an admin UI reads as protection and is not.
 
 - Voice use-cases (transcription, field extraction) — a different
   data-protection question, evaluated separately.
-- CRM-marketing personas (`campaign_optimizer`, `customer_success`) — they
-  leave with CRM.
+- CRM-marketing advisors (`campaign_optimizer`, `customer_success`) — deferred
+  until the marketing and sales domain lands in Sub, which
+  `docs/designs/MARKETING_SALES_SOT.md` commits to. They are out of scope here,
+  not abandoned; when they arrive they are advisors over an owned campaign or
+  audience projection like any other, not ported personas.
 - Any AI-initiated domain mutation. Not in this design, not later, without an
   explicit architecture decision replacing this document.
