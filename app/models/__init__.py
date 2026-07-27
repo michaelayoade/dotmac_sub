@@ -734,6 +734,10 @@ from app.models.sales import (  # noqa: F401
     SalesOrderPaymentStatus,
     SalesOrderStatus,
 )
+from app.models.sales_billing_shadow import (  # noqa: F401
+    SalesBillingShadowBucket,
+    SalesBillingShadowRun,
+)
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
 from app.models.sequence import DocumentSequence  # noqa: F401
 from app.models.service_extension import (  # noqa: F401

@@ -29,6 +29,24 @@ The chain uses structural foreign keys. Metadata identifiers remain migration
 provenance and compatibility evidence; they are not canonical joins for new
 writes.
 
+**Known exception — Sale → Money is metadata-backed, not structural.** There is
+no foreign key from `Invoice`, `InvoiceLine`, `PaymentAllocation` or `Payment`
+to `SalesOrder`. The installation invoice is reached through
+`Project.metadata_["selfcare_installation_invoice_id"]`, subscription invoices
+through `SalesOrderLine.metadata_["selfcare_subscription_invoice_id"]`, and the
+originating payment through a string-matched `Payment.external_id`. The
+paragraph above therefore does **not** hold for this boundary, and did not when
+it was written.
+
+Do not read that as licence to add metadata joins elsewhere, and do not treat
+the sales-order money columns as authoritative. The exception is being retired
+through an explicit authority migration whose obligation → document →
+application contract, shadow phase and cutover gate are specified in
+[`SALE_TO_MONEY_HANDOFF_SOT.md`](SALE_TO_MONEY_HANDOFF_SOT.md). Note in
+particular that a payment keyed to a sales order proves **origin, not
+application**: an order-originated payment auto-allocates across the account's
+open invoices, so settlement must be read through `PaymentAllocation`.
+
 ## Named owners
 
 | Decision or fact | Owner |

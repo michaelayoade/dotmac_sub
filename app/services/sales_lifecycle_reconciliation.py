@@ -176,18 +176,33 @@ def reconcile_sales_to_service_lifecycle(
                 ) from exc
             counts["cx_handoffs_repaired"] += 1
 
-    # Sale -> Money shadow phase. Detect-only in both modes, deliberately: a
-    # disagreement between the stored Sale columns and the ledger is evidence
-    # for finance, never an input to an automatic money correction. See
-    # docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md.
-    shadow = sales_billing_position.scan_billing_shadow(db)
-    for drift in shadow.drifts:
-        logger.warning("sales_billing_shadow_drift %s", drift)
-
     if apply:
         db.commit()
     else:
         db.rollback()
+
+    # Sale -> Money shadow phase. Observed in both modes and repaired in
+    # neither: a disagreement between the stored Sale columns and the ledger is
+    # evidence for finance, never an input to an automatic money correction,
+    # and it does not establish which side is wrong. The check is called
+    # without `apply` on purpose — it fails closed if asked to repair.
+    #
+    # Deliberately after the repair transaction settles. The observation is
+    # read-only against business state, and its evidence row must survive a
+    # detect-mode run — inside the block above, the rollback would discard the
+    # very evidence the cutover gate depends on. See
+    # docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md.
+    shadow = sales_billing_position.scan_billing_shadow(db, actor_id=actor_id)
+    for drift in shadow.drifts:
+        logger.warning("sales_billing_shadow_drift %s", drift)
+    if not shadow.clean:
+        logger.warning(
+            "sales_billing_shadow_not_clean fingerprint=%s counts=%s",
+            shadow.cohort_fingerprint,
+            shadow.as_counts(),
+        )
+    db.commit()
+
     return {
         **shadow.as_counts(),
         "apply": apply,

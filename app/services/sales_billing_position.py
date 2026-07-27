@@ -1,4 +1,4 @@
-"""The Sale -> Money handoff: read a sales order's position from billing.
+"""The Sale → Money handoff: read a sales order's position from billing.
 
 `sales.orders` currently *stores* `amount_paid`, `balance_due`,
 `payment_status` and `paid_at`. Those are Money-pipeline facts held as
@@ -6,40 +6,53 @@ Sale-pipeline columns, derived by ad-hoc assignment rather than by the invoice
 state machine, and reconciled against the ledger by nothing. One duplicated
 boundary has already produced four separate money defects.
 
-This module is the read side of the replacement: given a SalesOrder, resolve
-what billing says about it. It is the shadow phase of an explicit authority
-migration --
+This module is the read side of the replacement, and the shadow phase of an
+explicit authority migration. It **writes nothing to sales or billing state**
+and refuses to repair — see ``SUPPORTS_APPLY``.
 
-  old owner   sales.orders, storing derived money columns
-  new owner   financial.invoices / financial.payments, read through here
-  shadow      both computed; disagreement reported, never auto-corrected
-  cutover     stored columns become reads once drift is understood and zero
-  retirement  the columns are dropped and _apply_payment_fields deleted
+## Settlement is read through allocation, never through payment origin
 
-It writes nothing and decides nothing. Money repairs need finance approval and
-belong to their owner, so drift here is evidence for a human, not an input to
-an automatic correction.
+An order-originated payment carries
+``external_id = "crm:sales_order:{id}:payment"``, but that proves **origin, not
+application**: ``_record_sales_order_payment`` deliberately charges the account
+rather than one invoice, and the ledger auto-allocates across whatever is open.
+Summing those payments would credit this sale with money that settled some
+other obligation. Settlement is therefore computed from ``PaymentAllocation``
+rows against the order's own invoices; the originating payments are carried
+separately as provenance only.
+
+## The obligation → document → application chain
+
+The structural target, which foreign keys alone do not achieve:
+
+    finite SalesOrder billing obligation
+      → structurally linked Invoice / InvoiceLine
+      → PaymentAllocation or credit application
+      → Payment / settlement
+      → refunds, reversals, credit notes and waivers
+
+An invoice header FK is insufficient where one invoice combines several
+sources: the relationship belongs at line or obligation level with defined
+partial-allocation semantics, so that a recurring invoice descending from this
+sale's subscription cannot inflate the original sale.
 
 ## Joining is currently metadata, not structure
 
-There is no foreign key from Invoice or Payment to SalesOrder. The links are:
-
-  installation invoice   Project.metadata_["selfcare_installation_invoice_id"],
-                         reached from the order's Project
+  installation invoice   Project.metadata_["selfcare_installation_invoice_id"]
   subscription invoice   SalesOrderLine.metadata_["selfcare_subscription_invoice_id"]
-  payment                Payment.external_id == "crm:sales_order:{id}:payment"
+  originating payment    Payment.external_id == "crm:sales_order:{id}:payment"
 
-The sales-to-service contract says the chain uses structural foreign keys and
-that metadata identifiers are provenance, not canonical joins. That is not true
-of this boundary, and it is the reason the handoff has no contract: there is
-nothing structural to contract over. Establishing those keys is the next slice;
-this module deliberately reads what exists today so the shadow phase can start
-without a migration.
+That is the known exception recorded in ``SALES_TO_SERVICE_LIFECYCLE_SOT.md``.
+This module reads what exists today so the shadow phase can start without a
+migration, and classifies every unsafe join so the structural slice is driven
+by evidence.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
 from uuid import UUID
@@ -47,46 +60,66 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
-from app.models.sales import SalesOrder, SalesOrderPaymentStatus
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentAllocation
+from app.models.sales import SalesOrder, SalesOrderPaymentStatus, SalesOrderStatus
+from app.models.sales_billing_shadow import (
+    SALES_BILLING_SHADOW_CONTRACT_VERSION,
+    SalesBillingShadowBucket,
+    SalesBillingShadowRun,
+)
 from app.services.common import coerce_uuid, round_money
 
 logger = logging.getLogger(__name__)
 
+#: This check observes; it never repairs. A shared CLI that offers --apply must
+#: read this and refuse, rather than silently no-op — a silent no-op implies an
+#: authority this check deliberately lacks.
+SUPPORTS_APPLY = False
+
 _ZERO = Decimal("0.00")
 
-#: Invoice states that still represent customer-facing debt.
 _OPEN_INVOICE_STATUSES = (
     InvoiceStatus.issued,
     InvoiceStatus.partially_paid,
     InvoiceStatus.overdue,
 )
 
+#: Buckets that must reach zero before the boundary can carry authority.
+_BLOCKING_BUCKETS = frozenset(
+    {
+        SalesBillingShadowBucket.WAIVED_EVIDENCE_MISSING,
+        SalesBillingShadowBucket.UNLINKED_UNEXPECTED,
+        SalesBillingShadowBucket.UNRESOLVED_INVALID,
+        SalesBillingShadowBucket.UNRESOLVED_MISSING,
+        SalesBillingShadowBucket.UNRESOLVED_AMBIGUOUS,
+        SalesBillingShadowBucket.DRIFTING,
+    }
+)
+
+
+class ShadowCheckCannotRepair(RuntimeError):
+    """Raised when the shadow check is asked to repair anything."""
+
 
 @dataclass(frozen=True)
 class SalesOrderBillingPosition:
-    """What billing says about one sales order.
-
-    ``invoiced`` and ``settled`` come from the ledger. ``payment_status`` is the
-    status the Sale pipeline *would* derive from them, so the shadow comparison
-    is like-for-like against the stored column.
-    """
-
     sales_order_id: UUID
     invoiced: Decimal = _ZERO
+    #: Money actually applied to THIS order's invoices, via allocation.
     settled: Decimal = _ZERO
     open_balance: Decimal = _ZERO
     payment_status: str = SalesOrderPaymentStatus.pending.value
     invoice_ids: tuple[UUID, ...] = ()
-    payment_ids: tuple[UUID, ...] = ()
-    #: Joins that could not be resolved, e.g. a metadata id pointing nowhere.
-    unresolved: tuple[str, ...] = ()
+    #: Payments that originated from this order. Provenance only — an
+    #: originating payment may have settled a different obligation entirely.
+    originating_payment_ids: tuple[UUID, ...] = ()
+    invalid_joins: tuple[str, ...] = ()
+    missing_joins: tuple[str, ...] = ()
+    ambiguous_joins: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class SalesOrderBillingDrift:
-    """A disagreement between the stored Sale columns and the ledger."""
-
     sales_order_id: UUID
     field: str
     stored: str
@@ -99,81 +132,94 @@ class SalesOrderBillingDrift:
         )
 
 
-def _invoice_ids_for(
-    db: Session, sales_order: SalesOrder
+def _referenced_invoice_ids(
+    sales_order: SalesOrder,
 ) -> tuple[list[UUID], list[str]]:
-    """Collect the invoice ids reachable from a sales order, and what was not."""
+    """Invoice ids this order references, plus malformed references."""
     ids: list[UUID] = []
-    unresolved: list[str] = []
+    invalid: list[str] = []
+
+    def _take(raw: object, label: str) -> None:
+        text = str(raw or "").strip()
+        if not text:
+            return
+        resolved = coerce_uuid(text)
+        if resolved is None:
+            invalid.append(f"{label}:{text}")
+        else:
+            ids.append(resolved)
 
     project = sales_order.project
     if project is not None and isinstance(project.metadata_, dict):
-        raw = str(
-            project.metadata_.get("selfcare_installation_invoice_id") or ""
-        ).strip()
-        if raw:
-            resolved = coerce_uuid(raw)
-            if resolved is None:
-                unresolved.append(f"installation_invoice:{raw}")
-            else:
-                ids.append(resolved)
+        _take(
+            project.metadata_.get("selfcare_installation_invoice_id"),
+            "installation_invoice",
+        )
 
     for line in sales_order.lines or ():
         if not getattr(line, "is_active", True):
             continue
         meta = line.metadata_ if isinstance(line.metadata_, dict) else {}
-        raw = str(meta.get("selfcare_subscription_invoice_id") or "").strip()
-        if not raw:
-            continue
-        resolved = coerce_uuid(raw)
-        if resolved is None:
-            unresolved.append(f"subscription_invoice:{raw}")
-        else:
-            ids.append(resolved)
+        _take(meta.get("selfcare_subscription_invoice_id"), "subscription_invoice")
 
-    # Preserve order, drop duplicates: one invoice may be referenced twice.
     seen: set[UUID] = set()
     unique = [i for i in ids if not (i in seen or seen.add(i))]
-    return unique, unresolved
+    return unique, invalid
 
 
 def resolve_billing_position(
-    db: Session, sales_order: SalesOrder
+    db: Session,
+    sales_order: SalesOrder,
+    *,
+    shared_invoice_ids: frozenset[UUID] = frozenset(),
 ) -> SalesOrderBillingPosition:
-    """Read this sales order's money position from the billing ledger.
+    """Read this order's money position from the ledger. Pure read.
 
-    Pure read. Never writes, never repairs, never asks another owner to.
+    ``shared_invoice_ids`` are invoices reachable from more than one sales
+    order — ambiguity the caller detects cohort-wide and passes down.
     """
-    invoice_ids, unresolved = _invoice_ids_for(db, sales_order)
+    referenced, invalid = _referenced_invoice_ids(sales_order)
 
     invoiced = _ZERO
     open_balance = _ZERO
     found_ids: list[UUID] = []
-    if invoice_ids:
+    missing: list[str] = []
+    ambiguous: list[str] = []
+
+    if referenced:
         invoices = db.scalars(
             select(Invoice).where(
-                Invoice.id.in_(invoice_ids), Invoice.is_active.is_(True)
+                Invoice.id.in_(referenced), Invoice.is_active.is_(True)
             )
         ).all()
         found = {invoice.id for invoice in invoices}
-        unresolved.extend(f"invoice_missing:{i}" for i in invoice_ids if i not in found)
+        missing.extend(f"invoice_missing:{i}" for i in referenced if i not in found)
         for invoice in invoices:
+            if invoice.id in shared_invoice_ids:
+                ambiguous.append(f"invoice_shared:{invoice.id}")
             found_ids.append(invoice.id)
             invoiced += Decimal(str(invoice.total or 0))
             if invoice.status in _OPEN_INVOICE_STATUSES:
                 open_balance += Decimal(str(invoice.balance_due or 0))
 
-    # The sales-order payment carries a stable external ref from the CRM era.
-    payments = db.scalars(
-        select(Payment).where(
+    # Settlement = what was APPLIED to these invoices, not what this order
+    # originated. See the module docstring.
+    settled = _ZERO
+    if found_ids:
+        rows = db.execute(
+            select(PaymentAllocation.amount).where(
+                PaymentAllocation.invoice_id.in_(found_ids),
+                PaymentAllocation.is_active.is_(True),
+            )
+        ).all()
+        settled = sum((Decimal(str(row[0] or 0)) for row in rows), start=_ZERO)
+
+    originating = db.scalars(
+        select(Payment.id).where(
             Payment.external_id == f"crm:sales_order:{sales_order.id}:payment",
             Payment.is_active.is_(True),
-            Payment.status == PaymentStatus.succeeded,
         )
     ).all()
-    settled = sum(
-        (Decimal(str(payment.amount or 0)) for payment in payments), start=_ZERO
-    )
 
     invoiced = round_money(invoiced)
     settled = round_money(settled)
@@ -193,33 +239,60 @@ def resolve_billing_position(
         open_balance=open_balance,
         payment_status=status,
         invoice_ids=tuple(found_ids),
-        payment_ids=tuple(payment.id for payment in payments),
-        unresolved=tuple(unresolved),
+        originating_payment_ids=tuple(originating),
+        invalid_joins=tuple(invalid),
+        missing_joins=tuple(missing),
+        ambiguous_joins=tuple(ambiguous),
     )
 
 
-def compare_with_stored(
-    sales_order: SalesOrder, position: SalesOrderBillingPosition
-) -> list[SalesOrderBillingDrift]:
-    """Report where the stored Sale columns disagree with the ledger.
+def _has_canonical_waiver_evidence(sales_order: SalesOrder) -> bool:
+    """A waiver is only excluded from comparison if its owner wrote evidence."""
+    metadata = sales_order.metadata_ if isinstance(sales_order.metadata_, dict) else {}
+    waiver = metadata.get("waiver")
+    if not isinstance(waiver, dict):
+        return False
+    return bool(
+        str(waiver.get("waived_by") or "").strip()
+        and str(waiver.get("reason") or "").strip()
+        and str(waiver.get("waived_at") or "").strip()
+    )
 
-    Shadow-phase evidence only. A disagreement is a question for finance, not a
-    licence to rewrite either side — a stored column may be right and the join
-    incomplete, which is exactly what this phase exists to find out.
+
+def _expects_billing(sales_order: SalesOrder) -> bool:
+    """Whether this order should have billing artifacts by now."""
+    if sales_order.status == SalesOrderStatus.draft.value:
+        return False
+    return Decimal(str(sales_order.total or 0)) > 0
+
+
+def classify(
+    sales_order: SalesOrder,
+    position: SalesOrderBillingPosition,
+) -> tuple[SalesBillingShadowBucket, list[SalesOrderBillingDrift]]:
+    """Assign exactly one bucket, and any drift when the order is comparable.
+
+    Order matters: unsafe joins are reported before comparison, because a
+    comparison across a join we do not trust is not evidence of anything.
     """
-    drifts: list[SalesOrderBillingDrift] = []
-
-    # A waived order is settled by decision, not by money, so the ledger will
-    # legitimately show nothing settled. Comparing it would report drift on
-    # every waiver.
     if sales_order.payment_status == SalesOrderPaymentStatus.waived.value:
-        return drifts
+        if _has_canonical_waiver_evidence(sales_order):
+            return SalesBillingShadowBucket.WAIVED_EXCLUDED, []
+        return SalesBillingShadowBucket.WAIVED_EVIDENCE_MISSING, []
 
-    # An order billing cannot see at all is not drift — it is an unlinked
-    # order, reported separately so the two are never conflated.
-    if not position.invoice_ids and not position.payment_ids:
-        return drifts
+    if position.invalid_joins:
+        return SalesBillingShadowBucket.UNRESOLVED_INVALID, []
+    if position.missing_joins:
+        return SalesBillingShadowBucket.UNRESOLVED_MISSING, []
+    if position.ambiguous_joins:
+        return SalesBillingShadowBucket.UNRESOLVED_AMBIGUOUS, []
 
+    if not position.invoice_ids:
+        if _expects_billing(sales_order):
+            return SalesBillingShadowBucket.UNLINKED_UNEXPECTED, []
+        return SalesBillingShadowBucket.UNLINKED_EXPECTED, []
+
+    drifts: list[SalesOrderBillingDrift] = []
     stored_paid = round_money(Decimal(str(sales_order.amount_paid or 0)))
     if stored_paid != position.settled:
         drifts.append(
@@ -230,7 +303,6 @@ def compare_with_stored(
                 billing=str(position.settled),
             )
         )
-
     if sales_order.payment_status != position.payment_status:
         drifts.append(
             SalesOrderBillingDrift(
@@ -241,51 +313,143 @@ def compare_with_stored(
             )
         )
 
-    return drifts
+    if drifts:
+        return SalesBillingShadowBucket.DRIFTING, drifts
+    return SalesBillingShadowBucket.AGREEING, []
 
 
 @dataclass
 class BillingShadowReport:
-    """Aggregate shadow-phase result across the scanned cohort."""
-
     scanned: int = 0
-    unlinked: int = 0
-    with_unresolved_joins: int = 0
-    drifting: int = 0
+    buckets: Counter = field(default_factory=Counter)
     drifts: list[SalesOrderBillingDrift] = field(default_factory=list)
+    cohort_fingerprint: str = ""
+    contract_version: int = SALES_BILLING_SHADOW_CONTRACT_VERSION
+
+    @property
+    def clean(self) -> bool:
+        """No blocking bucket has any member."""
+        return not any(self.buckets.get(bucket, 0) for bucket in _BLOCKING_BUCKETS)
 
     def as_counts(self) -> dict[str, int]:
-        return {
-            "sales_orders_scanned": self.scanned,
-            "sales_orders_unlinked_to_billing": self.unlinked,
-            "sales_orders_with_unresolved_billing_joins": self.with_unresolved_joins,
-            "sales_orders_drifting_from_billing": self.drifting,
+        counts = {
+            f"sales_billing_shadow_{bucket.value}": self.buckets.get(bucket, 0)
+            for bucket in SalesBillingShadowBucket
         }
+        counts["sales_billing_shadow_scanned"] = self.scanned
+        return counts
+
+    def assert_exhaustive(self) -> None:
+        """Every in-scope order must land in exactly one bucket.
+
+        A silently unclassified order would shrink the denominator and make a
+        dirty cohort look clean, so this fails the run instead.
+        """
+        total = sum(self.buckets.values())
+        if total != self.scanned:
+            raise RuntimeError(
+                "Sale → Money shadow buckets are not exhaustive: "
+                f"scanned={self.scanned} bucketed={total}"
+            )
+
+
+def _shared_invoice_ids(db: Session, orders: list[SalesOrder]) -> frozenset[UUID]:
+    """Invoices reachable from more than one sales order.
+
+    The installation-invoice path deliberately reuses an invoice across
+    projects sharing a sales order or quote, so this is a real state — and an
+    invoice that cannot be attributed to one obligation cannot carry the
+    boundary.
+    """
+    owners: dict[UUID, set[UUID]] = defaultdict(set)
+    for order in orders:
+        referenced, _invalid = _referenced_invoice_ids(order)
+        for invoice_id in referenced:
+            owners[invoice_id].add(order.id)
+    return frozenset(
+        invoice_id for invoice_id, order_ids in owners.items() if len(order_ids) > 1
+    )
 
 
 def scan_billing_shadow(
-    db: Session, *, limit: int | None = None
+    db: Session,
+    *,
+    apply: bool = False,
+    persist: bool = True,
+    actor_id: str | None = None,
 ) -> BillingShadowReport:
-    """Compare every active sales order against the ledger. Read-only."""
-    report = BillingShadowReport()
-    query = (
-        select(SalesOrder)
-        .where(SalesOrder.is_active.is_(True))
-        .order_by(SalesOrder.created_at, SalesOrder.id)
-    )
-    if limit is not None:
-        query = query.limit(limit)
+    """Observe the Sale → Money boundary. Never repairs.
 
-    for order in db.scalars(query).all():
+    ``apply=True`` fails closed rather than silently doing nothing: a no-op
+    would imply this check could repair if asked, and it cannot.
+    """
+    if apply:
+        raise ShadowCheckCannotRepair(
+            "The Sale → Money shadow check observes only (SUPPORTS_APPLY is "
+            "False). Money repairs belong to their owner and need finance "
+            "approval; a disagreement here does not establish which side is "
+            "wrong."
+        )
+
+    orders = list(
+        db.scalars(
+            select(SalesOrder)
+            .where(SalesOrder.is_active.is_(True))
+            .order_by(SalesOrder.created_at, SalesOrder.id)
+        ).all()
+    )
+    shared = _shared_invoice_ids(db, orders)
+
+    report = BillingShadowReport()
+    fingerprint = hashlib.sha256()
+    for order in orders:
         report.scanned += 1
-        position = resolve_billing_position(db, order)
-        if position.unresolved:
-            report.with_unresolved_joins += 1
-        if not position.invoice_ids and not position.payment_ids:
-            report.unlinked += 1
-            continue
-        drifts = compare_with_stored(order, position)
-        if drifts:
-            report.drifting += 1
-            report.drifts.extend(drifts)
+        position = resolve_billing_position(db, order, shared_invoice_ids=shared)
+        bucket, drifts = classify(order, position)
+        report.buckets[bucket] += 1
+        report.drifts.extend(drifts)
+        fingerprint.update(f"{order.id}:{bucket.value}\n".encode())
+
+    report.cohort_fingerprint = fingerprint.hexdigest()
+    report.assert_exhaustive()
+
+    if persist:
+        db.add(
+            SalesBillingShadowRun(
+                contract_version=report.contract_version,
+                cohort_fingerprint=report.cohort_fingerprint,
+                scanned=report.scanned,
+                bucket_counts={
+                    bucket.value: report.buckets.get(bucket, 0)
+                    for bucket in SalesBillingShadowBucket
+                },
+                clean=report.clean,
+                actor_id=actor_id,
+            )
+        )
+        db.flush()
     return report
+
+
+def consecutive_clean_runs(db: Session) -> int:
+    """How many consecutive clean observations end the current window.
+
+    Resets on any dirty run, and on a contract-version change: bucket semantics
+    differing across runs means they are not comparable observations.
+    """
+    runs = db.scalars(
+        select(SalesBillingShadowRun)
+        .where(
+            SalesBillingShadowRun.contract_version
+            == SALES_BILLING_SHADOW_CONTRACT_VERSION
+        )
+        .order_by(
+            SalesBillingShadowRun.observed_at.desc(), SalesBillingShadowRun.id.desc()
+        )
+    ).all()
+    streak = 0
+    for run in runs:
+        if not run.clean:
+            break
+        streak += 1
+    return streak
