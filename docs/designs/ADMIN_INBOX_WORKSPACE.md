@@ -68,6 +68,35 @@ Missing backend capabilities may be represented by the isolated browser demo
 adapter. Demo controls must be labelled, remain non-authoritative, and be
 replaceable without changing the page's presentational components.
 
+## Stats and filters control
+
+The collapsible Stats and Filters control is a page-scoped visual exception to
+the shared branding palette and 8px compact-control radius. Its static Tailwind
+v4 amber, status, assignment, saved-view, dark-mode, and `rounded-xl` group
+classes are confined to `templates/admin/inbox/_sidebar.html`; it does not
+change the global theme, Tailwind configuration, or shared components.
+
+Status, assignment, channel, team, agent, activity-window, unread, and saved-view
+controls continue to submit the canonical projection filters. Channel remains
+the communication method and Team remains staff ownership. A separate Inbox
+selector is rendered only after the projection exposes a specific receiving
+account or mailbox identifier and real choices; Team must never be relabelled
+as Inbox.
+
+`Needs attention` is a live, counted cohort distinct from Unreplied. It selects
+an active conversation only after a customer message, a successful human-agent
+reply, and a later customer follow-up, while no successful human-agent reply
+follows that latest message. It applies immediately and does not depend on an
+overdue timer. Successful replies require agent provenance and a
+successful/accepted delivery state; failed, scheduled, AI-intake, and
+explicitly no-response-required messages do not qualify.
+
+The cohort excludes resolved, snoozed, inactive, ticketed, Facebook comment,
+and Instagram comment conversations. It is recomputed by
+`communications.team_inbox_projection` on every read, so message, delivery,
+status, snooze, activation, or ticket changes are reflected on refetch without
+a persisted UI flag.
+
 ## Loading and failure behaviour
 
 - List, thread, and contact context load independently.

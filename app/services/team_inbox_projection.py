@@ -59,7 +59,8 @@ INBOX_LIST_DEFINITION = ListDefinition(
         ListFieldDefinition("service_team_ids", "Teams", filterable=True),
         ListFieldDefinition("assigned_person_id", "Assignee", filterable=True),
         ListFieldDefinition("contact_resolution_status", "Contact", filterable=True),
-        ListFieldDefinition("needs_response", "Needs response", filterable=True),
+        ListFieldDefinition("needs_response", "Unreplied", filterable=True),
+        ListFieldDefinition("needs_attention", "Needs attention", filterable=True),
         ListFieldDefinition("ai_handling", "AI handling", filterable=True),
         ListFieldDefinition("has_ticket", "Sent to ticket", filterable=True),
         ListFieldDefinition("activity_from", "Active from", filterable=True),
@@ -92,6 +93,7 @@ class InboxQueueRequest:
     service_team_ids: tuple[str, ...] = ()
     assigned_person_id: str | UUID | None = None
     needs_response: bool = False
+    needs_attention: bool = False
     contact_resolution_status: str | None = None
     priority_at_most: int | None = None
     muted: bool | None = None
@@ -185,10 +187,8 @@ class InboxAssignmentCounts:
     # The teams the actor belongs to, so the "My team" filter can select exactly
     # the cohort my_team counted rather than approximating it.
     my_team_ids: tuple[str, ...]
-    # One cohort, one name. This was previously also exposed as `needs_attention`
-    # with an identical value, which rendered as two sidebar filters that always
-    # showed the same count and applied the same `needs_response=true` filter.
     unreplied: int
+    needs_attention: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +204,7 @@ class InboxQueueProjection:
     service_team_id: str
     assigned_person_id: str
     needs_response: bool
+    needs_attention: bool
     contact_resolution_status: str
     priority_at_most: int | None
     muted: bool | None
@@ -331,6 +332,11 @@ def _assignment_counts(
         my_team_ids=my_team_ids,
         unassigned=queue_metrics.unassigned_open,
         unreplied=queue_metrics.needs_response,
+        needs_attention=team_inbox_read.list_conversations(
+            db,
+            needs_attention=True,
+            limit=1,
+        ).count,
     )
 
 
@@ -447,6 +453,7 @@ def _filter_params(
     assigned_person_id: str | None,
     contact_resolution_status: str | None,
     needs_response: bool,
+    needs_attention: bool,
     ai_handling: bool | None,
     has_ticket: bool | None,
     activity_from: datetime | None,
@@ -474,6 +481,7 @@ def _filter_params(
         "assigned_person_id": assigned_person_id,
         "contact_resolution_status": contact_resolution_status,
         "needs_response": "true" if needs_response else None,
+        "needs_attention": "true" if needs_attention else None,
         "ai_handling": _tristate(ai_handling),
         "has_ticket": _tristate(has_ticket),
         "activity_from": _activity_param(activity_from),
@@ -503,6 +511,7 @@ def build_queue_projection(
     raw_team_text = str(raw_team_id) if raw_team_id is not None else None
     raw_assignee_text = str(raw_assignee_id) if raw_assignee_id is not None else None
     needs_response = request.needs_response
+    needs_attention = request.needs_attention
     raw_contact_status = request.contact_resolution_status
     raw_priority = request.priority_at_most
     muted = request.muted
@@ -564,6 +573,7 @@ def build_queue_projection(
         assigned_person_id=str(assignee_id) if assignee_id else None,
         contact_resolution_status=contact_status,
         needs_response=needs_response,
+        needs_attention=needs_attention,
         ai_handling=request.ai_handling,
         has_ticket=request.has_ticket,
         activity_from=request.activity_from,
@@ -598,6 +608,7 @@ def build_queue_projection(
             activity_to=request.activity_to,
             assigned_person_id=assignee_id,
             needs_response=needs_response,
+            needs_attention=needs_attention,
             contact_resolution_status=contact_status,
             priority_at_most=priority,
             muted=muted,
@@ -630,6 +641,7 @@ def build_queue_projection(
             assigned_person_id=raw_assignee_text,
             contact_resolution_status=raw_contact_status,
             needs_response=needs_response,
+            needs_attention=needs_attention,
             ai_handling=request.ai_handling,
             has_ticket=request.has_ticket,
             activity_from=request.activity_from,
@@ -679,6 +691,7 @@ def build_queue_projection(
         service_team_id=str(team_id) if team_id else "",
         assigned_person_id=str(assignee_id) if assignee_id else "",
         needs_response=needs_response,
+        needs_attention=needs_attention,
         contact_resolution_status=contact_status or "",
         priority_at_most=priority,
         muted=muted,

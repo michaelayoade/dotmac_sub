@@ -39,8 +39,11 @@
         448,
       ),
       filtersOpen: parseStoredBoolean(KEYS.filtersOpen, false),
-      byAgentOpen: false,
-      savedViewOpen: false,
+      byAgentOpen: Boolean(
+        new URLSearchParams(window.location.search).get("assigned_person_id") ||
+          new URLSearchParams(window.location.search).get("activity_from") ||
+          new URLSearchParams(window.location.search).get("activity_to"),
+      ),
       savedViewName: "",
       selectedIds: [],
       bulkAction: "status",
@@ -293,16 +296,36 @@
           });
       },
 
-      navigateFilter(changes) {
+      navigateFilter(changes, clearAll = false) {
         const url = new URL(window.location.href);
-        [
+        const assignmentKeys = [
           "status",
           "assigned_person_id",
+          "service_team_ids",
           "unassigned",
           "needs_response",
+          "needs_attention",
+          "ai_handling",
+          "activity_from",
+          "activity_to",
           "open_only",
+          "has_ticket",
           "page",
-        ].forEach((key) => url.searchParams.delete(key));
+        ];
+        const savedViewKeys = [
+          ...assignmentKeys,
+          "search",
+          "channel_type",
+          "service_team_id",
+          "contact_resolution_status",
+          "priority_at_most",
+          "muted",
+          "snoozed",
+          "unread",
+        ];
+        (clearAll ? savedViewKeys : assignmentKeys).forEach((key) =>
+          url.searchParams.delete(key),
+        );
         // The two team params scope the same relation, so only one may be live
         // at a time. Setting either clears the other; leaving both in the URL
         // asked the server for two team filters at once, which it cannot
@@ -351,11 +374,50 @@
           this.navigateFilter({ open_only: "true", unassigned: "true" });
         } else if (value === "unreplied") {
           this.navigateFilter({ needs_response: "true" });
+        } else if (value === "attention") {
+          this.navigateFilter({ needs_attention: "true" });
+        } else if (value === "ai") {
+          this.navigateFilter({ ai_handling: "true" });
         } else if (value) {
           this.navigateFilter({ assigned_person_id: value });
         } else {
           this.navigateFilter({});
         }
+      },
+
+      assignmentFilterActive(value) {
+        const filters = new URLSearchParams(window.location.search);
+        const assignee = filters.get("assigned_person_id") || "";
+        if (value === "mine") return Boolean(this.actorId) && assignee === this.actorId;
+        if (value === "agent") {
+          return (
+            (Boolean(assignee) && assignee !== this.actorId) ||
+            filters.has("activity_from") ||
+            filters.has("activity_to")
+          );
+        }
+        if (value === "team") {
+          return (
+            Boolean(this.myTeamIds) &&
+            filters.get("service_team_ids") === this.myTeamIds
+          );
+        }
+        if (value === "ai") return filters.get("ai_handling") === "true";
+        if (value === "unassigned") return filters.get("unassigned") === "true";
+        if (value === "unreplied") return filters.get("needs_response") === "true";
+        if (value === "attention") {
+          return filters.get("needs_attention") === "true";
+        }
+        return ![
+          "assigned_person_id",
+          "service_team_ids",
+          "unassigned",
+          "needs_response",
+          "needs_attention",
+          "ai_handling",
+          "activity_from",
+          "activity_to",
+        ].some((key) => filters.has(key));
       },
 
       // Scopes the queue to every team the operator belongs to — the same set
@@ -374,7 +436,40 @@
           if (value === true) changes[key] = "true";
           else if (value !== false && value !== null && value !== "") changes[key] = value;
         });
-        this.navigateFilter(changes);
+        this.navigateFilter(changes, true);
+      },
+
+      savedViewIsActive(payload) {
+        const filters = new URLSearchParams(window.location.search);
+        const keys = [
+          "status",
+          "search",
+          "channel_type",
+          "service_team_id",
+          "service_team_ids",
+          "assigned_person_id",
+          "needs_response",
+          "needs_attention",
+          "contact_resolution_status",
+          "priority_at_most",
+          "muted",
+          "snoozed",
+          "open_only",
+          "unassigned",
+          "unread",
+          "ai_handling",
+          "has_ticket",
+          "activity_from",
+          "activity_to",
+        ];
+        const normalized = (value) => {
+          if (value === true) return "true";
+          if (value === false || value === null || value === undefined) return "";
+          return String(value);
+        };
+        return keys.every(
+          (key) => (filters.get(key) || "") === normalized((payload || {})[key]),
+        );
       },
 
       async saveCurrentView() {
@@ -391,13 +486,21 @@
           search: "search",
           channel_type: "channel_type",
           service_team_id: "service_team_id",
+          service_team_ids: "service_team_ids",
+          assigned_person_id: "assigned_person_id",
           needs_response: "needs_response",
+          needs_attention: "needs_attention",
           contact_resolution_status: "contact_resolution_status",
           priority_at_most: "priority_at_most",
           muted: "muted",
           snoozed: "snoozed",
           open_only: "open_only",
           unassigned: "unassigned",
+          unread: "unread",
+          ai_handling: "ai_handling",
+          has_ticket: "has_ticket",
+          activity_from: "activity_from",
+          activity_to: "activity_to",
         };
         Object.entries(mapping).forEach(([queryKey, formKey]) => {
           if (source.has(queryKey)) data.set(formKey, source.get(queryKey));
@@ -410,7 +513,6 @@
           });
           if (!response.ok) throw new Error("Unable to save view");
           this.savedViewName = "";
-          this.savedViewOpen = false;
           this.showToast("Saved view created.");
           this.refreshSidebar();
         } catch (error) {
