@@ -4,8 +4,8 @@ ADR 0007 Phase 3 (expand). Tables only: no existing read path changes, and
 rows are written with ``authority = 'shadow'`` until the Phase 3 cutover gate
 (per-currency/lane parity plus finance sign-off) passes.
 
-Revision ID: 428_customer_subledger_postings
-Revises: 427_billing_contract_obligation_identity
+Revision ID: 431_customer_subledger_postings
+Revises: 430_billing_contract_obligation_identity
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "428_customer_subledger_postings"
-down_revision = "427_billing_contract_obligation_identity"
+revision = "431_customer_subledger_postings"
+down_revision = "430_billing_contract_obligation_identity"
 branch_labels = None
 depends_on = None
 
@@ -132,9 +132,7 @@ def upgrade() -> None:
         sa.Column("payment_id", postgresql.UUID(as_uuid=True)),
         sa.Column("credit_note_id", postgresql.UUID(as_uuid=True)),
         sa.Column("entitlement_id", postgresql.UUID(as_uuid=True)),
-        sa.CheckConstraint(
-            "amount > 0", name="ck_customer_position_effect_positive"
-        ),
+        sa.CheckConstraint("amount > 0", name="ck_customer_position_effect_positive"),
     )
     op.create_index(
         "ix_customer_position_effect_group",

@@ -4,8 +4,8 @@ ADR 0007 Phases 6 and 7 (expand). Tables only: SalesOrder.amount_paid and
 current fulfillment reads are untouched, and export rows are transport
 evidence with no accounting authority.
 
-Revision ID: 431_sales_funding_erp_exports
-Revises: 430_durable_timers_collections_cases
+Revision ID: 434_sales_funding_erp_exports
+Revises: 433_durable_timers_collections_cases
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "431_sales_funding_erp_exports"
-down_revision = "430_durable_timers_collections_cases"
+revision = "434_sales_funding_erp_exports"
+down_revision = "433_durable_timers_collections_cases"
 branch_labels = None
 depends_on = None
 
@@ -102,9 +102,7 @@ def upgrade() -> None:
         sa.Column("source_kind", sa.String(80), nullable=False),
         sa.Column("source_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("source_event_id", postgresql.UUID(as_uuid=True)),
-        sa.Column(
-            "payload_version", sa.Integer(), nullable=False, server_default="1"
-        ),
+        sa.Column("payload_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("payload", postgresql.JSONB(), nullable=False),
         sa.Column("idempotency_key", sa.String(200), nullable=False),
         sa.Column("status", _ERP_STATUS, nullable=False),

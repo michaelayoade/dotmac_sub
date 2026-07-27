@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import overload
 from uuid import UUID
 
 from sqlalchemy import select
@@ -79,11 +80,24 @@ def _error(suffix: str, message: str, **details: object) -> BillingObligationErr
     )
 
 
+@overload
+def _aware_utc(value: datetime) -> datetime: ...
+
+
+@overload
+def _aware_utc(value: None) -> None: ...
+
+
 def _aware_utc(value: datetime | None) -> datetime | None:
     """Restore UTC tzinfo on instants read back from persistence.
 
     SQLite drops timezone metadata in tests; production PostgreSQL preserves
     the UTC offset the owner wrote.
+
+    Overloaded because it reads both nullable columns (``ends_at``) and
+    non-nullable ones (``starts_at``). Without this a non-null instant comes
+    back widened to ``datetime | None`` and callers that genuinely cannot see
+    None would each need their own assert.
     """
 
     if value is None or value.tzinfo is not None:

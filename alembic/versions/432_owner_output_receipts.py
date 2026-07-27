@@ -4,8 +4,8 @@ ADR 0007 Phase 4 (expand). The transactional outbox (event_store) already
 proves the producer side; this table proves the consumer side: one committed
 outcome per (consumer, event_id), succeeded or explicitly terminal-failed.
 
-Revision ID: 429_owner_output_receipts
-Revises: 428_customer_subledger_postings
+Revision ID: 432_owner_output_receipts
+Revises: 431_customer_subledger_postings
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "429_owner_output_receipts"
-down_revision = "428_customer_subledger_postings"
+revision = "432_owner_output_receipts"
+down_revision = "431_customer_subledger_postings"
 branch_labels = None
 depends_on = None
 

@@ -41,7 +41,6 @@ def _utc(value):
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-
 def _context(key: str | None = None) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
@@ -142,18 +141,22 @@ def test_replay_of_the_same_idempotency_key_writes_one_version(db_session, ids):
     )
     db_session.commit()
     second = BillingContracts.record_version(
-        db_session, _command(account_id, subscription_id), context=_context(
-            "pytest:stable-key"
-        )
+        db_session,
+        _command(account_id, subscription_id),
+        context=_context("pytest:stable-key"),
     )
 
     assert second.replayed is True
     assert second.version_id == first.version_id
-    versions = db_session.execute(
-        select(BillingContractVersion).where(
-            BillingContractVersion.contract_id == first.contract_id
+    versions = (
+        db_session.execute(
+            select(BillingContractVersion).where(
+                BillingContractVersion.contract_id == first.contract_id
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(versions) == 1
 
 

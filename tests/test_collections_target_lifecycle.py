@@ -84,9 +84,7 @@ def _proposal(**overrides) -> CollectionsProposal:
 
 
 def test_postpaid_policy_proposes_for_an_exact_overdue_receivable(db_session):
-    proposal = plan_postpaid_consequence(
-        db_session, obligation=_obligation(), now=NOW
-    )
+    proposal = plan_postpaid_consequence(db_session, obligation=_obligation(), now=NOW)
 
     assert proposal is not None
     assert proposal.reason is CollectionsReason.postpaid_overdue
@@ -179,15 +177,9 @@ def _advance(db, proposal, *, next_action_at=None):
 def test_the_case_ladder_escalates_one_step_per_proposal(db_session):
     proposal = _proposal()
 
-    opened = _advance(
-        db_session, proposal, next_action_at=NOW + timedelta(days=3)
-    )
-    warned = _advance(
-        db_session, proposal, next_action_at=NOW + timedelta(days=6)
-    )
-    escalated = _advance(
-        db_session, proposal, next_action_at=NOW + timedelta(days=9)
-    )
+    opened = _advance(db_session, proposal, next_action_at=NOW + timedelta(days=3))
+    warned = _advance(db_session, proposal, next_action_at=NOW + timedelta(days=6))
+    escalated = _advance(db_session, proposal, next_action_at=NOW + timedelta(days=9))
     requested = _advance(db_session, proposal)
     replayed = _advance(db_session, proposal)
 
@@ -227,9 +219,7 @@ def test_the_consequence_request_is_a_reason_scoped_owner_output(db_session):
     result = _advance(db_session, proposal)
 
     event = db_session.execute(
-        select(EventStore).where(
-            EventStore.event_id == result.consequence_event_id
-        )
+        select(EventStore).where(EventStore.event_id == result.consequence_event_id)
     ).scalar_one()
     payload = event.payload
 
@@ -265,9 +255,13 @@ def test_close_cancels_timers_and_stages_restore_evidence(db_session):
     assert case.state is CollectionsCaseState.closed
     assert case.close_reason == "invoice settled in full"
 
-    live_timers = db_session.execute(
-        select(DurableTimer).where(DurableTimer.status == TimerStatus.scheduled)
-    ).scalars().all()
+    live_timers = (
+        db_session.execute(
+            select(DurableTimer).where(DurableTimer.status == TimerStatus.scheduled)
+        )
+        .scalars()
+        .all()
+    )
     assert live_timers == []
 
 

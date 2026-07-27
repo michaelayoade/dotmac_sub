@@ -14,31 +14,45 @@ def test_billing_run_evidence_is_the_single_migration_head() -> None:
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    # Single linear head: the ADR 0007 billing target chain (431..427) sits on
-    # service-team lifecycle (426), which chains through vendor project intake
-    # evidence (425), proposed-route review evidence (424), prepaid
-    # opening-funding reconciliation (423), conversation handoff (422),
-    # service-extension activity (421), billing-run evidence (420), and
+    # Single linear head: the ADR 0007 billing target chain (434..430) now sits
+    # on inbox conversation participants (429), which chains through vendor
+    # material release and advances (428), vendor principal user type (427),
+    # service-team lifecycle (426), vendor project intake evidence (425),
+    # proposed-route review evidence (424), prepaid opening-funding
+    # reconciliation (423), conversation handoff (422), service-extension
+    # activity (421), billing-run evidence (420), and
     # customer WHT (419).
-    assert script.get_heads() == ["431_sales_funding_erp_exports"]
+    assert script.get_heads() == ["434_sales_funding_erp_exports"]
     assert (
-        script.get_revision("431_sales_funding_erp_exports").down_revision
-        == "430_durable_timers_collections_cases"
+        script.get_revision("434_sales_funding_erp_exports").down_revision
+        == "433_durable_timers_collections_cases"
     )
     assert (
-        script.get_revision("430_durable_timers_collections_cases").down_revision
-        == "429_owner_output_receipts"
+        script.get_revision("433_durable_timers_collections_cases").down_revision
+        == "432_owner_output_receipts"
     )
     assert (
-        script.get_revision("429_owner_output_receipts").down_revision
-        == "428_customer_subledger_postings"
+        script.get_revision("432_owner_output_receipts").down_revision
+        == "431_customer_subledger_postings"
     )
     assert (
-        script.get_revision("428_customer_subledger_postings").down_revision
-        == "427_billing_contract_obligation_identity"
+        script.get_revision("431_customer_subledger_postings").down_revision
+        == "430_billing_contract_obligation_identity"
     )
     assert (
-        script.get_revision("427_billing_contract_obligation_identity").down_revision
+        script.get_revision("430_billing_contract_obligation_identity").down_revision
+        == "429_inbox_conversation_participants"
+    )
+    assert (
+        script.get_revision("429_inbox_conversation_participants").down_revision
+        == "428_vendor_material_release_and_advances"
+    )
+    assert (
+        script.get_revision("428_vendor_material_release_and_advances").down_revision
+        == "427_vendor_principal_user_type"
+    )
+    assert (
+        script.get_revision("427_vendor_principal_user_type").down_revision
         == "426_service_team_lifecycle"
     )
     assert (

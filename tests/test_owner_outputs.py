@@ -63,13 +63,9 @@ def _envelope() -> OwnerOutputEnvelope:
 
 def test_staging_outside_an_owner_command_fails_closed(db_session):
     with pytest.raises(OwnerOutputError) as excinfo:
-        stage_owner_output(
-            db_session, _envelope(), {"detail": "x"}, context=_context()
-        )
+        stage_owner_output(db_session, _envelope(), {"detail": "x"}, context=_context())
 
-    assert excinfo.value.code == (
-        "events.owner_outputs.output_requires_owner_command"
-    )
+    assert excinfo.value.code == ("events.owner_outputs.output_requires_owner_command")
 
 
 def test_staged_output_commits_with_the_owner_state_and_carries_the_envelope(
@@ -104,9 +100,7 @@ def test_a_failed_producer_command_leaves_no_output(db_session):
         pass
 
     def operation():
-        stage_owner_output(
-            db_session, _envelope(), {"detail": "x"}, context=context
-        )
+        stage_owner_output(db_session, _envelope(), {"detail": "x"}, context=context)
         raise Boom("state change failed after staging")
 
     with pytest.raises(Boom):

@@ -964,6 +964,13 @@ from app.models.vendor_routes import (  # noqa: F401
     VendorPurchaseInvoiceStatus,
     VendorUser,
 )
+from app.models.vendor_supply import (  # noqa: F401
+    VendorAdvance,
+    VendorAdvanceStatus,
+    VendorMaterialRelease,
+    VendorMaterialReleaseItem,
+    VendorMaterialReleaseStatus,
+)
 from app.models.wireguard import (  # noqa: F401
     WireGuardConnectionLog,
     WireGuardPeer,

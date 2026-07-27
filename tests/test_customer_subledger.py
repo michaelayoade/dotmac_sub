@@ -300,9 +300,7 @@ def test_non_positive_effect_amounts_fail_closed(db_session, account_id):
     assert excinfo.value.code == "financial.customer_subledger.invalid_effect_amount"
 
 
-def test_shadow_rows_never_count_toward_an_authoritative_read(
-    db_session, account_id
-):
+def test_shadow_rows_never_count_toward_an_authoritative_read(db_session, account_id):
     _stage(
         db_session,
         account_id,

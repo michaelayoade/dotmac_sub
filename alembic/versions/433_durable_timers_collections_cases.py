@@ -4,8 +4,8 @@ ADR 0007 Phase 5 (expand). Tables only. The dunning_runner and
 prepaid_balance_sweep schedules keep running unchanged; timers and cases are
 shadow evidence until the Phase 5 parity gate passes.
 
-Revision ID: 430_durable_timers_collections_cases
-Revises: 429_owner_output_receipts
+Revision ID: 433_durable_timers_collections_cases
+Revises: 432_owner_output_receipts
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "430_durable_timers_collections_cases"
-down_revision = "429_owner_output_receipts"
+revision = "433_durable_timers_collections_cases"
+down_revision = "432_owner_output_receipts"
 branch_labels = None
 depends_on = None
 
@@ -24,9 +24,7 @@ _AUTHORITY = sa.Enum("shadow", "authoritative", name="billingrecordauthority")
 _TIMER_STATUS = sa.Enum(
     "scheduled", "fired", "canceled", "superseded", name="timerstatus"
 )
-_REASON = sa.Enum(
-    "postpaid_overdue", "prepaid_underfunded", name="collectionsreason"
-)
+_REASON = sa.Enum("postpaid_overdue", "prepaid_underfunded", name="collectionsreason")
 _CASE_STATE = sa.Enum(
     "open",
     "warned",

@@ -87,9 +87,7 @@ def test_scheduling_outside_an_owner_command_fails_closed(db_session):
             context=_context(),
         )
 
-    assert excinfo.value.code == (
-        "runtime.durable_timers.timer_requires_owner_command"
-    )
+    assert excinfo.value.code == ("runtime.durable_timers.timer_requires_owner_command")
 
 
 def test_rescheduling_supersedes_and_bumps_the_generation(db_session):
@@ -98,9 +96,7 @@ def test_rescheduling_supersedes_and_bumps_the_generation(db_session):
     first_id = first.id
     db_session.commit()
 
-    second = _schedule(
-        db_session, entity_id=entity_id, due_at=NOW + timedelta(days=1)
-    )
+    second = _schedule(db_session, entity_id=entity_id, due_at=NOW + timedelta(days=1))
 
     assert second.generation == 2
     old = db_session.get(DurableTimer, first_id)
@@ -190,9 +186,7 @@ def test_a_superseded_timer_never_fires(db_session):
     entity_id = uuid4()
     _schedule(db_session, entity_id=entity_id, due_at=NOW)
     db_session.commit()
-    _schedule(
-        db_session, entity_id=entity_id, due_at=NOW + timedelta(days=30)
-    )
+    _schedule(db_session, entity_id=entity_id, due_at=NOW + timedelta(days=30))
     db_session.commit()
 
     fired = fire_due_timers(

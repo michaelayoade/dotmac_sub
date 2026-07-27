@@ -183,9 +183,7 @@ def scheduled_financial_sweeps() -> set[str]:
             continue
         func = node.func
         callee = (
-            func.attr
-            if isinstance(func, ast.Attribute)
-            else getattr(func, "id", "")
+            func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
         )
         if callee != _SCHEDULED_TASK_HELPER:
             continue

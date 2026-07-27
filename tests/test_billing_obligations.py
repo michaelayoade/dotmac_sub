@@ -47,7 +47,6 @@ def _utc(value):
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-
 def _context(key: str | None = None) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
@@ -249,9 +248,7 @@ def test_applications_cannot_exceed_the_obligation(db_session, contract_version)
     assert excinfo.value.code == "billing.obligations.resolution_exceeds_obligation"
 
 
-def test_non_cash_resolution_is_typed_not_a_faked_payment(
-    db_session, contract_version
-):
+def test_non_cash_resolution_is_typed_not_a_faked_payment(db_session, contract_version):
     scheduled = _schedule(db_session, contract_version)
     db_session.commit()
     BillingObligations.open(
@@ -331,9 +328,7 @@ def test_scheduling_requires_an_existing_contract_version(db_session, contract_v
     assert excinfo.value.code == "billing.obligations.contract_version_not_found"
 
 
-def test_tax_is_carried_separately_into_the_gross_amount(
-    db_session, contract_version
-):
+def test_tax_is_carried_separately_into_the_gross_amount(db_session, contract_version):
     version_id, line_key, _ = contract_version
 
     result = BillingObligations.schedule(

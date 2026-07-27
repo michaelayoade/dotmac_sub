@@ -1,5 +1,6 @@
 """Admin review workspace for vendor projects, quotes, and purchase invoices."""
 
+from datetime import datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -26,6 +27,7 @@ from app.services.vendor_as_built_review_proposals import (
     ConfirmVendorAsBuiltReviewCommand,
 )
 from app.services.vendor_portal_operations import (
+    ConfigureVendorProcurementCommand,
     ReviewVendorQuoteCommand,
     vendor_portal_operations,
 )
@@ -124,6 +126,16 @@ def vendor_operations_queue(
     )
     context.update(
         {
+            "draft_projects": (
+                vendor_portal_operations.list_draft_projects(db)
+                if show_field_reviews
+                else []
+            ),
+            "active_vendors": (
+                vendor_portal_operations.list_active_vendors(db)
+                if show_field_reviews
+                else []
+            ),
             "message": message,
             "show_field_reviews": show_field_reviews,
             "show_route_reviews": show_route_reviews,
@@ -161,6 +173,39 @@ def vendor_operations_queue(
         }
     )
     return templates.TemplateResponse("admin/vendors/operations.html", context)
+
+
+@router.post("/projects/{project_id}/procurement")
+def configure_vendor_procurement(
+    request: Request,
+    project_id: str,
+    mode: str = Form(...),
+    vendor_id: str | None = Form(None),
+    bidding_close_at: datetime | None = Form(None),
+    _auth: dict = Depends(_project_write),
+    db: Session = Depends(get_db),
+):
+    context = _staff_confirmation_context(
+        request, scope=project_id, reason="vendor_procurement_configuration"
+    )
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_portal_operations.configure_procurement(
+            db,
+            ConfigureVendorProcurementCommand(
+                context=context,
+                project_id=project_id,
+                mode=mode,
+                vendor_id=vendor_id,
+                bidding_close_at=bidding_close_at,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
+    return RedirectResponse(
+        "/admin/vendors/operations?message=Vendor+procurement+configured",
+        status_code=303,
+    )
 
 
 @router.get("/quotes/{quote_id}", response_class=HTMLResponse)
@@ -555,5 +600,88 @@ def request_vendor_invoice_revision(
     return RedirectResponse(
         f"/admin/vendors/operations/invoices/{invoice_id}"
         "?message=Invoice+revision+requested",
+        status_code=303,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Vendor material releases and advances
+#
+# Both owners decide; this router only authorizes, translates the form, and
+# commits. Approval is the Sub decision the configured provider then acts on.
+# ---------------------------------------------------------------------------
+
+
+def _supply_error(exc: ValueError) -> HTTPException:
+    code = getattr(exc, "code", "")
+    kind = getattr(exc, "kind", "invalid")
+    status_code = 404 if kind == "not_found" else 409 if code else 400
+    return HTTPException(status_code=status_code, detail=str(exc))
+
+
+@router.post(
+    "/material-releases/{release_id}/{action}",
+    dependencies=[Depends(require_permission("inventory:write"))],
+)
+def review_vendor_material_release(
+    request: Request,
+    release_id: str,
+    action: str,
+    review_notes: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    from app.services import vendor_material_release
+
+    if action not in {"approve", "reject"}:
+        raise HTTPException(status_code=404, detail="Unknown action")
+    db_session_adapter.release_read_transaction(db)
+    try:
+        if action == "approve":
+            vendor_material_release.approve_committed(
+                db, release_id, actor_id=_actor(request), notes=review_notes
+            )
+        else:
+            vendor_material_release.reject_committed(
+                db, release_id, actor_id=_actor(request), reason=review_notes
+            )
+    except ValueError as exc:
+        raise _supply_error(exc) from exc
+    return RedirectResponse(
+        f"/admin/vendors/operations?message=Material+release+{action}d",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/advances/{advance_id}/{action}",
+    dependencies=[Depends(require_permission("finance:ap:write"))],
+)
+def review_vendor_advance(
+    request: Request,
+    advance_id: str,
+    action: str,
+    review_notes: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    """Advancing money is an accounts-payable decision, so it is gated on the
+    AP permission rather than the inventory one used for material."""
+    from app.services import vendor_advances
+
+    if action not in {"approve", "reject"}:
+        raise HTTPException(status_code=404, detail="Unknown action")
+    db_session_adapter.release_read_transaction(db)
+    try:
+        if action == "approve":
+            vendor_advances.approve_committed(
+                db, advance_id, actor_id=_actor(request), notes=review_notes
+            )
+        else:
+            vendor_advances.reject_committed(
+                db, advance_id, actor_id=_actor(request), reason=review_notes
+            )
+    except ValueError as exc:
+        raise _supply_error(exc) from exc
+    return RedirectResponse(
+        f"/admin/vendors/operations?message=Advance+{action}d",
         status_code=303,
     )

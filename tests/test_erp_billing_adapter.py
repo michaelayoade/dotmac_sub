@@ -67,9 +67,7 @@ def _stage(db, *, key=None, payload=None):
         source_id=uuid4(),
         payload=payload if payload is not None else _payload(),
     )
-    return _in_owner_command(
-        db, lambda: stage_export(db, command, context=context)
-    )
+    return _in_owner_command(db, lambda: stage_export(db, command, context=context))
 
 
 def test_staging_outside_an_owner_command_fails_closed(db_session):

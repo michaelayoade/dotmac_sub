@@ -189,9 +189,7 @@ def test_full_finite_funding_advances_exactly_once(db_session, funding_setup):
     assert event.payload["obligation_count"] == 2
 
 
-def test_an_unregistered_obligation_cannot_touch_the_gate(
-    db_session, funding_setup
-):
+def test_an_unregistered_obligation_cannot_touch_the_gate(db_session, funding_setup):
     """A future recurring obligation cannot reopen or inflate the order."""
 
     sales_order_id, (registered, recurring) = funding_setup

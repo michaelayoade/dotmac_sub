@@ -257,7 +257,9 @@ class BillingContracts:
             )
         ).scalar_one_or_none()
         if existing is not None:
-            line_ids = tuple(
+            # Named apart from the list built for a fresh version below: this
+            # one is already the finished tuple read back off the replay.
+            replayed_line_ids = tuple(
                 db.execute(
                     select(BillingContractLine.id).where(
                         BillingContractLine.contract_version_id == existing.id
@@ -271,7 +273,7 @@ class BillingContracts:
                 version_id=existing.id,
                 version=existing.version,
                 authority=existing.authority,
-                line_ids=line_ids,
+                line_ids=replayed_line_ids,
                 replayed=True,
             )
 

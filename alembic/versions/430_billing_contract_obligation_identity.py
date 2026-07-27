@@ -12,8 +12,8 @@ SQLite unit-test harness can still create the same tables:
   of one contract overlap in time (ADR 0007 invariant 1);
 - the partial unique index for the single open-ended effective version.
 
-Revision ID: 427_billing_contract_obligation_identity
-Revises: 426_service_team_lifecycle
+Revision ID: 430_billing_contract_obligation_identity
+Revises: 429_inbox_conversation_participants
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "427_billing_contract_obligation_identity"
-down_revision = "426_service_team_lifecycle"
+revision = "430_billing_contract_obligation_identity"
+down_revision = "429_inbox_conversation_participants"
 branch_labels = None
 depends_on = None
 
@@ -274,9 +274,7 @@ def upgrade() -> None:
             sa.ForeignKey("billing_contract_versions.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column(
-            "contract_line_key", postgresql.UUID(as_uuid=True), nullable=False
-        ),
+        sa.Column("contract_line_key", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("charge_component", _CHARGE_COMPONENT, nullable=False),
         sa.Column("component_key", sa.String(120), nullable=False, server_default=""),
         sa.Column("description", sa.String(255), nullable=False),
@@ -284,9 +282,7 @@ def upgrade() -> None:
         sa.Column("unit_price", sa.Numeric(14, 4), nullable=False),
         sa.Column("currency", sa.String(3), nullable=False),
         sa.Column("accounting_treatment", _ACCOUNTING_TREATMENT, nullable=False),
-        sa.Column(
-            "is_finite", sa.Boolean(), nullable=False, server_default=sa.false()
-        ),
+        sa.Column("is_finite", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("tax_treatment_code", sa.String(60)),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint(
@@ -321,9 +317,7 @@ def upgrade() -> None:
             sa.ForeignKey("billing_contract_versions.id", ondelete="RESTRICT"),
             nullable=False,
         ),
-        sa.Column(
-            "contract_line_key", postgresql.UUID(as_uuid=True), nullable=False
-        ),
+        sa.Column("contract_line_key", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "account_id",
             postgresql.UUID(as_uuid=True),
@@ -350,9 +344,7 @@ def upgrade() -> None:
         sa.Column("resolved_amount", sa.Numeric(14, 4), nullable=False),
         sa.Column("accounting_treatment", _ACCOUNTING_TREATMENT, nullable=False),
         sa.Column("collection_timing", _COLLECTION_TIMING, nullable=False),
-        sa.Column(
-            "is_finite", sa.Boolean(), nullable=False, server_default=sa.false()
-        ),
+        sa.Column("is_finite", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("state", _OBLIGATION_STATE, nullable=False),
         sa.Column("resolution_kind", _OBLIGATION_RESOLUTION),
         sa.Column("opened_at", sa.DateTime(timezone=True)),
