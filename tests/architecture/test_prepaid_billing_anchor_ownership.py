@@ -79,6 +79,35 @@ def test_payments_does_not_call_the_owner_projection_inline() -> None:
     assert "retract_prepaid_billing_anchors_after_funding_reversal" not in source
 
 
+# `financial.payments` still advances the anchor in exactly one place, while
+# re-anchoring a lapsed prepaid invoice's documentary period. That is a KNOWN,
+# DELIBERATE exception, not an approved second owner: it is reached by every
+# `_finalize_invoice_payment_effects` caller, several of which emit no
+# funding-change event, so retiring it is a wider change that needs its own
+# architecture decision. It is recorded by name in docs/SOT_RELATIONSHIP_MAP.md
+# under "Billing-anchor writer boundary".
+PAYMENTS_ANCHOR_WRITER_EXCEPTIONS = {"_reanchor_paid_prepaid_invoice_if_lapsed"}
+
+
+def test_payments_anchor_writers_are_a_named_shrinking_exception() -> None:
+    """Pin the one remaining payment-side writer so no new one can appear.
+
+    Equality, not a subset: adding another `next_billing_at` writer to
+    `financial.payments` fails here, and retiring this one requires deleting
+    its name from the exception set.
+    """
+    assert _assigns_next_billing_at(PAYMENTS) == PAYMENTS_ANCHOR_WRITER_EXCEPTIONS
+
+    documented = (PROJECT_ROOT / "docs" / "SOT_RELATIONSHIP_MAP.md").read_text(
+        encoding="utf-8"
+    )
+    for name in PAYMENTS_ANCHOR_WRITER_EXCEPTIONS:
+        assert name in documented, (
+            f"{name} writes the billing anchor but is not documented as a named "
+            "exception in the relationship map"
+        )
+
+
 def test_the_owner_defines_the_single_anchor_projection() -> None:
     names = _module_function_names(OWNER)
     assert "project_prepaid_billing_anchor_for_invoice" in names

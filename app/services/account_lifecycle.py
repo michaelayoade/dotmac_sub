@@ -584,7 +584,7 @@ def _build_restoration_result(
         item for item in blocker_tuple if item in payment_clearable_reasons()
     )
     payment_settled = trigger in PAYMENT_TRIGGERS
-    return SubscriptionRestorationResult(
+    result = SubscriptionRestorationResult(
         subscription_id=str(subscription.id),
         account_id=str(subscription.subscriber_id),
         trigger=trigger,
@@ -606,6 +606,18 @@ def _build_restoration_result(
         ),
         required_action=_required_action(outcome, blocker_tuple, clearable),
     )
+    if result.financially_settled_but_access_blocked:
+        # Staged here, at the single point where every outcome is built, rather
+        # than at the tail of `restore_subscription_detailed`. The early returns
+        # for an unauthorized trigger and a duplicate active login are exactly
+        # the "paid but still dark" cases the worklist exists for, and staging
+        # further down silently skipped both of them.
+        from app.services.settled_access_blocked import (
+            stage_financially_settled_but_access_blocked,
+        )
+
+        stage_financially_settled_but_access_blocked(db, result)
+    return result
 
 
 def restore_subscription_detailed(
@@ -750,7 +762,9 @@ def restore_subscription_detailed(
         )
 
     compute_account_status(db, str(subscription.subscriber_id))
-    result = _build_restoration_result(
+    # Worklist staging lives in `_build_restoration_result`, so every outcome —
+    # including the early-return branches above — reaches the operator queue.
+    return _build_restoration_result(
         db,
         subscription,
         trigger=trigger,
@@ -758,13 +772,6 @@ def restore_subscription_detailed(
         resolved_count=resolved_count,
         access_restored=restored,
     )
-    if result.financially_settled_but_access_blocked:
-        from app.services.settled_access_blocked import (
-            stage_financially_settled_but_access_blocked,
-        )
-
-        stage_financially_settled_but_access_blocked(db, result)
-    return result
 
 
 def restore_subscription(

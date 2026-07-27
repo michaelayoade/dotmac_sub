@@ -42,6 +42,7 @@ from app.services.billing.payments import PaymentAllocations
 from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
 from app.services.events.types import Event, EventType
 from app.services.prepaid_service_renewals import (
+    _utc,
     apply_stale_prepaid_billing_anchor_repair,
     preview_stale_prepaid_billing_anchor_repair,
     project_prepaid_billing_anchor_for_invoice,
@@ -50,6 +51,23 @@ from app.services.prepaid_service_renewals import (
 from app.services.service_entitlements import (
     revoke_prepaid_entitlements_for_unpaid_invoice,
 )
+
+
+def at(value: datetime | None) -> datetime | None:
+    """Normalize one timestamp before comparing it.
+
+    `Subscription.next_billing_at` and `ServiceEntitlement.ends_at` are
+    ``DateTime(timezone=True)`` columns, so Postgres returns them aware while
+    the SQLite test backend returns them naive. Comparing a freshly written
+    aware value against a naive round-tripped one raises TypeError and hides
+    real assertions behind a harness artefact.
+
+    This reuses the owner's own boundary normalizer rather than sprinkling
+    ``replace(tzinfo=UTC)`` at each assertion, so the tests agree with exactly
+    the coercion the product applies.
+    """
+    return None if value is None else _utc(value)
+
 
 PERIOD_START = datetime(2026, 7, 1, tzinfo=UTC)
 PERIOD_END = datetime(2026, 8, 1, tzinfo=UTC)
@@ -216,7 +234,11 @@ def test_payment_allocation_emits_the_durable_funding_change_event(
     assert payload["invoice_id"] == str(invoice.id)
     assert payload["allocation_id"] == str(result.allocation.id)
     assert payload["settlement_id"]
-    assert records[0].subscriber_id == subscriber.id
+    # `emit_event(..., account_id=...)` populates `EventStore.account_id`; it is
+    # the field `PrepaidRenewalHandler` routes on, so assert the routing key the
+    # consequence owner actually reads.
+    assert records[0].account_id == subscriber.id
+    assert records[0].invoice_id == invoice.id
 
 
 def test_paid_allocation_produces_entitlement_and_advanced_anchor(
@@ -237,11 +259,11 @@ def test_paid_allocation_produces_entitlement_and_advanced_anchor(
     db_session.commit()
 
     db_session.refresh(subscription)
-    assert subscription.next_billing_at == entitlement.ends_at, (
+    assert at(subscription.next_billing_at) == at(entitlement.ends_at), (
         "the prepaid renewal owner did not advance the billing anchor to the "
         "exact funded coverage end"
     )
-    assert subscription.next_billing_at > PERIOD_START
+    assert at(subscription.next_billing_at) > PERIOD_START
 
 
 def test_settled_service_survives_a_later_prepaid_sweep(
@@ -270,7 +292,7 @@ def test_settled_service_survives_a_later_prepaid_sweep(
     decision = coverage[subscription.id]
     assert decision.status is PrepaidCoverageStatus.covered
     assert decision.covered
-    assert subscription.next_billing_at > inside_period
+    assert at(subscription.next_billing_at) > inside_period
 
 
 def test_enforcement_guard_blocks_adverse_action_on_a_stale_anchor(
@@ -304,7 +326,7 @@ def test_enforcement_guard_blocks_adverse_action_on_a_stale_anchor(
     assert decision.status is PrepaidCoverageStatus.covered
     assert decision.evidence is not None
     assert decision.evidence.source_id == entitlement.id
-    assert subscription.next_billing_at <= inside_period, (
+    assert at(subscription.next_billing_at) <= inside_period, (
         "test precondition: the anchor must still be stale for this guard to "
         "be meaningful"
     )
@@ -322,14 +344,14 @@ def test_replaying_the_same_funding_change_event_is_idempotent(
     PrepaidRenewalHandler().handle(db_session, event)
     db_session.commit()
     db_session.refresh(subscription)
-    first_anchor = subscription.next_billing_at
+    first_anchor = at(subscription.next_billing_at)
     first_entitlements = db_session.query(ServiceEntitlement).count()
 
     PrepaidRenewalHandler().handle(db_session, event)
     db_session.commit()
     db_session.refresh(subscription)
 
-    assert subscription.next_billing_at == first_anchor
+    assert at(subscription.next_billing_at) == first_anchor
     assert db_session.query(ServiceEntitlement).count() == first_entitlements
 
 
@@ -346,10 +368,10 @@ def test_reversal_does_not_leave_a_stale_advanced_anchor(
     db_session.commit()
     entitlement = _entitlement(db_session, invoice)
     db_session.refresh(subscription)
-    assert subscription.next_billing_at == entitlement.ends_at
+    assert at(subscription.next_billing_at) == at(entitlement.ends_at)
 
     # The payment owner reopens the invoice and revokes what its money funded.
-    period_start = entitlement.starts_at
+    period_start = at(entitlement.starts_at)
     invoice.status = InvoiceStatus.issued
     invoice.balance_due = AMOUNT
     db_session.flush()
@@ -365,7 +387,7 @@ def test_reversal_does_not_leave_a_stale_advanced_anchor(
     db_session.commit()
     db_session.refresh(subscription)
 
-    assert subscription.next_billing_at == period_start, (
+    assert at(subscription.next_billing_at) == period_start, (
         "the reversed period kept an advanced anchor, so the customer would "
         "have kept unfunded service"
     )
@@ -379,7 +401,7 @@ def test_reversal_retraction_is_idempotent(db_session, subscriber, subscription)
         db_session, _funding_event(db_session, subscriber, invoice)
     )
     db_session.commit()
-    period_start = _entitlement(db_session, invoice).starts_at
+    period_start = at(_entitlement(db_session, invoice).starts_at)
 
     invoice.status = InvoiceStatus.issued
     invoice.balance_due = AMOUNT
@@ -396,7 +418,7 @@ def test_reversal_retraction_is_idempotent(db_session, subscriber, subscription)
     db_session.commit()
     db_session.refresh(subscription)
 
-    assert subscription.next_billing_at == period_start
+    assert at(subscription.next_billing_at) == period_start
 
 
 def test_reversal_retraction_finds_invoices_without_a_payload_hint(
@@ -410,7 +432,7 @@ def test_reversal_retraction_finds_invoices_without_a_payload_hint(
         db_session, _funding_event(db_session, subscriber, invoice)
     )
     db_session.commit()
-    period_start = _entitlement(db_session, invoice).starts_at
+    period_start = at(_entitlement(db_session, invoice).starts_at)
 
     invoice.status = InvoiceStatus.issued
     invoice.balance_due = AMOUNT
@@ -428,7 +450,7 @@ def test_reversal_retraction_finds_invoices_without_a_payload_hint(
     db_session.refresh(subscription)
 
     assert projections
-    assert subscription.next_billing_at == period_start
+    assert at(subscription.next_billing_at) == period_start
 
 
 def test_anchor_projection_is_a_pure_recomputation(
@@ -449,7 +471,7 @@ def test_anchor_projection_is_a_pure_recomputation(
     assert [item.changed for item in second] == [False]
     db_session.commit()
     db_session.refresh(subscription)
-    assert subscription.next_billing_at == entitlement.ends_at
+    assert at(subscription.next_billing_at) == at(entitlement.ends_at)
 
 
 def test_stale_anchor_repair_preview_then_apply_drives_the_cohort_to_zero(
@@ -470,7 +492,7 @@ def test_stale_anchor_repair_preview_then_apply_drives_the_cohort_to_zero(
     candidate = preview.candidates[0]
     assert candidate.subscription_id == subscription.id
     assert candidate.current_next_billing_at == PERIOD_START
-    assert candidate.coverage_end == entitlement.ends_at
+    assert candidate.coverage_end == at(entitlement.ends_at)
 
     result = apply_stale_prepaid_billing_anchor_repair(
         db_session,
@@ -482,7 +504,7 @@ def test_stale_anchor_repair_preview_then_apply_drives_the_cohort_to_zero(
     assert result.skipped_changed == 0
 
     db_session.refresh(subscription)
-    assert subscription.next_billing_at == entitlement.ends_at
+    assert at(subscription.next_billing_at) == at(entitlement.ends_at)
 
     after = preview_stale_prepaid_billing_anchor_repair(db_session, limit=50)
     assert after.cohort_size == 0, "the drift cohort did not reach zero"
@@ -497,7 +519,7 @@ def test_stale_anchor_repair_preview_then_apply_drives_the_cohort_to_zero(
     assert replay.repaired == 0
     assert replay.already_correct == 1
     db_session.refresh(subscription)
-    assert subscription.next_billing_at == entitlement.ends_at
+    assert at(subscription.next_billing_at) == at(entitlement.ends_at)
 
 
 def test_stale_anchor_repair_writes_durable_audit_evidence(
@@ -527,7 +549,8 @@ def test_stale_anchor_repair_writes_durable_audit_evidence(
     assert audit.metadata_["owner"] == "financial.prepaid_service_renewals"
     assert audit.metadata_["previous_next_billing_at"] == PERIOD_START.isoformat()
     assert (
-        audit.metadata_["repaired_next_billing_at"] == entitlement.ends_at.isoformat()
+        audit.metadata_["repaired_next_billing_at"]
+        == at(entitlement.ends_at).isoformat()
     )
     assert audit.metadata_["preview_fingerprint"] == preview.fingerprint
 
@@ -559,4 +582,4 @@ def test_repair_skips_a_candidate_whose_coverage_changed_after_preview(
     assert result.repaired == 0
     assert result.skipped_changed == 1
     db_session.refresh(subscription)
-    assert subscription.next_billing_at == PERIOD_START
+    assert at(subscription.next_billing_at) == PERIOD_START
