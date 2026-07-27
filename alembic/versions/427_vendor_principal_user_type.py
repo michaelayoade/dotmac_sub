@@ -8,16 +8,16 @@ principal being handed staff permissions.
 ``usertype`` is shared with ``subscribers``; adding a value there is inert for
 subscriber rows, which never use it.
 
-Revision ID: 426_vendor_principal_user_type
-Revises: 425_vendor_project_intake_evidence
+Revision ID: 427_vendor_principal_user_type
+Revises: 426_service_team_lifecycle
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "426_vendor_principal_user_type"
-down_revision = "425_vendor_project_intake_evidence"
+revision = "427_vendor_principal_user_type"
+down_revision = "426_service_team_lifecycle"
 branch_labels = None
 depends_on = None
 
