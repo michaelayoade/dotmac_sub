@@ -424,6 +424,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
         SalesLifecycleProjectionHandler,
     )
     from app.services.events.handlers.staff_invite import StaffInviteHandler
+    from app.services.events.handlers.support_lifecycle_projection import (
+        SupportLifecycleProjectionHandler,
+    )
     from app.services.events.handlers.webhook import WebhookHandler
 
     dispatcher.register_handler(WebhookHandler())
@@ -432,6 +435,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(ProvisioningHandler())
     dispatcher.register_handler(SalesLifecycleProjectionHandler())
     dispatcher.register_handler(OutageLifecycleProjectionHandler())
+    dispatcher.register_handler(SupportLifecycleProjectionHandler())
     dispatcher.register_handler(EnforcementHandler())
     dispatcher.register_handler(IPAssignmentProjectionHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())

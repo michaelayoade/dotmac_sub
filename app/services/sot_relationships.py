@@ -16069,15 +16069,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         event_types=(
                             "ticket.created",
                             "ticket.assigned",
-                            "ticket.status_changed",
-                            "ticket.comment_added",
                             "ticket.resolution_requested",
                             "ticket.resolution_confirmed",
                             "ticket.resolution_disputed",
-                            "ticket.merged",
+                            "support.resolution_confirmation_due",
                         ),
                         schema_version=1,
-                        delivery_owner="communications.notification_service",
+                        delivery_owner="events.dispatcher",
                         compatibility=(
                             "Version 1 carries stable Ticket/account identifiers and bounded "
                             "change evidence; private comment bodies and attachments are not "
@@ -16415,11 +16413,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "ticket-to-work-order issuance eligibility",
                     "native ticket-to-work-order provenance",
                     "field-outcome projection onto the ticket timeline",
+                    "committed field outcome consumption",
                 ),
                 depends_on=(
                     "support.ticket_lifecycle",
                     "operations.work_order_commands",
+                    "operations.field_completion",
                     "observability.audit_log",
+                    "events.dispatcher",
+                    "events.owner_outputs",
                 ),
                 notes=(
                     "An active member of the ticket's assigned team explicitly "
@@ -16460,6 +16462,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical ticket lifecycle state",
                             ),
                             canonical_writer="support.ticket_work_order_handoff",
+                        ),
+                        ConcernContract(
+                            name="committed field outcome consumption",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authoritative field outcome",
+                                "native ticket-to-work-order provenance",
+                                "receipted owner-output deliveries",
+                            ),
                         ),
                     ),
                     authoritative_inputs=(
@@ -16510,9 +16521,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="authoritative field outcome",
-                            owner="operations.work_order_status",
+                            owner="operations.field_completion",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source="completed or failed WorkOrder field event",
+                            source=(
+                                "committed work_order.field_outcome_recorded output "
+                                "from the field transition owner"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="receipted owner-output deliveries",
+                            owner="events.owner_outputs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique (consumer, event_id) receipts committing "
+                                "atomically with each consumed field outcome"
+                            ),
                         ),
                     ),
                     transaction=TransactionContract(
@@ -16563,9 +16586,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     events=EventContract(
-                        event_types=("ticket.work_order_issued",),
+                        event_types=(
+                            "ticket.work_order_issued",
+                            "work_order.field_outcome_recorded",
+                        ),
                         schema_version=1,
-                        delivery_owner="observability.audit_log",
+                        delivery_owner="events.dispatcher",
                         compatibility=(
                             "Version 1 records native ticket/work-order/project scope and "
                             "the assigned team without customer payloads."
@@ -17443,7 +17469,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.work_orders",
                     "operations.work_order_status",
                     "control.domain_settings",
-                    "support.ticket_work_order_handoff",
                 ),
                 notes=(
                     "Authenticated field job detail projects the same completion "

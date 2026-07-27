@@ -244,6 +244,17 @@ class EventType(enum.Enum):
     customer_login = "customer.login"
     customer_logout = "customer.logout"
     customer_ticket_created = "customer.ticket_created"
+
+    # Support ticket / work-order lifecycle outputs
+    # (docs/designs/TICKET_WORK_ORDER_HANDOFF_SOT.md). Staged atomically with
+    # each owning transition; the support lifecycle projection handler
+    # applies cross-owner consequences with durable receipts.
+    ticket_resolution_requested = "ticket.resolution_requested"
+    ticket_resolution_confirmed = "ticket.resolution_confirmed"
+    ticket_resolution_disputed = "ticket.resolution_disputed"
+    ticket_merged = "ticket.merged"
+    ticket_work_order_issued = "ticket.work_order_issued"
+    work_order_field_outcome_recorded = "work_order.field_outcome_recorded"
     customer_password_changed = "customer.password_changed"  # noqa: S105
 
     # Reseller events (5)

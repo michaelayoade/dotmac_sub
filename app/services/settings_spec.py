@@ -1284,6 +1284,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
+        key="durable_timer_dispatch_interval_seconds",
+        env_var="DURABLE_TIMER_DISPATCH_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=30,
+        max_value=600,
+        label="Durable timer due-trigger dispatch interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.scheduler,
         key="event_dispatch_batch_size",
         env_var="EVENT_DISPATCH_BATCH_SIZE",
         value_type=SettingValueType.integer,
