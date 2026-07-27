@@ -19,7 +19,7 @@ from app.services import (
 )
 from app.services import web_billing_tax_rates as web_billing_tax_rates_service
 from app.services.audit_helpers import (
-    build_audit_activities_for_types,
+    build_audit_activities_for_events,
     log_audit_event,
 )
 from app.services.auth_dependencies import has_permission, require_permission
@@ -54,7 +54,24 @@ def _created_changes(
 
 def _tax_rate_audit_items(db: Session, limit: int = 5) -> list[dict]:
     try:
-        return build_audit_activities_for_types(db, ["tax_rate"], limit=limit)
+        from app.models.audit import AuditEvent
+
+        events = (
+            db.query(AuditEvent)
+            .filter(AuditEvent.entity_type.in_(("tax_rate", "domain_setting")))
+            .filter(AuditEvent.is_active.is_(True))
+            .order_by(AuditEvent.occurred_at.desc())
+            .limit(200)
+            .all()
+        )
+        tax_events = [
+            event
+            for event in events
+            if event.entity_type == "tax_rate"
+            or "withholding_tax_rate_percent"
+            in ((event.metadata_ or {}).get("changes") or {})
+        ]
+        return build_audit_activities_for_events(db, tax_events[:limit])
     except Exception:
         db.rollback()
         return []

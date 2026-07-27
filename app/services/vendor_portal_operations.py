@@ -21,6 +21,7 @@ from app.models.vendor_routes import (
     ProjectQuoteStatus,
     ProposedRouteRevision,
     ProposedRouteRevisionStatus,
+    VendorAssignmentType,
 )
 from app.models.work_order import WorkOrder
 from app.schemas.vendor_portal import (
@@ -168,6 +169,15 @@ class StageVendorAsBuiltSubmission:
     payload: VendorAsBuiltCreate
     vendor_id: str
     user_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureVendorProcurementCommand:
+    context: CommandContext
+    project_id: str
+    mode: str
+    vendor_id: str | None = None
+    bidding_close_at: datetime | None = None
 
 
 def _lifecycle_project(
@@ -744,6 +754,40 @@ def _serialize_route_revision_review(row: ProposedRouteRevision) -> dict:
 
 
 class VendorPortalOperations:
+    @staticmethod
+    def configure_procurement(
+        db: Session, command: ConfigureVendorProcurementCommand
+    ) -> dict:
+        def operation() -> dict:
+            project = _lifecycle_project(db, command.project_id, for_update=True)
+            if project.status != InstallationProjectStatus.draft.value:
+                raise _error(
+                    "procurement_not_draft",
+                    "Only a draft installation project can be assigned or opened for bids.",
+                )
+            if command.mode == VendorAssignmentType.direct.value:
+                if not command.vendor_id:
+                    raise _error("vendor_required", "Choose a vendor for direct assignment.")
+                project.assigned_vendor_id = coerce_uuid(command.vendor_id)
+                project.assignment_type = VendorAssignmentType.direct.value
+                project.status = InstallationProjectStatus.assigned.value
+            elif command.mode == VendorAssignmentType.bidding.value:
+                if command.bidding_close_at is None or command.bidding_close_at <= _now():
+                    raise _error("bidding_window_required", "Choose a future bid closing time.")
+                project.assigned_vendor_id = None
+                project.assignment_type = VendorAssignmentType.bidding.value
+                project.bidding_open_at = _now()
+                project.bidding_close_at = command.bidding_close_at
+                project.status = InstallationProjectStatus.open_for_bidding.value
+            else:
+                raise _error("invalid_procurement_mode", "Choose direct assignment or bidding.")
+            db.flush()
+            return _serialize_project(project)
+
+        return _execute(
+            db, context=command.context, name="configure_procurement", operation=operation
+        )
+
     @staticmethod
     def list_reviewable_route_revisions(
         db: Session,

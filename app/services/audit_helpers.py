@@ -426,6 +426,11 @@ def build_audit_activities_for_types(
     return _events_to_activities(db, events, include_entity_label=True)
 
 
+def build_audit_activities_for_events(db: Session, events: list) -> list[dict]:
+    """Build labelled activity rows from a caller's already-scoped events."""
+    return _events_to_activities(db, events, include_entity_label=True)
+
+
 def list_audit_events_for_entities(
     db: Session,
     entity_refs: list[tuple[str, str]],
