@@ -204,10 +204,13 @@ def receive_inbound_email(
     # supplies one — so every inbound email landed with a null subscriber and
     # no `contact_resolution`, invisible to the contact filter and to the
     # customer record's communications section.
+    # The already-parsed address, not the raw `From:` header — a header carries
+    # a display name ("Ada <ada@example.com>") and the channel normalizer does
+    # not strip one, so passing it raw resolved nobody.
     resolution = team_inbox_channel_receive.resolve_contact_context(
         db,
         channel_type=InboxChannelType.email.value,
-        contact_address=payload.from_address,
+        contact_address=normalized_from or payload.from_address,
         subscriber_id=payload.subscriber_id,
     )
 

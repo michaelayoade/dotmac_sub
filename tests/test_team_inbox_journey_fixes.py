@@ -32,6 +32,26 @@ from app.services import (
 )
 
 
+@pytest.fixture
+def default_channel_team():
+    """Set the channel fallback team for one test.
+
+    `Settings` is a frozen dataclass, so `monkeypatch.setattr` cannot touch a
+    field on it; the write goes through `object.__setattr__` and is restored
+    afterwards.
+    """
+    from app.config import settings
+
+    field = "team_inbox_channel_fallback_service_team_id"
+    original = getattr(settings, field)
+
+    def apply(value: object) -> None:
+        object.__setattr__(settings, field, str(value or ""))
+
+    yield apply
+    object.__setattr__(settings, field, original)
+
+
 def _team(db_session, name: str = "Support") -> ServiceTeam:
     team = ServiceTeam(name=name, team_type=ServiceTeamType.support.value)
     db_session.add(team)
@@ -128,7 +148,7 @@ def test_an_email_conversation_reaches_the_customer_scoped_read(db_session):
 
 
 def test_a_whatsapp_thread_lands_on_the_configured_default_team(
-    db_session, monkeypatch
+    db_session, default_channel_team
 ):
     """WhatsApp and the Meta social channels carry no address to route on.
 
@@ -137,11 +157,7 @@ def test_a_whatsapp_thread_lands_on_the_configured_default_team(
     """
     support = _team(db_session)
     db_session.commit()
-    monkeypatch.setattr(
-        "app.config.settings.team_inbox_channel_fallback_service_team_id",
-        str(support.id),
-        raising=False,
-    )
+    default_channel_team(support.id)
 
     result = team_inbox_channel_receive.receive_inbound_channel(
         db_session,
@@ -165,13 +181,9 @@ def test_a_whatsapp_thread_lands_on_the_configured_default_team(
 
 
 def test_an_unset_default_team_leaves_the_thread_unrouted_rather_than_guessing(
-    db_session, monkeypatch
+    db_session, default_channel_team
 ):
-    monkeypatch.setattr(
-        "app.config.settings.team_inbox_channel_fallback_service_team_id",
-        "",
-        raising=False,
-    )
+    default_channel_team("")
     result = team_inbox_channel_receive.receive_inbound_channel(
         db_session,
         team_inbox_channel_receive.InboundChannelPayload(
@@ -187,15 +199,11 @@ def test_an_unset_default_team_leaves_the_thread_unrouted_rather_than_guessing(
     assert conversation.primary_service_team_id is None
 
 
-def test_a_deactivated_default_team_is_not_used(db_session, monkeypatch):
+def test_a_deactivated_default_team_is_not_used(db_session, default_channel_team):
     support = _team(db_session)
     support.is_active = False
     db_session.commit()
-    monkeypatch.setattr(
-        "app.config.settings.team_inbox_channel_fallback_service_team_id",
-        str(support.id),
-        raising=False,
-    )
+    default_channel_team(support.id)
     assert team_inbox_routing.default_service_team_id(db_session) is None
 
 
