@@ -2009,6 +2009,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "direct bank-transfer availability and configured-account projection",
                     "invoice direct-transfer intent record creation and replacement",
                     "direct-transfer top-up intent proof submission transition",
+                    "direct-transfer reviewed-proof resolution projection",
                     "gateway invoice and reseller checkout intent record creation",
                     "saved-card top-up intent failure projection",
                     "top-up intent completed-payment projection",
@@ -2027,9 +2028,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "The participant derives direct-transfer availability from canonical "
                     "active collection-account destinations and customer "
                     "instructions. It is the canonical invoice-intent, proof-link, "
-                    "completed-payment, and gateway-expiry projection writer. Cash remains "
-                    "authoritative in the payment owner; callers compose or idempotently "
-                    "repair the intent projection without parallel field writers."
+                    "reviewed-proof resolution, completed-payment, and gateway-expiry "
+                    "projection writer. Cash remains authoritative in the payment owner; "
+                    "callers compose or idempotently repair the intent projection without "
+                    "parallel field writers."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -2065,6 +2067,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical direct-transfer top-up intent",
                                 "direct-transfer proof-link command evidence",
+                                "top-up intent transition protocol",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "direct-transfer reviewed-proof resolution projection"
+                            ),
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical direct-transfer top-up intent",
+                                "typed reviewed-proof resolution evidence",
+                                "canonical succeeded payment evidence",
                                 "top-up intent transition protocol",
                             ),
                             canonical_writer="financial.topup_intents",
@@ -2224,13 +2239,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="typed reviewed-proof resolution evidence",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact linked PaymentProof identity, closed verified or "
+                                "rejected outcome, optional canonical Payment identity, "
+                                "named review or reconciliation source, and correlated "
+                                "CommandContext supplied by the payment-proof owner"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="top-up intent transition protocol",
                             owner="financial.topup_intents",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "canonical provider identity, status vocabulary, pending-to-"
-                                "submitted eligibility, proof-link uniqueness, and event "
-                                "vocabulary"
+                                "submitted eligibility, exact proof-link uniqueness, "
+                                "submitted-to-completed/canceled reviewed-proof resolution, "
+                                "late-payment recovery, and event vocabulary"
                             ),
                         ),
                     ),
@@ -2239,15 +2266,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         boundary=(
                             "A creation, payment-proof, payment-settlement, webhook, portal, "
                             "reseller, or reconciliation caller supplies the transaction; "
-                            "this participant stages intent creation, replacement, proof, "
-                            "failure/completion/expiry projection, and events without "
+                            "this participant stages intent creation, replacement, proof "
+                            "submission/resolution, failure/completion/expiry projection, "
+                            "and events without "
                             "committing or rolling back. Cash-first payment owners may commit confirmed "
                             "money before invoking this idempotent repairable projection."
                         ),
                         locking=(
                             "Creation holds the canonical account lock before pending intent "
                             "replacement. Gateway creation locks the account or billing "
-                            "account before its reference; proof submission locks the exact intent. Completion "
+                            "account before its reference; proof submission and resolution "
+                            "lock the exact intent. Completion "
                             "locks subscriber or billing-account scope, exact intent, then "
                             "succeeded Payment before scope/provider/currency/link evidence "
                             "is rechecked; expiry uses the same scope and intent locks."
@@ -2255,9 +2284,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         idempotency=(
                             "A stable creation key replays the matching pending invoice "
                             "intent; a fresh creation explicitly cancels prior pending "
-                            "attempts. One pending intent accepts one proof link. Replaying "
-                            "the same succeeded Payment or expired state performs no second "
-                            "field transition or event; a different payment link conflicts."
+                            "attempts. One pending intent accepts one proof link. Exact "
+                            "verified/rejected proof-resolution replay performs no second "
+                            "transition or event, while changed outcome, proof, or payment "
+                            "evidence conflicts. Replaying the same succeeded Payment or "
+                            "expired state performs no second field transition or event."
                         ),
                         retries=(
                             "Only the caller retries after rollback. If cash was already "
@@ -2275,6 +2306,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.topup_intents.provider_mismatch",
                             "financial.topup_intents.invalid_transition",
                             "financial.topup_intents.proof_link_conflict",
+                            "financial.topup_intents.proof_resolution_link_mismatch",
+                            "financial.topup_intents.proof_resolution_conflict",
+                            "financial.topup_intents.proof_resolution_payment_required",
+                            "financial.topup_intents.proof_resolution_payment_forbidden",
                             "financial.topup_intents.amount_non_positive",
                             "financial.topup_intents.idempotency_key_invalid",
                             "financial.topup_intents.idempotency_conflict",
@@ -2306,6 +2341,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "incomplete configured-bank evidence",
                             "non-pending intent lifecycle state",
                             "an existing proof evidence link",
+                            "a reviewed proof that does not exactly match the intent link",
+                            "conflicting reviewed-proof outcome or payment evidence",
                             "missing or conflicting creation idempotency evidence",
                             "missing, inactive, unsettled, wrong-scope, wrong-currency, or "
                             "wrong-provider payment evidence",
@@ -2318,6 +2355,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "topup_intent.direct_transfer_created",
                             "topup_intent.direct_transfer_canceled",
                             "topup_intent.direct_transfer_submitted",
+                            "topup_intent.direct_transfer_proof_rejected",
                             "topup_intent.completed",
                             "topup_intent.expired",
                             "topup_intent.gateway_created",
@@ -2337,6 +2375,38 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "projection from the canonical Payment."
                         ),
                     ),
+                    projections=(
+                        ProjectionContract(
+                            name="direct-transfer reviewed-proof intent resolution",
+                            input_names=(
+                                "canonical direct-transfer top-up intent",
+                                "typed reviewed-proof resolution evidence",
+                                "canonical succeeded payment evidence",
+                                "top-up intent transition protocol",
+                            ),
+                            writer="financial.topup_intents",
+                            freshness=(
+                                "Synchronous with payment-proof review; exact historical "
+                                "drift is repaired by the named reconciliation owner."
+                            ),
+                            stale_behavior=(
+                                "A terminal proof with a submitted exact-linked intent is "
+                                "reported as drift. Ambiguous or non-current payment evidence "
+                                "is quarantined without changing money or intent state."
+                            ),
+                            drift_signal=(
+                                "A direct-transfer TopupIntent remains submitted while its "
+                                "exact metadata-linked PaymentProof is verified or rejected."
+                            ),
+                            rebuild_operation=(
+                                "Run reconcile_topup_intent_proofs and apply only exact "
+                                "complete or cancel candidates through the canonical writer."
+                            ),
+                            repair_owner=(
+                                "financial.topup_intent_proof_reconciliation"
+                            ),
+                        ),
+                    ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.COMPLETE,
                         old_owner=(
@@ -2348,14 +2418,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         new_owner="financial.topup_intents",
                         verification=(
                             "Configured-account projection, atomic create/replace/proof-link, "
-                            "typed completion/expiry success, idempotent replay/repair, "
-                            "rollback, mismatch rejection, caller, event, and architecture "
-                            "tests."
+                            "typed reviewed-proof completion/rejection, completion/expiry "
+                            "success, idempotent replay/repair, rollback, mismatch rejection, "
+                            "caller, event, and architecture tests."
                         ),
                         cutover_gate=(
-                            "Every completion/expiry caller supplies typed evidence; only "
-                            "this participant writes completion identity, provider evidence, "
-                            "amount/time, completed/expired status, and lifecycle events."
+                            "Every reviewed-proof/completion/expiry caller supplies typed "
+                            "evidence; only this participant writes canceled/completed/"
+                            "expired intent status, completion identity, provider evidence, "
+                            "amount/time, proof-resolution metadata, and lifecycle events."
                         ),
                         fallback_retirement=(
                             "Portal-owned direct-transfer construction/replacement/proof "
@@ -2586,6 +2657,206 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_direct_transfer_intents.py",
                         "tests/test_customer_portal_topup_flow.py",
+                        "tests/architecture/test_topup_intent_ownership.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="financial.topup_intent_proof_reconciliation",
+                module="app.services.topup_intent_proof_reconciliation",
+                owns=("submitted intent terminal-proof reconciliation",),
+                depends_on=(
+                    "financial.payment_proofs",
+                    "financial.payments",
+                    "financial.topup_intents",
+                ),
+                notes=(
+                    "The read-only preview discovers only exact PaymentProof identities "
+                    "persisted in submitted direct-transfer intent metadata. One bounded "
+                    "owner command locks and rechecks the terminal proof, then composes "
+                    "the canonical intent participant. Rejected proofs cancel; verified "
+                    "proofs complete only from a current active succeeded Payment. "
+                    "Reversed/missing payment evidence remains quarantined."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="submitted intent terminal-proof reconciliation",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "canonical payment-proof review evidence",
+                                "canonical direct-transfer top-up intent",
+                                "canonical succeeded payment evidence",
+                                "canonical reviewed-proof intent projection protocol",
+                            ),
+                            canonical_writer=(
+                                "financial.topup_intent_proof_reconciliation"
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical payment-proof review evidence",
+                            owner="financial.payment_proofs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked PaymentProof identity, account, reference, terminal "
+                                "verified/rejected status, and optional resulting Payment link"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical direct-transfer top-up intent",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked submitted TopupIntent identity, account, reference, "
+                                "provider, exact metadata proof link, and current projection"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical succeeded payment evidence",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active succeeded Payment linked by the verified proof with "
+                                "matching account, currency, provider, amount, and provenance"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical reviewed-proof intent projection protocol",
+                            owner="financial.topup_intents",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "flush-only exact-link completion/rejection, idempotency, "
+                                "late-payment recovery, metadata, and event contract"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The operator adapter previews read-only, releases its session, "
+                            "then each selected exact candidate enters one owner command on "
+                            "a transaction-free session and composes only the canonical "
+                            "top-up intent participant."
+                        ),
+                        locking=(
+                            "The command locks PaymentProof first; the participant then locks "
+                            "the canonical account scope, TopupIntent, and any succeeded "
+                            "Payment before rechecking exact link and outcome evidence."
+                        ),
+                        idempotency=(
+                            "Stable intent/proof/outcome command evidence replays the same "
+                            "terminal projection without a second transition or event. "
+                            "Changed proof status, payment link, or intent link fails closed."
+                        ),
+                        retries=(
+                            "Transient owner-transaction failures may retry the same exact "
+                            "candidate. Missing, reversed, inactive, changed, or ambiguous "
+                            "evidence remains requires_review and is never guessed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.topup_intent_proof_reconciliation.active_caller_transaction",
+                            "financial.topup_intent_proof_reconciliation.command_contract_violation",
+                            "financial.topup_intent_proof_reconciliation.intent_not_found",
+                            "financial.topup_intent_proof_reconciliation.invalid_command_context",
+                            "financial.topup_intent_proof_reconciliation.limit_invalid",
+                            "financial.topup_intent_proof_reconciliation.nested_owner_command",
+                            "financial.topup_intent_proof_reconciliation.nested_transaction_completion",
+                            "financial.topup_intent_proof_reconciliation.proof_intent_scope_mismatch",
+                            "financial.topup_intent_proof_reconciliation.proof_not_found",
+                            "financial.topup_intent_proof_reconciliation.proof_not_terminal",
+                            "financial.topup_intent_proof_reconciliation.proof_payment_changed",
+                            "financial.topup_intent_proof_reconciliation.proof_status_changed",
+                            "financial.topup_intent_proof_reconciliation.scan_limit_invalid",
+                        ),
+                        mapping_owner=("scripts.one_off.reconcile_topup_intent_proofs"),
+                        retryable_codes=(),
+                        fail_closed_on=(
+                            "missing or changed proof, intent, or payment identity",
+                            "non-terminal proof or non-exact intent proof link",
+                            "verified proof without a current active succeeded Payment",
+                            "scope, currency, provider, outcome, or projection conflict",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "topup_intent.completed",
+                            "topup_intent.direct_transfer_proof_rejected",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "The canonical intent events retain their existing additive "
+                            "schema and identify reconciliation as the named source."
+                        ),
+                        replay=(
+                            "Event replay never re-enters reconciliation; the exact proof "
+                            "and intent records deterministically rebuild the projection."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="terminal proof to top-up intent projection",
+                            input_names=(
+                                "canonical payment-proof review evidence",
+                                "canonical direct-transfer top-up intent",
+                                "canonical succeeded payment evidence",
+                                "canonical reviewed-proof intent projection protocol",
+                            ),
+                            writer=("financial.topup_intents"),
+                            freshness=(
+                                "Synchronous at proof review; the drift preview is suitable "
+                                "for scheduled and operator invariant monitoring."
+                            ),
+                            stale_behavior=(
+                                "Exact terminal-proof drift is reported and repairable; "
+                                "missing/reversed payment or absent proof-link evidence stays "
+                                "quarantined without changing money or intent state."
+                            ),
+                            drift_signal=(
+                                "A direct-transfer TopupIntent remains submitted while its "
+                                "exact metadata-linked PaymentProof is verified or rejected."
+                            ),
+                            rebuild_operation=(
+                                "Run reconcile_topup_intent_proofs in dry-run mode, then "
+                                "apply reviewed exact candidates through the owner command."
+                            ),
+                            repair_owner=(
+                                "financial.topup_intent_proof_reconciliation"
+                            ),
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUT_OVER,
+                        old_owner=(
+                            "no canonical writer after payment-proof review plus ad hoc "
+                            "status analysis or manual intent mutation"
+                        ),
+                        new_owner="financial.topup_intent_proof_reconciliation",
+                        verification=(
+                            "Exact-link preview, verified/rejected repair, quarantine, "
+                            "rollback, idempotency, live review, event, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "New proof reviews synchronously terminalize exact linked intents "
+                            "and the reviewed repair cohort contains no unexplained candidate."
+                        ),
+                        fallback_retirement=(
+                            "Direct SQL status repair and account-level proof inference are "
+                            "forbidden; only explicit requires_review exceptions may remain."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/ACCOUNT_CREDIT_DEPOSITS.md",
+                    ),
+                    test_refs=(
+                        "tests/test_topup_intent_proof_reconciliation.py",
+                        "tests/test_payment_proofs.py",
                         "tests/architecture/test_topup_intent_ownership.py",
                     ),
                 ),
@@ -4105,7 +4376,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "locked pending intent validation plus participant staging "
                                 "of the submitted status, exact proof/configured-bank link, "
-                                "versioned intent event, and immutable invoice WHT snapshot "
+                                "terminal reviewed-proof completion/rejection projection, "
+                                "versioned intent events, and immutable invoice WHT snapshot "
                                 "metadata when present"
                             ),
                         ),
@@ -4160,7 +4432,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         boundary=(
                             "Each submit, verify, or reject command starts on a clean "
                             "adapter session and commits proof state, any direct-transfer "
-                            "intent link, canonical payment, "
+                            "intent link or terminal resolution, canonical payment, "
                             "tax-owner WHT source evidence, review work items, audit rows, "
                             "customer delivery intents, and outbox events exactly once at "
                             "the public owner boundary."
@@ -4223,7 +4495,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "bank-transfer proofs",
                             "missing or conflicting server-owned WHT snapshot values",
                             "failure to stage an eligible payment, tax source, review work "
-                            "item, top-up intent link, audit, notification, or event "
+                            "item, top-up intent link/resolution, audit, notification, or event "
                             "consequence",
                             "active caller transaction or manifest mismatch",
                         ),
@@ -4256,10 +4528,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.payment_proofs",
                         verification=(
-                            "Submission, direct-transfer intent linkage, duplicate, "
-                            "subscriber settlement, consolidated/WHT, reviewer notification, "
-                            "customer notification, route, locking, rollback, typed-result, "
-                            "and architecture tests."
+                            "Submission, direct-transfer intent linkage and terminal "
+                            "resolution, duplicate, subscriber settlement, consolidated/WHT, "
+                            "reviewer notification, customer notification, route, locking, "
+                            "rollback, typed-result, and architecture tests."
                         ),
                         cutover_gate=(
                             "Every API, admin web, customer portal, reseller portal, and "
@@ -12816,6 +13088,293 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "helpers instead of writing heartbeat/run state directly. Metrics "
             "collectors read counters or bounded snapshots; unbounded business "
             "queries run only in scheduled single-flight producers."
+        ),
+    ),
+    DomainSOT(
+        domain="workforce_operations",
+        services=(
+            SOTService(
+                name="operations.service_team_lifecycle",
+                module="app.services.service_team_lifecycle",
+                owns=(
+                    "service-team lifecycle",
+                    "service-team membership lifecycle",
+                    "staff service-team resolution",
+                    "active service-team selector projection",
+                    "service-team administration projection",
+                ),
+                depends_on=(
+                    "party.registry",
+                    "auth.staff_provisioning",
+                    "events.store",
+                    "observability.audit_log",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="service-team lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed service-team command",
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            canonical_writer="operations.service_team_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="service-team membership lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed service-team command",
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            canonical_writer="operations.service_team_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="staff service-team resolution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="active service-team selector projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("current native service-team state",),
+                        ),
+                        ConcernContract(
+                            name="service-team administration projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed service-team command",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed create, update, activation, membership, and role "
+                                "commands with CommandContext and expected state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active staff authentication principal",
+                            owner="auth.staff_provisioning",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active SystemUser staff login and authorization principal"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Person Party identity",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active Person Party and reviewed "
+                                "SystemUser.person_party_id identity binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current native service-team state",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="ServiceTeam and ServiceTeamMember rows",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each public mutation enters execute_owner_command once on a "
+                            "transaction-free session; audit, outbox, team, and membership changes "
+                            "flush inside that root transaction."
+                        ),
+                        locking=(
+                            "Teams are selected by UUID, followed by staff-principal and Person "
+                            "Party identity then membership locks; case-insensitive team-name "
+                            "and team/person constraints arbitrate concurrent writes."
+                        ),
+                        idempotency=(
+                            "Create binds a caller-supplied team UUID; equivalent desired-state "
+                            "updates, activation changes, and membership commands replay while a "
+                            "deactivated row or changed evidence under one create identity fails "
+                            "closed."
+                        ),
+                        retries=(
+                            "Adapters retry the complete owner command only after full rollback "
+                            "and refetch current updated_at evidence after a stale rejection."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "service_team_invalid",
+                            "service_team_not_found",
+                            "service_team_staff_not_found",
+                            "service_team_staff_identity_unbound",
+                            "service_team_staff_identity_invalid",
+                            "service_team_name_conflict",
+                            "service_team_identity_collision",
+                            "service_team_stale",
+                            "service_team_reason_required",
+                            "service_team_inactive",
+                            "service_team_has_active_members",
+                            "service_team_member_not_found",
+                            "service_team_member_inactive",
+                            *owner_command_boundary_error_codes(
+                                "operations.service_team_lifecycle"
+                            ),
+                        ),
+                        mapping_owner="service-team web and API adapters",
+                        fail_closed_on=(
+                            "unknown, inactive, or Party-unbound selected staff identity",
+                            "reactivation or role change with retired staff identity",
+                            "stale lifecycle evidence",
+                            "team identity collision",
+                            "deactivation with active members",
+                            "zero or multiple active memberships during staff-team resolution",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "service_team.changed",
+                            "service_team.membership_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.store",
+                        compatibility=(
+                            "Version 1 carries team, command/correlation, operation, member, "
+                            "role, and actor identifiers without private staff payloads."
+                        ),
+                        replay=(
+                            "Native team/member rows plus transactional event and audit evidence "
+                            "reconstruct the lifecycle without workflow-setting mirrors."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="staff service-team resolution",
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            writer="operations.service_team_lifecycle",
+                            freshness="Transaction-current native database state.",
+                            stale_behavior=(
+                                "Return identity-unavailable, no-membership, or ambiguous; "
+                                "never select by row age or compare principal IDs to Party IDs."
+                            ),
+                            drift_signal=(
+                                "An active staff principal has zero or multiple matching active "
+                                "Party-backed memberships for a caller requiring one team."
+                            ),
+                            rebuild_operation=(
+                                "Requery the reviewed SystemUser-to-Party binding and native "
+                                "active memberships."
+                            ),
+                            repair_owner="operations.service_team_lifecycle",
+                        ),
+                        ProjectionContract(
+                            name="active service-team selector projection",
+                            input_names=("current native service-team state",),
+                            writer="operations.service_team_lifecycle",
+                            freshness="Transaction-current native database state.",
+                            stale_behavior=(
+                                "Fail the request rather than use workflow-setting fallback."
+                            ),
+                            drift_signal=(
+                                "Legacy workflow-setting team/member keys exist or differ from "
+                                "native row identity and active membership."
+                            ),
+                            rebuild_operation=(
+                                "Requery native ServiceTeam and ServiceTeamMember rows."
+                            ),
+                            repair_owner="operations.service_team_lifecycle",
+                        ),
+                        ProjectionContract(
+                            name="service-team administration projection",
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            writer="operations.service_team_lifecycle",
+                            freshness="Transaction-current native database state.",
+                            stale_behavior=(
+                                "Render an explicit error; never fall back to retired settings."
+                            ),
+                            drift_signal=(
+                                "Membership references an absent staff principal or a duplicate "
+                                "case-insensitive team name exists."
+                            ),
+                            rebuild_operation=(
+                                "Recompose team, membership, and staff labels from native rows."
+                            ),
+                            repair_owner="operations.service_team_lifecycle",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "support.ticket_configuration workflow-setting team/member payloads "
+                            "and their settings-to-native mirror"
+                        ),
+                        new_owner="operations.service_team_lifecycle",
+                        verification=(
+                            "service-team owner behavior, migration, admin-surface, caller, and "
+                            "architecture tests"
+                        ),
+                        cutover_gate=(
+                            "settings payloads are backfilled and verified; every caller reads "
+                            "native projections; only this owner writes team/member rows"
+                        ),
+                        fallback_retirement=(
+                            "support_service_teams/support_service_team_members keys, ticket-"
+                            "settings editors, mirror helper, CRM hard-delete path, and direct "
+                            "team/member writers, including the old provider direct writer and "
+                            "email-matching agent projection, are absent"
+                        ),
+                    ),
+                    steward="operations administration",
+                    design_refs=(
+                        "docs/designs/SERVICE_TEAM_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_service_team_lifecycle.py",
+                        "tests/test_service_team_web.py",
+                        "tests/architecture/test_service_team_lifecycle_boundary.py",
+                    ),
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.web.admin.service_teams",
+            "app.services.support_ticket_settings",
+            "app.services.team_inbox_*",
+            "app.services.workqueue.*",
+            "app.services.ticket_assignment.*",
+            "app.services.ticket_work_order_handoff",
+            "app.services.operational_escalation_delivery",
+            "app.services.projects",
+            "app.services.dispatch",
+        ),
+        rule=(
+            "Party and staff-principal owners supply identity; the service-team "
+            "owner supplies shared team topology and membership. Consumers "
+            "translate Party membership to their current principal-facing "
+            "identifiers through the owner's resolver and never write team rows "
+            "or restore settings mirrors."
         ),
     ),
     DomainSOT(
