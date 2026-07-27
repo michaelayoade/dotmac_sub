@@ -632,16 +632,6 @@ def consume_invoice_approved(
     from app.models.vendor_routes import VendorPurchaseInvoice
     from app.services.common import coerce_uuid
     from app.services.events.owner_outputs import consume_owner_output
-    from app.services.owner_commands import (
-        OwnerCommandDefinition,
-        execute_owner_command,
-    )
-
-    definition = OwnerCommandDefinition(
-        owner="operations.vendor_purchase_invoices",
-        concern="vendor purchase-invoice mutation coordination",
-        name="consume_invoice_approved",
-    )
 
     def _effect() -> str:
         from app.services.backoffice import enqueue_purchase_invoice_outbox
@@ -655,10 +645,10 @@ def consume_invoice_approved(
         event = enqueue_purchase_invoice_outbox(db, invoice)
         return "enqueued" if event is not None else "skipped_not_owned"
 
-    return execute_owner_command(
+    return _execute(
         db,
-        definition=definition,
         context=context,
+        name="consume_invoice_approved",
         operation=lambda: consume_owner_output(
             db,
             consumer="operations.vendor_purchase_invoices",

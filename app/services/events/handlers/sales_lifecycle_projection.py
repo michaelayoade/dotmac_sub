@@ -35,8 +35,11 @@ HANDLED_EVENT_TYPES = frozenset(
         EventType.service_order_released,
         EventType.service_order_completed,
         EventType.customer_experience_accepted,
+        EventType.custom,
     }
 )
+
+_CX_ACCEPTANCE_DUE_TRIGGER = "sales.cx_acceptance_due"
 
 
 class SalesLifecycleProjectionHandler:
@@ -53,6 +56,10 @@ class SalesLifecycleProjectionHandler:
             self._prepare_customer_experience_handoff(db, event)
         elif event.event_type == EventType.customer_experience_accepted:
             self._fulfill_sales_order(db, event)
+        elif event.event_type == EventType.custom:
+            if event.payload.get("trigger") == _CX_ACCEPTANCE_DUE_TRIGGER:
+                self._flag_overdue_acceptance(db, event)
+            # Every other custom payload belongs to other adapters.
 
     @staticmethod
     def _context(event: Event, scope: str):
@@ -123,8 +130,7 @@ class SalesLifecycleProjectionHandler:
                 context=self._context(event, str(service_order_id)),
             )
 
-    @staticmethod
-    def _prepare_customer_experience_handoff(db: Session, event: Event) -> None:
+    def _prepare_customer_experience_handoff(self, db: Session, event: Event) -> None:
         service_order_id = event.service_order_id or event.payload.get(
             "service_order_id"
         )
@@ -134,11 +140,13 @@ class SalesLifecycleProjectionHandler:
             return
         from app.services import customer_experience_handoffs
 
-        customer_experience_handoffs.ensure_ready_for_service_order(
-            db,
-            service_order_id=coerce_uuid(service_order_id),
-            actor_id="sales.lifecycle_projection",
-        )
+        with _owner_session(db) as owner_db:
+            customer_experience_handoffs.consume_service_order_completion(
+                owner_db,
+                service_order_id=coerce_uuid(service_order_id),
+                event_id=event.event_id,
+                context=self._context(event, str(service_order_id)),
+            )
 
     def _fulfill_sales_order(self, db: Session, event: Event) -> None:
         sales_order_id = event.payload.get("sales_order_id")
@@ -159,4 +167,18 @@ class SalesLifecycleProjectionHandler:
                 handoff_id=coerce_uuid(handoff_id),
                 event_id=event.event_id,
                 context=self._context(event, str(sales_order_id)),
+            )
+
+    def _flag_overdue_acceptance(self, db: Session, event: Event) -> None:
+        handoff_id = event.payload.get("entity_id")
+        if not handoff_id:
+            return
+        from app.services import customer_experience_handoffs
+
+        with _owner_session(db) as owner_db:
+            customer_experience_handoffs.consume_cx_acceptance_due(
+                owner_db,
+                handoff_id=coerce_uuid(handoff_id),
+                event_id=event.event_id,
+                context=self._context(event, str(handoff_id)),
             )

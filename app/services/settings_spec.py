@@ -1283,6 +1283,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Durable event outbox dispatch interval (seconds)",
     ),
     SettingSpec(
+        domain=SettingDomain.workflow,
+        key="cx_acceptance_attention_hours",
+        env_var="CX_ACCEPTANCE_ATTENTION_HOURS",
+        value_type=SettingValueType.integer,
+        default=72,
+        min_value=1,
+        max_value=720,
+        label="CX handoff acceptance attention deadline (hours)",
+    ),
+    SettingSpec(
         domain=SettingDomain.scheduler,
         key="durable_timer_dispatch_interval_seconds",
         env_var="DURABLE_TIMER_DISPATCH_INTERVAL_SECONDS",

@@ -21174,6 +21174,129 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="auth.access_invitations",
+                module="app.services.access_invitations",
+                owns=("access invitation lifecycle",),
+                depends_on=(
+                    "auth.credential_recovery",
+                    "runtime.durable_timers",
+                    "events.dispatcher",
+                    "events.owner_outputs",
+                ),
+                notes=(
+                    "Records issued/accepted/expired/revoked evidence for the "
+                    "staff, reseller, user, and subscriber invitation "
+                    "capabilities, with a durable per-invitation expiry timer "
+                    "and a receipted expiry consumer. Rows are lifecycle "
+                    "evidence, never an access grant: the capability's "
+                    "redeem-time TTL check in the issuing domain remains the "
+                    "fail-closed gate, and a completed reset stamps "
+                    "acceptance."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="access invitation lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("issued invitation capabilities",),
+                            canonical_writer="auth.access_invitations",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="issued invitation capabilities",
+                            owner="auth.credential_recovery",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact reset capabilities minted for invite "
+                                "purposes with their principal and TTL"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "record_issued participates in the caller's active "
+                            "owner command or roots its own; the expiry "
+                            "consumer enters execute_owner_command once on a "
+                            "transaction-free session."
+                        ),
+                        locking=(
+                            "Reissue supersedes the principal's prior issued "
+                            "rows inside one transaction; expiry reloads the "
+                            "row and state-guards the transition."
+                        ),
+                        idempotency=(
+                            "Reissue replaces the expiry timer by generation; "
+                            "consumer receipts make redelivery an exact no-op."
+                        ),
+                        retries=(
+                            "A failed expiry consequence leaves no receipt; "
+                            "the outbox redelivers until it commits."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.access_invitations.active_caller_transaction",
+                            "auth.access_invitations.command_contract_violation",
+                            "auth.access_invitations.invalid_command_context",
+                            "auth.access_invitations.nested_owner_command",
+                            "auth.access_invitations.nested_transaction_completion",
+                        ),
+                        mapping_owner="auth and admin web adapters",
+                        fail_closed_on=("expiring an accepted or revoked invitation",),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "access_invitation.issued",
+                            "access_invitation.accepted",
+                            "access_invitation.expired",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries invitation, principal, purpose, "
+                            "and deadline identities; no email addresses, only "
+                            "digests on the row."
+                        ),
+                        replay=(
+                            "Invitation rows are the durable state; outputs are "
+                            "evidence and consumer receipts reject replays."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "stateless capability TTLs with redeem-time-only "
+                            "expiry and no lifecycle evidence"
+                        ),
+                        new_owner="auth.access_invitations",
+                        verification=(
+                            "Invitation lifecycle behavior tests and the "
+                            "identity chain boundary test."
+                        ),
+                        cutover_gate=(
+                            "Every invite issuance path records its invitation "
+                            "and stages the expiry timer."
+                        ),
+                        fallback_retirement=(
+                            "Redeem-time TTL checks are retained deliberately "
+                            "as the fail-closed gate; no parallel lifecycle "
+                            "writer exists."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/designs/IDENTITY_ONBOARDING_CHAIN.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_access_invitations.py",
+                        "tests/architecture/test_identity_onboarding_chain_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="auth.credential_recovery",
                 module="app.services.credential_recovery",
                 owns=(

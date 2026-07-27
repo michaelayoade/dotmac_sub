@@ -584,7 +584,7 @@ def consume_material_request_approved(
     The outbox intent and its unique ``(consumer, event_id)`` receipt commit
     atomically; a redelivery is an exact no-op, and a failed enqueue stays a
     failed retryable delivery. Sub never infers issuance — the ERP outcome
-    returns through the durable outbox write-back.
+    returns through the durable outbox observation projection.
     """
     from app.services.events.owner_outputs import consume_owner_output
     from app.services.owner_commands import (

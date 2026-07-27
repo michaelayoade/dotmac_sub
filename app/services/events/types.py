@@ -256,6 +256,12 @@ class EventType(enum.Enum):
     customer_logout = "customer.logout"
     customer_ticket_created = "customer.ticket_created"
 
+    # Identity / onboarding invitation lifecycle
+    # (docs/designs/IDENTITY_ONBOARDING_CHAIN.md)
+    access_invitation_issued = "access_invitation.issued"
+    access_invitation_accepted = "access_invitation.accepted"
+    access_invitation_expired = "access_invitation.expired"
+
     # Support ticket / work-order lifecycle outputs
     # (docs/designs/TICKET_WORK_ORDER_HANDOFF_SOT.md). Staged atomically with
     # each owning transition; the support lifecycle projection handler

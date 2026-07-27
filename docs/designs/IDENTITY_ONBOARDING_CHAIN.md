@@ -1,7 +1,8 @@
 # Identity & Onboarding Owner Chain (rank 5 assessment)
 
-**Status:** Assessed 2026-07-27 — existing transitions conform; missing
-nodes require new domain aggregates (deferred feature slices, named below)
+**Status:** Assessed and partially delivered 2026-07-27 — existing
+transitions conform; the invitation aggregate is now implemented
+(`auth.access_invitations`); remaining nodes stay named feature slices
 **System of record:** Sub
 **Decision owner:** Michael
 
@@ -54,13 +55,15 @@ chained in the sales slice.
 These are feature builds, not chaining conversions; converting them without
 their aggregates would invent state that has no owner:
 
-1. **Invitation aggregate.** Every "invitation" today is a stateless signed
-   JWT; expiry exists only as a read-time check at redemption. An
-   `issued → accepted → expired → revoked` invitation entity is required
-   before an `invitation_expiry_due` durable timer (or an
-   `invitation.expired` output that revokes a pending grant) is
-   meaningful. Owner candidates: `auth.staff_provisioning` /
-   `auth.reseller_onboarding` for their principals.
+1. **Invitation aggregate — DELIVERED.** `auth.access_invitations`
+   (contracted owner, migration 435) records
+   `issued → accepted / expired / revoked` for the staff, reseller, user,
+   and subscriber invitation capabilities: every issuance path records the
+   row and stages a durable `invitation_expiry_due` timer; reissue
+   supersedes and cancels the prior timer; a completed reset stamps
+   acceptance; the fired trigger drives the receipted expiry consumer.
+   Rows are lifecycle evidence, never a grant — the capability's
+   redeem-time TTL check remains the fail-closed gate.
 2. **Verification/approval deadline models.** No phone-verification or
    onboarding-approval entity exists (`SubscriberNINVerification` and
    `PartyContactPoint.verification_status` are the nearest facts). The
@@ -92,3 +95,13 @@ stages a durable `sla_breach_due` timer atomically with its creation
 `check_sla_breaches` — breach records, watchers, and the
 `ticket.sla_breached` escalation — with a state-guarded no-op for paused,
 completed, or already-breached clocks.
+
+## CX acceptance deadline (delivered with this slice)
+
+The sales chain's ready CX handoff now runs through the handoff owner's
+receipted `consume_service_order_completion`, which stages a durable
+`cx_acceptance_due` timer (`workflow.cx_acceptance_attention_hours`,
+default 72h) when the handoff turns ready; the fired trigger drives the
+receipted `consume_cx_acceptance_due`, flagging a still-ready handoff
+`needs_attention` ("Customer acceptance overdue"). Acceptance itself
+remains a staff decision.

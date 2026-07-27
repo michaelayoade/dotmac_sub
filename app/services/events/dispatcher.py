@@ -407,6 +407,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
         CredentialSessionProjectionHandler,
     )
     from app.services.events.handlers.enforcement import EnforcementHandler
+    from app.services.events.handlers.identity_lifecycle_projection import (
+        IdentityLifecycleProjectionHandler,
+    )
     from app.services.events.handlers.ip_assignment_projection import (
         IPAssignmentProjectionHandler,
     )
@@ -440,6 +443,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(OutageLifecycleProjectionHandler())
     dispatcher.register_handler(SupportLifecycleProjectionHandler())
     dispatcher.register_handler(MaterialsLifecycleProjectionHandler())
+    dispatcher.register_handler(IdentityLifecycleProjectionHandler())
     dispatcher.register_handler(EnforcementHandler())
     dispatcher.register_handler(IPAssignmentProjectionHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())

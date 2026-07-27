@@ -59,3 +59,33 @@ def test_pending_subscriber_role_widens_only_through_party_owner():
     assert "PartyInvariantError" in src
     enrollment = _source("app/services/customer_credential_enrollment.py")
     assert "ensure_role" not in enrollment
+
+
+def test_invitation_aggregate_is_lifecycle_evidence_with_durable_expiry():
+    svc = _source("app/services/access_invitations.py")
+    assert 'purpose="invitation_expiry_due"' in svc
+    assert "consume_owner_output" in svc
+    # Rows are evidence, never a grant: the module writes no credentials
+    # and no sessions.
+    assert "password_hash" not in svc
+    assert "AuthSession" not in svc
+    # Every invite issuance path records its invitation.
+    for producer in (
+        "app/services/staff_provisioning.py",
+        "app/services/reseller_onboarding.py",
+        "app/services/web_system_user_mutations.py",
+    ):
+        assert "access_invitations.record_issued" in _source(producer)
+    # A completed reset stamps acceptance.
+    assert "access_invitations.mark_accepted" in _source(
+        "app/services/credential_recovery.py"
+    )
+
+
+def test_cx_acceptance_deadline_is_a_durable_timer():
+    cx = _source("app/services/customer_experience_handoffs.py")
+    assert 'purpose="cx_acceptance_due"' in cx
+    assert "def consume_cx_acceptance_due" in cx
+    assert "def consume_service_order_completion" in cx
+    handler = _source("app/services/events/handlers/sales_lifecycle_projection.py")
+    assert '"sales.cx_acceptance_due"' in handler
