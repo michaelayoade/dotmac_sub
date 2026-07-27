@@ -1476,15 +1476,34 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   coverage, which makes it idempotent under event replay and lets a refund,
   chargeback, or reversal retract the anchor back to the start of the period
   that stopped being funded — a reversal cannot leave a stale advanced anchor.
-  Advancement is forward-only while the invoice's own entitlements survive:
-  `financial.service_extensions` owns its billing-anchor projection and records
-  a grant interval starting at the later of the existing anchor and application
-  time, and `financial.payments` preserves that delta when it re-anchors a
-  lapsed prepaid renewal, so both legitimately leave the anchor ahead of what
-  the invoice funded. This owner advances to meet coverage and never claws back
-  a lead another owner granted. Applied service-extension grant intervals count
-  as surviving coverage on the retraction side too, so a refund removes the
-  refunded period without cancelling a goodwill extension. `payment.refunded` and `payment.reversed` reach the same owner through
+  Coverage is the union of active `ServiceEntitlement` intervals and applied
+  `ServiceExtensionEntry` grant intervals — the same evidence
+  `financial.prepaid_service_coverage` reads. The anchor never lands below that
+  union, nor below the start of the period the invoice funded. On top of that
+  floor the caller declares one thing, `BillingAnchorAuthority`, deciding
+  whether the anchor may move backwards past a lead this owner cannot explain:
+  - `funding_observation` (payment creation, allocation, refund, reversal) may
+    not. A settling payment observes that funding changed and says nothing
+    about why the anchor is ahead; that lead may be a
+    `financial.service_extensions` grant, a
+    `financial.subscription_billing_grants` grant, or the extension delta
+    `financial.payments` deliberately preserves while re-anchoring a lapsed
+    renewal. Advancement is monotonic while the invoice's own entitlements
+    survive.
+  - `reviewed_reconciliation` (the operator-confirmed opening-funding branch of
+    `financial.prepaid_draft_reconciliation`) may. That owner has rewritten the
+    invoice's documentary period from a fingerprint-bound reviewed preview and
+    holds exact entitlement evidence, and a stale anchor left by a long-lapsed
+    period is an unresolved projection rather than a grant. The floor keeps
+    this sound: a reviewed correction can only pull the anchor down onto
+    existing coverage, so it deletes an evidence-free lead and can never cancel
+    granted service.
+  These two values reproduce the two anchor policies that previously lived in
+  `_finalize_invoice_payment_effects` and `finalize_invoice_application_for_owner`
+  respectively; collapsing them into a single policy is what alternately clawed
+  back granted service or stranded a lapsed invoice at a stale anchor.
+  Retraction after a refund needs no special authority: revoked entitlements
+  leave the coverage union and the anchor follows the evidence down. `payment.refunded` and `payment.reversed` reach the same owner through
   `PrepaidRenewalHandler`. The accumulated drift cohort (an active
   `ServiceEntitlement` ending after `next_billing_at`) is repaired by the
   owner's idempotent, fingerprint-bound

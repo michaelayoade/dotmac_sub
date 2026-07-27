@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from app.models.admin_alert import AdminAlert
+from app.models.catalog import SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
 from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.subscriber import Subscriber, SubscriberStatus
@@ -333,6 +334,11 @@ def test_facade_reports_nothing_needed_doing_as_false(db_session, subscription):
     caller that treats True as a restoration could notify a customer, clear an
     alert, or resolve a worklist entry for an account never suspended.
     """
+    # The shared fixture is `pending`; make this genuinely "already active with
+    # service" so the two flags are distinguishable rather than both falsy.
+    subscription.status = SubscriptionStatus.active
+    db_session.flush()
+
     result = restore_subscription_detailed(
         db_session,
         str(subscription.id),
@@ -342,8 +348,9 @@ def test_facade_reports_nothing_needed_doing_as_false(db_session, subscription):
     )
 
     assert result.outcome is RestorationOutcome.already_active
-    assert result.subscription_reactivated is False
+    assert result.subscription_reactivated is False, "nothing was transitioned"
     assert result.access_restored is True, "the customer does have service"
+    assert result.financially_settled_but_access_blocked is False
     assert (
         restore_subscription(
             db_session,
@@ -353,6 +360,68 @@ def test_facade_reports_nothing_needed_doing_as_false(db_session, subscription):
             emit=False,
         )
         is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "lock_reasons", "trigger", "expected"),
+    [
+        # (outcome branch, locks to place, trigger, legacy boolean)
+        ("already_active", (), "payment", False),
+        ("unauthorized_trigger", (EnforcementReason.fraud,), "payment", False),
+        (
+            "remaining_locks",
+            (EnforcementReason.overdue, EnforcementReason.fraud),
+            "payment",
+            False,
+        ),
+        ("lifecycle_override", (EnforcementReason.overdue,), "payment", True),
+        ("restored", (EnforcementReason.overdue,), "payment", True),
+    ],
+)
+def test_facade_matches_the_legacy_boolean_on_every_branch(
+    db_session, subscription, scenario, lock_reasons, trigger, expected
+):
+    """Pin `restore_subscription`'s truthiness across all five outcome branches.
+
+    The legacy contract is "did this call transition the subscription to
+    active". Each row below is one branch of `restore_subscription_detailed`
+    and the boolean the pre-split implementation returned for it. The
+    `lifecycle_override` row is the interesting one: the row DID move to active,
+    so the facade must still say True even though the customer has no service —
+    that nuance belongs on the typed outcome, not on a flag ten unreviewed
+    callers read.
+    """
+    if scenario == "already_active":
+        subscription.status = SubscriptionStatus.active
+        db_session.flush()
+    for reason in lock_reasons:
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=reason,
+            source=f"test:{reason.value}",
+            emit=False,
+        )
+    if scenario == "lifecycle_override":
+        set_account_lifecycle_override(
+            db_session,
+            str(subscription.subscriber_id),
+            status=SubscriberStatus.suspended,
+            reason="Regulatory hold",
+            source="admin:compliance",
+        )
+    db_session.flush()
+
+    assert (
+        restore_subscription(
+            db_session,
+            str(subscription.id),
+            trigger=trigger,
+            resolved_by="payment:test",
+            emit=False,
+        )
+        is expected
     )
 
 

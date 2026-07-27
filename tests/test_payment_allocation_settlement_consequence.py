@@ -48,6 +48,7 @@ from app.services.billing.payments import PaymentAllocations
 from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
 from app.services.events.types import Event, EventType
 from app.services.prepaid_service_renewals import (
+    BillingAnchorAuthority,
     _utc,
     apply_stale_prepaid_billing_anchor_repair,
     preview_stale_prepaid_billing_anchor_repair,
@@ -488,6 +489,102 @@ def test_projection_never_claws_back_an_anchor_lead_it_cannot_see(
     assert at(subscription.next_billing_at) == granted_through
     assert [item.changed for item in projections] == [False]
     assert [item.retracted for item in projections] == [False]
+
+
+def test_reviewed_reconciliation_may_correct_a_stale_lead_downward(
+    db_session, subscriber, subscription
+):
+    """A reviewed correction resolves an evidence-free anchor lead.
+
+    The payment path must preserve a lead it cannot explain, but a stale anchor
+    left behind by a long-lapsed period carries no grant — it is exactly the
+    "unresolved projection" `financial.prepaid_service_coverage` refuses to
+    treat as authority. A named owner acting on an operator-confirmed preview
+    may pull it back onto exact coverage.
+    """
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    _allocate(db_session, payment, invoice)
+    entitlement = _entitlement(db_session, invoice)
+
+    stale_lead = at(entitlement.ends_at) + timedelta(days=46)
+    subscription.next_billing_at = stale_lead
+    db_session.flush()
+
+    # Observational authority leaves it alone...
+    project_prepaid_billing_anchor_for_invoice(
+        db_session,
+        invoice,
+        evidence_ref="pytest:observation",
+        authority=BillingAnchorAuthority.funding_observation,
+    )
+    db_session.flush()
+    assert at(subscription.next_billing_at) == stale_lead
+
+    # ...a reviewed correction resolves it down to exact coverage.
+    projections = project_prepaid_billing_anchor_for_invoice(
+        db_session,
+        invoice,
+        evidence_ref="pytest:reviewed",
+        authority=BillingAnchorAuthority.reviewed_reconciliation,
+    )
+    db_session.commit()
+    db_session.refresh(subscription)
+
+    assert at(subscription.next_billing_at) == at(entitlement.ends_at)
+    assert [item.retracted for item in projections] == [True]
+
+
+def test_reviewed_reconciliation_still_cannot_cut_below_granted_service(
+    db_session, subscriber, subscription
+):
+    """The floor holds for reviewed authority too.
+
+    A reviewed correction can delete an evidence-free lead, but never coverage
+    another owner granted — otherwise it would be the round-3 defect wearing a
+    different hat.
+    """
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    _allocate(db_session, payment, invoice)
+    entitlement = _entitlement(db_session, invoice)
+    granted_through = at(entitlement.ends_at) + timedelta(days=9)
+
+    extension = ServiceExtension(
+        reason="Goodwill after a regional outage",
+        window_start=PERIOD_START,
+        window_end=PERIOD_END,
+        days=9,
+        scope_type=ServiceExtensionScope.subscribers,
+        status=ServiceExtensionStatus.applied,
+        applied_at=PERIOD_START,
+    )
+    db_session.add(extension)
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            grant_starts_at=at(entitlement.ends_at),
+            grant_ends_at=granted_through,
+        )
+    )
+    subscription.next_billing_at = granted_through + timedelta(days=30)
+    db_session.flush()
+
+    project_prepaid_billing_anchor_for_invoice(
+        db_session,
+        invoice,
+        evidence_ref="pytest:reviewed-with-extension",
+        authority=BillingAnchorAuthority.reviewed_reconciliation,
+    )
+    db_session.commit()
+    db_session.refresh(subscription)
+
+    assert at(subscription.next_billing_at) == granted_through, (
+        "a reviewed correction cut below coverage the extension owner granted"
+    )
 
 
 def test_a_reversal_retracts_the_period_but_keeps_an_applied_extension(

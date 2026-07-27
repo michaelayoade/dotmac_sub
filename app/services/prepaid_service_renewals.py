@@ -995,6 +995,38 @@ def renewal_outcomes_for_payment(
     return tuple(outcomes)
 
 
+class BillingAnchorAuthority(enum.StrEnum):
+    """How much authority the caller has to move an anchor backwards.
+
+    Before this owner existed, `financial.payments` ran two different anchor
+    policies from two finalizers, and both are load-bearing:
+
+    * ``_finalize_invoice_payment_effects`` (payment creation, allocation,
+      refund, reversal) re-anchored a lapsed prepaid invoice and deliberately
+      carried its *inferred* extension delta forward, never writing the anchor
+      backwards.
+    * ``finalize_invoice_application_for_owner`` (reviewed prepaid-draft
+      reconciliation) additionally projected the anchor unconditionally from
+      the exact entitlements, overriding that inferred delta.
+
+    Collapsing them into one policy is what made this projection alternately
+    claw back granted service or strand a lapsed invoice at a stale anchor, so
+    authority is an explicit input rather than something guessed from state.
+    """
+
+    #: A payment settled, was allocated, or was reversed. The trigger observes
+    #: that funding changed; it says nothing about why the anchor is ahead.
+    #: That lead may be a `financial.service_extensions` grant or the payment
+    #: owner's own preserved delta, so it is never overwritten downwards.
+    funding_observation = "funding_observation"
+
+    #: A named owner is deliberately correcting the record from a reviewed,
+    #: fingerprint-bound, operator-confirmed preview, having just rewritten the
+    #: invoice's documentary period. It may set the anchor onto exact projected
+    #: coverage even when that is earlier than the current anchor.
+    reviewed_reconciliation = "reviewed_reconciliation"
+
+
 @dataclass(frozen=True, slots=True)
 class BillingAnchorProjection:
     """One owner-computed anchor decision for a single subscription."""
@@ -1005,6 +1037,7 @@ class BillingAnchorProjection:
     coverage_end: datetime | None
     changed: bool
     retracted: bool
+    authority: BillingAnchorAuthority = BillingAnchorAuthority.funding_observation
 
 
 def project_prepaid_billing_anchor_for_invoice(
@@ -1012,6 +1045,7 @@ def project_prepaid_billing_anchor_for_invoice(
     invoice: Invoice,
     *,
     evidence_ref: str,
+    authority: BillingAnchorAuthority = BillingAnchorAuthority.funding_observation,
 ) -> tuple[BillingAnchorProjection, ...]:
     """Recompute affected billing anchors from canonical entitlement evidence.
 
@@ -1021,23 +1055,40 @@ def project_prepaid_billing_anchor_for_invoice(
     then ask this owner to project it. They never write ``next_billing_at``
     themselves, so there is exactly one writer for the projection.
 
-    The result is a pure function of current coverage state, which makes it
-    idempotent under replay and self-repairing in both directions:
+    The result is a pure function of current coverage state and the caller's
+    declared authority, which makes it idempotent under replay:
 
-    * A settled prepaid invoice moves the anchor forward to the end of the
-      subscription's exact active coverage. Advancement is FORWARD-ONLY while
-      this invoice's own entitlements survive: an anchor already ahead of that
-      coverage was put there by another owner — the
-      ``financial.service_extensions`` billing-anchor projection, a
-      ``financial.subscription_billing_grants`` grant, or the payment owner
-      preserving an extension delta across a lapsed-renewal re-anchor — and
-      this owner must not silently claw back service someone else granted.
-    * A refund, chargeback, reversal, or reallocation that revokes this
-      invoice's entitlements retracts the anchor to whatever coverage still
-      survives, so a reversal can never leave a stale advanced anchor claiming
-      service the customer no longer paid for. Applied service-extension grants
-      are counted as surviving coverage, so a refund removes the refunded
-      period without also cancelling a goodwill extension.
+    ``coverage`` is the union of active ``ServiceEntitlement`` intervals and
+    applied ``ServiceExtensionEntry`` grant intervals — exactly what
+    ``financial.prepaid_service_coverage`` treats as evidence. The anchor never
+    lands below that union, and never below the start of the period this
+    invoice funded.
+
+    On top of that floor, ``authority`` decides one question: may the anchor
+    move BACKWARDS past an unexplained lead?
+
+    * ``funding_observation`` — no. A payment settling is an observation that
+      funding changed; it carries no statement about why the anchor is ahead.
+      That lead may be a ``financial.service_extensions`` grant, a
+      ``financial.subscription_billing_grants`` grant, or the extension delta
+      the payment owner deliberately preserved in the same transaction while
+      re-anchoring a lapsed renewal. Overwriting it would silently claw back
+      service another owner granted, so advancement is monotonic while this
+      invoice's own entitlements survive.
+    * ``reviewed_reconciliation`` — yes. A named owner has just rewritten this
+      invoice's documentary period from an operator-confirmed, fingerprint-
+      bound preview and holds exact entitlement evidence for it. A stale anchor
+      left behind by a long-lapsed period carries no grant, and is precisely
+      what ``financial.prepaid_service_coverage`` classifies as an unresolved
+      projection: never restoration or suspension authority. A reviewed
+      correction may resolve it downwards. This stays sound because the floor
+      above still applies — reviewed authority can only pull the anchor down
+      ONTO existing coverage, never below it, so it can delete an evidence-free
+      lead but can never cancel granted service.
+
+    Retraction after a refund, chargeback, reversal, or reallocation needs no
+    special authority: once this invoice's entitlements are revoked they leave
+    the coverage union, and the anchor follows the evidence down on its own.
     """
 
     rows = db.execute(
@@ -1120,22 +1171,29 @@ def project_prepaid_billing_anchor_for_invoice(
             else None
         )
         coverage_end = coverage_end_by_subscription.get(subscription_id)
-        if coverage_end is not None:
-            # Surviving coverage wins, but it can never leave the period this
-            # invoice funded looking covered when it no longer is: an extension
-            # that already expired retracts to the unfunded period start.
-            target: datetime | None = max(coverage_end, unfunded_start)
-            if invoice_still_funds.get(subscription_id) and previous is not None:
-                # Nothing was revoked, so this is an advancement. Never move the
-                # anchor backwards over a lead another owner granted.
-                target = max(previous, target)
+        # The floor every authority shares: surviving coverage, but never
+        # leaving the period this invoice funded looking covered when it is not
+        # (an extension that already expired cannot vouch for it).
+        floor = (
+            max(coverage_end, unfunded_start)
+            if coverage_end is not None
+            else unfunded_start
+        )
+        if coverage_end is None and previous is not None and previous < unfunded_start:
+            # Nothing survives and an earlier unpaid period is already due.
+            # Never push a due anchor later.
+            target: datetime | None = previous
+        elif (
+            authority is BillingAnchorAuthority.funding_observation
+            and invoice_still_funds.get(subscription_id)
+            and previous is not None
+        ):
+            # Observational trigger, nothing revoked: monotonic. An anchor
+            # ahead of coverage may be a grant this owner cannot see.
+            target = max(previous, floor)
         else:
-            # No coverage survives for this subscription at all, so the period
-            # this invoice funded is due again from its own start.
-            target = unfunded_start
-            if previous is not None and previous < unfunded_start:
-                # An earlier unpaid period is already due; never push it later.
-                target = previous
+            # Reviewed correction, or a retraction the evidence already forces.
+            target = floor
         retracted = previous is not None and target < previous
         changed = target != previous
         if changed:
@@ -1149,6 +1207,7 @@ def project_prepaid_billing_anchor_for_invoice(
                 coverage_end=coverage_end,
                 changed=changed,
                 retracted=retracted and changed,
+                authority=authority,
             )
         )
     if changed_any:
@@ -1161,6 +1220,7 @@ def project_prepaid_billing_anchor_for_invoice(
                 "invoice_id": str(invoice.id),
                 "account_id": str(invoice.account_id),
                 "evidence_ref": evidence_ref,
+                "authority": authority.value,
                 "projections": [
                     {
                         "subscription_id": str(item.subscription_id),
@@ -1997,6 +2057,7 @@ def run_due_prepaid_service_renewals(
 
 __all__ = [
     "STALE_BILLING_ANCHOR_REPAIR_SCOPE",
+    "BillingAnchorAuthority",
     "BillingAnchorProjection",
     "FundingChangeEvaluation",
     "FundingChangeEvaluationDisposition",
