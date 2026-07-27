@@ -1993,6 +1993,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "all-or-nothing exact invoice credit application",
                     "invoice-void release of exact account-credit allocations",
                     "account-credit application invariant monitoring",
+                    "bounded account-credit invariant summary",
                 ),
                 depends_on=("financial.payments", "financial.invoices"),
                 notes=(
@@ -7727,7 +7728,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "Billing health is monitoring evidence, never a financial "
-                    "balance owner or direct suspension/restoration decision."
+                    "balance owner or direct suspension/restoration decision. "
+                    "The frequent snapshot consumes typed aggregate counts; "
+                    "record-level forensic inspection stays with the financial "
+                    "owner and is not used merely to calculate a metric count."
                 ),
             ),
             SOTService(
@@ -10228,21 +10232,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
-                name="network.ip_assignment_service_ownership",
-                module="app.services.ip_assignment_repair",
-                owns=("exact service ownership of active IPv4 assignments",),
+                name="network.ip_assignment_lifecycle",
+                module="app.services.ip_assignment_lifecycle",
+                owns=(
+                    "exact service ownership of active IPv4 assignments",
+                    "reviewed exact-service IPv4 assignment lifecycle repair",
+                    "reviewed exact-service IPv4 served projection repair",
+                ),
                 depends_on=(
+                    "access.radius_projection",
+                    "access.session_enforcement",
                     "access.subscription_lifecycle",
                     "events.dispatcher",
+                    "network.identity",
                     "observability.audit_log",
+                    "sessions.radius_reconciliation",
                 ),
                 notes=(
-                    "IPAssignment remains the address-allocation authority. This "
-                    "migration owner repairs only a missing subscription_id when "
-                    "one active assignment, one active service, the subscriber, "
-                    "and the served-address compatibility projection agree. It "
-                    "never creates, moves, releases, reclaims, or deactivates an "
-                    "address and never writes Subscription.ipv4_address or RADIUS."
+                    "IPAssignment remains the desired-address authority. This "
+                    "shadowing owner retains the safe ownership-only backfill and "
+                    "fingerprinted exact-service create/link/deactivate repair. The "
+                    "reviewed projection command may converge only the exact "
+                    "Subscription.ipv4_address copy; its durable event delegates "
+                    "RADIUS and old-IP session consequences to their owners. Normal "
+                    "provisioning writers remain declared migration debt until the "
+                    "later runtime cutover."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -10255,15 +10269,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "served IPv4 compatibility projection",
                                 "reviewed ownership repair command",
                             ),
-                            canonical_writer=(
-                                "network.ip_assignment_service_ownership"
+                            canonical_writer=("network.ip_assignment_lifecycle"),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "reviewed exact-service IPv4 assignment lifecycle repair"
                             ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "serviceable IPv4 address inventory",
+                                "reviewed lifecycle repair command",
+                            ),
+                            canonical_writer="network.ip_assignment_lifecycle",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "reviewed exact-service IPv4 served projection repair"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "served IPv4 compatibility projection",
+                                "observed RADIUS IPv4 projection",
+                                "active RADIUS session observation",
+                                "reviewed served projection repair command",
+                            ),
+                            canonical_writer="network.ip_assignment_lifecycle",
                         ),
                     ),
                     authoritative_inputs=(
                         AuthorityInput(
                             name="canonical active IPv4 assignment",
-                            owner="network.ip_assignment_service_ownership",
+                            owner="network.ip_assignment_lifecycle",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
                                 "active IPAssignment identity, address, subscriber, "
@@ -10280,7 +10320,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="served IPv4 compatibility projection",
-                            owner="network.ip_assignment_service_ownership",
+                            owner="network.ip_assignment_lifecycle",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
                                 "Subscription.ipv4_address used only to verify an "
@@ -10290,25 +10330,77 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="reviewed ownership repair command",
-                            owner="network.ip_assignment_service_ownership",
+                            owner="network.ip_assignment_lifecycle",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "exact assignment cohort, preview SHA-256, actor, "
                                 "reason, and idempotency key"
                             ),
                         ),
+                        AuthorityInput(
+                            name="serviceable IPv4 address inventory",
+                            owner="network.ip_assignment_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IPv4Address and IpPool identity, active state, "
+                                "reservation, management allocation, ONT binding, "
+                                "network-device address identity, and active "
+                                "routed-block exclusions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed lifecycle repair command",
+                            owner="network.ip_assignment_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact subscription, desired IPv4 address, exact "
+                                "deactivation cohort, preview SHA-256, actor, reason, "
+                                "and idempotency key"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="observed RADIUS IPv4 projection",
+                            owner="access.radius_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "DB-configured external radcheck and radreply state "
+                                "for the exact selected service login"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active RADIUS session observation",
+                            owner="sessions.radius_reconciliation",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "active exact-subscription session identities and "
+                                "their currently framed IPv4 addresses"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed served projection repair command",
+                            owner="network.ip_assignment_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact subscription and assignment identifiers, "
+                                "preview SHA-256, actor, reason, and idempotency key"
+                            ),
+                        ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "The public reconciliation command enters "
+                            "Each public ownership, lifecycle, or served-projection "
+                            "command enters "
                             "execute_owner_command once on a transaction-free "
                             "session; the operator adapter owns session lifecycle."
                         ),
                         locking=(
-                            "Selected IPAssignment, Subscriber, and proposed "
-                            "Subscription rows are locked in stable identifier "
-                            "order before evidence is recomputed."
+                            "The exact Subscription, Subscriber, selected "
+                            "IPAssignment, desired IPv4Address, desired IpPool, and "
+                            "all relevant assignment rows are locked. PostgreSQL "
+                            "also holds routed-block and device-IP inventories in "
+                            "SHARE mode for ledger repair; every command recomputes "
+                            "its complete evidence before mutation."
                         ),
                         idempotency=(
                             "A durable audit row binds the idempotency key to the "
@@ -10322,38 +10414,52 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     errors=ErrorContract(
                         domain_codes=(
-                            "network.ip_assignment_service_ownership.active_caller_transaction",
-                            "network.ip_assignment_service_ownership.assignment_not_found",
-                            "network.ip_assignment_service_ownership.command_contract_violation",
-                            "network.ip_assignment_service_ownership.duplicate_assignment",
-                            "network.ip_assignment_service_ownership.empty_cohort",
-                            "network.ip_assignment_service_ownership.idempotency_conflict",
-                            "network.ip_assignment_service_ownership.invalid_command_context",
-                            "network.ip_assignment_service_ownership.missing_idempotency_key",
-                            "network.ip_assignment_service_ownership.nested_owner_command",
-                            "network.ip_assignment_service_ownership.nested_transaction_completion",
-                            "network.ip_assignment_service_ownership.stale_preview",
-                            "network.ip_assignment_service_ownership.unsafe_cohort",
+                            "network.ip_assignment_lifecycle.active_caller_transaction",
+                            "network.ip_assignment_lifecycle.assignment_not_found",
+                            "network.ip_assignment_lifecycle.command_contract_violation",
+                            "network.ip_assignment_lifecycle.duplicate_assignment",
+                            "network.ip_assignment_lifecycle.empty_cohort",
+                            "network.ip_assignment_lifecycle.idempotency_conflict",
+                            "network.ip_assignment_lifecycle.invalid_command_context",
+                            "network.ip_assignment_lifecycle.missing_idempotency_key",
+                            "network.ip_assignment_lifecycle.nested_owner_command",
+                            "network.ip_assignment_lifecycle.nested_transaction_completion",
+                            "network.ip_assignment_lifecycle.stale_preview",
+                            "network.ip_assignment_lifecycle.subscriber_not_found",
+                            "network.ip_assignment_lifecycle.subscription_not_found",
+                            "network.ip_assignment_lifecycle.unsafe_projection_repair",
+                            "network.ip_assignment_lifecycle.unsafe_repair",
+                            "network.ip_assignment_lifecycle.unsafe_cohort",
                         ),
                         mapping_owner="operator CLI and future administrative adapters",
                         fail_closed_on=(
                             "ambiguous service ownership",
                             "multiple active services or assignments",
                             "subscriber or served-address disagreement",
+                            "cross-service deactivation or address ownership",
+                            "reserved, management, routed, or inactive-pool address",
                             "changed preview evidence",
+                            "RADIUS or session observation disagreement",
+                            "shared-login selection disagreement",
                         ),
                     ),
                     events=EventContract(
-                        event_types=("ip_assignment.service_ownership_reconciled",),
+                        event_types=(
+                            "ip_assignment.service_ownership_reconciled",
+                            "ip_assignment.lifecycle_repaired",
+                            "ip_assignment.served_projection_repaired",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
-                            "Version 1 carries only the exact assignment cohort, "
-                            "preview fingerprint, and linked count."
+                            "Version 1 events carry exact assignment identifiers, "
+                            "subscription identity, preview fingerprint, bounded "
+                            "mutation counts, and old/new address consequence "
+                            "evidence without customer identity data."
                         ),
                         replay=(
                             "The durable batch audit row and item audit rows "
-                            "reconstruct the ownership-only outcome."
+                            "reconstruct each ownership or lifecycle outcome."
                         ),
                     ),
                     projections=(
@@ -10365,7 +10471,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "served IPv4 compatibility projection",
                                 "reviewed ownership repair command",
                             ),
-                            writer="network.ip_assignment_service_ownership",
+                            writer="network.ip_assignment_lifecycle",
                             freshness=(
                                 "A linked active assignment is current only while "
                                 "its active service, subscriber, and address "
@@ -10383,37 +10489,77 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "Re-run the dry-run preview and confirm only the "
                                 "reviewed repairable cohort with its exact SHA-256."
                             ),
-                            repair_owner=("network.ip_assignment_service_ownership"),
+                            repair_owner=("network.ip_assignment_lifecycle"),
+                        ),
+                        ProjectionContract(
+                            name="exact-service served IPv4 compatibility projection",
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "served IPv4 compatibility projection",
+                                "observed RADIUS IPv4 projection",
+                                "active RADIUS session observation",
+                                "reviewed served projection repair command",
+                            ),
+                            writer="network.ip_assignment_lifecycle",
+                            freshness=(
+                                "Subscription.ipv4_address is current only while it "
+                                "equals the single active exact-service assignment; "
+                                "RADIUS and session observations are checked at each "
+                                "preview and again under the command lock."
+                            ),
+                            stale_behavior=(
+                                "Missing, multiple, shared-login, RADIUS-disagreed, "
+                                "or session-conflicted evidence fails closed."
+                            ),
+                            drift_signal=(
+                                "The exact-service IP consistency audit compares one "
+                                "unambiguous assignment to served and policy-aware "
+                                "RADIUS projections."
+                            ),
+                            rebuild_operation=(
+                                "Run the dry-run exact-service projection adapter, "
+                                "apply its exact fingerprint, then let the durable "
+                                "event reconcile RADIUS and old-IP sessions."
+                            ),
+                            repair_owner="network.ip_assignment_lifecycle",
                         ),
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.SHADOWING,
                         old_owner=(
-                            "subscriber-level ip_assignment_repair that treated "
-                            "Subscription.ipv4_address as allocation authority"
+                            "generic IPAssignments CRUD, provisioning_helpers, "
+                            "web_network_ip, subscriber_wan_ipam, and ip_lifecycle "
+                            "direct writers"
                         ),
-                        new_owner="network.ip_assignment_service_ownership",
+                        new_owner="network.ip_assignment_lifecycle",
                         verification=(
-                            "Full-fleet classification plus focused contract, "
-                            "stale-preview, idempotency, and sole-writer tests."
+                            "Full-fleet classification, exact-service ledger and "
+                            "served-projection previews, and focused contract, "
+                            "stale-preview, consequence, and idempotency tests."
                         ),
                         cutover_gate=(
                             "Every active assignment has an exact service link or "
-                            "reviewed blocker, and safe ownership-only backfill is "
-                            "verified before exact-service runtime cutover."
+                            "reviewed quarantine reason; reviewed repair converges "
+                            "the IPAM ledger and served/RADIUS/session projections; "
+                            "remaining projection drift is near zero before "
+                            "unconditional exact-service runtime cutover."
                         ),
                         fallback_retirement=(
-                            "Legacy create, repoint, reclaim, deactivate, and "
-                            "per-item commit behavior is removed."
+                            "Normal provisioning, admin assignment, terminal release, "
+                            "WAN claim, and generic CRUD writers delegate to this "
+                            "owner or are removed before migration completion."
                         ),
                     ),
                     steward="network operations",
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md",
                     ),
                     test_refs=(
                         "tests/test_ip_assignment_repair.py",
+                        "tests/test_ip_assignment_lifecycle.py",
                         "tests/architecture/test_ip_assignment_service_ownership.py",
                     ),
                 ),
@@ -11915,6 +12061,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "customer.identity_scope",
                     "communications.team_inbox_threads",
+                    "control.settings_spec",
+                ),
+                notes=(
+                    "ADR 0006 temporarily assigns portal live-chat authority to CRM "
+                    "when comms.chat_session_authority=crm. This native command owner "
+                    "then fails closed for both new and previously issued widget tokens; "
+                    "it never mirrors or falls back to a local write."
                 ),
                 contract=_team_inbox_contract(
                     service_name="communications.team_inbox_widget",
@@ -11937,11 +12090,34 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source="Native chat-widget conversation and message chronology.",
                         ),
+                        AuthorityInput(
+                            name="live-chat authority selection",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "Database-authoritative "
+                                "comms.chat_session_authority control; native commands "
+                                "are accepted only when the value resolves to selfcare."
+                            ),
+                        ),
                     ),
                     transaction_mode=TransactionMode.OWNER_MANAGED,
                     event_types=(
                         "team_inbox.widget_message_recorded.v1",
                         "team_inbox.widget_read_state_changed.v1",
+                    ),
+                    design_refs=(
+                        "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+                        "docs/adr/0006-temporary-crm-chat-authority.md",
+                        "docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_chat_session.py",
+                        "tests/test_team_inbox_widget_native.py",
+                        "tests/architecture/test_team_inbox_boundaries.py",
+                        "tests/architecture/test_team_inbox_sot_contracts.py",
                     ),
                 ),
             ),
@@ -13850,37 +14026,135 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="ai_advisory",
         services=(
             SOTService(
+                name="ai.gateway",
+                module="app.services.ai.gateway",
+                owns=(
+                    "LLM provider transport",
+                    "provider circuit-breaker and endpoint health",
+                ),
+                notes=(
+                    "The same species as a payment gateway: an external system "
+                    "Sub calls. Holds no business rule and owns no domain "
+                    "state. Credentials resolve through secrets (OpenBao), "
+                    "never settings rows. See docs/designs/AI_SOT.md."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="LLM provider transport",
+                            role=OwnerRole.TRANSPORT,
+                            input_names=(
+                                "assembled advisory prompt",
+                                "resolved provider credential",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="provider circuit-breaker and endpoint health",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("observed provider response",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="assembled advisory prompt",
+                            owner="ai.generation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "System prompt plus the caller's owned "
+                                "projection, already redacted to the advisor's "
+                                "declared input sensitivity."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="resolved provider credential",
+                            owner="secrets.reference_store",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="OpenBao-backed provider API key.",
+                        ),
+                        AuthorityInput(
+                            name="observed provider response",
+                            owner="external:llm_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="HTTP status, latency and token counts.",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "Holds no transaction and writes no row. Circuit "
+                            "state is process-local."
+                        ),
+                        locking="None.",
+                        idempotency=(
+                            "None: a repeated generation is a new provider "
+                            "call and new spend."
+                        ),
+                        retries=(
+                            "Falls back to the secondary endpoint, then fails "
+                            "closed. An open circuit refuses before calling."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ai.gateway.disabled",
+                            "ai.gateway.circuit_open",
+                            "ai.gateway.provider_unavailable",
+                        ),
+                        mapping_owner="app.services.ai.engine",
+                        retryable_codes=("ai.gateway.provider_unavailable",),
+                        fail_closed_on=(
+                            "ai.gateway.disabled",
+                            "ai.gateway.circuit_open",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="ai.gateway",
+                        verification=(
+                            "tests/test_ai_engine.py exercises the transport "
+                            "through the advisory port."
+                        ),
+                    ),
+                    steward="customer experience platform",
+                    design_refs=("docs/designs/AI_SOT.md",),
+                    test_refs=(
+                        "tests/test_ai_engine.py",
+                        "tests/architecture/test_ai_boundaries.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="ai.insights",
                 module="app.services.ai_operations",
                 owns=(
                     "AI insight rows",
                     "insight lifecycle: create, acknowledge, expire",
-                    "per-scope AI intake configuration",
                 ),
                 notes=(
                     "The canonical writer of AIInsight. Generated insights "
-                    "land here and nowhere else; AiIntakeConfig owns the "
-                    "per-scope/channel decision to run AI at all. AI is "
-                    "advisory: it never mutates domain state — acting on a "
-                    "recommendation means calling the domain's declared "
-                    "owner. See docs/designs/AI_SOT.md."
+                    "land here and nowhere else. AI is advisory: it never "
+                    "mutates domain state — acting on a recommendation means "
+                    "calling the domain's declared owner. AiIntakeConfig is a "
+                    "CRM import for an unimplemented conversational-intake "
+                    "feature and gates nothing; see docs/designs/AI_SOT.md."
                 ),
             ),
             SOTService(
                 name="ai.generation",
                 module="app.services.ai.engine",
                 owns=(
-                    "the report-advisory generation path",
+                    "the advisory generation path",
                     "advisor lookup, token budget, and prompt assembly",
+                    "input-sensitivity redaction before a prompt leaves",
                 ),
-                depends_on=("ai.insights",),
+                depends_on=("ai.insights", "ai.gateway"),
                 notes=(
-                    "advise() takes the CALLER's owned report projection and "
-                    "never queries a domain model, so the AI boundary holds by "
-                    "construction. It persists only through ai.insights (the "
-                    "single AIInsight writer). Behind the default-OFF "
-                    "ai.generation control. Called on demand from the admin "
-                    "report surface (app.web.admin.reports)."
+                    "advise() takes the CALLER's owned projection and never "
+                    "queries a domain model, so the AI boundary holds by "
+                    "construction rather than by vigilance — this is why "
+                    "personas were removed from the design. It persists only "
+                    "through ai.insights. Behind the default-OFF ai.generation "
+                    "control. Called on demand from the admin report surface."
                 ),
             ),
         ),
@@ -13890,10 +14164,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.reports",
         ),
         rule=(
-            "AI observes, derives, and recommends; it never decides domain "
-            "state. Insight consequences are requested from the owning domain "
-            "service, which applies its own guards, events, and audit. No "
-            "app/services/ai* module writes a non-AI ORM row."
+            "AI advises ON an owned projection and never re-derives one: the "
+            "caller hands in what it already computes, so the boundary holds "
+            "by construction. AI observes, derives, and recommends; it never "
+            "decides domain state. Insight consequences are requested from the "
+            "owning domain service, which applies its own guards, events, and "
+            "audit. No app/services/ai* module writes a non-AI ORM row."
         ),
     ),
     DomainSOT(
