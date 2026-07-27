@@ -336,9 +336,7 @@ class BillingContractVersion(Base):
     source_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     # Effective half-open interval [starts_at, ends_at).
-    starts_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Contracted money.
@@ -347,12 +345,8 @@ class BillingContractVersion(Base):
 
     # Composable cadence (ADR 0007 section 4). Rate unit and invoice interval
     # are independent typed facts, so a daily rate can aggregate monthly.
-    rate_basis: Mapped[RateBasis] = mapped_column(
-        _rate_basis_enum, nullable=False
-    )
-    rate_unit: Mapped[IntervalUnit] = mapped_column(
-        _interval_unit_enum, nullable=False
-    )
+    rate_basis: Mapped[RateBasis] = mapped_column(_rate_basis_enum, nullable=False)
+    rate_unit: Mapped[IntervalUnit] = mapped_column(_interval_unit_enum, nullable=False)
     rate_quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 4), nullable=False, default=Decimal("1")
     )
@@ -392,13 +386,9 @@ class BillingContractVersion(Base):
     )
 
     # Terms and tax inputs consumed by rating and documents.
-    payment_terms_days: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
+    payment_terms_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tax_treatment_code: Mapped[str | None] = mapped_column(String(60))
-    tax_inclusive: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
+    tax_inclusive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     discount_code: Mapped[str | None] = mapped_column(String(60))
     discount_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
 
@@ -465,9 +455,7 @@ class BillingContractLine(Base):
         _charge_component_enum, nullable=False
     )
     # Distinguishes two lines of the same component (e.g. two addons).
-    component_key: Mapped[str] = mapped_column(
-        String(120), nullable=False, default=""
-    )
+    component_key: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(
         Numeric(14, 4), nullable=False, default=Decimal("1")

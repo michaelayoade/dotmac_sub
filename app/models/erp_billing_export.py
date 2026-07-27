@@ -57,9 +57,7 @@ class ErpBillingExport(Base):
 
     __tablename__ = "erp_billing_exports"
     __table_args__ = (
-        UniqueConstraint(
-            "idempotency_key", name="uq_erp_billing_export_idempotency"
-        ),
+        UniqueConstraint("idempotency_key", name="uq_erp_billing_export_idempotency"),
         Index("ix_erp_billing_export_status", "status"),
         Index("ix_erp_billing_export_source", "source_kind", "source_id"),
     )

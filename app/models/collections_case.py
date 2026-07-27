@@ -96,9 +96,7 @@ class CollectionsCase(Base):
     source_kind: Mapped[str] = mapped_column(String(80), nullable=False)
     source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
 
-    opened_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     warned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     consequence_requested_at: Mapped[datetime | None] = mapped_column(

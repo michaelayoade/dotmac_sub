@@ -74,7 +74,6 @@ def _error(suffix: str, message: str, **details: object) -> BillingContractError
     )
 
 
-
 def _aware_utc(value: datetime | None) -> datetime | None:
     """Restore UTC tzinfo on instants read back from persistence.
 
@@ -456,8 +455,7 @@ class BillingContracts:
             select(BillingContractVersion)
             .where(
                 BillingContractVersion.contract_id == contract_id,
-                BillingContractVersion.status
-                == BillingContractVersionStatus.effective,
+                BillingContractVersion.status == BillingContractVersionStatus.effective,
                 BillingContractVersion.ends_at.is_(None),
             )
             .with_for_update()

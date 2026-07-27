@@ -79,7 +79,6 @@ def _error(suffix: str, message: str, **details: object) -> BillingObligationErr
     )
 
 
-
 def _aware_utc(value: datetime | None) -> datetime | None:
     """Restore UTC tzinfo on instants read back from persistence.
 
@@ -437,9 +436,7 @@ class BillingObligations:
             ),
         )
         if treatment is not None:
-            query = query.where(
-                BillingObligation.accounting_treatment == treatment
-            )
+            query = query.where(BillingObligation.accounting_treatment == treatment)
         ordered = query.order_by(BillingObligation.period_start)
         return list(db.execute(ordered).scalars())
 

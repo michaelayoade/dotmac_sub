@@ -226,9 +226,7 @@ def _align_start(start: datetime, cadence: BillingCadence) -> datetime:
             midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
             aligned = midnight - timedelta(days=midnight.weekday())
         elif unit is IntervalUnit.month:
-            aligned = local.replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
-            )
+            aligned = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         else:
             aligned = local.replace(
                 month=1, day=1, hour=0, minute=0, second=0, microsecond=0
@@ -239,9 +237,7 @@ def _align_start(start: datetime, cadence: BillingCadence) -> datetime:
     assert cadence.anchor_day is not None  # guaranteed by __post_init__
     last_day = calendar.monthrange(local.year, local.month)[1]
     day = min(cadence.anchor_day, last_day)
-    anchored = local.replace(
-        day=day, hour=0, minute=0, second=0, microsecond=0
-    )
+    anchored = local.replace(day=day, hour=0, minute=0, second=0, microsecond=0)
     if anchored > local:
         # The anchor for this month is still ahead; the current period began
         # on the previous month's anchor.

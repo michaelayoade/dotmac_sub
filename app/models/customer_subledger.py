@@ -160,9 +160,7 @@ class CustomerPositionEffect(Base):
     __table_args__ = (
         Index("ix_customer_position_effect_group", "group_id"),
         Index("ix_customer_position_effect_links", "obligation_id"),
-        CheckConstraint(
-            "amount > 0", name="ck_customer_position_effect_positive"
-        ),
+        CheckConstraint("amount > 0", name="ck_customer_position_effect_positive"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

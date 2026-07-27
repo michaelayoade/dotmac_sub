@@ -2478,8 +2478,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "current dunning outcomes for the candidate cohort."
                         ),
                         fallback_retirement=(
-                            "Inline dunning rule evaluation is removed after "
-                            "cutover."
+                            "Inline dunning rule evaluation is removed after cutover."
                         ),
                     ),
                     steward="billing operations",
@@ -2558,13 +2557,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.SHADOWING,
-                        old_owner=(
-                            "prepaid balance sweep threshold evaluation"
-                        ),
+                        old_owner=("prepaid balance sweep threshold evaluation"),
                         new_owner="collections.prepaid_policy",
                         verification=(
-                            "Underfunded, covered, and not-yet-started planner "
-                            "tests."
+                            "Underfunded, covered, and not-yet-started planner tests."
                         ),
                         cutover_gate=(
                             "ADR 0007 Phase 5 gate: planner proposals match "
@@ -2909,20 +2905,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "committed billing owner outputs",
                                 "recorded ERP exports",
                             ),
-                            canonical_writer=(
-                                "integration.dotmac_erp_billing_adapter"
-                            ),
+                            canonical_writer=("integration.dotmac_erp_billing_adapter"),
                         ),
                         ConcernContract(
-                            name=(
-                                "durable ERP delivery and acknowledgement "
-                                "evidence"
-                            ),
+                            name=("durable ERP delivery and acknowledgement evidence"),
                             role=OwnerRole.COMMAND_WRITER,
                             input_names=("recorded ERP exports",),
-                            canonical_writer=(
-                                "integration.dotmac_erp_billing_adapter"
-                            ),
+                            canonical_writer=("integration.dotmac_erp_billing_adapter"),
                         ),
                     ),
                     authoritative_inputs=(

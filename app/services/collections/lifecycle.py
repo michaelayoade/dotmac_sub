@@ -380,9 +380,7 @@ class CollectionsLifecycle:
                     "account_id": str(case.account_id),
                     "subscription_id": str(case.subscription_id),
                     "close_reason": close_reason,
-                    "consequence_idempotency_key": (
-                        case.consequence_idempotency_key
-                    ),
+                    "consequence_idempotency_key": (case.consequence_idempotency_key),
                 },
                 context=context,
                 account_id=case.account_id,
