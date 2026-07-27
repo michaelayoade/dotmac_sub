@@ -96,7 +96,7 @@ def test_rescheduling_supersedes_and_bumps_the_generation(db_session):
     entity_id = uuid4()
     first = _schedule(db_session, entity_id=entity_id, due_at=NOW)
     first_id = first.id
-    db_session.rollback()
+    db_session.commit()
 
     second = _schedule(
         db_session, entity_id=entity_id, due_at=NOW + timedelta(days=1)
@@ -118,7 +118,7 @@ def test_rescheduling_supersedes_and_bumps_the_generation(db_session):
 def test_cancel_is_idempotent(db_session):
     entity_id = uuid4()
     _schedule(db_session, entity_id=entity_id, due_at=NOW)
-    db_session.rollback()
+    db_session.commit()
 
     context = _context()
 
@@ -149,7 +149,7 @@ def test_firing_emits_only_the_declared_trigger_and_marks_the_timer(db_session):
     entity_id = uuid4()
     timer = _schedule(db_session, entity_id=entity_id, due_at=NOW)
     timer_id = timer.id
-    db_session.rollback()
+    db_session.commit()
 
     fired = fire_due_timers(
         db_session, now=NOW + timedelta(minutes=1), context=_context()
@@ -177,7 +177,7 @@ def test_firing_emits_only_the_declared_trigger_and_marks_the_timer(db_session):
 def test_a_timer_that_is_not_due_does_not_fire(db_session):
     entity_id = uuid4()
     _schedule(db_session, entity_id=entity_id, due_at=NOW + timedelta(days=2))
-    db_session.rollback()
+    db_session.commit()
 
     fired = fire_due_timers(db_session, now=NOW, context=_context())
 
@@ -189,11 +189,11 @@ def test_a_superseded_timer_never_fires(db_session):
 
     entity_id = uuid4()
     _schedule(db_session, entity_id=entity_id, due_at=NOW)
-    db_session.rollback()
+    db_session.commit()
     _schedule(
         db_session, entity_id=entity_id, due_at=NOW + timedelta(days=30)
     )
-    db_session.rollback()
+    db_session.commit()
 
     fired = fire_due_timers(
         db_session, now=NOW + timedelta(minutes=1), context=_context()
@@ -205,7 +205,7 @@ def test_a_superseded_timer_never_fires(db_session):
 def test_the_due_scan_is_bounded(db_session):
     for _ in range(3):
         _schedule(db_session, entity_id=uuid4(), due_at=NOW)
-        db_session.rollback()
+        db_session.commit()
 
     fired = fire_due_timers(
         db_session,

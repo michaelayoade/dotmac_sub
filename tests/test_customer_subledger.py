@@ -265,7 +265,7 @@ def test_reversal_negates_the_original_and_chains_once(db_session, account_id):
     assert position.collectible_receivable == Decimal("0")
     # Close the read transaction the position query opened; the next owner
     # command requires a transaction-free session.
-    db_session.rollback()
+    db_session.commit()
 
     second_context = _context()
     with pytest.raises(CustomerSubledgerError) as excinfo:

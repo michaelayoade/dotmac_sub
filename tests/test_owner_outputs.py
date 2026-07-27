@@ -112,7 +112,7 @@ def test_a_failed_producer_command_leaves_no_output(db_session):
     with pytest.raises(Boom):
         _in_owner_command(db_session, operation)
 
-    db_session.rollback()
+    db_session.commit()
     count = len(db_session.execute(select(EventStore)).scalars().all())
     assert count == 0
 
@@ -140,7 +140,7 @@ def test_consumer_effect_and_receipt_commit_together_and_replay_once(db_session)
     assert receipt.outcome is ReceiptOutcome.succeeded
     # Reading the receipt after commit opened a refresh transaction; close it
     # so the next owner command starts transaction-free.
-    db_session.rollback()
+    db_session.commit()
 
     # Redelivery: same consumer, same event. The effect must not run again.
     second_context = _context("pytest:consumer-key-2")
@@ -174,7 +174,7 @@ def test_a_raised_consumer_error_leaves_no_receipt(db_session):
     with pytest.raises(Transient):
         _in_owner_command(db_session, consume)
 
-    db_session.rollback()
+    db_session.commit()
     receipts = db_session.execute(select(OwnerOutputReceipt)).scalars().all()
     # No receipt: the delivery stays durably retryable, not silently done.
     assert receipts == []
@@ -199,7 +199,7 @@ def test_terminal_failure_is_recorded_with_evidence_and_only_once(db_session):
 
     assert receipt.outcome is ReceiptOutcome.terminal_failure
     assert "reviewed" in receipt.failure_reason
-    db_session.rollback()
+    db_session.commit()
 
     second_context = _context()
     with pytest.raises(OwnerOutputError) as excinfo:
