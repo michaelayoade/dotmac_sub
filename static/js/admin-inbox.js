@@ -38,6 +38,7 @@
         288,
         448,
       ),
+      resizingSidebar: false,
       filtersOpen: parseStoredBoolean(KEYS.filtersOpen, false),
       byAgentOpen: Boolean(
         new URLSearchParams(window.location.search).get("assigned_person_id") ||
@@ -51,12 +52,15 @@
       realtimeConnected: false,
       contactOpen: false,
       newConversationOpen: false,
+      newConversationSubmitting: false,
+      managerDashboardOpen: false,
       ticketPanelOpen: false,
       commandPaletteOpen: false,
       shortcutHelpOpen: false,
       commandQuery: "",
       presenceText: "",
       newMessagesAvailable: false,
+      newListActivityAvailable: false,
       toastMessage: "",
       socket: null,
       reconnectTimer: null,
@@ -66,12 +70,13 @@
       inFlight: new Set(),
       newConversation: {
         channel: "email",
-        inbox: "support",
+        contactName: "",
         recipient: "",
         subject: "",
         cc: "",
         bcc: "",
         template: "",
+        templateValues: "",
         body: "",
         files: [],
         error: "",
@@ -103,11 +108,23 @@
       },
 
       startSidebarResize(event) {
-        if (window.innerWidth < 768) return;
-        event.currentTarget.setPointerCapture?.(event.pointerId);
+        if (window.innerWidth <= 639) return;
+        event.preventDefault();
+        const handle = event.currentTarget;
+        const pointerId = event.pointerId;
+        handle.setPointerCapture?.(pointerId);
         const startX = event.clientX;
         const startWidth = this.sidebarWidth;
+        const previousBodyCursor = document.body.style.cursor;
+        const previousBodyUserSelect = document.body.style.userSelect;
+        const previousRootCursor = document.documentElement.style.cursor;
+        this.resizingSidebar = true;
+        document.body.style.cursor = "ew-resize";
+        document.body.style.userSelect = "none";
+        document.documentElement.style.cursor = "ew-resize";
         const move = (moveEvent) => {
+          if (moveEvent.pointerId !== pointerId) return;
+          moveEvent.preventDefault();
           this.sidebarWidth = clamp(
             startWidth + moveEvent.clientX - startX,
             288,
@@ -118,15 +135,30 @@
             `${this.sidebarWidth}px`,
           );
         };
-        const stop = () => {
+        const stop = (stopEvent) => {
+          if (
+            stopEvent?.pointerId !== undefined &&
+            stopEvent.pointerId !== pointerId
+          ) {
+            return;
+          }
           localStorage.setItem(KEYS.sidebarWidth, String(this.sidebarWidth));
+          this.resizingSidebar = false;
+          document.body.style.cursor = previousBodyCursor;
+          document.body.style.userSelect = previousBodyUserSelect;
+          document.documentElement.style.cursor = previousRootCursor;
+          if (handle.hasPointerCapture?.(pointerId)) {
+            handle.releasePointerCapture(pointerId);
+          }
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", stop);
           window.removeEventListener("pointercancel", stop);
+          window.removeEventListener("blur", stop);
         };
         window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", stop, { once: true });
-        window.addEventListener("pointercancel", stop, { once: true });
+        window.addEventListener("pointerup", stop);
+        window.addEventListener("pointercancel", stop);
+        window.addEventListener("blur", stop);
       },
 
       persistFilters() {
@@ -201,7 +233,10 @@
               }
             }
           }
-          if (target.id === "inbox-sidebar-content") {
+          if (
+            target.id === "inbox-sidebar-content" ||
+            target.id === "inbox-conversation-queue"
+          ) {
             this.syncSelectedCheckboxes();
             this.updateSelectedHighlight();
             this.subscribeVisibleTopics();
@@ -246,6 +281,7 @@
 
       filterRequestStarted() {
         this.newMessagesAvailable = false;
+        this.newListActivityAvailable = false;
       },
 
       showList() {
@@ -268,9 +304,9 @@
       updateSelectedHighlight() {
         document.querySelectorAll(".conversation-item").forEach((row) => {
           const selected = row.dataset.conversationId === this.selectedId;
-          row.classList.toggle("border-l-amber-500", selected);
-          row.classList.toggle("bg-amber-50", selected);
-          row.querySelector("a")?.toggleAttribute("aria-current", selected);
+          row
+            .querySelector("[data-conversation-link]")
+            ?.toggleAttribute("aria-current", selected);
         });
       },
 
@@ -342,6 +378,22 @@
             url.searchParams.set(key, value);
           }
         });
+        if (this.selectedId) {
+          url.searchParams.set("conversation_id", this.selectedId);
+        }
+        history.pushState({}, "", url);
+        window.htmx.ajax("GET", `${url.pathname}${url.search}`, {
+          target: "#inbox-sidebar-content",
+          swap: "innerHTML",
+        });
+      },
+
+      searchConversations(value) {
+        const url = new URL(window.location.href);
+        const search = String(value || "").trim();
+        if (search) url.searchParams.set("search", search);
+        else url.searchParams.delete("search");
+        url.searchParams.delete("page");
         if (this.selectedId) {
           url.searchParams.set("conversation_id", this.selectedId);
         }
@@ -528,16 +580,43 @@
         this.contactOpen = false;
       },
       openNewConversation() {
+        this.managerDashboardOpen = false;
+        this.newConversationSubmitting = false;
         this.newConversationOpen = true;
         this.$nextTick(() =>
           this.$refs.newConversationDialog?.querySelector("select, input")?.focus(),
         );
+      },
+      closeNewConversation() {
+        if (this.newConversationSubmitting) return;
+        this.newConversationOpen = false;
+      },
+      prepareNewConversation() {
+        this.newConversationSubmitting = true;
+      },
+      selectNewConversationTemplate(event) {
+        const option = event.target.selectedOptions?.[0];
+        if (!option) return;
+        const body = option.dataset.body || "";
+        if (body) this.newConversation.body = body;
+        const subject = option.dataset.subject || "";
+        if (subject && !this.newConversation.subject) {
+          this.newConversation.subject = subject;
+        }
+      },
+      toggleManagerDashboard() {
+        this.managerDashboardOpen = !this.managerDashboardOpen;
+        if (this.managerDashboardOpen) {
+          this.newConversationOpen = false;
+        }
       },
       openTicketPanel() {
         this.ticketPanelOpen = true;
       },
       closeOverlays() {
         this.newConversationOpen = false;
+        this.newConversationSubmitting = false;
+        this.managerDashboardOpen = false;
         this.ticketPanelOpen = false;
         this.commandPaletteOpen = false;
         this.shortcutHelpOpen = false;
@@ -599,6 +678,19 @@
         window.htmx.ajax("GET", `${url.pathname}${url.search}`, {
           target: "#inbox-sidebar-content",
           swap: "innerHTML",
+        });
+      },
+
+      refreshConversationList() {
+        const url = new URL(window.location.href);
+        if (this.selectedId) {
+          url.searchParams.set("conversation_id", this.selectedId);
+        }
+        this.newListActivityAvailable = false;
+        window.htmx.ajax("GET", `${url.pathname}${url.search}`, {
+          target: "#inbox-conversation-queue",
+          select: "#inbox-conversation-queue",
+          swap: "outerHTML",
         });
       },
 
@@ -685,7 +777,7 @@
             "inbox_updated",
           ].includes(eventType)
         ) {
-          this.refreshSidebar();
+          this.newListActivityAvailable = true;
           if (data.conversation_id === this.selectedId) {
             if (this.composerFocused()) this.newMessagesAvailable = true;
             else this.refreshThread(this.selectedId);

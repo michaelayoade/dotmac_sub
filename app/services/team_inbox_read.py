@@ -118,6 +118,7 @@ class InboxConversationListRow:
     is_muted: bool
     snoozed_until: datetime | None
     is_snoozed: bool
+    contact_name: str | None
     subject: str | None
     contact_address: str | None
     first_message_at: datetime | None
@@ -131,7 +132,9 @@ class InboxConversationListRow:
     active_assigned_person_id: str | None
     needs_response: bool
     needs_attention: bool
+    has_ticket: bool
     is_unread: bool
+    unread_count: int
     team_count: int
     labels: tuple[InboxConversationListLabel, ...]
 
@@ -422,6 +425,15 @@ def _contact_resolution_status(conversation: InboxConversation) -> str | None:
     if isinstance(resolution, dict):
         value = str(resolution.get("status") or "").strip()
         return value or None
+    return None
+
+
+def _contact_display_name(conversation: InboxConversation) -> str | None:
+    metadata = conversation.metadata_ or {}
+    for key in ("contact_name", "sender_name", "profile_name"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value[:200]
     return None
 
 
@@ -747,13 +759,6 @@ def list_conversations(
         if (latest := _latest_external_message(messages)) is not None
     }
     ticketed_conversation_ids = _ticketed_conversation_ids(db, conversation_ids)
-    unread_ids = (
-        team_inbox_read_state.unread_conversation_ids(
-            db, conversation_ids=conversation_ids, person_id=operator_person_id
-        )
-        if operator_person_id is not None
-        else set()
-    )
     active_assignments = (
         {
             assignment.conversation_id: assignment
@@ -800,6 +805,16 @@ def list_conversations(
                 )
             )
 
+    unread_counts = (
+        team_inbox_read_state.conversation_unread_message_counts(
+            db,
+            conversation_ids=conversation_ids,
+            person_id=operator_person_id,
+        )
+        if conversation_ids and operator_person_id is not None
+        else {}
+    )
+
     items: list[InboxConversationListRow] = []
     for conversation, team in rows:
         latest = latest_messages.get(conversation.id)
@@ -818,7 +833,8 @@ def list_conversations(
             continue
         if contact_resolution_status and resolution_status != contact_resolution_status:
             continue
-        row_is_unread = conversation.id in unread_ids
+        unread_count = unread_counts.get(conversation.id, 0)
+        row_is_unread = unread_count > 0
         if unread_only and not row_is_unread:
             continue
         items.append(
@@ -838,6 +854,7 @@ def list_conversations(
                 is_muted=conversation.is_muted,
                 snoozed_until=conversation.snoozed_until,
                 is_snoozed=_is_currently_snoozed(conversation),
+                contact_name=_contact_display_name(conversation),
                 subject=conversation.subject,
                 contact_address=conversation.contact_address,
                 first_message_at=conversation.first_message_at,
@@ -855,7 +872,9 @@ def list_conversations(
                 else None,
                 needs_response=row_needs_response,
                 needs_attention=row_needs_attention,
+                has_ticket=conversation.id in ticketed_conversation_ids,
                 is_unread=row_is_unread,
+                unread_count=unread_count,
                 team_count=int(team_counts.get(conversation.id, 0)),
                 labels=tuple(labels_by_conversation.get(conversation.id, [])),
             )

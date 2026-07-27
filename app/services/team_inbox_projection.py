@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -14,8 +15,10 @@ from sqlalchemy.orm import Session
 from app.models.service_team import ServiceTeamMember
 from app.models.system_user import SystemUser
 from app.models.team_inbox import (
+    InboxAgentPresence,
     InboxChannelType,
     InboxConversation,
+    InboxConversationAssignment,
     InboxConversationStatus,
     InboxConversationTeam,
 )
@@ -178,6 +181,37 @@ class InboxAgentOption:
 
 
 @dataclass(frozen=True, slots=True)
+class InboxManagerAgent:
+    id: UUID
+    name: str
+    initials: str
+    presence_status: str
+    active_chats: int
+    max_concurrent_conversations: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class InboxManagerChannelCount:
+    key: str
+    label: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class InboxManagerDashboardProjection:
+    online_agents: int
+    chats_with_online_agents: int
+    unassigned: int
+    needs_attention: int
+    open: int
+    pending: int
+    resolved_today: int
+    agents: tuple[InboxManagerAgent, ...]
+    channel_split: tuple[InboxManagerChannelCount, ...]
+    active_chats: tuple[team_inbox_read.InboxConversationListRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class InboxAssignmentCounts:
     all: int
     assigned_to_me: int
@@ -266,6 +300,182 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
             initials=_initials(row.first_name, row.last_name, row.display_name),
         )
         for row in rows
+    )
+
+
+def _resolved_today_count(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Count today's authoritative status transitions to resolved.
+
+    Conversation ``updated_at`` can change for unrelated reasons, so the
+    status-history observation written by the command owner is the reliable
+    input for this dashboard projection.
+    """
+
+    today = (now or datetime.now(UTC)).astimezone(UTC).date()
+    count = 0
+    rows = (
+        db.query(InboxConversation.metadata_)
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.status == InboxConversationStatus.resolved.value)
+        .all()
+    )
+    for (metadata,) in rows:
+        history = metadata.get("status_history") if isinstance(metadata, dict) else None
+        if not isinstance(history, list):
+            continue
+        for event in reversed(history):
+            if not isinstance(event, dict) or event.get("to") != "resolved":
+                continue
+            try:
+                occurred_at = datetime.fromisoformat(str(event.get("at") or ""))
+            except ValueError:
+                break
+            if occurred_at.tzinfo is None:
+                occurred_at = occurred_at.replace(tzinfo=UTC)
+            if occurred_at.astimezone(UTC).date() == today:
+                count += 1
+            break
+    return count
+
+
+def build_manager_dashboard_projection(
+    db: Session,
+    *,
+    queue_metrics: team_inbox_operations.InboxQueueMetrics,
+    needs_attention: int,
+) -> InboxManagerDashboardProjection:
+    """Build the read-only manager panel from Inbox-owned observations."""
+
+    agent_options = list_agent_options(db)
+    person_ids = [agent.id for agent in agent_options]
+    presence_rows = (
+        db.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id.in_(person_ids))
+        .all()
+        if person_ids
+        else []
+    )
+    presence_by_person = {row.person_id: row for row in presence_rows}
+    online_person_ids = {
+        row.person_id
+        for row in presence_rows
+        if (row.manual_override_status or row.status) == "online"
+    }
+
+    active_assignments = (
+        db.query(InboxConversationAssignment)
+        .join(
+            InboxConversation,
+            InboxConversation.id == InboxConversationAssignment.conversation_id,
+        )
+        .filter(InboxConversationAssignment.is_active.is_(True))
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+        .all()
+    )
+    chat_counts = Counter(row.person_id for row in active_assignments)
+    chats_with_online_agents = len(
+        {
+            row.conversation_id
+            for row in active_assignments
+            if row.person_id in online_person_ids
+        }
+    )
+    agent_rows: list[InboxManagerAgent] = []
+    for agent in agent_options:
+        presence = presence_by_person.get(agent.id)
+        agent_rows.append(
+            InboxManagerAgent(
+                id=agent.id,
+                name=agent.name,
+                initials=agent.initials,
+                presence_status=(
+                    (presence.manual_override_status or presence.status)
+                    if presence is not None
+                    else "offline"
+                ),
+                active_chats=chat_counts[agent.id],
+                max_concurrent_conversations=(
+                    presence.max_concurrent_conversations
+                    if presence is not None
+                    else None
+                ),
+            )
+        )
+    agents = tuple(agent_rows)
+
+    raw_channel_counts = {
+        channel: int(count)
+        for channel, count in (
+            db.query(InboxConversation.channel_type, func.count(InboxConversation.id))
+            .filter(InboxConversation.is_active.is_(True))
+            .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+            .group_by(InboxConversation.channel_type)
+            .all()
+        )
+    }
+    declared_channels = (
+        ("email", "Email"),
+        ("whatsapp", "WhatsApp"),
+        ("facebook_messenger", "Facebook"),
+        ("instagram_dm", "Instagram"),
+    )
+    known_keys = {key for key, _label in declared_channels}
+    channel_split = tuple(
+        InboxManagerChannelCount(
+            key=key,
+            label=label,
+            count=raw_channel_counts.get(key, 0),
+        )
+        for key, label in declared_channels
+    ) + (
+        InboxManagerChannelCount(
+            key="other",
+            label="Other",
+            count=sum(
+                count
+                for key, count in raw_channel_counts.items()
+                if key not in known_keys
+            ),
+        ),
+    )
+
+    open_count = int(
+        db.query(func.count(InboxConversation.id))
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.status == InboxConversationStatus.open.value)
+        .scalar()
+        or 0
+    )
+    pending_count = int(
+        db.query(func.count(InboxConversation.id))
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.status == InboxConversationStatus.pending.value)
+        .scalar()
+        or 0
+    )
+    active_chats = tuple(
+        team_inbox_read.list_conversations(
+            db,
+            open_only=True,
+            limit=8,
+        ).items
+    )
+    return InboxManagerDashboardProjection(
+        online_agents=len(online_person_ids),
+        chats_with_online_agents=chats_with_online_agents,
+        unassigned=queue_metrics.unassigned_open,
+        needs_attention=needs_attention,
+        open=open_count,
+        pending=pending_count,
+        resolved_today=_resolved_today_count(db),
+        agents=agents,
+        channel_split=channel_split,
+        active_chats=active_chats,
     )
 
 

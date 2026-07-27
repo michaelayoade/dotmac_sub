@@ -76,6 +76,12 @@ notification delivery point. SMTP, WhatsApp, and social integrations translate
 the intent and later return normalized receipt observations; they cannot change
 conversation or ticket lifecycle state.
 
+Operator-initiated conversations use the same command boundary. The opening
+message retains approved WhatsApp template identity and submitted provider
+variables, and uploaded attachments are staged against the new conversation
+then bound only after the opening outbound intent succeeds. A failed opening
+send rolls the conversation and staged attachment facts back together.
+
 ## Derived state and repair
 
 | Projection | Inputs | Canonical writer | Repair |
@@ -116,6 +122,10 @@ stale. Realtime has no replay authority.
   conversation/message rows, delivery metadata, and ticket provenance on
   every read. There is no stored flag to drift and no event-specific repair
   path; a normal projection refetch is the idempotent rebuild.
+- Queue-row unread totals count inbound messages after the authenticated
+  operator's authoritative read cursor. With no cursor, every timestamped
+  inbound message in the conversation is unread; outbound and internal
+  messages never contribute.
 - Sort: the typed allow-list in `InboxListSort`; unknown values fall back to
   the priority-ascending, last-message-descending queue order. Page size is
   restricted to the declared options.

@@ -28,6 +28,7 @@ from app.services.auth_dependencies import can, require_permission
 from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
+settings_router = APIRouter(prefix="/crm/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
 
 
@@ -172,6 +173,16 @@ def team_inbox_queue(
     )
     if projection.canonical_url is not None:
         return RedirectResponse(url=projection.canonical_url, status_code=307)
+    can_manage_inbox = can(request, "support:ticket:update")
+    manager_dashboard = (
+        team_inbox_projection.build_manager_dashboard_projection(
+            db,
+            queue_metrics=projection.queue_metrics,
+            needs_attention=projection.assignment_counts.needs_attention,
+        )
+        if can_manage_inbox
+        else None
+    )
     context = _ctx(request, db)
     context.update(
         {
@@ -210,6 +221,11 @@ def team_inbox_queue(
             "channel_options": projection.channel_options,
             "label_options": projection.label_options,
             "saved_filters": projection.saved_filters,
+            "new_conversation_template_options": tuple(
+                team_inbox_operations.list_templates(db)
+            ),
+            "can_manage_inbox": can_manage_inbox,
+            "manager_dashboard": manager_dashboard,
             "selected": (
                 projection.selected.timeline
                 if projection.selected is not None
@@ -1277,6 +1293,29 @@ def team_inbox_email_routes(
     return templates.TemplateResponse("admin/inbox/email_routes.html", context)
 
 
+@settings_router.get(
+    "/settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_settings_entrypoint(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Render mailbox routing at the requested CRM-shaped settings URL."""
+
+    context = _ctx(request, db)
+    context.update(
+        {
+            "email_routes": team_inbox_routing.list_email_routes(db),
+            "service_team_options": team_inbox_metrics.active_service_team_options(db),
+            "notice_status": None,
+            "notice_message": None,
+        }
+    )
+    return templates.TemplateResponse("admin/inbox/email_routes.html", context)
+
+
 def _routes_redirect(*, status: str, message: str) -> RedirectResponse:
     return RedirectResponse(
         url=(
@@ -1392,16 +1431,34 @@ async def team_inbox_stage_attachments(
     "/conversations",
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
-def team_inbox_start_conversation(
+async def team_inbox_start_conversation(
     request: Request,
     channel_type: str = Form(...),
     contact_address: str = Form(...),
     body_text: str = Form(...),
     subject: str | None = Form(default=None),
     service_team_id: str | None = Form(default=None),
+    contact_name: str | None = Form(default=None),
+    template_id: str | None = Form(default=None),
+    template_values: str | None = Form(default=None),
+    cc: str | None = Form(default=None),
+    bcc: str | None = Form(default=None),
+    files: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
     """Open a new conversation and send its first message."""
+    if (_query_text(cc) or "").strip() or (_query_text(bcc) or "").strip():
+        return RedirectResponse(
+            url=(
+                "/admin/inbox?status=error&message="
+                "CC%20and%20BCC%20delivery%20is%20not%20available%20yet."
+            ),
+            status_code=303,
+        )
+    uploads: list[tuple[str, str | None, bytes]] = []
+    for upload in files:
+        data = await upload.read()
+        uploads.append((upload.filename or "attachment", upload.content_type, data))
     _prepare_mutation(db)
     try:
         outcome = team_inbox_commands.start_conversation(
@@ -1412,10 +1469,20 @@ def team_inbox_start_conversation(
             subject=_query_text(subject),
             service_team_id=_query_text(service_team_id),
             actor_person_id=_actor_id_from_request(request),
+            contact_name=_query_text(contact_name),
+            template_id=_query_text(template_id),
+            template_values=tuple(
+                value.strip()
+                for value in (_query_text(template_values) or "").splitlines()
+                if value.strip()
+            ),
+            uploads=tuple(uploads),
         )
     except (
         team_inbox_commands.InboxCommandError,
+        team_inbox_media.MediaUploadError,
         team_inbox_operations.InboxOperationError,
+        ValueError,
     ) as exc:
         return RedirectResponse(
             url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
