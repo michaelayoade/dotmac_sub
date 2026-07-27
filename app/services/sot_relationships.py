@@ -16293,14 +16293,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor advance eligibility, ceiling, and approval",
                     "payables settlement observation for vendor advances",
                 ),
-                depends_on=("operations.vendor_project_lifecycle",),
+                depends_on=(
+                    "control.settings_spec",
+                    "operations.vendor_project_lifecycle",
+                ),
                 notes=(
                     "Sub decides whether to advance money to a vendor and how "
                     "much; the payables provider owns the payment and any netting "
-                    "against the vendor's later invoice. The advance draws "
-                    "against the approved quote, which is what bounds it: Sub "
-                    "refuses to advance more than the work is agreed to be worth "
-                    "and refuses to stack advances past that ceiling. A settled "
+                    "against the vendor's later invoice. The amount is entered, "
+                    "not derived: staff approval is the control. Sub applies two "
+                    "limits only — a hard bound at the approved quote total, "
+                    "which is arithmetic rather than policy and counts advances "
+                    "already committed so it cannot be evaded by splitting a "
+                    "request, and an optional percentage guard rail from "
+                    "projects.vendor_advance_max_percent that defaults to no cap "
+                    "and can only lower that bound, never raise it. A settled "
                     "advance is an observation of the provider, never a Sub "
                     "decision; Sub never computes settlement and never adjusts an "
                     "invoice total."
@@ -16313,6 +16320,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical installation-project lifecycle state",
                                 "canonical vendor project records",
+                                "vendor advance cap policy",
                             ),
                             canonical_writer="operations.vendor_advances",
                         ),
@@ -16340,6 +16348,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "the approved quote total and currency the advance "
                                 "draws against"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor advance cap policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "projects.vendor_advance_max_percent, an optional "
+                                "guard rail that defaults to no cap"
                             ),
                         ),
                         AuthorityInput(
@@ -16436,8 +16453,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         state=AuthorityMigrationState.NATIVE,
                         new_owner="operations.vendor_advances",
                         verification=(
-                            "Ceiling, stacking, released-ceiling, assignment, "
-                            "advanceable-state, approval, and "
+                            "Quote-total bound, stacking, released-ceiling, "
+                            "configured-cap, cap-cannot-raise-the-bound, "
+                            "assignment, advanceable-state, approval, and "
                             "observed-settlement tests."
                         ),
                     ),

@@ -11,9 +11,22 @@ against the vendor's later invoice. Sub never computes settlement, never marks
 itself paid, and never adjusts an invoice total — a `settled` advance is an
 observation of the provider, not a Sub decision.
 
-The advance draws against the **approved quote**, which is what bounds it: Sub
-refuses to advance more of a project than the work is agreed to be worth, and
-refuses to stack advances past that ceiling.
+**The amount is entered, not derived.** Staff approval is the control: an
+approver sees the amount, the quote total, and what the project has already
+committed, and decides. Sub applies exactly two limits:
+
+* A hard bound at the approved quote total. This is arithmetic, not policy —
+  you cannot advance more than the work is agreed to be worth, and the answer
+  to cost escalation is a variation, not an over-advance. It counts advances
+  already committed, so the bound cannot be evaded by splitting a request.
+* An optional percentage guard rail from ``projects.vendor_advance_max_percent``.
+  It defaults to 0, meaning no percentage policy at all. Where an operator sets
+  one it stops an obviously out-of-policy request before it reaches an approver;
+  it does not replace the approver's judgement.
+
+An invented cap would be worse than none: it forces the workarounds this domain
+exists to eliminate — splitting advances across requests, or paying off-system
+with no project-anchored record.
 """
 
 from __future__ import annotations
@@ -26,6 +39,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
 from app.models.vendor_routes import (
     InstallationProject,
     InstallationProjectStatus,
@@ -36,6 +50,7 @@ from app.models.vendor_supply import VendorAdvance, VendorAdvanceStatus
 from app.services.common import coerce_uuid
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.settings_spec import resolve_value
 
 # An advance funds work about to start or under way. Advancing against verified
 # work would be paying for something already complete and invoiceable.
@@ -54,7 +69,10 @@ _COMMITTED_STATUSES = frozenset(
         VendorAdvanceStatus.settled.value,
     }
 )
-DEFAULT_MAX_ADVANCE_PERCENT = Decimal("40")
+# 0 means "no percentage policy" — the operator has not set one, so the
+# approver alone decides. There is deliberately no code default percentage:
+# a number nobody chose is policy by accident.
+NO_PERCENT_CAP = Decimal("0")
 
 
 class VendorAdvanceError(ValueError):
@@ -113,9 +131,29 @@ def committed_total(db: Session, project_id: UUID | str) -> Decimal:
     return sum((_money(row.amount) for row in rows), Decimal("0.00"))
 
 
-def advance_ceiling(quote: ProjectQuote, max_percent: Decimal | None = None) -> Decimal:
-    percent = max_percent if max_percent is not None else DEFAULT_MAX_ADVANCE_PERCENT
-    return _money(_money(quote.total) * percent / Decimal("100"))
+def configured_max_percent(db: Session) -> Decimal:
+    """The operator's percentage guard rail, or 0 when they have not set one."""
+    raw = resolve_value(db, SettingDomain.projects, "vendor_advance_max_percent")
+    try:
+        percent = Decimal(str(raw or 0))
+    except (InvalidOperation, ValueError):
+        return NO_PERCENT_CAP
+    return percent if Decimal("0") < percent <= Decimal("100") else NO_PERCENT_CAP
+
+
+def advance_ceiling(
+    quote: ProjectQuote, max_percent: Decimal = NO_PERCENT_CAP
+) -> Decimal:
+    """The most this project may carry in advances.
+
+    The quote total is the hard bound. A configured percentage can only lower
+    it — it never raises it, so a misconfigured 100%+ cannot authorise
+    advancing more than the work is worth.
+    """
+    total = _money(quote.total)
+    if max_percent <= Decimal("0"):
+        return total
+    return min(total, _money(total * max_percent / Decimal("100")))
 
 
 def request_advance(db: Session, command: RequestVendorAdvance) -> VendorAdvance:
@@ -153,15 +191,15 @@ def request_advance(db: Session, command: RequestVendorAdvance) -> VendorAdvance
             "An advance requires an approved quote to draw against.",
         )
 
-    ceiling = advance_ceiling(quote)
+    ceiling = advance_ceiling(quote, configured_max_percent(db))
     already = committed_total(db, project.id)
     if already + amount > ceiling:
-        remaining = ceiling - already
+        remaining = max(ceiling - already, Decimal("0.00"))
         raise _error(
             "advance_ceiling_exceeded",
             (
-                f"Advances on this project are capped at {ceiling} "
-                f"{quote.currency}; {max(remaining, Decimal('0.00'))} remains."
+                f"Advances on this project cannot exceed {ceiling} "
+                f"{quote.currency}; {remaining} remains."
             ),
         )
 
