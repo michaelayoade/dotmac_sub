@@ -87,9 +87,12 @@ from app.models.billing_contract import (  # noqa: F401
     IntervalUnit,
     ObligationResolutionKind,
     ObligationState,
-    ProrationPolicy,
     RateBasis,
 )
+
+# app.models.catalog also exports a legacy ProrationPolicy; the billing
+# contract's proration enum is imported from app.models.billing_contract
+# directly to avoid shadowing it here.
 from app.models.branding import BrandProfile  # noqa: F401
 from app.models.catalog import (  # noqa: F401
     AccessCredential,

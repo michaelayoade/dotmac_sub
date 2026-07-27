@@ -12,7 +12,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
 from sqlalchemy import select
 
 from app.models.billing_contract import (

@@ -31,7 +31,6 @@ from app.services.collections.mode_policies import CollectionsProposal
 from app.services.domain_errors import DomainError
 from app.services.events.owner_outputs import OwnerOutputEnvelope, stage_owner_output
 from app.services.events.types import EventType
-from app.services.locking import lock_for_update
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
