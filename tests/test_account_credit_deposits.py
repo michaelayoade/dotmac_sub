@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import event
+from sqlalchemy.exc import IntegrityError
 
 from app.models.billing import (
     Invoice,
@@ -1185,6 +1186,57 @@ def test_invariant_summary_matches_unresolved_deposit_webhook(db_session, subscr
 
     assert [item.code for item in violations] == ["deposit_webhook_unresolved"]
     assert summary.deposit_webhook_unresolved == 1
+    assert summary.total == len(violations)
+
+
+def test_duplicate_provider_reference_is_unreachable_by_constraint(
+    db_session, subscriber
+):
+    """The seventh invariant has no equivalence test because it cannot happen.
+
+    `uq_payments_active_external_id` is a unique index over
+    `(provider_id, external_id)`, on PostgreSQL partial with predicate
+    `is_active AND provider_id IS NOT NULL AND external_id IS NOT NULL` --
+    exactly the rows `duplicate_provider_reference` inspects. The database
+    refuses the state the invariant looks for, so both the forensic scan and
+    the aggregate can only ever report zero, and neither can be exercised
+    against a real duplicate.
+
+    Pin the constraint instead. If it is ever dropped or narrowed, this fails
+    and the invariant becomes live -- at which point it needs the equivalence
+    test that cannot be written today.
+    """
+    provider = _provider(db_session)
+    db_session.add(
+        Payment(
+            account_id=subscriber.id,
+            amount=Decimal("500.00"),
+            status=PaymentStatus.succeeded,
+            paid_at=datetime.now(UTC),
+            provider_id=provider.id,
+            external_id="duplicate-provider-reference",
+        )
+    )
+    db_session.commit()
+
+    db_session.add(
+        Payment(
+            account_id=subscriber.id,
+            amount=Decimal("500.00"),
+            status=PaymentStatus.succeeded,
+            paid_at=datetime.now(UTC),
+            provider_id=provider.id,
+            external_id="duplicate-provider-reference",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+    summary = AccountCreditApplications.summarize_invariants(db_session)
+    violations = AccountCreditApplications.inspect_invariants(db_session)
+    assert summary.duplicate_provider_reference == 0
+    assert [item.code for item in violations] == []
     assert summary.total == len(violations)
 
 
