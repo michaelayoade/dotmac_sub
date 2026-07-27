@@ -313,7 +313,7 @@ def test_open_obligations_are_scoped_to_one_account_and_currency(
 
 
 def test_scheduling_requires_an_existing_contract_version(db_session, contract_version):
-    _, line_key = contract_version
+    _, line_key, _ = contract_version
     db_session.commit()
 
     with pytest.raises(BillingObligationError) as excinfo:
