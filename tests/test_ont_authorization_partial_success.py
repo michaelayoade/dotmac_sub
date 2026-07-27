@@ -637,11 +637,44 @@ def test_unclaimed_legacy_rows_are_adopted_by_the_authorizing_olt(db_session):
     assert legacy.olt_device_id == olt.id
 
 
+def test_illegal_authorization_transition_leaves_the_status_untouched():
+    """The strict guard rejects before assigning; nothing is silently forced.
+
+    Deliberately session-free: the invariant is about the guard itself, so it
+    is proven on a transient instance with no flush and no rollback.
+    """
+    from app.services.network import ont_status
+
+    ont = OntUnit(
+        serial_number="HWTCILLEGAL00",
+        authorization_status=OntAuthorizationStatus.failed,
+    )
+    original_transitions = dict(ont_status._AUTHORIZATION_TRANSITIONS)
+    ont_status._AUTHORIZATION_TRANSITIONS[OntAuthorizationStatus.failed] = {
+        OntAuthorizationStatus.pending
+    }
+    try:
+        with pytest.raises(ValueError, match="Illegal ONT authorization"):
+            ont_status.set_authorization_status(ont, OntAuthorizationStatus.authorized)
+    finally:
+        ont_status._AUTHORIZATION_TRANSITIONS.clear()
+        ont_status._AUTHORIZATION_TRANSITIONS.update(original_transitions)
+
+    assert ont.authorization_status is OntAuthorizationStatus.failed
+
+
 def test_illegal_authorization_transitions_fail_the_projection_instead_of_forcing(
     db_session,
     monkeypatch,
 ):
-    """A rejected transition is a reported local failure, not a silent override."""
+    """A rejected transition is a reported local failure, not a silent override.
+
+    Asserts only on the returned tuple: this path ends in the owner's own
+    ``db.rollback()``, and the ``db_session`` fixture binds the session to a
+    plain outer transaction (``join_transaction_mode`` resolves to
+    ``rollback_only``), so any post-call re-read of test data is unavailable by
+    construction. Same shape as the IntegrityError tests above.
+    """
     from app.services.network import ont_status
 
     olt = _olt(db_session, "OLT-Illegal-Transition")
@@ -668,11 +701,13 @@ def test_illegal_authorization_transitions_fail_the_projection_instead_of_forcin
         ont_id_on_olt=6,
     )
 
+    # Under the previous ``strict=False`` call this returned the row id with the
+    # status forced to authorized and only a log line to show for it.
     assert ont_id is None
     assert "rejected the status change" in message
-    db_session.rollback()
-    db_session.refresh(ont)
-    assert ont.authorization_status == OntAuthorizationStatus.failed
+    assert (
+        "Illegal ONT authorization status transition: failed -> authorized" in message
+    )
 
 
 def test_missing_olt_blocks_unscoped_local_inventory_creation(db_session):
