@@ -176,19 +176,41 @@ def test_a_full_payment_still_promotes_a_draft_order(db_session, quiet_billing):
     assert order.status == SalesOrderStatus.paid.value
 
 
-def test_fulfilment_asserts_its_own_edge(db_session, quiet_billing):
-    """CX acceptance goes through the same table as everything else."""
+def test_a_cancelled_order_cannot_be_fulfilled(db_session, quiet_billing):
+    """The transition table is the only thing that catches this.
+
+    ``fulfill_from_customer_experience`` checks that funding is settled, but a
+    cancelled order can be settled — so without the machine, CX acceptance
+    would happily fulfil an order that was cancelled.
+    """
     order = _order(db_session)
     order.payment_status = SalesOrderPaymentStatus.paid.value
-    order.status = SalesOrderStatus.fulfilled.value
+    order.status = SalesOrderStatus.cancelled.value
     db_session.commit()
 
-    with pytest.raises(sales_order_service.SalesOrderLifecycleError):
-        # Already fulfilled by different evidence — refused before the machine
-        # is consulted, so the two guards agree rather than conflict.
+    with pytest.raises(HTTPException) as exc:
         sales_order_service.fulfill_from_customer_experience(
             db_session,
             sales_order_id=order.id,
             handoff_id=uuid.uuid4(),
             actor_id="staff:cx",
         )
+    assert exc.value.status_code == 409
+    db_session.refresh(order)
+    assert order.status == SalesOrderStatus.cancelled.value
+
+
+def test_refulfilling_replays_idempotently(db_session, quiet_billing):
+    """Already fulfilled is a no-op, not an error — the replay guard runs first."""
+    order = _order(db_session)
+    order.payment_status = SalesOrderPaymentStatus.paid.value
+    order.status = SalesOrderStatus.fulfilled.value
+    db_session.commit()
+
+    changed = sales_order_service.fulfill_from_customer_experience(
+        db_session,
+        sales_order_id=order.id,
+        handoff_id=uuid.uuid4(),
+        actor_id="staff:cx",
+    )
+    assert changed is False
