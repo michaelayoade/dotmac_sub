@@ -51,9 +51,7 @@ def plan_prepaid_consequence(
         # The service period has not started; nothing is uncovered yet.
         return None
 
-    outstanding = Decimal(obligation.gross_amount) - Decimal(
-        obligation.resolved_amount
-    )
+    outstanding = Decimal(obligation.gross_amount) - Decimal(obligation.resolved_amount)
     if outstanding <= 0:
         return None
 
@@ -63,9 +61,7 @@ def plan_prepaid_consequence(
         currency=obligation.currency,
         authority=authority,
     )
-    available = (
-        position.prepaid_funding_reserved + position.unapplied_customer_credit
-    )
+    available = position.prepaid_funding_reserved + position.unapplied_customer_credit
     if available >= outstanding:
         return None
 

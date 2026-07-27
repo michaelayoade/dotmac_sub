@@ -299,9 +299,7 @@ class SalesOrderFunding:
         return status
 
     @staticmethod
-    def gate_status(
-        db: Session, *, sales_order_id: UUID
-    ) -> FundingGateStatus | None:
+    def gate_status(db: Session, *, sales_order_id: UUID) -> FundingGateStatus | None:
         """Read-only: the gate status for one order, if a gate exists."""
 
         gate = db.execute(

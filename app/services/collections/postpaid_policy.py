@@ -43,9 +43,7 @@ def plan_postpaid_consequence(
     if due_at is None or due_at > now:
         return None
 
-    outstanding = Decimal(obligation.gross_amount) - Decimal(
-        obligation.resolved_amount
-    )
+    outstanding = Decimal(obligation.gross_amount) - Decimal(obligation.resolved_amount)
     if outstanding <= 0:
         return None
 
