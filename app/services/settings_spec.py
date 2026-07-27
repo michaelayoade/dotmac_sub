@@ -81,6 +81,7 @@ SCHEDULER_BOOLEAN_SETTING_KEYS = frozenset(
         (SettingDomain.network_monitoring, "infra_availability_snapshot_enabled"),
         (SettingDomain.notification, "ncc_report_email_enabled"),
         (SettingDomain.notification, "operational_escalation_delivery_enabled"),
+        (SettingDomain.projects, "sales_lifecycle_reconcile_enabled"),
         (SettingDomain.radius, "connectivity_shadow_audit_enabled"),
         (SettingDomain.radius, "ip_consistency_audit_enabled"),
         (SettingDomain.radius, "radius_sync_enabled"),
@@ -4158,6 +4159,25 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=True,
         label="Stale overdue-lock detection",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="sales_lifecycle_reconcile_enabled",
+        env_var="SALES_LIFECYCLE_RECONCILE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Sales-to-service lifecycle drift detection",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="sales_lifecycle_reconcile_apply_enabled",
+        env_var="SALES_LIFECYCLE_RECONCILE_APPLY_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Sales-to-service lifecycle auto-repair (creates subscriptions, "
+            "service orders and their first invoice)"
+        ),
     ),
     SettingSpec(
         domain=SettingDomain.audit,

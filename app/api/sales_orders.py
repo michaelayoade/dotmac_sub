@@ -11,7 +11,7 @@ CRM left sales orders auth-only; sub gates them on
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_permission
+from app.api.deps import get_current_user, get_db, require_permission
 from app.schemas.common import ListResponse
 from app.schemas.sales_order import (
     SalesOrderCreate,
@@ -24,6 +24,15 @@ from app.schemas.sales_order import (
 from app.services import sales_orders as sales_order_service
 
 router = APIRouter(prefix="/sales-orders", tags=["sales-orders"])
+
+
+def _actor_id(current_user: dict | None) -> str | None:
+    if not current_user:
+        return None
+    value = current_user.get("actor_id") or current_user.get("subscriber_id")
+    if not value:
+        return None
+    return str(value).strip() or None
 
 
 @router.post(
@@ -82,9 +91,16 @@ def list_sales_orders(
     dependencies=[Depends(require_permission("crm:sales_order:write"))],
 )
 def update_sales_order(
-    sales_order_id: str, payload: SalesOrderUpdate, db: Session = Depends(get_db)
+    sales_order_id: str,
+    payload: SalesOrderUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    return sales_order_service.sales_orders.update(db, sales_order_id, payload)
+    # Marking an order paid posts money to the ledger, so the settlement has to
+    # be attributable to whoever asserted it.
+    return sales_order_service.sales_orders.update(
+        db, sales_order_id, payload, actor_id=_actor_id(current_user)
+    )
 
 
 @router.delete(

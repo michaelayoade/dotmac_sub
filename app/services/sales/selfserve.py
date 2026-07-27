@@ -42,9 +42,11 @@ Native ownership deltas from the CRM source:
 
 **Billing-safety invariant (risk #2):** the deposit money path is
 ``initiate_deposit`` → sub Invoice → provider → ``verify_and_record_payment``.
-The accept here only *marks* the sales order (amount_paid / payment_status)
-— it never creates a second payment. One ledger event per deposit, recorded
-by billing, mirrored as SO bookkeeping.
+The accept here never creates a second payment: it hands the verified receipt
+to ``sales.orders``, flagged as already-ledgered, so the order's financial
+state and the funding consequences are applied by their owner while the ledger
+still sees exactly one event per deposit. This service does not write
+``payment_status``/``amount_paid``/``balance_due`` itself.
 
 All pricing lives in settings (``SettingDomain.projects``,
 ``selfserve_quote_*``) so the numbers are tunable per market without code
@@ -69,8 +71,6 @@ from app.models.sales import (
     Quote,
     QuoteStatus,
     SalesOrder,
-    SalesOrderPaymentStatus,
-    SalesOrderStatus,
 )
 from app.models.subscriber import Subscriber
 from app.schemas.sales import (
@@ -613,37 +613,53 @@ class SelfServeQuotes:
             )
             db.refresh(quote)
 
-        _record_deposit_on_sales_order(db, quote, amount)
+        _record_deposit_on_sales_order(
+            db, quote, amount, reference=deposit_reference, provider=provider
+        )
         return build_portal_quote_payload(db, quote, already_accepted=already_accepted)
 
 
 def _record_deposit_on_sales_order(
-    db: Session, quote: Quote, deposit_amount: Decimal
+    db: Session,
+    quote: Quote,
+    deposit_amount: Decimal,
+    *,
+    reference: str,
+    provider: str | None = None,
 ) -> SalesOrder | None:
-    """Mark the deposit on the quote's sales order — SO bookkeeping only.
+    """Hand the verified deposit to the SalesOrder financial owner.
 
-    Deliberately never creates a payment row: the sole ledger event for a
-    deposit is ``verify_and_record_payment`` on the deposit invoice (risk #2).
+    This used to write ``payment_status``/``status``/``amount_paid`` straight
+    onto the row. That made the portal a second writer of state
+    ``sales.orders`` owns, and it skipped the funding consequences entirely:
+    a deposit that covered the whole total (``selfserve_quote_deposit_percent``
+    accepts 100) left the order ``paid`` with no Subscription, no ServiceOrder
+    and no ``sales_order.paid`` event.
+
+    Still deliberately never creates a payment row: the sole ledger event for
+    a deposit is ``verify_and_record_payment`` on the deposit invoice
+    (risk #2), which is why the receipt is passed as already-ledgered.
     """
     sales_order = db.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).first()
     if sales_order is None:
         return None
-    total = _money(sales_order.total)
-    paid = _money(deposit_amount)
-    sales_order.deposit_required = True
-    sales_order.deposit_paid = True
-    sales_order.amount_paid = paid
-    sales_order.balance_due = _money(max(Decimal("0.00"), total - paid))
-    sales_order.payment_status = (
-        SalesOrderPaymentStatus.paid.value
-        if paid >= total and total > 0
-        else SalesOrderPaymentStatus.partial.value
-    )
-    if sales_order.payment_status == SalesOrderPaymentStatus.paid.value:
-        sales_order.status = SalesOrderStatus.paid.value
-    db.commit()
-    db.refresh(sales_order)
-    return sales_order
+    from app.services import sales_orders as sales_order_service
+
+    try:
+        return sales_order_service.record_deposit_receipt(
+            db,
+            sales_order_id=sales_order.id,
+            amount=_money(deposit_amount),
+            reference=reference,
+            provider=provider,
+            actor_id="sales.selfserve",
+            ledger_already_recorded=True,
+        )
+    except sales_order_service.SalesOrderLifecycleError as exc:
+        status_code = 404 if exc.kind == "not_found" else 409
+        if exc.kind == "invalid":
+            status_code = 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 def build_portal_quote_payload(

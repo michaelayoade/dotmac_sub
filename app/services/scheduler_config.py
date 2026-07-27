@@ -566,6 +566,25 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=900,
         )
+        # Sales-to-service lifecycle backstop. The funding consequence (one
+        # Subscription + one ServiceOrder per service line) runs best-effort on
+        # the live sale path, so a swallowed failure used to leave a paid order
+        # permanently unprovisioned with nothing watching. Detect-only by
+        # default — repair creates subscriptions and their first invoice, so
+        # apply mode is a separate registered control
+        # (projects.sales_lifecycle_reconcile_apply_enabled).
+        sales_lifecycle_reconcile_enabled = _scheduler_setting_enabled(
+            session,
+            SettingDomain.projects,
+            "sales_lifecycle_reconcile_enabled",
+        )
+        _sync_scheduled_task(
+            session,
+            name="sales_lifecycle_reconcile",
+            task_name="app.tasks.sales_lifecycle.reconcile_sales_to_service_lifecycle",
+            enabled=sales_lifecycle_reconcile_enabled,
+            interval_seconds=3600,
+        )
         # The full RADIUS projection writer remains an event-driven transport.
         # This permanent reconciler compares desired-versus-observed state and
         # requests that writer only when repair is required.

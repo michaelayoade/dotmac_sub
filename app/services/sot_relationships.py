@@ -24596,13 +24596,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.sales_lifecycle_reconciliation",
                 owns=("sales-to-service projection drift repair orchestration",),
                 depends_on=(
+                    "sales.orders",
                     "sales.fulfillment",
                     "operations.service_order_lifecycle",
                     "customer.experience_handoff",
                 ),
                 notes=(
                     "The reconciler invents no identity, receipt, implementation "
-                    "verification, provisioning result, or customer acceptance."
+                    "verification, provisioning result, or customer acceptance. "
+                    "It also repairs the gate-4 funding consequence: a fully "
+                    "funded SalesOrder whose Subscription/ServiceOrder push was "
+                    "swallowed by the best-effort live path is re-pushed through "
+                    "sales.orders. A service line whose catalog offer no longer "
+                    "resolves is reported, not counted as repaired."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -24683,12 +24689,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "sales.lifecycle_reconciliation.nested_owner_command",
                             "sales.lifecycle_reconciliation.nested_transaction_completion",
                             "implementation_scope_repair_rejected",
+                            "funded_subscription_repair_rejected",
                             "verified_release_repair_rejected",
                             "cx_handoff_repair_rejected",
                         ),
                         mapping_owner="sales lifecycle reconciliation command adapter",
                         retryable_codes=(
                             "implementation_scope_repair_rejected",
+                            "funded_subscription_repair_rejected",
                             "verified_release_repair_rejected",
                             "cx_handoff_repair_rejected",
                         ),

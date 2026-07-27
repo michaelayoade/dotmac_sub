@@ -39,6 +39,7 @@ native models, with Sub ownership deltas applied:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -780,6 +781,7 @@ def _sync_sales_order_add_ons(
     *,
     lines: list[SalesOrderLine],
     subscriptions: list[Subscription],
+    commit: bool = True,
 ) -> None:
     """Attach explicitly sold add-ons to an unambiguous subscription."""
     from app.models.catalog import AddOn, SubscriptionAddOn
@@ -879,101 +881,36 @@ def _sync_sales_order_add_ons(
         next_meta["subscription_add_on_id"] = str(existing.id)
         line.metadata_ = next_meta
         db.add(line)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
+@dataclass(frozen=True)
+class SalesOrderServiceSyncResult:
+    """What one funding-consequence pass actually achieved.
+
+    ``unresolved_offer_lines`` is the honest part: a line whose offer cannot be
+    resolved is skipped, not provisioned, and the reconciler reports it instead
+    of claiming a clean repair.
+    """
+
+    subscriptions_created: int = 0
+    unresolved_offer_lines: int = 0
 
 
 def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> None:
-    """Create a subscription (plus its first invoice) for each sales-order
-    line tagged with a sub offer.
+    """Best-effort wrapper: a billing hiccup must never break the sale.
 
-    Native rewire of ``push_sales_order_subscription_to_selfcare``:
-    ``selfcare.create_subscription`` (HTTP → ``POST /crm/subscriptions``)
-    becomes an in-process :func:`app.services.crm_api.create_subscription`
-    call keyed on the unchanged
-    ``external_ref="sales_order:{id}:subscription:{line_id}"``. Best-effort:
-    a billing hiccup must never break the sale; the resolved ids are stored
-    on the line metadata so repeated calls are safe.
+    Swallowing the error here is deliberate, but it is only safe because the
+    drift it can leave behind — a fully funded order with no Subscription and
+    no ServiceOrder — is now detected and repaired by
+    ``sales_lifecycle_reconciliation``. Do not widen this except-clause without
+    a matching reconciler check.
     """
-    from app.services import crm_api
-
     try:
-        sales_order_id = sales_order.id
-        if not sales_order_id:
-            return
-        if not sales_order.subscriber_id:
-            return
-
-        lines = _active_sales_order_lines(db, sales_order_id)
-        offer_lines = [(line, ref) for line in lines if (ref := _line_offer_ref(line))]
-        if not offer_lines:
-            return
-
-        staged_subscriptions: list[tuple[SalesOrderLine, Subscription]] = []
-        for line, offer_ref in offer_lines:
-            meta = line.metadata_ if isinstance(line.metadata_, dict) else {}
-            existing_subscription_id = str(
-                meta.get("selfcare_subscription_id") or ""
-            ).strip()
-            subscription = None
-            invoice = None
-            if existing_subscription_id:
-                from app.models.catalog import Subscription
-
-                subscription = db.get(
-                    Subscription, coerce_uuid(existing_subscription_id)
-                )
-            else:
-                try:
-                    result = crm_api.create_subscription(
-                        db,
-                        subscriber_id=str(sales_order.subscriber_id),
-                        offer_ref=offer_ref,
-                        external_ref=f"sales_order:{sales_order_id}:subscription:{line.id}",
-                        unit_price=line.unit_price,
-                        service_address_id=meta.get("service_address_id"),
-                        billing_cycle=_line_billing_cycle(line),
-                    )
-                except LookupError:
-                    logger.warning(
-                        "sales_order_subscription_offer_unresolved "
-                        "sales_order_id=%s line_id=%s offer_ref=%s",
-                        sales_order_id,
-                        line.id,
-                        offer_ref,
-                    )
-                    continue
-                subscription = result.get("subscription") if result else None
-                invoice = result.get("invoice") if result else None
-            if subscription is None:
-                continue
-            new_meta = dict(line.metadata_ or {})
-            new_meta["selfcare_subscription_id"] = str(subscription.id)
-            if invoice is not None:
-                new_meta["selfcare_subscription_invoice_id"] = str(invoice.id)
-            line.metadata_ = new_meta
-            db.add(line)
-            logger.info(
-                "sales_order_subscription_created sales_order_id=%s line_id=%s "
-                "subscription_id=%s",
-                sales_order_id,
-                line.id,
-                subscription.id,
-            )
-            staged_subscriptions.append((line, subscription))
-        db.commit()
-        _sync_sales_order_add_ons(
-            db,
-            lines=lines,
-            subscriptions=[item[1] for item in staged_subscriptions],
-        )
-        for line, subscription in staged_subscriptions:
-            _ensure_provisioning_order_for_sales_line(
-                db,
-                sales_order=sales_order,
-                line=line,
-                subscription=subscription,
-            )
-        db.commit()
+        push_sales_order_subscriptions(db, sales_order, commit=True)
     except Exception:
         logger.warning(
             "sales_order_subscription_sync_failed sales_order_id=%s",
@@ -981,6 +918,175 @@ def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> Non
             exc_info=True,
         )
         db.rollback()
+
+
+def push_sales_order_subscriptions(
+    db: Session, sales_order: SalesOrder, *, commit: bool = True
+) -> SalesOrderServiceSyncResult:
+    """Create a subscription (plus its first invoice) for each sales-order
+    line tagged with a sub offer.
+
+    Native rewire of ``push_sales_order_subscription_to_selfcare``:
+    ``selfcare.create_subscription`` (HTTP → ``POST /crm/subscriptions``)
+    becomes an in-process :func:`app.services.crm_api.create_subscription`
+    call keyed on the unchanged
+    ``external_ref="sales_order:{id}:subscription:{line_id}"``. The resolved
+    ids are stored on the line metadata so repeated calls are safe.
+
+    Errors propagate. ``_push_sales_order_subscriptions`` is the best-effort
+    caller on the live sale path; the reconciler calls this directly so a
+    repair that cannot complete is reported rather than logged and dropped.
+    """
+    from app.services import crm_api
+
+    sales_order_id = sales_order.id
+    if not sales_order_id or not sales_order.subscriber_id:
+        return SalesOrderServiceSyncResult()
+
+    lines = _active_sales_order_lines(db, sales_order_id)
+    offer_lines = [(line, ref) for line in lines if (ref := _line_offer_ref(line))]
+    if not offer_lines:
+        return SalesOrderServiceSyncResult()
+
+    unresolved = 0
+    staged_subscriptions: list[tuple[SalesOrderLine, Subscription]] = []
+    for line, offer_ref in offer_lines:
+        meta = line.metadata_ if isinstance(line.metadata_, dict) else {}
+        existing_subscription_id = str(
+            meta.get("selfcare_subscription_id") or ""
+        ).strip()
+        subscription = None
+        invoice = None
+        if existing_subscription_id:
+            from app.models.catalog import Subscription
+
+            subscription = db.get(Subscription, coerce_uuid(existing_subscription_id))
+        else:
+            try:
+                result = crm_api.create_subscription(
+                    db,
+                    subscriber_id=str(sales_order.subscriber_id),
+                    offer_ref=offer_ref,
+                    external_ref=f"sales_order:{sales_order_id}:subscription:{line.id}",
+                    unit_price=line.unit_price,
+                    service_address_id=meta.get("service_address_id"),
+                    billing_cycle=_line_billing_cycle(line),
+                )
+            except LookupError:
+                # The offer no longer resolves. Skipping keeps the rest of the
+                # order moving, but the line stays unprovisioned, so it is
+                # counted and surfaced rather than silently dropped.
+                unresolved += 1
+                logger.warning(
+                    "sales_order_subscription_offer_unresolved "
+                    "sales_order_id=%s line_id=%s offer_ref=%s",
+                    sales_order_id,
+                    line.id,
+                    offer_ref,
+                )
+                continue
+            subscription = result.get("subscription") if result else None
+            invoice = result.get("invoice") if result else None
+        if subscription is None:
+            unresolved += 1
+            continue
+        new_meta = dict(line.metadata_ or {})
+        new_meta["selfcare_subscription_id"] = str(subscription.id)
+        if invoice is not None:
+            new_meta["selfcare_subscription_invoice_id"] = str(invoice.id)
+        line.metadata_ = new_meta
+        db.add(line)
+        logger.info(
+            "sales_order_subscription_created sales_order_id=%s line_id=%s "
+            "subscription_id=%s",
+            sales_order_id,
+            line.id,
+            subscription.id,
+        )
+        staged_subscriptions.append((line, subscription))
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    _sync_sales_order_add_ons(
+        db,
+        lines=lines,
+        subscriptions=[item[1] for item in staged_subscriptions],
+        commit=commit,
+    )
+    for line, subscription in staged_subscriptions:
+        _ensure_provisioning_order_for_sales_line(
+            db,
+            sales_order=sales_order,
+            line=line,
+            subscription=subscription,
+        )
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return SalesOrderServiceSyncResult(
+        subscriptions_created=len(staged_subscriptions),
+        unresolved_offer_lines=unresolved,
+    )
+
+
+#: How the recorded ``amount_paid`` was arrived at. ``observed`` means a caller
+#: supplied the figure from an actual receipt; ``inferred_from_total`` means
+#: staff flipped the order to paid and the amount was back-filled from the
+#: order total. Both post to the ledger today, but only the first is evidence.
+AMOUNT_OBSERVED = "observed"
+AMOUNT_INFERRED = "inferred_from_total"
+
+
+def _payment_provenance(sales_order: SalesOrder) -> dict[str, str]:
+    metadata = sales_order.metadata_ if isinstance(sales_order.metadata_, dict) else {}
+    return {
+        "amount_source": str(metadata.get("payment_amount_source") or AMOUNT_OBSERVED),
+        "confirmed_by": str(metadata.get("payment_confirmed_by") or ""),
+    }
+
+
+def _stamp_payment_provenance(
+    sales_order: SalesOrder, *, amount_source: str, actor_id: str | None
+) -> None:
+    """Record who settled the order and whether the amount was evidenced.
+
+    A staff-confirmed settlement creates ledger money, so it must be
+    attributable. Without this the ledger row carries only the order number and
+    no actor, and an inferred amount is indistinguishable from a real receipt.
+    """
+    metadata = dict(sales_order.metadata_ or {})
+    metadata["payment_amount_source"] = amount_source
+    metadata["payment_confirmed_by"] = str(actor_id or "").strip() or "unattributed"
+    metadata["payment_confirmed_at"] = datetime.now(UTC).isoformat()
+    sales_order.metadata_ = metadata
+
+
+def unprovisioned_service_lines(
+    db: Session, sales_order: SalesOrder
+) -> list[SalesOrderLine]:
+    """Offer-tagged lines on a fully funded order that never got a Subscription.
+
+    This is the drift ``_push_sales_order_subscriptions`` can leave behind when
+    its best-effort guard swallows a failure, or when an offer failed to
+    resolve. Gate 4 of the sales-to-service contract says full funding creates
+    one pending Subscription per service line, so a non-empty result here is a
+    contract violation the reconciler must repair.
+    """
+    if sales_order.payment_status != _PAID or not sales_order.is_active:
+        return []
+    if sales_order.status == SalesOrderStatus.cancelled.value:
+        return []
+    missing: list[SalesOrderLine] = []
+    for line in _active_sales_order_lines(db, sales_order.id):
+        if not _line_offer_ref(line):
+            continue
+        meta = line.metadata_ if isinstance(line.metadata_, dict) else {}
+        if str(meta.get("selfcare_subscription_id") or "").strip():
+            continue
+        missing.append(line)
+    return missing
 
 
 def _record_sales_order_payment(db: Session, sales_order: SalesOrder) -> None:
@@ -1013,13 +1119,24 @@ def _record_sales_order_payment(db: Session, sales_order: SalesOrder) -> None:
         # settle both.
         ensure_installation_invoice_for_sales_order(db, sales_order_id)
 
+        provenance = _payment_provenance(sales_order)
+        memo = f"Sales order {sales_order.order_number or sales_order_id}"
+        if provenance["amount_source"] == AMOUNT_INFERRED:
+            # Make an unevidenced settlement legible in the ledger rather than
+            # letting it read like a received payment.
+            memo += (
+                f" — settled by {provenance['confirmed_by'] or 'unattributed'}"
+                " (amount inferred from order total, no receipt reference)"
+            )
+        elif provenance["confirmed_by"]:
+            memo += f" — recorded by {provenance['confirmed_by']}"
         crm_api.record_external_payment(
             db,
             subscriber_id=str(sales_order.subscriber_id),
             amount=amount_paid,
             external_ref=f"sales_order:{sales_order_id}:payment",
             paid_at=sales_order.paid_at,
-            memo=f"Sales order {sales_order.order_number or sales_order_id}",
+            memo=memo,
             currency=sales_order.currency or "NGN",
         )
     except Exception:
@@ -1031,12 +1148,20 @@ def _record_sales_order_payment(db: Session, sales_order: SalesOrder) -> None:
         db.rollback()
 
 
-def _sync_sales_order_financials(db: Session, sales_order: SalesOrder) -> None:
+def _sync_sales_order_financials(
+    db: Session, sales_order: SalesOrder, *, record_ledger_payment: bool = True
+) -> None:
     """Apply the paid-order financial side-effects natively.
 
     Replaces the CRM's ``_sync_sales_order_payment_to_sub`` HTTP fan-out.
     Only fires on a paid/partial order; every step is idempotent, so
     repeated calls are safe.
+
+    ``record_ledger_payment=False`` is for money that is already in the ledger
+    by another owner's hand — the self-serve deposit is posted by
+    ``payments.verify_and_record_payment`` before the sales order ever hears
+    about it, so re-posting here would double-count it. The service
+    consequences of full funding still run.
     """
     if sales_order.payment_status not in {_PAID, _PARTIAL}:
         return
@@ -1044,14 +1169,20 @@ def _sync_sales_order_financials(db: Session, sales_order: SalesOrder) -> None:
     # service contract or provisioning order before the sale is fully funded.
     if sales_order.payment_status == _PAID:
         _push_sales_order_subscriptions(db, sales_order)
-    _record_sales_order_payment(db, sales_order)
+    if record_ledger_payment:
+        _record_sales_order_payment(db, sales_order)
 
 
 def _emit_sales_order_paid(
-    db: Session, sales_order: SalesOrder, previous_payment_status: str | None
+    db: Session,
+    sales_order: SalesOrder,
+    previous_payment_status: str | None,
+    *,
+    actor_id: str | None = None,
 ) -> None:
     if sales_order.payment_status != _PAID or previous_payment_status == _PAID:
         return
+    provenance = _payment_provenance(sales_order)
     try:
         emit_event(
             db,
@@ -1062,7 +1193,12 @@ def _emit_sales_order_paid(
                 "total": str(sales_order.total or 0),
                 "amount_paid": str(sales_order.amount_paid or 0),
                 "currency": sales_order.currency,
+                # Downstream consumers must be able to tell a receipted
+                # settlement from a staff-asserted one.
+                "amount_source": provenance["amount_source"],
+                "confirmed_by": provenance["confirmed_by"] or None,
             },
+            actor=str(actor_id or "").strip() or provenance["confirmed_by"] or None,
             subscriber_id=sales_order.subscriber_id,
         )
     except Exception:
@@ -1081,13 +1217,29 @@ def _apply_payment_fields(sales_order: SalesOrder, data: dict) -> None:
         sales_order.total = round_money(total)
         sales_order.amount_paid = round_money(amount_paid)
         sales_order.balance_due = balance_due
-        if total > 0 and balance_due <= 0:
+        # A waiver is an explicit financial decision, so only an explicit
+        # payment_status may revoke it. Without this guard every totals
+        # recalculation (a line add/edit routes through
+        # ``_recalculate_order_totals``) reads a waived order as
+        # amount_paid == 0 and silently downgrades it to pending, and the
+        # waived -> confirmed promotion below can never fire again because
+        # the status it tests for has just been overwritten.
+        derive_status = (
+            "payment_status" in data or sales_order.payment_status != _WAIVED
+        )
+        if not derive_status:
+            pass
+        elif total > 0 and balance_due <= 0:
             sales_order.payment_status = _PAID
             if not sales_order.paid_at:
                 sales_order.paid_at = datetime.now(UTC)
         elif amount_paid > 0:
             sales_order.payment_status = _PARTIAL
         else:
+            # A zero-total order stays pending on purpose: a freshly created
+            # order has total == 0 and amount_paid == 0, and promoting that to
+            # paid would fire the funding consequences against an order with no
+            # lines. Genuinely free work is modelled as ``waived``.
             sales_order.payment_status = _PENDING
     if sales_order.payment_status == _PAID:
         if sales_order.status in {
@@ -1148,6 +1300,120 @@ def _accrue_reseller_commission(db: Session, sales_order: SalesOrder | None) -> 
         getattr(sales_order, "id", None),
     )
     return None
+
+
+def record_deposit_receipt(
+    db: Session,
+    *,
+    sales_order_id: UUID | str,
+    amount: Decimal | str,
+    reference: str,
+    actor_id: str,
+    provider: str | None = None,
+    ledger_already_recorded: bool = False,
+) -> SalesOrder:
+    """Record one verified deposit receipt against its SalesOrder.
+
+    Owns its transaction: the receipt, the derived financial state and the
+    ``sales_order.paid`` outbox row commit together, and the funding
+    consequences run after. There is deliberately no ``commit=False`` mode —
+    the consequences commit internally, so a caller-managed transaction could
+    not span them anyway.
+
+    ``sales.orders`` owns SalesOrder financial status. Callers that verified
+    the money elsewhere hand the receipt here rather than writing
+    ``payment_status``/``amount_paid`` themselves, so the funding consequences
+    the sales-to-service contract promises — one pending Subscription and one
+    idempotent ServiceOrder per service line once the sale is fully funded —
+    actually fire.
+
+    ``ledger_already_recorded=True`` says the money is already in the billing
+    ledger by another owner's hand: the self-serve portal settles the deposit
+    invoice through ``payments.verify_and_record_payment`` before the sales
+    order hears about it, so re-posting here would double-count it.
+
+    Idempotent on ``reference``: an exact replay is a no-op, and the same
+    reference arriving with a different amount is a conflict rather than a
+    silent rewrite of the order's financial state.
+    """
+    actor = str(actor_id or "").strip()
+    if not actor:
+        raise SalesOrderLifecycleError(
+            "actor_required", "Deposit actor is required", kind="invalid"
+        )
+    normalized_reference = str(reference or "").strip()
+    if not normalized_reference:
+        raise SalesOrderLifecycleError(
+            "reference_required", "Deposit reference is required", kind="invalid"
+        )
+    try:
+        receipt_amount = round_money(Decimal(str(amount)))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise SalesOrderLifecycleError(
+            "invalid_amount", "Deposit amount must be a number", kind="invalid"
+        ) from exc
+    if receipt_amount <= 0:
+        raise SalesOrderLifecycleError(
+            "invalid_amount",
+            "Deposit amount must be greater than zero",
+            kind="invalid",
+        )
+
+    order = db.scalars(
+        select(SalesOrder)
+        .where(SalesOrder.id == coerce_uuid(str(sales_order_id)))
+        .with_for_update()
+    ).one_or_none()
+    if order is None or not order.is_active:
+        raise SalesOrderLifecycleError(
+            "sales_order_not_found", "Sales order not found", kind="not_found"
+        )
+    if order.status == SalesOrderStatus.cancelled.value:
+        raise SalesOrderLifecycleError(
+            "sales_order_canceled", "Cancelled order cannot accept a deposit"
+        )
+
+    metadata = dict(order.metadata_ or {})
+    receipts = dict(metadata.get("deposit_receipts") or {})
+    already = receipts.get(normalized_reference)
+    if isinstance(already, dict):
+        recorded = round_money(Decimal(str(already.get("amount") or 0)))
+        if recorded != receipt_amount:
+            raise SalesOrderLifecycleError(
+                "deposit_receipt_conflict",
+                f"Deposit reference '{normalized_reference}' was already recorded "
+                f"as {recorded}; refusing to rewrite it as {receipt_amount}",
+            )
+        return order
+
+    previous_payment_status = order.payment_status
+    receipts[normalized_reference] = {
+        "amount": str(receipt_amount),
+        "provider": provider,
+        "recorded_at": datetime.now(UTC).isoformat(),
+        "recorded_by": actor,
+    }
+    metadata["deposit_receipts"] = receipts
+    order.metadata_ = metadata
+    order.deposit_required = True
+    order.deposit_paid = True
+    # Receipts accumulate. Assigning amount_paid would let a second deposit
+    # erase the first.
+    accumulated = round_money(Decimal(str(order.amount_paid or 0)) + receipt_amount)
+    _stamp_payment_provenance(order, amount_source=AMOUNT_OBSERVED, actor_id=actor)
+    _apply_payment_fields(order, {"total": order.total, "amount_paid": accumulated})
+    # Emit inside the same transaction as the state change it describes, so the
+    # outbox row cannot survive a rolled-back settlement.
+    _emit_sales_order_paid(
+        db, order, previous_payment_status=previous_payment_status, actor_id=actor
+    )
+    db.flush()
+    db.commit()
+    db.refresh(order)
+    _sync_sales_order_financials(
+        db, order, record_ledger_payment=not ledger_already_recorded
+    )
+    return order
 
 
 def _ensure_project_for_manual_sales_order(db: Session, sales_order: SalesOrder):
@@ -1321,7 +1587,9 @@ class SalesOrders(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, sales_order_id: str, payload):
+    def update(
+        db: Session, sales_order_id: str, payload, *, actor_id: str | None = None
+    ):
         sales_order = db.get(SalesOrder, coerce_uuid(sales_order_id))
         if not sales_order:
             raise HTTPException(status_code=404, detail="Sales order not found")
@@ -1376,13 +1644,19 @@ class SalesOrders(ListResponseMixin):
                     data.get("source") or sales_order.source or quote.lead.lead_source
                 )
 
+        amount_source = AMOUNT_OBSERVED if "amount_paid" in data else None
         if data.get("payment_status") == _PAID:
             resolved_total = Decimal(data.get("total") or sales_order.total or 0)
             resolved_amount_paid = Decimal(
                 data.get("amount_paid") or sales_order.amount_paid or 0
             )
             if resolved_amount_paid < resolved_total:
+                # Staff asserted the order is settled without supplying a
+                # figure, so the amount is back-filled from the total. This
+                # still posts to the ledger, so record that the money was
+                # asserted rather than received — see AMOUNT_INFERRED.
                 data["amount_paid"] = round_money(resolved_total)
+                amount_source = AMOUNT_INFERRED
             data["balance_due"] = Decimal("0.00")
             if "paid_at" not in data or data.get("paid_at") is None:
                 data["paid_at"] = datetime.now(UTC)
@@ -1395,6 +1669,10 @@ class SalesOrders(ListResponseMixin):
         for key, value in data.items():
             setattr(sales_order, key, value)
 
+        if amount_source is not None:
+            _stamp_payment_provenance(
+                sales_order, amount_source=amount_source, actor_id=actor_id
+            )
         _apply_payment_fields(sales_order, data)
         _ensure_fulfillment(db, sales_order)
         db.commit()
@@ -1404,7 +1682,10 @@ class SalesOrders(ListResponseMixin):
         _accrue_reseller_commission(db, sales_order)
         _sync_sales_order_financials(db, sales_order)
         _emit_sales_order_paid(
-            db, sales_order, previous_payment_status=previous_payment_status
+            db,
+            sales_order,
+            previous_payment_status=previous_payment_status,
+            actor_id=actor_id,
         )
         return sales_order
 
@@ -1421,6 +1702,7 @@ class SalesOrders(ListResponseMixin):
         notes: str | None = None,
         owner_agent_id: str | None = None,
         source: str | None = None,
+        actor_id: str | None = None,
     ):
         """Update a sales order using raw string inputs (e.g. web forms)."""
         update_data: dict[str, Any] = {}
@@ -1463,13 +1745,52 @@ class SalesOrders(ListResponseMixin):
         from app.schemas.sales_order import SalesOrderUpdate
 
         payload = SalesOrderUpdate(**update_data)
-        return SalesOrders.update(db, sales_order_id, payload)
+        return SalesOrders.update(db, sales_order_id, payload, actor_id=actor_id)
 
     @staticmethod
     def delete(db: Session, sales_order_id: str):
+        """Deactivate a sales order that has not yet taken money or work.
+
+        Deactivation is not a cancellation: the reconciler only scans
+        ``is_active`` orders, so flipping the flag on a funded order hides it
+        from drift repair while its Project, Subscription and ServiceOrder keep
+        running. Anything past that point has to be cancelled through the
+        lifecycle instead.
+        """
         sales_order = db.get(SalesOrder, coerce_uuid(sales_order_id))
         if not sales_order:
             raise HTTPException(status_code=404, detail="Sales order not found")
+        if not sales_order.is_active:
+            return
+        blockers: list[str] = []
+        if sales_order.status in {
+            SalesOrderStatus.paid.value,
+            SalesOrderStatus.fulfilled.value,
+        }:
+            blockers.append(f"status is {sales_order.status}")
+        if sales_order.payment_status in {_PAID, _PARTIAL}:
+            blockers.append(f"payment_status is {sales_order.payment_status}")
+        if sales_order.project is not None:
+            blockers.append("it has an implementation project")
+        from app.models.provisioning import ServiceOrder
+
+        service_order_count = (
+            db.query(func.count(ServiceOrder.id))
+            .filter(ServiceOrder.sales_order_id == sales_order.id)
+            .scalar()
+            or 0
+        )
+        if service_order_count:
+            blockers.append(f"it has {service_order_count} provisioning order(s)")
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Sales order cannot be deactivated because "
+                    + "; ".join(blockers)
+                    + ". Cancel it through the sales-order lifecycle instead."
+                ),
+            )
         sales_order.is_active = False
         db.commit()
 

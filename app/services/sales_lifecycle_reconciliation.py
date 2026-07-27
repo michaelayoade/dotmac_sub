@@ -15,7 +15,13 @@ from app.models.vendor_routes import (
     InstallationProjectLifecycleEvent,
     InstallationProjectStatus,
 )
-from app.services import customer_experience_handoffs, sales_fulfillment
+from app.services import (
+    customer_experience_handoffs,
+    sales_fulfillment,
+)
+from app.services import (
+    sales_orders as sales_order_service,
+)
 
 
 class SalesLifecycleReconciliationError(ValueError):
@@ -45,23 +51,45 @@ def reconcile_sales_to_service_lifecycle(
         ).all()
     )
     for order in orders:
-        if order.project is not None:
-            continue
-        counts["missing_implementation_scope"] += 1
-        if apply:
-            try:
-                sales_fulfillment.ensure_implementation_scope(
-                    db,
-                    sales_order_id=order.id,
-                    actor_id=actor_id,
-                    commit=False,
-                )
-            except ValueError as exc:
-                db.rollback()
-                raise SalesLifecycleReconciliationError(
-                    "implementation_scope_repair_rejected", str(exc)
-                ) from exc
-            counts["implementation_scope_repaired"] += 1
+        if order.project is None:
+            counts["missing_implementation_scope"] += 1
+            if apply:
+                try:
+                    sales_fulfillment.ensure_implementation_scope(
+                        db,
+                        sales_order_id=order.id,
+                        actor_id=actor_id,
+                        commit=False,
+                    )
+                except ValueError as exc:
+                    db.rollback()
+                    raise SalesLifecycleReconciliationError(
+                        "implementation_scope_repair_rejected", str(exc)
+                    ) from exc
+                counts["implementation_scope_repaired"] += 1
+
+        # Gate 4: full funding creates one pending Subscription and one
+        # idempotent ServiceOrder per service line. The live path is
+        # best-effort, so this is the only thing that notices when it silently
+        # did not happen.
+        unprovisioned = sales_order_service.unprovisioned_service_lines(db, order)
+        if unprovisioned:
+            counts["funded_orders_missing_subscription"] += 1
+            counts["funded_lines_missing_subscription"] += len(unprovisioned)
+            if apply:
+                try:
+                    result = sales_order_service.push_sales_order_subscriptions(
+                        db, order, commit=False
+                    )
+                except Exception as exc:  # owner rejected the repair
+                    db.rollback()
+                    raise SalesLifecycleReconciliationError(
+                        "funded_subscription_repair_rejected", str(exc)
+                    ) from exc
+                counts["subscriptions_repaired"] += result.subscriptions_created
+                # An offer that no longer resolves cannot be repaired here; say
+                # so rather than reporting a clean sweep.
+                counts["unresolvable_offer_lines"] += result.unresolved_offer_lines
 
     verified = list(
         db.scalars(
@@ -152,6 +180,14 @@ def reconcile_sales_to_service_lifecycle(
         "apply": apply,
         "missing_implementation_scope": counts["missing_implementation_scope"],
         "implementation_scope_repaired": counts["implementation_scope_repaired"],
+        "funded_orders_missing_subscription": counts[
+            "funded_orders_missing_subscription"
+        ],
+        "funded_lines_missing_subscription": counts[
+            "funded_lines_missing_subscription"
+        ],
+        "subscriptions_repaired": counts["subscriptions_repaired"],
+        "unresolvable_offer_lines": counts["unresolvable_offer_lines"],
         "verified_implementation_not_released": counts[
             "verified_implementation_not_released"
         ],

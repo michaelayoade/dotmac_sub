@@ -80,7 +80,15 @@ configuration. Changing one requires a migration/versioned contract and tests.
    WorkOrder owns the foreign key.
 4. A partially paid SalesOrder records the receipt but creates no Subscription
    or ServiceOrder. Full funding creates one pending Subscription and one
-   idempotent ServiceOrder per service line.
+   idempotent ServiceOrder per service line. Every receipt reaches the order
+   through `sales.orders`; no other surface writes `payment_status`,
+   `amount_paid` or `balance_due`. Receipts are keyed by provider reference and
+   accumulate — an exact replay is a no-op, and the same reference arriving with
+   a different amount is rejected. A caller whose money is already in the ledger
+   (the self-serve deposit is posted by `verify_and_record_payment`) says so, so
+   the funding consequences run without the payment being counted twice.
+   A `waived` order is an explicit financial decision: only an explicit
+   `payment_status` change may revoke it, never a totals recalculation.
 5. Sales ServiceOrders remain `draft` until the vendor-project owner records an
    append-only staff verification event. After that fact commits, the registered
    lifecycle projection handler asks `sales.fulfillment` to complete the native
@@ -121,7 +129,22 @@ Apply only owner-backed repairs:
 python -m scripts.migration.reconcile_sales_lifecycle --apply
 ```
 
-The reconciler may create a missing implementation scope, release a ServiceOrder
-from existing verification evidence, or recreate a missing ready CX handoff. It
+The reconciler may create a missing implementation scope, push the missing
+Subscription/ServiceOrder for a fully funded order, release a ServiceOrder from
+existing verification evidence, or recreate a missing ready CX handoff. It
 cannot invent an interaction, Party binding, payment, verification event,
-provisioning result, or acceptance.
+provisioning result, or acceptance. A service line whose catalog offer no longer
+resolves is counted as `unresolvable_offer_lines` rather than reported as
+repaired.
+
+The same sweep runs hourly as
+`app.tasks.sales_lifecycle.reconcile_sales_to_service_lifecycle`, gated by
+`projects.sales_lifecycle_reconcile_enabled`. It is **detect-only** by default
+and logs drift at WARNING; auto-repair creates subscriptions and their first
+invoice, so it is a separate opt-in control,
+`projects.sales_lifecycle_reconcile_apply_enabled`.
+
+The funding consequence on the live sale path stays best-effort — a billing
+hiccup must never fail a sale — which is only safe because this reconciler
+detects what the swallow leaves behind. Do not widen that except-clause without
+a matching reconciler check.
