@@ -767,25 +767,37 @@ class VendorPortalOperations:
                 )
             if command.mode == VendorAssignmentType.direct.value:
                 if not command.vendor_id:
-                    raise _error("vendor_required", "Choose a vendor for direct assignment.")
+                    raise _error(
+                        "vendor_required", "Choose a vendor for direct assignment."
+                    )
                 project.assigned_vendor_id = coerce_uuid(command.vendor_id)
                 project.assignment_type = VendorAssignmentType.direct.value
                 project.status = InstallationProjectStatus.assigned.value
             elif command.mode == VendorAssignmentType.bidding.value:
-                if command.bidding_close_at is None or command.bidding_close_at <= _now():
-                    raise _error("bidding_window_required", "Choose a future bid closing time.")
+                if (
+                    command.bidding_close_at is None
+                    or command.bidding_close_at <= _now()
+                ):
+                    raise _error(
+                        "bidding_window_required", "Choose a future bid closing time."
+                    )
                 project.assigned_vendor_id = None
                 project.assignment_type = VendorAssignmentType.bidding.value
                 project.bidding_open_at = _now()
                 project.bidding_close_at = command.bidding_close_at
                 project.status = InstallationProjectStatus.open_for_bidding.value
             else:
-                raise _error("invalid_procurement_mode", "Choose direct assignment or bidding.")
+                raise _error(
+                    "invalid_procurement_mode", "Choose direct assignment or bidding."
+                )
             db.flush()
             return _serialize_project(project)
 
         return _execute(
-            db, context=command.context, name="configure_procurement", operation=operation
+            db,
+            context=command.context,
+            name="configure_procurement",
+            operation=operation,
         )
 
     @staticmethod

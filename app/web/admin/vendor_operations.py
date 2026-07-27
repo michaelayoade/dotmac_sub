@@ -9,7 +9,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.vendor_routes import InstallationProject, InstallationProjectStatus, Vendor
+from app.models.vendor_routes import (
+    InstallationProject,
+    InstallationProjectStatus,
+    Vendor,
+)
 from app.services import (
     vendor_as_built_review_proposals,
     vendor_project_review_proposals,
@@ -127,8 +131,18 @@ def vendor_operations_queue(
     )
     context.update(
         {
-            "draft_projects": db.query(InstallationProject).filter(InstallationProject.status == InstallationProjectStatus.draft.value).limit(100).all() if show_field_reviews else [],
-            "active_vendors": db.query(Vendor).filter(Vendor.is_active.is_(True)).order_by(Vendor.name).all() if show_field_reviews else [],
+            "draft_projects": db.query(InstallationProject)
+            .filter(InstallationProject.status == InstallationProjectStatus.draft.value)
+            .limit(100)
+            .all()
+            if show_field_reviews
+            else [],
+            "active_vendors": db.query(Vendor)
+            .filter(Vendor.is_active.is_(True))
+            .order_by(Vendor.name)
+            .all()
+            if show_field_reviews
+            else [],
             "message": message,
             "show_field_reviews": show_field_reviews,
             "show_route_reviews": show_route_reviews,
@@ -170,15 +184,35 @@ def vendor_operations_queue(
 
 @router.post("/projects/{project_id}/procurement")
 def configure_vendor_procurement(
-    request: Request, project_id: str, mode: str = Form(...), vendor_id: str | None = Form(None), bidding_close_at: datetime | None = Form(None), _auth: dict = Depends(_project_write), db: Session = Depends(get_db)
+    request: Request,
+    project_id: str,
+    mode: str = Form(...),
+    vendor_id: str | None = Form(None),
+    bidding_close_at: datetime | None = Form(None),
+    _auth: dict = Depends(_project_write),
+    db: Session = Depends(get_db),
 ):
-    context = _staff_confirmation_context(request, scope=project_id, reason="vendor_procurement_configuration")
+    context = _staff_confirmation_context(
+        request, scope=project_id, reason="vendor_procurement_configuration"
+    )
     db_session_adapter.release_read_transaction(db)
     try:
-        vendor_portal_operations.configure_procurement(db, ConfigureVendorProcurementCommand(context=context, project_id=project_id, mode=mode, vendor_id=vendor_id, bidding_close_at=bidding_close_at))
+        vendor_portal_operations.configure_procurement(
+            db,
+            ConfigureVendorProcurementCommand(
+                context=context,
+                project_id=project_id,
+                mode=mode,
+                vendor_id=vendor_id,
+                bidding_close_at=bidding_close_at,
+            ),
+        )
     except DomainError as exc:
         raise _quote_error(exc) from exc
-    return RedirectResponse("/admin/vendors/operations?message=Vendor+procurement+configured", status_code=303)
+    return RedirectResponse(
+        "/admin/vendors/operations?message=Vendor+procurement+configured",
+        status_code=303,
+    )
 
 
 @router.get("/quotes/{quote_id}", response_class=HTMLResponse)
