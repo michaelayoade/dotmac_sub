@@ -1463,6 +1463,30 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   `financial.prepaid_service_coverage_reconciliation`, which creates missing
   entitlement evidence from an exact existing debit or paid invoice line and
   quarantines ambiguity without posting money.
+- Billing-anchor writer boundary: `Subscription.next_billing_at` is a projection
+  of exact entitlement evidence, and
+  `financial.prepaid_service_renewals.project_prepaid_billing_anchor_for_invoice`
+  is its single owner-side writer for invoice-funded prepaid service. Payment
+  allocation, invoice application, and draft reconciliation are participants:
+  they commit exact entitlement evidence and then either emit the durable
+  funding-change event or request that projection. The former inline
+  `project_paid_invoice_billing_anchors` call in `financial.payments` and its
+  helper in `service_entitlements` are retired, so the payment owner never
+  writes the anchor. The projection is a pure recomputation from surviving
+  active entitlements, which makes it idempotent under event replay and lets a
+  refund, chargeback, or reversal retract the anchor back to the start of the
+  period that stopped being funded — a reversal cannot leave a stale advanced
+  anchor. `payment.refunded` and `payment.reversed` reach the same owner through
+  `PrepaidRenewalHandler`. The accumulated drift cohort (an active
+  `ServiceEntitlement` ending after `next_billing_at`) is repaired by the
+  owner's idempotent, fingerprint-bound
+  `preview_stale_prepaid_billing_anchor_repair` /
+  `apply_stale_prepaid_billing_anchor_repair` pair, driven by
+  `scripts/one_off/repair_stale_prepaid_billing_anchors.py`, which posts no
+  money and stages one audit event per repaired subscription. Known remaining
+  exception: `_reanchor_paid_prepaid_invoice_if_lapsed` in `financial.payments`
+  still advances the anchor while re-anchoring a lapsed prepaid invoice's
+  documentary period; retiring that second writer is a separate, wider change.
 - Retired payment-application evidence boundary: the former
   `PaymentPrepaidApplication` runtime is not a current financial or coverage
   owner. Revision `394_retire_payment_prepaid_applications` renames its physical

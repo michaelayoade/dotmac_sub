@@ -13,6 +13,45 @@ logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
 
+def heal_walled_paid_accounts() -> dict[str, int]:
+    """Scheduled, bounded healing of accounts walled with nothing owed.
+
+    Application is gated twice: by the `walled_account_healing_apply_enabled`
+    setting, and per account by a locked recomputation that must prove zero
+    overdue receivable. Ambiguous accounts become durable operator exceptions
+    instead of automated guesses.
+    """
+    from app.models.domain_settings import SettingDomain
+    from app.services.billing.unwall_paid_accounts import (
+        run_scheduled_walled_account_healing,
+    )
+    from app.services.settings_spec import resolve_boolean
+
+    session = SessionLocal()
+    try:
+        apply = resolve_boolean(
+            session,
+            SettingDomain.billing,
+            "walled_account_healing_apply_enabled",
+        )
+        stats = run_scheduled_walled_account_healing(session, apply=apply)
+        if stats["exceptions"]:
+            logger.warning(
+                "walled_account_healing_exceptions",
+                extra={"event": "walled_account_healing_exceptions", **stats},
+            )
+        return stats
+    except Exception:
+        session.rollback()
+        logger.exception(
+            "walled_account_healing_failed",
+            extra={"event": "walled_account_healing_failed"},
+        )
+        raise
+    finally:
+        session.close()
+
+
 def cleanup_subscription_block_sessions(
     subscription_id: str, reason: str = "blocked"
 ) -> dict[str, int]:

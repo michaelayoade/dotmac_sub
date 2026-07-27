@@ -587,6 +587,24 @@ def build_beat_schedule() -> dict:
             enabled=stale_overdue_lock_detect_enabled,
             interval_seconds=86400,
         )
+        # Walled accounts that owe nothing: real healing, unambiguous cases
+        # only. The pass discovers the cohort every hour and always records
+        # durable operator exceptions. It APPLIES a restore only when
+        # `walled_account_healing_apply_enabled` is on AND a locked
+        # recomputation proves zero overdue receivable for that exact account,
+        # so an ambiguous row is escalated rather than guessed at.
+        walled_account_healing_enabled = _scheduler_setting_enabled(
+            session,
+            SettingDomain.billing,
+            "walled_account_healing_enabled",
+        )
+        _sync_scheduled_task(
+            session,
+            name="walled_account_healing",
+            task_name="app.tasks.enforcement.heal_walled_paid_accounts",
+            enabled=walled_account_healing_enabled,
+            interval_seconds=3600,
+        )
         # Cross-app drift detector (R-3): daily read-only proof that CRM / sub /
         # ERP still agree on the business facts that matter. Detect-only — it
         # persists findings by fingerprint and WARNs on material drift, pointing

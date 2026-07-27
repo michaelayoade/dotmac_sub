@@ -102,6 +102,7 @@ SCHEDULER_BOOLEAN_SETTING_KEYS = frozenset(
         (SettingDomain.billing, "cutover_balance_audit_enabled"),
         (SettingDomain.billing, "funded_inactive_exposure_audit_enabled"),
         (SettingDomain.billing, "stale_overdue_lock_detect_enabled"),
+        (SettingDomain.billing, "walled_account_healing_enabled"),
         (SettingDomain.catalog, "nas_backup_retention_enabled"),
         (SettingDomain.comms, "oauth_token_refresh_enabled"),
         (SettingDomain.network_monitoring, "infra_availability_prune_enabled"),
@@ -4238,6 +4239,25 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=True,
         label="Stale overdue-lock detection",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="walled_account_healing_enabled",
+        env_var="WALLED_ACCOUNT_HEALING_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Walled-account healing pass",
+    ),
+    # Money-adjacent: the pass only APPLIES when this is on AND a locked
+    # recomputation proves zero overdue receivable for that exact account.
+    # Ambiguous accounts always become operator exceptions, never guesses.
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="walled_account_healing_apply_enabled",
+        env_var="WALLED_ACCOUNT_HEALING_APPLY_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Walled-account healing applies changes",
     ),
     SettingSpec(
         domain=SettingDomain.audit,

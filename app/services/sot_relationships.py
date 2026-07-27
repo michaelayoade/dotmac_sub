@@ -9426,6 +9426,37 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.walled_account_healing",
+                module="app.services.billing.unwall_paid_accounts",
+                owns=(
+                    "walled-account healing candidate selection",
+                    "locked zero-overdue-receivable healing decision",
+                    "scheduled walled-account healing application",
+                    "walled-account healing operator exceptions",
+                ),
+                depends_on=(
+                    "financial.access_resolution",
+                    "financial.billing_profile",
+                    "collections.lifecycle",
+                    "access.subscription_lifecycle",
+                ),
+                notes=(
+                    "Service-state only: this owner posts, moves and forgives no "
+                    "money. It selects walled accounts with a canonical restoration "
+                    "path, recomputes the exact overdue receivable under an account "
+                    "lock, and requests the financial-access restoration owner. "
+                    "Scheduled application is allowed only when that recomputation "
+                    "proves zero overdue receivable; there is no tolerance, epsilon "
+                    "or de-minimis threshold, so a sub-naira residue correctly "
+                    "blocks the automated restore. Every ambiguous or blocked row "
+                    "becomes a durable, deduplicated operator exception with its "
+                    "recomputed evidence instead of an automated guess. Restoration "
+                    "reason scoping stays with the lifecycle owner: healing never "
+                    "lifts an admin, fraud or FUP lock and never clears a lifecycle "
+                    "override."
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_service_renewals",
                 module="app.services.prepaid_service_renewals",
                 owns=(
@@ -9434,6 +9465,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "locked and idempotent prepaid renewal debit",
                     "exact debit-to-entitlement evidence",
                     "prepaid subscription paid-through advancement",
+                    "billing-anchor projection from entitlement evidence",
+                    "billing-anchor retraction after funding reversal",
+                    "stale billing-anchor drift repair",
                     "canonical prepaid renewed-through outcome",
                     "post-credit-application due-service consequence",
                     "bounded scheduled renewal catch-up",
@@ -9456,7 +9490,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "same transaction; payment correlation is a trigger, not source "
                     "attribution for pooled account credit. Incomplete evidence raises "
                     "through the durable event-handler attempt so the permanent event "
-                    "redriver retries it; an explicit no-due-service outcome is success."
+                    "redriver retries it; an explicit no-due-service outcome is success. "
+                    "This owner is also the single writer of the invoice-funded "
+                    "billing anchor: payment allocation, invoice application and draft "
+                    "reconciliation commit entitlement evidence and then emit the "
+                    "funding-change event or request "
+                    "project_prepaid_billing_anchor_for_invoice. That projection is a "
+                    "pure recomputation from surviving active entitlements, so replay "
+                    "is idempotent and a refund, chargeback or reversal retracts the "
+                    "anchor to the start of the period that stopped being funded "
+                    "instead of leaving it stale. The retired inline "
+                    "project_paid_invoice_billing_anchors helper is gone."
                 ),
             ),
             SOTService(

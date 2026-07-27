@@ -26,6 +26,20 @@ def reconcile_billing_approval_drift() -> dict[str, int]:
     return enforcement_scheduled.reconcile_billing_approval_drift()
 
 
+@celery_app.task(name="app.tasks.enforcement.heal_walled_paid_accounts")
+def heal_walled_paid_accounts() -> dict[str, int]:
+    """Heal accounts held behind the wall while owing nothing.
+
+    Real healing, not detection — but unambiguous cases only. A candidate is
+    restored automatically only when a locked recomputation proves zero overdue
+    receivable; anything else becomes a durable operator exception. Exact
+    arithmetic: no tolerance, epsilon, or de-minimis threshold is applied, so a
+    sub-naira residue correctly blocks the automated restore and shows up on
+    the operator worklist instead of disappearing.
+    """
+    return enforcement_scheduled.heal_walled_paid_accounts()
+
+
 @celery_app.task(name="app.tasks.enforcement.detect_stale_overdue_locks")
 def detect_stale_overdue_locks() -> dict[str, int]:
     """Dry-run detector for stale ``overdue`` enforcement locks - accounts held

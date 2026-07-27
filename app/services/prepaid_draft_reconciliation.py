@@ -1045,6 +1045,21 @@ def _stage_action(
             "This draft requires more funding or manual evidence review.",
             disposition=preview.disposition.value,
         )
+    if preview.recommended_action is PrepaidDraftAction.settle_paid:
+        # This owner settles the documentary period; it never writes
+        # `Subscription.next_billing_at` itself. Billing-anchor advancement is
+        # owned by `financial.prepaid_service_renewals`, so the committed
+        # entitlement evidence is handed to that owner to project. See
+        # docs/SOT_RELATIONSHIP_MAP.md, "Prepaid renewal boundary".
+        from app.services.prepaid_service_renewals import (
+            project_prepaid_billing_anchor_for_invoice,
+        )
+
+        project_prepaid_billing_anchor_for_invoice(
+            db,
+            invoice,
+            evidence_ref=f"prepaid_draft_reconciliation:{invoice.id}",
+        )
     _record_metadata(
         invoice,
         preview=preview,
