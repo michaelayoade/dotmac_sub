@@ -15243,6 +15243,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor project workspace read and action projections",
                     "vendor project workspace mutation coordination",
+                    "quote creation eligibility",
                     "quote submission eligibility and impact snapshot",
                     "as-built submission eligibility and impact snapshot",
                     "staff project-review eligibility and impact snapshot",
@@ -15282,6 +15283,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical vendor project records",
                                 "vendor quote currency and validity policy",
                                 "vendor workspace mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="quote creation eligibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
                             ),
                         ),
                         ConcernContract(
@@ -15422,6 +15431,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_line_not_found",
                             "operations.vendor_project_workspace.route_revision_not_found",
                             "operations.vendor_project_workspace.project_not_assigned",
+                            "operations.vendor_project_workspace.quote_creation_not_allowed",
                             "operations.vendor_project_workspace.bidding_closed",
                             "operations.vendor_project_workspace.quote_not_editable",
                             "operations.vendor_project_workspace.quote_not_submittable",
@@ -15609,6 +15619,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_line_not_found",
                             "operations.vendor_project_workspace.route_revision_not_found",
                             "operations.vendor_project_workspace.project_not_assigned",
+                            "operations.vendor_project_workspace.quote_creation_not_allowed",
                             "operations.vendor_project_workspace.bidding_closed",
                             "operations.vendor_project_workspace.quote_not_editable",
                             "operations.vendor_project_workspace.quote_not_submittable",
