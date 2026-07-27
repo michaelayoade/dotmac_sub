@@ -9,7 +9,6 @@ import pytest
 from jinja2 import Environment, FileSystemLoader
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
-from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxAgentPresence,
     InboxConversation,
@@ -146,16 +145,17 @@ def test_queue_row_projects_real_contact_name_and_unread_message_count(db_sessio
 
 
 def test_manager_dashboard_projects_presence_load_status_and_channels(db_session):
-    user = SystemUser(
-        first_name="Maya",
-        last_name="Manager",
-        display_name="Maya Manager",
+    user, person = add_bound_staff_user(
+        db_session,
         email="maya-manager@example.test",
     )
+    user.first_name = "Maya"
+    user.last_name = "Manager"
+    user.display_name = "Maya Manager"
     team = ServiceTeam(name="Support", team_type=ServiceTeamType.support.value)
     db_session.add_all([user, team])
     db_session.flush()
-    db_session.add(ServiceTeamMember(team_id=team.id, person_id=user.id))
+    db_session.add(ServiceTeamMember(team_id=team.id, person_id=person.id))
     assigned = InboxConversation(
         channel_type="whatsapp",
         status=InboxConversationStatus.open.value,

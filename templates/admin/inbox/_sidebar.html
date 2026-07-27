@@ -103,6 +103,7 @@
                   @submit="filterRequestStarted()">
             {% if selected %}<input type="hidden" name="conversation_id" value="{{ selected.id }}">{% endif %}
             <input type="hidden" name="search" value="{{ search }}">
+            {% if ai_handling is not none %}<input type="hidden" name="ai_handling" value="{{ 'true' if ai_handling else 'false' }}">{% endif %}
             <fieldset>
                 <legend class="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Status</legend>
                 <div class="flex flex-wrap gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800/50">
