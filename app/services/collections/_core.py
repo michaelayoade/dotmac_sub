@@ -1358,9 +1358,13 @@ def confirm_financial_access_restoration(
                 resolved_by=resolved_by or f"financial_access:{account.id}",
                 reason=lock.reason,
             )
-            restored = outcome.access_restored
+            # `subscriptions_changed` is a count of state transitions and keeps
+            # its legacy meaning; the worklist entry is only cleared once the
+            # customer genuinely has service again, so an account still held by
+            # a lifecycle override stays on the queue.
+            restored = outcome.subscription_reactivated
             restoration_outcomes.append(outcome.to_dict())
-            if restored:
+            if outcome.access_restored:
                 clear_financially_settled_but_access_blocked(
                     db, str(lock.subscription_id)
                 )

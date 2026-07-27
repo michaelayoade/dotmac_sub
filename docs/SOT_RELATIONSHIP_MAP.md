@@ -1473,10 +1473,18 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   `project_paid_invoice_billing_anchors` call in `financial.payments` and its
   helper in `service_entitlements` are retired, so the payment owner never
   writes the anchor. The projection is a pure recomputation from surviving
-  active entitlements, which makes it idempotent under event replay and lets a
-  refund, chargeback, or reversal retract the anchor back to the start of the
-  period that stopped being funded — a reversal cannot leave a stale advanced
-  anchor. `payment.refunded` and `payment.reversed` reach the same owner through
+  coverage, which makes it idempotent under event replay and lets a refund,
+  chargeback, or reversal retract the anchor back to the start of the period
+  that stopped being funded — a reversal cannot leave a stale advanced anchor.
+  Advancement is forward-only while the invoice's own entitlements survive:
+  `financial.service_extensions` owns its billing-anchor projection and records
+  a grant interval starting at the later of the existing anchor and application
+  time, and `financial.payments` preserves that delta when it re-anchors a
+  lapsed prepaid renewal, so both legitimately leave the anchor ahead of what
+  the invoice funded. This owner advances to meet coverage and never claws back
+  a lead another owner granted. Applied service-extension grant intervals count
+  as surviving coverage on the retraction side too, so a refund removes the
+  refunded period without cancelling a goodwill extension. `payment.refunded` and `payment.reversed` reach the same owner through
   `PrepaidRenewalHandler`. The accumulated drift cohort (an active
   `ServiceEntitlement` ending after `next_billing_at`) is repaired by the
   owner's idempotent, fingerprint-bound

@@ -52,6 +52,11 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.idempotency import IdempotencyKey
+from app.models.service_extension import (
+    ServiceExtension,
+    ServiceExtensionEntry,
+    ServiceExtensionStatus,
+)
 from app.models.subscriber import Address, Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import AccountAdjustmentPreviewRequest
@@ -1016,21 +1021,30 @@ def project_prepaid_billing_anchor_for_invoice(
     then ask this owner to project it. They never write ``next_billing_at``
     themselves, so there is exactly one writer for the projection.
 
-    The result is a pure function of current entitlement state, which makes it
+    The result is a pure function of current coverage state, which makes it
     idempotent under replay and self-repairing in both directions:
 
     * A settled prepaid invoice moves the anchor forward to the end of the
-      subscription's exact active coverage.
-    * A refund, chargeback, reversal, or reallocation that revokes the
-      entitlement retracts the anchor back to the start of the period that
-      stopped being funded, so a reversal can never leave a stale advanced
-      anchor claiming service the customer no longer paid for.
+      subscription's exact active coverage. Advancement is FORWARD-ONLY while
+      this invoice's own entitlements survive: an anchor already ahead of that
+      coverage was put there by another owner — the
+      ``financial.service_extensions`` billing-anchor projection, a
+      ``financial.subscription_billing_grants`` grant, or the payment owner
+      preserving an extension delta across a lapsed-renewal re-anchor — and
+      this owner must not silently claw back service someone else granted.
+    * A refund, chargeback, reversal, or reallocation that revokes this
+      invoice's entitlements retracts the anchor to whatever coverage still
+      survives, so a reversal can never leave a stale advanced anchor claiming
+      service the customer no longer paid for. Applied service-extension grants
+      are counted as surviving coverage, so a refund removes the refunded
+      period without also cancelling a goodwill extension.
     """
 
     rows = db.execute(
         select(
             ServiceEntitlement.subscription_id,
             ServiceEntitlement.starts_at,
+            ServiceEntitlement.status,
         )
         .where(ServiceEntitlement.source_invoice_id == invoice.id)
         .order_by(ServiceEntitlement.subscription_id, ServiceEntitlement.starts_at)
@@ -1039,20 +1053,26 @@ def project_prepaid_billing_anchor_for_invoice(
         return ()
 
     unfunded_start_by_subscription: dict[UUID, datetime] = {}
-    for subscription_id, starts_at in rows:
+    # Whether THIS invoice still funds the subscription. Losing its entitlement
+    # is what authorizes a retraction; an untouched invoice never may.
+    invoice_still_funds: dict[UUID, bool] = {}
+    for subscription_id, starts_at, status in rows:
         current = unfunded_start_by_subscription.get(subscription_id)
         candidate = _utc(starts_at)
         if current is None or candidate < current:
             unfunded_start_by_subscription[subscription_id] = candidate
+        if status == ServiceEntitlementStatus.active:
+            invoice_still_funds[subscription_id] = True
+        else:
+            invoice_still_funds.setdefault(subscription_id, False)
 
+    subscription_ids = list(unfunded_start_by_subscription)
     coverage_rows = db.execute(
         select(
             ServiceEntitlement.subscription_id,
             ServiceEntitlement.ends_at,
         ).where(
-            ServiceEntitlement.subscription_id.in_(
-                list(unfunded_start_by_subscription)
-            ),
+            ServiceEntitlement.subscription_id.in_(subscription_ids),
             ServiceEntitlement.status == ServiceEntitlementStatus.active,
         )
     ).all()
@@ -1060,6 +1080,31 @@ def project_prepaid_billing_anchor_for_invoice(
     for subscription_id, ends_at in coverage_rows:
         current = coverage_end_by_subscription.get(subscription_id)
         candidate = _utc(ends_at)
+        if current is None or candidate > current:
+            coverage_end_by_subscription[subscription_id] = candidate
+
+    # `financial.service_extensions` owns its own billing-anchor projection and
+    # records one immutable grant interval per subscription. Those intervals are
+    # coverage evidence exactly as `financial.prepaid_service_coverage` reads
+    # them, so they must be visible here too — otherwise a retraction would
+    # silently undo another owner's anchor projection.
+    for subscription_id, grant_ends_at in db.execute(
+        select(
+            ServiceExtensionEntry.subscription_id,
+            ServiceExtensionEntry.grant_ends_at,
+        )
+        .join(
+            ServiceExtension,
+            ServiceExtension.id == ServiceExtensionEntry.extension_id,
+        )
+        .where(
+            ServiceExtensionEntry.subscription_id.in_(subscription_ids),
+            ServiceExtension.status == ServiceExtensionStatus.applied,
+            ServiceExtensionEntry.grant_ends_at.isnot(None),
+        )
+    ).all():
+        current = coverage_end_by_subscription.get(subscription_id)
+        candidate = _utc(grant_ends_at)
         if current is None or candidate > current:
             coverage_end_by_subscription[subscription_id] = candidate
 
@@ -1076,17 +1121,22 @@ def project_prepaid_billing_anchor_for_invoice(
         )
         coverage_end = coverage_end_by_subscription.get(subscription_id)
         if coverage_end is not None:
-            target: datetime | None = coverage_end
-            retracted = previous is not None and coverage_end < previous
+            # Surviving coverage wins, but it can never leave the period this
+            # invoice funded looking covered when it no longer is: an extension
+            # that already expired retracts to the unfunded period start.
+            target: datetime | None = max(coverage_end, unfunded_start)
+            if invoice_still_funds.get(subscription_id) and previous is not None:
+                # Nothing was revoked, so this is an advancement. Never move the
+                # anchor backwards over a lead another owner granted.
+                target = max(previous, target)
         else:
-            # No exact active coverage survives for this subscription, so the
-            # period this invoice funded is due again from its own start.
+            # No coverage survives for this subscription at all, so the period
+            # this invoice funded is due again from its own start.
             target = unfunded_start
-            retracted = previous is None or previous > unfunded_start
             if previous is not None and previous < unfunded_start:
                 # An earlier unpaid period is already due; never push it later.
                 target = previous
-                retracted = False
+        retracted = previous is not None and target < previous
         changed = target != previous
         if changed:
             subscription.next_billing_at = target

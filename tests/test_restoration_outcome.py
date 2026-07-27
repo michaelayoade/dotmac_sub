@@ -325,6 +325,76 @@ def test_a_payment_clearable_blocker_is_critical_on_the_worklist(
     assert alert.details["required_action"] == "retry_with_authorized_trigger"
 
 
+def test_facade_reports_nothing_needed_doing_as_false(db_session, subscription):
+    """An already-active subscription must not read as "I restored something".
+
+    The ~10 existing `restore_subscription` callers were deliberately left
+    untouched, so the facade's truthiness must not shift underneath them: a
+    caller that treats True as a restoration could notify a customer, clear an
+    alert, or resolve a worklist entry for an account never suspended.
+    """
+    result = restore_subscription_detailed(
+        db_session,
+        str(subscription.id),
+        trigger="payment",
+        resolved_by="payment:test",
+        emit=False,
+    )
+
+    assert result.outcome is RestorationOutcome.already_active
+    assert result.subscription_reactivated is False
+    assert result.access_restored is True, "the customer does have service"
+    assert (
+        restore_subscription(
+            db_session,
+            str(subscription.id),
+            trigger="payment",
+            resolved_by="payment:test",
+            emit=False,
+        )
+        is False
+    )
+
+
+def test_facade_reports_a_restore_blocked_by_an_override_as_transitioned(
+    db_session, subscription
+):
+    """Legacy parity: the facade tracks the transition, not the access verdict.
+
+    The row did move to active, which is what the old boolean meant and what
+    its callers were reviewed against. That the account override still keeps
+    the customer dark is carried by the typed outcome, not by flipping the
+    facade under callers nobody re-reviewed.
+    """
+    suspend_subscription(
+        db_session,
+        str(subscription.id),
+        reason=EnforcementReason.overdue,
+        source="dunning_case:test",
+        emit=False,
+    )
+    set_account_lifecycle_override(
+        db_session,
+        str(subscription.subscriber_id),
+        status=SubscriberStatus.suspended,
+        reason="Regulatory hold",
+        source="admin:compliance",
+    )
+    db_session.flush()
+
+    result = restore_subscription_detailed(
+        db_session,
+        str(subscription.id),
+        trigger="payment",
+        resolved_by="payment:test",
+        emit=False,
+    )
+
+    assert result.subscription_reactivated is True
+    assert result.access_restored is False
+    assert result.outcome is RestorationOutcome.blocked_by_lifecycle_override
+
+
 def test_boolean_facade_still_answers_callers(db_session, subscription):
     suspend_subscription(
         db_session,

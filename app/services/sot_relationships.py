@@ -9496,10 +9496,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "reconciliation commit entitlement evidence and then emit the "
                     "funding-change event or request "
                     "project_prepaid_billing_anchor_for_invoice. That projection is a "
-                    "pure recomputation from surviving active entitlements, so replay "
-                    "is idempotent and a refund, chargeback or reversal retracts the "
+                    "pure recomputation from surviving coverage, so replay is "
+                    "idempotent and a refund, chargeback or reversal retracts the "
                     "anchor to the start of the period that stopped being funded "
-                    "instead of leaving it stale. The retired inline "
+                    "instead of leaving it stale. Advancement is forward-only while "
+                    "the invoice's own entitlements survive, and applied "
+                    "financial.service_extensions grant intervals count as surviving "
+                    "coverage, so this owner never claws back an anchor lead the "
+                    "extension owner or a lapsed-renewal re-anchor legitimately "
+                    "granted. The retired inline "
                     "project_paid_invoice_billing_anchors helper is gone."
                 ),
             ),

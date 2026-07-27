@@ -34,6 +34,12 @@ from app.models.billing import (
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.event_store import EventStore
+from app.models.service_extension import (
+    ServiceExtension,
+    ServiceExtensionEntry,
+    ServiceExtensionScope,
+    ServiceExtensionStatus,
+)
 from app.schemas.billing import (
     PaymentAllocationConfirm,
     PaymentAllocationPreviewRequest,
@@ -451,6 +457,91 @@ def test_reversal_retraction_finds_invoices_without_a_payload_hint(
 
     assert projections
     assert at(subscription.next_billing_at) == period_start
+
+
+def test_projection_never_claws_back_an_anchor_lead_it_cannot_see(
+    db_session, subscriber, subscription
+):
+    """Advancement is forward-only while this invoice's coverage survives.
+
+    `financial.service_extensions` owns its own billing-anchor projection, and
+    `financial.payments` preserves an extension delta when it re-anchors a
+    lapsed prepaid renewal. Both leave the anchor AHEAD of what this invoice
+    funded. Overwriting it with the entitlement end would silently claw back
+    service another owner granted — worse than the stale anchor being fixed.
+    """
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    _allocate(db_session, payment, invoice)
+    entitlement = _entitlement(db_session, invoice)
+
+    granted_through = at(entitlement.ends_at) + timedelta(days=5)
+    subscription.next_billing_at = granted_through
+    db_session.flush()
+
+    projections = project_prepaid_billing_anchor_for_invoice(
+        db_session, invoice, evidence_ref="pytest:extension-delta"
+    )
+    db_session.commit()
+    db_session.refresh(subscription)
+
+    assert at(subscription.next_billing_at) == granted_through
+    assert [item.changed for item in projections] == [False]
+    assert [item.retracted for item in projections] == [False]
+
+
+def test_a_reversal_retracts_the_period_but_keeps_an_applied_extension(
+    db_session, subscriber, subscription
+):
+    """A refund removes the refunded period, not a goodwill extension."""
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    _allocate(db_session, payment, invoice)
+    entitlement = _entitlement(db_session, invoice)
+    granted_through = at(entitlement.ends_at) + timedelta(days=7)
+
+    extension = ServiceExtension(
+        reason="Regional outage goodwill",
+        window_start=PERIOD_START,
+        window_end=PERIOD_END,
+        days=7,
+        scope_type=ServiceExtensionScope.subscribers,
+        status=ServiceExtensionStatus.applied,
+        applied_at=PERIOD_START,
+    )
+    db_session.add(extension)
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            grant_starts_at=at(entitlement.ends_at),
+            grant_ends_at=granted_through,
+        )
+    )
+    db_session.flush()
+
+    # The payment owner reopens the invoice and revokes what its money funded.
+    invoice.status = InvoiceStatus.issued
+    invoice.balance_due = AMOUNT
+    db_session.flush()
+    revoke_prepaid_entitlements_for_unpaid_invoice(db_session, invoice)
+
+    retract_prepaid_billing_anchors_after_funding_reversal(
+        db_session,
+        account_id=subscriber.id,
+        payment_id=payment.id,
+        invoice_ids=(invoice.id,),
+        evidence_ref="pytest:reversal-with-extension",
+    )
+    db_session.commit()
+    db_session.refresh(subscription)
+
+    assert at(subscription.next_billing_at) == granted_through, (
+        "the reversal cancelled an applied service-extension grant that the "
+        "extension owner, not this payment, had granted"
+    )
 
 
 def test_anchor_projection_is_a_pure_recomputation(

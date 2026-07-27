@@ -470,6 +470,15 @@ class SubscriptionRestorationResult:
     outcome: RestorationOutcome
     payment_settled: bool
     financial_lock_cleared: bool
+    # Did THIS call write `status = active`? This is the legacy boolean the
+    # `restore_subscription` facade returns, so its truthiness is unchanged for
+    # the ~10 existing callers: "nothing needed doing" must never read as
+    # "I restored something", or a caller notifies a customer, clears an alert,
+    # or resolves a worklist entry for an account that was never suspended.
+    subscription_reactivated: bool
+    # Does the customer actually have service now? Narrower than the above: an
+    # account-level lifecycle override keeps them dark even when the
+    # subscription row says active.
     access_restored: bool
     resolved_lock_count: int
     remaining_blockers: tuple[str, ...]
@@ -496,6 +505,7 @@ class SubscriptionRestorationResult:
             "outcome": self.outcome.value,
             "payment_settled": self.payment_settled,
             "financial_lock_cleared": self.financial_lock_cleared,
+            "subscription_reactivated": self.subscription_reactivated,
             "access_restored": self.access_restored,
             "resolved_lock_count": self.resolved_lock_count,
             "remaining_blockers": list(self.remaining_blockers),
@@ -560,6 +570,7 @@ def _build_restoration_result(
     trigger: str,
     outcome: RestorationOutcome,
     resolved_count: int,
+    subscription_reactivated: bool,
     access_restored: bool,
 ) -> SubscriptionRestorationResult:
     blockers = list(_active_blockers(db, subscription))
@@ -591,6 +602,7 @@ def _build_restoration_result(
         outcome=outcome,
         payment_settled=payment_settled,
         financial_lock_cleared=payment_settled and resolved_count > 0,
+        subscription_reactivated=subscription_reactivated,
         access_restored=access_restored,
         resolved_lock_count=resolved_count,
         remaining_blockers=blocker_tuple,
@@ -657,6 +669,7 @@ def restore_subscription_detailed(
             trigger=trigger,
             outcome=RestorationOutcome.already_active,
             resolved_count=0,
+            subscription_reactivated=False,
             access_restored=subscription.status == SubscriptionStatus.active,
         )
 
@@ -691,6 +704,7 @@ def restore_subscription_detailed(
             trigger=trigger,
             outcome=RestorationOutcome.blocked_by_unauthorized_trigger,
             resolved_count=0,
+            subscription_reactivated=False,
             access_restored=False,
         )
 
@@ -720,6 +734,7 @@ def restore_subscription_detailed(
                 trigger=trigger,
                 outcome=RestorationOutcome.blocked_by_active_login,
                 resolved_count=resolved_count,
+                subscription_reactivated=False,
                 access_restored=False,
             )
 
@@ -770,6 +785,7 @@ def restore_subscription_detailed(
         trigger=trigger,
         outcome=outcome,
         resolved_count=resolved_count,
+        subscription_reactivated=restored,
         access_restored=restored,
     )
 
@@ -786,8 +802,20 @@ def restore_subscription(
 ) -> bool:
     """Boolean facade over :func:`restore_subscription_detailed`.
 
+    Returns ``subscription_reactivated``, NOT ``access_restored``: the legacy
+    contract is "did this call transition the subscription to active", and the
+    existing callers were not reviewed against any other meaning. In
+    particular an already-active subscription must keep returning False —
+    "nothing needed doing" is not "I restored something", and a caller that
+    reads True as a restoration may notify a customer, clear an alert, or
+    resolve a worklist entry for an account that was never suspended.
+
+    Callers that need the richer picture — remaining blockers, a lifecycle
+    override still holding the customer off, the required operator action —
+    should call :func:`restore_subscription_detailed` directly.
+
     Returns:
-        True if the subscription was actually restored to active.
+        True if this call actually restored the subscription to active.
     """
     return restore_subscription_detailed(
         db,
@@ -797,7 +825,7 @@ def restore_subscription(
         reason=reason,
         notes=notes,
         emit=emit,
-    ).access_restored
+    ).subscription_reactivated
 
 
 def resolve_stale_lock_without_restoration(
