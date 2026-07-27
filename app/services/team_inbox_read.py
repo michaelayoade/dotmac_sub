@@ -169,7 +169,7 @@ def _message_time_column():
     )
 
 
-def _currently_snoozed_clause():
+def currently_snoozed_clause():
     """Asleep right now: a wake time still ahead, or waiting on a reply.
 
     ``team_inbox_operations.snooze_until_reply`` deliberately stores no wake
@@ -191,7 +191,7 @@ def _currently_snoozed_clause():
 
 
 def _is_currently_snoozed(conversation: InboxConversation) -> bool:
-    """Python twin of :func:`_currently_snoozed_clause`, for row projection."""
+    """Python twin of :func:`currently_snoozed_clause`, for row projection."""
     from app.services.team_inbox_operations import SNOOZE_UNTIL_REPLY_KEY
 
     if (conversation.metadata_ or {}).get(SNOOZE_UNTIL_REPLY_KEY) is True:
@@ -416,7 +416,7 @@ def list_conversations(
         # always read a passed wake time as awake. The scheduled waker settles
         # the durable status; this keeps the queue right in between its runs.
         query = query.filter(
-            _currently_snoozed_clause() if snoozed else ~_currently_snoozed_clause()
+            currently_snoozed_clause() if snoozed else ~currently_snoozed_clause()
         )
 
     # Customer-scoped read: the conversation carries the resolved subscriber, so

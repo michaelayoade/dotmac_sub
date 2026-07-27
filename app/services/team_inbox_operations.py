@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.team_inbox import (
@@ -989,28 +989,29 @@ def retry_failed_outbound_batch(
 
 
 def queue_metrics(db: Session) -> InboxQueueMetrics:
+    """Sidebar counts, as aggregates.
+
+    Every one of these used to be a Python ``sum`` over every open
+    conversation loaded into memory, on each page load. They are counted in
+    the database now.
+    """
     from app.services import team_inbox_read
 
-    open_rows = (
-        db.query(InboxConversation)
-        .filter(InboxConversation.is_active.is_(True))
-        .filter(InboxConversation.status != "resolved")
-        .all()
-    )
-    open_ids = [row.id for row in open_rows]
-    active_assignment_ids = (
-        {
-            row[0]
-            for row in db.query(InboxConversationAssignment.conversation_id)
-            .filter(InboxConversationAssignment.conversation_id.in_(open_ids))
-            .filter(InboxConversationAssignment.is_active.is_(True))
-            .all()
-        }
-        if open_ids
-        else set()
-    )
+    def count_open(*clauses) -> int:
+        query = (
+            db.query(func.count(InboxConversation.id))
+            .filter(InboxConversation.is_active.is_(True))
+            .filter(InboxConversation.status != "resolved")
+        )
+        for clause in clauses:
+            query = query.filter(clause)
+        return int(query.scalar() or 0)
+
+    assigned_conversation_ids = select(
+        InboxConversationAssignment.conversation_id
+    ).where(InboxConversationAssignment.is_active.is_(True))
     return InboxQueueMetrics(
-        total_open=len(open_rows),
+        total_open=count_open(),
         needs_response=team_inbox_read.list_conversations(
             db, needs_response=True, limit=1
         ).count,
@@ -1021,15 +1022,14 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
             .scalar()
             or 0
         ),
-        unassigned_open=sum(
-            1
-            for conversation in open_rows
-            if conversation.id not in active_assignment_ids
+        unassigned_open=count_open(
+            ~InboxConversation.id.in_(assigned_conversation_ids)
         ),
-        muted_open=sum(1 for conversation in open_rows if conversation.is_muted),
-        snoozed_open=sum(
-            1 for conversation in open_rows if conversation.snoozed_until is not None
-        ),
+        muted_open=count_open(InboxConversation.is_muted.is_(True)),
+        # "Asleep now", matching the queue's snoozed filter. Counting every row
+        # with a wake time meant the badge kept counting conversations that had
+        # already woken.
+        snoozed_open=count_open(team_inbox_read.currently_snoozed_clause()),
     )
 
 
