@@ -12326,7 +12326,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "persisted outage incident status vocabulary",
                     "outage incident lifecycle",
-                    "outage event emission and escalation planning",
+                    "typed outage lifecycle output emission",
                 ),
                 depends_on=(
                     "network.outage_impact",
@@ -27874,7 +27874,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "customer_experience.ready",
                             "customer_experience.accepted",
                             "customer_experience.needs_attention",
-                            "sales_order.fulfilled",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",

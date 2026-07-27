@@ -237,14 +237,9 @@ def accept_handoff(
     handoff.accepted_by_actor_type = str(actor_type or "staff_user")
     handoff.accepted_by_actor_id = actor
     handoff.attention_reason = None
-    from app.services import sales_orders
-
-    sales_orders.fulfill_from_customer_experience(
-        db,
-        sales_order_id=handoff.sales_order_id,
-        handoff_id=handoff.id,
-        actor_id=actor,
-    )
+    # The accepted output below is the durable trigger for SalesOrder
+    # fulfilment: the registered lifecycle projection handler asks the
+    # sales-order owner to apply it after this owner's fact commits.
     _event(
         db,
         handoff=handoff,

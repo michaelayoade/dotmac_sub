@@ -173,6 +173,7 @@ class EventType(enum.Enum):
     lead_account_converted = "lead.account_converted"
     quote_accepted = "quote.accepted"
     sales_order_paid = "sales_order.paid"
+    sales_order_funding_satisfied = "sales_order.funding_satisfied"
     sales_order_fulfilled = "sales_order.fulfilled"
     project_created = "project.created"
     installation_scope_created = "installation_scope.created"
@@ -316,6 +317,20 @@ class EventType(enum.Enum):
     # selection + per-subscriber preferences; the notifier only supplies content.
     outage_area = "outage.area"
     outage_last_mile = "outage.last_mile"
+
+    # Outage incident lifecycle outputs
+    # (docs/designs/NETWORK_OUTAGE_RESPONSE_LIFECYCLE.md). Staged atomically
+    # with each incident transition; the registered outage lifecycle
+    # projection handler applies cross-owner consequences. The legacy
+    # ``network.alert`` fan-out keeps its payload for external webhooks.
+    outage_created = "outage.created"
+    outage_suspected = "outage.suspected"
+    outage_confirmed = "outage.confirmed"
+    outage_clearing = "outage.clearing"
+    outage_reopened = "outage.reopened"
+    outage_rerooted = "outage.rerooted"
+    outage_discarded = "outage.discarded"
+    outage_resolved = "outage.resolved"
 
     # Custom event type for extensibility
     custom = "custom"

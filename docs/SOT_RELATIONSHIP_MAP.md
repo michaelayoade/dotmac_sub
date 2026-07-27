@@ -164,11 +164,15 @@ implementation release decision; a successful provisioning result is the only
 path that may activate a sales-created Subscription; CX acceptance is a
 separate append-only actor/time/event decision.
 
-Cross-owner consequences run only after their source fact commits. The
-registered sales-lifecycle projection handler consumes vendor-verification and
-service-order-completion outbox events, then requests idempotent work from the
-next owner. Originating owners never write downstream roots, and replayable
-projection failure cannot roll back already-authoritative evidence.
+Cross-owner consequences run only after their source fact commits. Each owner
+stages its output event atomically with its transition; the registered
+sales-lifecycle projection handler consumes the funding-satisfied,
+vendor-verification, service-order-release, service-order-completion, and
+CX-acceptance outbox events, then requests idempotent work from the next
+owner. Originating owners never write downstream roots, a consequence that
+cannot be applied stays a failed retryable delivery rather than a warning
+log, and replayable projection failure cannot roll back already-authoritative
+evidence.
 
 Operational defaults resolve from domain settings and connector configuration.
 Checked-in enums, capability/event names, legal transition edges, idempotency
@@ -3018,7 +3022,15 @@ writers are retired; historical rows remain readable evidence.
 36. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
 37. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
-   incident transitions, escalation planning, and outage event emission.
+   incident transitions, and typed lifecycle output emission
+   (`outage.created`/`outage.confirmed`/… staged atomically with each
+   transition, plus the legacy `network.alert` webhook fan-out). The
+   registered outage lifecycle projection handler consumes those committed
+   outputs to attach operational owners/watchers and plan or cancel SLA
+   escalations through `operations.sla_escalation`; a consequence that
+   cannot be applied stays a failed retryable delivery. Outage resolution
+   emits recovery evidence only — it never closes support Tickets or
+   WorkOrders (see `docs/designs/NETWORK_OUTAGE_RESPONSE_LIFECYCLE.md`).
 38. `network.connection_health`: combines authoritative path, live-session,
    last-mile, impact, and active-incident inputs into the customer-safe
    `connected/trouble/outage` verdict plus headline/message/advice. It does not

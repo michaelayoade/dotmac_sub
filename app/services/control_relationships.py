@@ -156,6 +156,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
         45,
         ("sales_to_service_lifecycle_projection",),
     ),
+    "OutageLifecycleProjectionHandler": HandlerControl(
+        "OutageLifecycleProjectionHandler",
+        HandlerStage.state,
+        46,
+        ("outage_lifecycle_projection",),
+    ),
     "EnforcementHandler": HandlerControl(
         "EnforcementHandler", HandlerStage.state, 50, ("service_enforcement",)
     ),
@@ -321,6 +327,12 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "SalesLifecycleProjectionHandler":
         from app.services.events.handlers.sales_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "OutageLifecycleProjectionHandler":
+        from app.services.events.handlers.outage_lifecycle_projection import (
             HANDLED_EVENT_TYPES,
         )
 
