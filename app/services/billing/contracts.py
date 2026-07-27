@@ -264,10 +264,12 @@ class BillingContracts:
             )
 
         current = BillingContracts._current_effective(db, contract_id=contract.id)
-        if current is not None and command.starts_at < current.starts_at:
+        if current is not None and command.starts_at <= current.starts_at:
+            # Equal starts would close the previous version into a zero-length
+            # interval, which its own check constraint forbids.
             raise _error(
                 "out_of_order_contract_version",
-                "A new version cannot start before the current effective one.",
+                "A new version must start after the current effective one.",
                 current_starts_at=current.starts_at.isoformat(),
                 requested_starts_at=command.starts_at.isoformat(),
             )
@@ -281,6 +283,16 @@ class BillingContracts:
             ).scalar_one_or_none()
             or 0
         ) + 1
+
+        if current is not None:
+            # Close the previous version *before* inserting the new one. Both
+            # rows would otherwise satisfy the "one open-ended effective
+            # version per contract" partial unique index at the same instant.
+            # The intervals stay contiguous and half-open: no gap, no overlap.
+            current.ends_at = command.starts_at
+            current.status = BillingContractVersionStatus.superseded
+            current.superseded_at = command.starts_at
+            db.flush()
 
         cadence = command.cadence
         version = BillingContractVersion(
@@ -324,14 +336,6 @@ class BillingContracts:
         )
         db.add(version)
         db.flush()
-
-        if current is not None:
-            # Close the previous version at the new start so the two intervals
-            # are contiguous and half-open: no gap, no overlap.
-            current.ends_at = command.starts_at
-            current.status = BillingContractVersionStatus.superseded
-            current.superseded_at = command.starts_at
-            db.flush()
 
         line_ids: list[UUID] = []
         for line in command.lines:

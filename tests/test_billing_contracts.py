@@ -65,10 +65,10 @@ def _cadence(**overrides) -> BillingCadence:
     return BillingCadence(**base)
 
 
-def _command(subscriber, subscription, **overrides) -> RecordContractVersionCommand:
+def _command(account_id, subscription_id, **overrides) -> RecordContractVersionCommand:
     fields = {
-        "account_id": subscriber.id,
-        "subscription_id": subscription.id,
+        "account_id": account_id,
+        "subscription_id": subscription_id,
         "source_kind": BillingContractSourceKind.sales_order_line,
         "source_id": uuid4(),
         "starts_at": datetime(2026, 3, 1, tzinfo=UTC),
@@ -89,13 +89,25 @@ def _command(subscriber, subscription, **overrides) -> RecordContractVersionComm
     return RecordContractVersionCommand(**fields)
 
 
-def test_recording_terms_creates_a_shadow_contract_version(
-    db_session, subscriber, subscription
-):
+@pytest.fixture()
+def ids(db_session, subscriber, subscription):
+    """Account and subscription identity captured before the first commit.
+
+    ``commit`` expires every ORM instance, so touching ``subscriber.id``
+    afterwards issues a refresh SELECT and leaves the session inside a caller
+    transaction, which ``execute_owner_command`` correctly refuses to inherit.
+    """
+
+    captured = (subscriber.id, subscription.id)
     db_session.commit()
+    return captured
+
+
+def test_recording_terms_creates_a_shadow_contract_version(db_session, ids):
+    account_id, subscription_id = ids
 
     result = BillingContracts.record_version(
-        db_session, _command(subscriber, subscription), context=_context()
+        db_session, _command(account_id, subscription_id), context=_context()
     )
 
     assert result.replayed is False
@@ -104,8 +116,8 @@ def test_recording_terms_creates_a_shadow_contract_version(
     assert result.authority is BillingRecordAuthority.shadow
 
     contract = db_session.get(BillingContract, result.contract_id)
-    assert contract.subscription_id == subscription.id
-    assert contract.account_id == subscriber.id
+    assert contract.subscription_id == subscription_id
+    assert contract.account_id == account_id
 
     version = db_session.get(BillingContractVersion, result.version_id)
     assert version.status is BillingContractVersionStatus.effective
@@ -114,18 +126,16 @@ def test_recording_terms_creates_a_shadow_contract_version(
     assert len(result.line_ids) == 1
 
 
-def test_replay_of_the_same_idempotency_key_writes_one_version(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_replay_of_the_same_idempotency_key_writes_one_version(db_session, ids):
+    account_id, subscription_id = ids
     context = _context("pytest:stable-key")
 
     first = BillingContracts.record_version(
-        db_session, _command(subscriber, subscription), context=context
+        db_session, _command(account_id, subscription_id), context=context
     )
     db_session.commit()
     second = BillingContracts.record_version(
-        db_session, _command(subscriber, subscription), context=_context(
+        db_session, _command(account_id, subscription_id), context=_context(
             "pytest:stable-key"
         )
     )
@@ -140,12 +150,10 @@ def test_replay_of_the_same_idempotency_key_writes_one_version(
     assert len(versions) == 1
 
 
-def test_supersession_closes_the_previous_version_contiguously(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_supersession_closes_the_previous_version_contiguously(db_session, ids):
+    account_id, subscription_id = ids
     first = BillingContracts.record_version(
-        db_session, _command(subscriber, subscription), context=_context()
+        db_session, _command(account_id, subscription_id), context=_context()
     )
     db_session.commit()
 
@@ -153,8 +161,8 @@ def test_supersession_closes_the_previous_version_contiguously(
     second = BillingContracts.record_version(
         db_session,
         _command(
-            subscriber,
-            subscription,
+            account_id,
+            subscription_id,
             starts_at=change_at,
             contracted_price=Decimal("30000.00"),
             source_kind=BillingContractSourceKind.plan_change,
@@ -183,19 +191,19 @@ def test_supersession_closes_the_previous_version_contiguously(
     assert previous.contracted_price == Decimal("25000.00")
 
 
-def test_line_lineage_survives_supersession(db_session, subscriber, subscription):
+def test_line_lineage_survives_supersession(db_session, ids):
     """An obligation keeps one lineage key when terms change."""
 
-    db_session.commit()
+    account_id, subscription_id = ids
     first = BillingContracts.record_version(
-        db_session, _command(subscriber, subscription), context=_context()
+        db_session, _command(account_id, subscription_id), context=_context()
     )
     db_session.commit()
     second = BillingContracts.record_version(
         db_session,
         _command(
-            subscriber,
-            subscription,
+            account_id,
+            subscription_id,
             starts_at=datetime(2026, 6, 1, tzinfo=UTC),
             source_kind=BillingContractSourceKind.plan_change,
         ),
@@ -216,20 +224,18 @@ def test_line_lineage_survives_supersession(db_session, subscriber, subscription
     assert keys[first.version_id] == keys[second.version_id]
 
 
-def test_effective_version_resolves_one_row_across_the_boundary(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_effective_version_resolves_one_row_across_the_boundary(db_session, ids):
+    account_id, subscription_id = ids
     BillingContracts.record_version(
-        db_session, _command(subscriber, subscription), context=_context()
+        db_session, _command(account_id, subscription_id), context=_context()
     )
     db_session.commit()
     change_at = datetime(2026, 6, 1, tzinfo=UTC)
     BillingContracts.record_version(
         db_session,
         _command(
-            subscriber,
-            subscription,
+            account_id,
+            subscription_id,
             starts_at=change_at,
             contracted_price=Decimal("30000.00"),
             source_kind=BillingContractSourceKind.plan_change,
@@ -239,11 +245,11 @@ def test_effective_version_resolves_one_row_across_the_boundary(
 
     before = BillingContracts.effective_version_at(
         db_session,
-        subscription_id=subscription.id,
+        subscription_id=subscription_id,
         moment=datetime(2026, 5, 31, tzinfo=UTC),
     )
     at_boundary = BillingContracts.effective_version_at(
-        db_session, subscription_id=subscription.id, moment=change_at
+        db_session, subscription_id=subscription_id, moment=change_at
     )
 
     assert before.contracted_price == Decimal("25000.00")
@@ -251,10 +257,8 @@ def test_effective_version_resolves_one_row_across_the_boundary(
     assert at_boundary.contracted_price == Decimal("30000.00")
 
 
-def test_cadence_round_trips_through_the_stored_version(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_cadence_round_trips_through_the_stored_version(db_session, ids):
+    account_id, subscription_id = ids
     cadence = _cadence(
         service_interval_unit=IntervalUnit.month,
         service_interval_count=3,
@@ -263,7 +267,7 @@ def test_cadence_round_trips_through_the_stored_version(
     )
     result = BillingContracts.record_version(
         db_session,
-        _command(subscriber, subscription, cadence=cadence),
+        _command(account_id, subscription_id, cadence=cadence),
         context=_context(),
     )
 
@@ -276,17 +280,15 @@ def test_cadence_round_trips_through_the_stored_version(
     assert restored.timezone_name == LAGOS
 
 
-def test_mixed_currency_between_contract_and_line_is_refused(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_mixed_currency_between_contract_and_line_is_refused(db_session, ids):
+    account_id, subscription_id = ids
 
     with pytest.raises(BillingContractError) as excinfo:
         BillingContracts.record_version(
             db_session,
             _command(
-                subscriber,
-                subscription,
+                account_id,
+                subscription_id,
                 lines=(
                     ContractLineInput(
                         charge_component=ChargeComponent.recurring_service,
@@ -303,12 +305,10 @@ def test_mixed_currency_between_contract_and_line_is_refused(
     assert excinfo.value.code == "billing.contracts.mixed_currency_contract"
 
 
-def test_a_version_cannot_start_before_the_current_effective_one(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_a_version_cannot_start_before_the_current_effective_one(db_session, ids):
+    account_id, subscription_id = ids
     BillingContracts.record_version(
-        db_session, _command(subscriber, subscription), context=_context()
+        db_session, _command(account_id, subscription_id), context=_context()
     )
     db_session.commit()
 
@@ -316,8 +316,8 @@ def test_a_version_cannot_start_before_the_current_effective_one(
         BillingContracts.record_version(
             db_session,
             _command(
-                subscriber,
-                subscription,
+                account_id,
+                subscription_id,
                 starts_at=datetime(2026, 1, 1, tzinfo=UTC),
                 source_kind=BillingContractSourceKind.staff_correction,
             ),
@@ -327,10 +327,8 @@ def test_a_version_cannot_start_before_the_current_effective_one(
     assert excinfo.value.code == "billing.contracts.out_of_order_contract_version"
 
 
-def test_duplicate_charge_component_on_one_version_is_refused(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_duplicate_charge_component_on_one_version_is_refused(db_session, ids):
+    account_id, subscription_id = ids
     line = ContractLineInput(
         charge_component=ChargeComponent.addon,
         description="Static IP",
@@ -342,17 +340,15 @@ def test_duplicate_charge_component_on_one_version_is_refused(
     with pytest.raises(BillingContractError) as excinfo:
         BillingContracts.record_version(
             db_session,
-            _command(subscriber, subscription, lines=(line, line)),
+            _command(account_id, subscription_id, lines=(line, line)),
             context=_context(),
         )
 
     assert excinfo.value.code == "billing.contracts.duplicate_contract_line"
 
 
-def test_recording_terms_requires_an_idempotency_key(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_recording_terms_requires_an_idempotency_key(db_session, ids):
+    account_id, subscription_id = ids
     command_id = uuid4()
     context = CommandContext(
         command_id=command_id,
@@ -364,22 +360,20 @@ def test_recording_terms_requires_an_idempotency_key(
 
     with pytest.raises(BillingContractError) as excinfo:
         BillingContracts.record_version(
-            db_session, _command(subscriber, subscription), context=context
+            db_session, _command(account_id, subscription_id), context=context
         )
 
     assert excinfo.value.code == "billing.contracts.missing_idempotency_key"
 
 
-def test_owner_command_rejects_a_caller_owned_transaction(
-    db_session, subscriber, subscription
-):
-    db_session.commit()
+def test_owner_command_rejects_a_caller_owned_transaction(db_session, ids):
+    account_id, subscription_id = ids
     # Leave a pending read so the session is inside a caller transaction.
     db_session.execute(select(BillingContract)).all()
 
     with pytest.raises(Exception) as excinfo:
         BillingContracts.record_version(
-            db_session, _command(subscriber, subscription), context=_context()
+            db_session, _command(account_id, subscription_id), context=_context()
         )
 
     assert getattr(excinfo.value, "code", "") == (

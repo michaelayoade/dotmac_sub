@@ -73,14 +73,20 @@ def _cadence(**overrides) -> BillingCadence:
 
 @pytest.fixture()
 def contract_version(db_session, subscriber, subscription):
-    """One effective shadow contract version with a single recurring line."""
+    """One effective shadow contract version with a single recurring line.
 
+    Identity is captured before the commit: committing expires every ORM
+    instance, and refreshing one would leave the session inside a caller
+    transaction that ``execute_owner_command`` refuses to inherit.
+    """
+
+    account_id, subscription_id = subscriber.id, subscription.id
     db_session.commit()
     result = BillingContracts.record_version(
         db_session,
         RecordContractVersionCommand(
-            account_id=subscriber.id,
-            subscription_id=subscription.id,
+            account_id=account_id,
+            subscription_id=subscription_id,
             source_kind=BillingContractSourceKind.sales_order_line,
             source_id=uuid4(),
             starts_at=START,
@@ -105,11 +111,14 @@ def contract_version(db_session, subscriber, subscription):
             BillingContractLine.contract_version_id == result.version_id
         )
     ).scalar_one()
-    return result.version_id, line_key
+    db_session.commit()
+    return result.version_id, line_key, account_id
 
 
-def _schedule(db_session, contract_version, *, index=0, net=Decimal("25000.00"), key=None):
-    version_id, line_key = contract_version
+def _schedule(
+    db_session, contract_version, *, index=0, net=Decimal("25000.00"), key=None
+):
+    version_id, line_key, _ = contract_version
     return BillingObligations.schedule(
         db_session,
         ScheduleObligationCommand(
@@ -275,8 +284,9 @@ def test_a_scheduled_obligation_cannot_be_resolved_before_it_opens(
 
 
 def test_open_obligations_are_scoped_to_one_account_and_currency(
-    db_session, subscriber, contract_version
+    db_session, contract_version
 ):
+    account_id = contract_version[2]
     scheduled = _schedule(db_session, contract_version)
     db_session.commit()
     BillingObligations.open(
@@ -285,10 +295,10 @@ def test_open_obligations_are_scoped_to_one_account_and_currency(
     db_session.commit()
 
     matching = BillingObligations.open_obligations_for_account(
-        db_session, account_id=subscriber.id, currency="NGN"
+        db_session, account_id=account_id, currency="NGN"
     )
     other_currency = BillingObligations.open_obligations_for_account(
-        db_session, account_id=subscriber.id, currency="USD"
+        db_session, account_id=account_id, currency="USD"
     )
 
     assert [item.id for item in matching] == [scheduled.obligation_id]
@@ -317,7 +327,7 @@ def test_scheduling_requires_an_existing_contract_version(db_session, contract_v
 def test_tax_is_carried_separately_into_the_gross_amount(
     db_session, contract_version
 ):
-    version_id, line_key = contract_version
+    version_id, line_key, _ = contract_version
 
     result = BillingObligations.schedule(
         db_session,

@@ -426,7 +426,8 @@ class BillingObligations:
             query = query.where(
                 BillingObligation.accounting_treatment == treatment
             )
-        return list(db.execute(query.order_by(BillingObligation.period_start)).scalars())
+        ordered = query.order_by(BillingObligation.period_start)
+        return list(db.execute(ordered).scalars())
 
 
 __all__ = [

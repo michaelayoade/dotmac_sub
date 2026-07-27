@@ -182,7 +182,11 @@ def scheduled_financial_sweeps() -> set[str]:
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        callee = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        callee = (
+            func.attr
+            if isinstance(func, ast.Attribute)
+            else getattr(func, "id", "")
+        )
         if callee != _SCHEDULED_TASK_HELPER:
             continue
         keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
