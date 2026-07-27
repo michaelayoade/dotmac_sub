@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TypeVar
+from uuid import UUID
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -21,8 +22,11 @@ from app.models.vendor_routes import (
     ProjectQuoteStatus,
     ProposedRouteRevision,
     ProposedRouteRevisionStatus,
+    Vendor,
+    VendorAssignmentType,
 )
 from app.models.work_order import WorkOrder
+from app.schemas.status_presentation import StatusPresentation
 from app.schemas.vendor_portal import (
     VendorAsBuiltCreate,
     VendorQuoteCreate,
@@ -38,6 +42,9 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 from app.services.settings_spec import resolve_value
+from app.services.status_presentation import (
+    proposed_route_revision_status_presentation,
+)
 from app.services.ui_contracts import Action
 from app.services.vendor_portal_errors import (
     VendorPortalOperationError,
@@ -156,6 +163,23 @@ class SubmitVendorRouteRevisionCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class VendorRouteRevisionItem:
+    id: UUID
+    revision_number: int
+    status: StatusPresentation
+    length_meters: float | None
+    length_label: str
+    review_notes: str | None
+    submit_action: Action
+
+
+@dataclass(frozen=True, slots=True)
+class VendorRouteAuthoringProjection:
+    create_action: Action
+    revisions: tuple[VendorRouteRevisionItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class StageVendorQuoteSubmission:
     context: CommandContext
     quote_id: str
@@ -168,6 +192,15 @@ class StageVendorAsBuiltSubmission:
     payload: VendorAsBuiltCreate
     vendor_id: str
     user_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureVendorProcurementCommand:
+    context: CommandContext
+    project_id: str
+    mode: str
+    vendor_id: str | None = None
+    bidding_close_at: datetime | None = None
 
 
 def _lifecycle_project(
@@ -543,6 +576,39 @@ def _serialize_project(
 
 def _serialize_quote(row: ProjectQuote) -> dict:
     editable = row.status in _EDITABLE_QUOTES
+    route_revisions = tuple(
+        VendorRouteRevisionItem(
+            id=revision.id,
+            revision_number=revision.revision_number,
+            status=proposed_route_revision_status_presentation(revision.status),
+            length_meters=revision.length_meters,
+            length_label=(
+                f"{revision.length_meters:,.1f} m"
+                if revision.length_meters is not None
+                else "Length unavailable"
+            ),
+            review_notes=revision.review_notes,
+            submit_action=Action(
+                key="submit_route_revision",
+                label="Submit for review",
+                allowed=revision.status == ProposedRouteRevisionStatus.draft.value,
+                reason=(
+                    None
+                    if revision.status == ProposedRouteRevisionStatus.draft.value
+                    else (
+                        "Only a draft route revision can be submitted "
+                        f"(currently {revision.status.replace('_', ' ')})"
+                    )
+                ),
+                affected=1,
+            ),
+        )
+        for revision in sorted(
+            getattr(row, "route_revisions", ()),
+            key=lambda item: (item.revision_number, str(item.id)),
+            reverse=True,
+        )
+    )
     reviewable = row.status in {
         ProjectQuoteStatus.submitted.value,
         ProjectQuoteStatus.under_review.value,
@@ -579,6 +645,15 @@ def _serialize_quote(row: ProjectQuote) -> dict:
         "reviewed_at": row.reviewed_at,
         "review_notes": row.review_notes,
         "line_items": [item for item in row.line_items if item.is_active],
+        "route_authoring": VendorRouteAuthoringProjection(
+            create_action=Action(
+                key="create_route_revision",
+                label="Save route draft",
+                allowed=True,
+                affected=1,
+            ),
+            revisions=route_revisions,
+        ),
         "route_revisions": [
             _serialize_route_revision_review(revision)
             for revision in sorted(
@@ -745,6 +820,52 @@ def _serialize_route_revision_review(row: ProposedRouteRevision) -> dict:
 
 class VendorPortalOperations:
     @staticmethod
+    def configure_procurement(
+        db: Session, command: ConfigureVendorProcurementCommand
+    ) -> dict:
+        def operation() -> dict:
+            project = _lifecycle_project(db, command.project_id, for_update=True)
+            if project.status != InstallationProjectStatus.draft.value:
+                raise _error(
+                    "procurement_not_draft",
+                    "Only a draft installation project can be assigned or opened for bids.",
+                )
+            if command.mode == VendorAssignmentType.direct.value:
+                if not command.vendor_id:
+                    raise _error(
+                        "vendor_required", "Choose a vendor for direct assignment."
+                    )
+                project.assigned_vendor_id = coerce_uuid(command.vendor_id)
+                project.assignment_type = VendorAssignmentType.direct.value
+                project.status = InstallationProjectStatus.assigned.value
+            elif command.mode == VendorAssignmentType.bidding.value:
+                if (
+                    command.bidding_close_at is None
+                    or command.bidding_close_at <= _now()
+                ):
+                    raise _error(
+                        "bidding_window_required", "Choose a future bid closing time."
+                    )
+                project.assigned_vendor_id = None
+                project.assignment_type = VendorAssignmentType.bidding.value
+                project.bidding_open_at = _now()
+                project.bidding_close_at = command.bidding_close_at
+                project.status = InstallationProjectStatus.open_for_bidding.value
+            else:
+                raise _error(
+                    "invalid_procurement_mode", "Choose direct assignment or bidding."
+                )
+            db.flush()
+            return _serialize_project(project)
+
+        return _execute(
+            db,
+            context=command.context,
+            name="configure_procurement",
+            operation=operation,
+        )
+
+    @staticmethod
     def list_reviewable_route_revisions(
         db: Session,
         *,
@@ -842,6 +963,30 @@ class VendorPortalOperations:
     @staticmethod
     def get_as_built_review(db: Session, as_built_id: str) -> dict:
         return _serialize_as_built_review(_as_built(db, as_built_id))
+
+    @staticmethod
+    def list_draft_projects(
+        db: Session, *, limit: int = 100
+    ) -> list[InstallationProject]:
+        """Draft installation projects awaiting vendor assignment."""
+
+        return (
+            db.query(InstallationProject)
+            .filter(InstallationProject.status == InstallationProjectStatus.draft.value)
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+
+    @staticmethod
+    def list_active_vendors(db: Session) -> list[Vendor]:
+        """Active vendors, for the assignment pickers on the operations page."""
+
+        return (
+            db.query(Vendor)
+            .filter(Vendor.is_active.is_(True))
+            .order_by(Vendor.name)
+            .all()
+        )
 
     @staticmethod
     def list_reviewable_projects(db: Session, *, limit: int = 200) -> list[dict]:
