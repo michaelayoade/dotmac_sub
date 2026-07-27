@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
@@ -139,6 +140,34 @@ def _reseller_contact(reseller: Reseller, channel_type: str) -> str | None:
     return reseller.contact_phone
 
 
+def _candidate_subscribers(db: Session, channel_type: str, normalized: str):
+    """Narrow the rows the Python matcher has to normalize.
+
+    Every inbound message runs this, and it used to load the whole subscriber
+    table and normalize each row in Python — now on the email path too.
+
+    Email normalization is exactly ``strip().lower()``, so the database can do
+    the comparison. Phone normalization applies a default country code and
+    strips separators, and no SQL prefilter on the raw column is a guaranteed
+    superset of that, so phone-like channels still scan. Narrowing them wants a
+    stored normalized contact column and a backfill, which is its own change —
+    the Python pass below stays the decider either way.
+    """
+    query = db.query(Subscriber)
+    if channel_type == InboxChannelType.email.value:
+        return query.filter(func.lower(func.trim(Subscriber.email)) == normalized).all()
+    return query.all()
+
+
+def _candidate_resellers(db: Session, channel_type: str, normalized: str):
+    query = db.query(Reseller).filter(Reseller.is_active.is_(True))
+    if channel_type == InboxChannelType.email.value:
+        return query.filter(
+            func.lower(func.trim(Reseller.contact_email)) == normalized
+        ).all()
+    return query.all()
+
+
 def resolve_contact_context(
     db: Session,
     *,
@@ -222,7 +251,7 @@ def resolve_contact_context(
     matched_subscribers: list[Subscriber] = []
     suppressed_subscribers: list[Subscriber] = []
     if normalized:
-        for subscriber in db.query(Subscriber).all():
+        for subscriber in _candidate_subscribers(db, channel_type, normalized):
             candidate = _normalize_contact_with_country(
                 channel_type,
                 _subscriber_contact(subscriber, channel_type),
@@ -237,7 +266,7 @@ def resolve_contact_context(
 
     matched_resellers: list[Reseller] = []
     if normalized:
-        for reseller in db.query(Reseller).filter(Reseller.is_active.is_(True)).all():
+        for reseller in _candidate_resellers(db, channel_type, normalized):
             candidate = _normalize_contact_with_country(
                 channel_type,
                 _reseller_contact(reseller, channel_type),
