@@ -140,6 +140,17 @@ class EventType(enum.Enum):
     workqueue_action_coordinated = "workqueue.action_coordinated"
 
     # Operations - vendor installation project lifecycle
+    # Materials / vendor / ERP chain outputs
+    # (docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md). Staged atomically with
+    # each owning transition; the materials lifecycle projection handler
+    # applies cross-owner consequences with durable receipts.
+    field_material_request_approved = "field_material_request.approved"
+    field_material_request_fulfilled = "field_material_request.fulfilled"
+    field_material_consumption_recorded = "field_material.consumption_recorded"
+    vendor_purchase_invoice_approved = "vendor_purchase_invoice.approved"
+    vendor_purchase_invoice_payment_observed = (
+        "vendor_purchase_invoice.payment_observed"
+    )
     vendor_material_release_requested = "vendor_material_release.requested"
     vendor_material_release_reviewed = "vendor_material_release.reviewed"
     vendor_material_release_issued = "vendor_material_release.issued"

@@ -168,6 +168,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
         48,
         ("support_lifecycle_projection",),
     ),
+    "MaterialsLifecycleProjectionHandler": HandlerControl(
+        "MaterialsLifecycleProjectionHandler",
+        HandlerStage.state,
+        49,
+        ("materials_lifecycle_projection",),
+    ),
     "EnforcementHandler": HandlerControl(
         "EnforcementHandler", HandlerStage.state, 50, ("service_enforcement",)
     ),
@@ -345,6 +351,12 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "SupportLifecycleProjectionHandler":
         from app.services.events.handlers.support_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "MaterialsLifecycleProjectionHandler":
+        from app.services.events.handlers.materials_lifecycle_projection import (
             HANDLED_EVENT_TYPES,
         )
 

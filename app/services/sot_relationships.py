@@ -17483,6 +17483,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "service-work-order material need and operational approval",
                     "backoffice material-outcome projection into the service workflow",
                     "work-order material allocation after confirmed external issue",
+                    "committed material output consumption",
                 ),
                 depends_on=(
                     "control.settings_spec",
@@ -17523,6 +17524,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical material dependency state",
                                 "ERP material-support outcome observation",
+                                "material dependency transition protocol",
+                            ),
+                            canonical_writer="operations.material_dependencies",
+                        ),
+                        ConcernContract(
+                            name="committed material output consumption",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical material dependency state",
                                 "material dependency transition protocol",
                             ),
                             canonical_writer="operations.material_dependencies",
@@ -17634,7 +17644,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     events=EventContract(
-                        event_types=("field_material_request.changed",),
+                        event_types=(
+                            "field_material_request.approved",
+                            "field_material_request.fulfilled",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
@@ -17701,6 +17714,112 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_field_material_requests.py",
                         "tests/test_dotmac_erp_material_sync.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.material_consumption",
+                module="app.services.field.materials",
+                owns=("field material consumption evidence",),
+                depends_on=(
+                    "operations.material_dependencies",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Technicians record monotonic, allocation-capped material "
+                    "consumption on their scoped work orders. Each recording "
+                    "stages the consumption-evidence output atomically for "
+                    "downstream reconcilers; ERP inventory outcomes remain "
+                    "ERP-owned observations."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="field material consumption evidence",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("allocated work-order materials",),
+                            canonical_writer="operations.material_consumption",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="allocated work-order materials",
+                            owner="operations.material_dependencies",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "FieldWorkOrderMaterial allocation rows synced "
+                                "from the ERP material-support outcome"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "consume commits once per technician submission on "
+                            "the scoped work order."
+                        ),
+                        locking=(
+                            "Each FieldWorkOrderMaterial row is selected FOR "
+                            "UPDATE before the monotonic consumption write."
+                        ),
+                        idempotency=(
+                            "Consumption is monotonic and capped at the "
+                            "allocation; replays cannot reduce or exceed it."
+                        ),
+                        retries=(
+                            "A failed submission changes nothing; the client "
+                            "resubmits the same absolute quantities."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.material_consumption.active_caller_transaction",
+                            "operations.material_consumption.command_contract_violation",
+                            "operations.material_consumption.invalid_command_context",
+                            "operations.material_consumption.nested_owner_command",
+                            "operations.material_consumption.nested_transaction_completion",
+                        ),
+                        mapping_owner="field API adapters",
+                        fail_closed_on=(
+                            "consumption above the allocated quantity",
+                            "an unscoped work order",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("field_material.consumption_recorded",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries work-order identity and per-item "
+                            "allocated/consumed quantities."
+                        ),
+                        replay=(
+                            "Allocation rows are the durable state; the output "
+                            "is evidence and replays are additive no-ops."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="unregistered writer on the SOT baseline",
+                        new_owner="operations.material_consumption",
+                        verification=(
+                            "Field materials consumption tests and the materials "
+                            "chain boundary test."
+                        ),
+                        cutover_gate=(
+                            "The module leaves the shrink-only unregistered "
+                            "writer baseline."
+                        ),
+                        fallback_retirement=("No parallel consumption writer exists."),
+                    ),
+                    steward="field operations",
+                    design_refs=(
+                        "docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_field_materials.py",
+                        "tests/architecture/test_materials_lifecycle_chain_boundary.py",
                     ),
                 ),
             ),
@@ -19567,7 +19686,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     events=EventContract(
-                        event_types=("vendor_purchase_invoice.changed",),
+                        event_types=(
+                            "vendor_purchase_invoice.changed",
+                            "vendor_purchase_invoice.approved",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
@@ -24698,6 +24820,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     events=EventContract(
                         event_types=(
                             "vendor_purchase_invoice.erp_projection_refreshed",
+                            "vendor_purchase_invoice.payment_observed",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",

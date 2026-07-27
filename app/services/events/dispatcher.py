@@ -411,6 +411,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
         IPAssignmentProjectionHandler,
     )
     from app.services.events.handlers.lifecycle import LifecycleHandler
+    from app.services.events.handlers.materials_lifecycle_projection import (
+        MaterialsLifecycleProjectionHandler,
+    )
     from app.services.events.handlers.notification import NotificationHandler
     from app.services.events.handlers.outage_lifecycle_projection import (
         OutageLifecycleProjectionHandler,
@@ -436,6 +439,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(SalesLifecycleProjectionHandler())
     dispatcher.register_handler(OutageLifecycleProjectionHandler())
     dispatcher.register_handler(SupportLifecycleProjectionHandler())
+    dispatcher.register_handler(MaterialsLifecycleProjectionHandler())
     dispatcher.register_handler(EnforcementHandler())
     dispatcher.register_handler(IPAssignmentProjectionHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())
