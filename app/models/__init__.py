@@ -91,6 +91,10 @@ from app.models.billing_contract import (  # noqa: F401
     RateBasis,
 )
 from app.models.branding import BrandProfile  # noqa: F401
+from app.models.owner_output import (  # noqa: F401
+    OwnerOutputReceipt,
+    ReceiptOutcome,
+)
 from app.models.customer_subledger import (  # noqa: F401
     CustomerPositionEffect,
     CustomerPostingGroup,
