@@ -113,8 +113,12 @@ def team_inbox_queue(
     open_only: bool = Query(default=False),
     unassigned: bool = Query(default=False),
     unread: bool = Query(default=False),
-    ai_handling: str | None = Query(default=None),
-    has_ticket: str | None = Query(default=None),
+    # Declared `bool | None` like `muted`/`snoozed`, not `str | None`: these ride
+    # `_query_optional_bool`, which keeps only real booleans. Typed as strings the
+    # checkbox value "true" was discarded at the adapter and neither filter ever
+    # reached the read model.
+    ai_handling: bool | None = Query(default=None),
+    has_ticket: bool | None = Query(default=None),
     activity_from: str | None = Query(default=None),
     activity_to: str | None = Query(default=None),
     sort_by: str | None = Query(default=None, alias="sort"),

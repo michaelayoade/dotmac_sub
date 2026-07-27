@@ -982,6 +982,24 @@ def start_conversation(
         db.add(conversation)
         db.flush()
 
+        # Give the thread an owning team link, not just a primary id. An
+        # operator-started conversation used to have no `InboxConversationTeam`
+        # row at all, so it was invisible to every team filter and to "My team"
+        # the moment it was created — including to the operator who started it.
+        team_inbox_routing.apply_email_routing_plan(
+            db,
+            conversation=conversation,
+            plan=team_inbox_routing.build_email_team_routing_plan(
+                db,
+                to_addresses=[],
+                cc_addresses=[],
+                fallback_service_team_id=(
+                    coerce_uuid(service_team_id)
+                    or team_inbox_routing.default_service_team_id(db)
+                ),
+            ),
+        )
+
         body_html = (
             "<p>"
             + "<br>".join(escape(line) for line in str(body_text).splitlines())

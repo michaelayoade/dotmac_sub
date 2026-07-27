@@ -1151,6 +1151,65 @@ def snooze_until_reply(
     return conversation
 
 
+def wake_due_snoozed_conversations(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    limit: int = 200,
+) -> int:
+    """Settle conversations whose chosen wake time has passed.
+
+    Snoozing wrote a durable ``status='snoozed'`` and a ``snoozed_until``, and
+    nothing ever cleared them — so a conversation snoozed until Tuesday was
+    still filed as snoozed the following month, and absent from the Open
+    cohort. The workqueue provider already read the wake time as expiry
+    (``snoozed_until <= now`` means awake), so the two disagreed about the same
+    column.
+
+    Idempotent and repair-shaped: it recomputes from ``snoozed_until`` alone,
+    so re-running it changes nothing and a missed run is caught by the next.
+    """
+    moment = now or datetime.now(UTC)
+    due = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.snoozed_until.isnot(None))
+        .filter(InboxConversation.snoozed_until <= moment)
+        .order_by(InboxConversation.snoozed_until.asc())
+        .limit(max(1, limit))
+        .all()
+    )
+    woken = 0
+    for conversation in due:
+        metadata = dict(conversation.metadata_ or {})
+        history = metadata.get("workflow_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "at": _now_iso(),
+                "actor_id": None,
+                "source": "team_inbox_snooze_expiry",
+                "snoozed_until": {
+                    "from": conversation.snoozed_until.isoformat()
+                    if conversation.snoozed_until
+                    else None,
+                    "to": None,
+                },
+            }
+        )
+        metadata["workflow_history"] = history[-50:]
+        conversation.metadata_ = metadata
+        conversation.snoozed_until = None
+        # A conversation resolved while asleep stays resolved: the wake time
+        # passing is not a reason to reopen closed work.
+        if conversation.status == "snoozed":
+            conversation.status = "open"
+        woken += 1
+    db.flush()
+    return woken
+
+
 def wake_on_inbound(db: Session, *, conversation: InboxConversation) -> bool:
     """Wake a conversation that was snoozed until the customer replied.
 

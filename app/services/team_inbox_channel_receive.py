@@ -372,6 +372,7 @@ def receive_inbound_channel(
         channel_type=channel_type,
         external_thread_id=external_thread_id,
     )
+    created_conversation = conversation is None
     if conversation is None:
         conversation = InboxConversation(
             subscriber_id=resolution.subscriber_id,
@@ -394,11 +395,19 @@ def receive_inbound_channel(
         metadata["contact_resolution"] = resolution.as_metadata()
         conversation.metadata_ = metadata
 
+    # A social or WhatsApp message carries no recipient address to route on, so
+    # the plan is fallback-only. The webhooks pass no fallback, which left every
+    # WhatsApp, Messenger and Instagram thread with no owning team at all —
+    # absent from every team filter and from "My team" until a human escalated
+    # it by hand. The configured default team now stands in.
     routing_plan = team_inbox_routing.build_email_team_routing_plan(
         db,
         to_addresses=[],
         cc_addresses=[],
-        fallback_service_team_id=payload.fallback_service_team_id,
+        fallback_service_team_id=(
+            payload.fallback_service_team_id
+            or team_inbox_routing.default_service_team_id(db)
+        ),
     )
     team_inbox_routing.apply_email_routing_plan(
         db,
@@ -444,6 +453,11 @@ def receive_inbound_channel(
             created_at=message.created_at,
             extra={"sender_type": "visitor", "from_customer": True},
         ),
+    )
+    team_inbox_realtime.publish_queue_event(
+        db,
+        conversation_id=str(conversation.id),
+        created=created_conversation,
     )
     return InboundChannelReceiveResult(
         kind="received",
