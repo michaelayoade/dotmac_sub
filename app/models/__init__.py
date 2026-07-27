@@ -91,6 +91,12 @@ from app.models.billing_contract import (  # noqa: F401
     RateBasis,
 )
 from app.models.branding import BrandProfile  # noqa: F401
+from app.models.customer_subledger import (  # noqa: F401
+    CustomerPositionEffect,
+    CustomerPostingGroup,
+    PositionEffectKind,
+    PostingCommandKind,
+)
 from app.models.catalog import (  # noqa: F401
     AccessCredential,
     AccessType,

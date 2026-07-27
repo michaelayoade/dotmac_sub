@@ -2118,6 +2118,164 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.customer_subledger",
+                module="app.services.billing.customer_subledger",
+                owns=(
+                    "append-only customer posting groups",
+                    "customer posting reversal chain",
+                    "typed per-currency subledger position",
+                ),
+                depends_on=(
+                    "billing.obligations",
+                    "customer.accounts",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "ADR 0007 Phase 3. One business result stages exactly one "
+                    "immutable posting group as a required flush-only "
+                    "participant inside the deciding owner's transaction. "
+                    "Position is derived only from these postings per currency "
+                    "and semantic lane; effects are operational meanings, not "
+                    "ERP debits/credits, and Dotmac ERP keeps the general "
+                    "ledger. Wrong postings are reversed by a linked group, "
+                    "never edited."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="append-only customer posting groups",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "deciding owner command evidence",
+                                "recorded customer postings",
+                            ),
+                            canonical_writer="financial.customer_subledger",
+                        ),
+                        ConcernContract(
+                            name="customer posting reversal chain",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("recorded customer postings",),
+                            canonical_writer="financial.customer_subledger",
+                        ),
+                        ConcernContract(
+                            name="typed per-currency subledger position",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("recorded customer postings",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="deciding owner command evidence",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "account identity plus the calling owner's active "
+                                "command context (actor, reason, idempotency key)"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="recorded customer postings",
+                            owner="financial.customer_subledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "customer_posting_groups and "
+                                "customer_position_effects rows"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "stage_posting_group and stage_reversal run only "
+                            "inside another owner's active execute_owner_command "
+                            "transaction, use flush only, and never commit or "
+                            "roll back. Calling them outside an owner command "
+                            "fails closed."
+                        ),
+                        locking=(
+                            "The calling owner holds its canonical account/record "
+                            "locks; the idempotency unique constraint serialises "
+                            "duplicate posting attempts."
+                        ),
+                        idempotency=(
+                            "One posting group per (producer owner, business "
+                            "idempotency key); a replay returns the original "
+                            "group. A group has at most one reversal."
+                        ),
+                        retries=(
+                            "The calling owner retries its complete command; a "
+                            "posting group is never partially visible because it "
+                            "commits atomically with the business result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.customer_subledger.command_contract_violation",
+                            "financial.customer_subledger.invalid_effect_amount",
+                            "financial.customer_subledger.invalid_posting_currency",
+                            "financial.customer_subledger.invalid_posting_instant",
+                            "financial.customer_subledger.missing_idempotency_key",
+                            "financial.customer_subledger.posting_group_already_reversed",
+                            "financial.customer_subledger.posting_group_not_found",
+                            "financial.customer_subledger.posting_requires_owner_command",
+                        ),
+                        mapping_owner="the deciding money owners and their adapters",
+                        fail_closed_on=(
+                            "staging outside an active owner command",
+                            "a non-positive effect amount",
+                            "a second reversal of one posting group",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("financial.customer_posting.committed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive. Consumers project committed "
+                            "postings and never re-decide why money moved."
+                        ),
+                        replay=(
+                            "Rebuildable from customer_posting_groups. Phase 3 is "
+                            "shadow and stages no delivery; ADR 0007 Phase 4 adds "
+                            "the transactional outbox and consumer receipts."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "financial.ledger per-entry rows plus the multi-source "
+                            "customer.financial_position document-union formulas"
+                        ),
+                        new_owner="financial.customer_subledger",
+                        verification=(
+                            "Participant boundary, idempotent replay, reversal "
+                            "chain, and per-lane position tests plus the ADR 0007 "
+                            "guards."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 3 gate: every new money-changing path "
+                            "produces one posting group, per-currency/lane shadow "
+                            "differences are zero for the approved observation "
+                            "window, and finance signs the cohort evidence."
+                        ),
+                        fallback_retirement=(
+                            "Document-union balance formulas, the account-credit "
+                            "special formula, and legacy financial.ledger writer "
+                            "paths are removed after cutover."
+                        ),
+                    ),
+                    steward="billing and finance operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_customer_subledger.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.ledger",
                 module="app.services.billing.ledger",
                 owns=(
