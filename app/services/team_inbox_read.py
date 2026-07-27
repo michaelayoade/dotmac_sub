@@ -742,9 +742,15 @@ def list_conversations(
             InboxConversation.id.asc(),
         )
     total = query.count()
-    needs_python_filter = bool(
-        needs_response or needs_attention or contact_resolution_status
-    )
+    # `needs_response` and `contact_resolution_status` are already SQL filters
+    # above, so listing them here too would load the whole filtered set before a
+    # page could be sliced — and `needs_response` is the default "Unreplied"
+    # cohort, so that is the ordinary path. Only `needs_attention` genuinely
+    # needs Python: its rule reads ordering across the message sequence and
+    # loose-typed metadata on every message, which has no faithful SQL twin.
+    # The row-level checks below stay as a safety net; they are no-ops whenever
+    # the SQL twin agrees.
+    needs_python_filter = bool(needs_attention)
     rows = (
         ordered_query.all()
         if needs_python_filter
