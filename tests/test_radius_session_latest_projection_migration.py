@@ -45,8 +45,8 @@ def test_radius_session_projection_remains_in_the_single_migration_chain() -> No
         == "425_vendor_project_intake_evidence"
     )
     assert (
-        script.get_revision("427_vendor_material_release_and_advances").down_revision
-        == "426_vendor_principal_user_type"
+        script.get_revision("425_vendor_project_intake_evidence").down_revision
+        == "424_proposed_route_review_evidence"
     )
     assert (
         script.get_revision("424_proposed_route_review_evidence").down_revision
