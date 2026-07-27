@@ -143,7 +143,13 @@ def _referenced_invoice_ids(
         text = str(raw or "").strip()
         if not text:
             return
-        resolved = coerce_uuid(text)
+        try:
+            # coerce_uuid raises on a malformed value rather than returning
+            # None; a metadata join carrying one is exactly the unsafe-join
+            # evidence this phase exists to surface, not an error to propagate.
+            resolved = coerce_uuid(text)
+        except (ValueError, AttributeError, TypeError):
+            resolved = None
         if resolved is None:
             invalid.append(f"{label}:{text}")
         else:

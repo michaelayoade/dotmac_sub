@@ -24784,6 +24784,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="sales.billing_shadow_observation",
+                module="app.services.sales_billing_position",
+                owns=("Sale-to-Money shadow observation evidence",),
+                depends_on=(
+                    "sales.orders",
+                    "financial.invoices",
+                    "financial.payments",
+                ),
+                notes=(
+                    "Observation collector for the Sale-to-Money authority "
+                    "migration. Reads the ledger position for a SalesOrder and "
+                    "records how it compares with the order's stored money "
+                    "columns. Writes only its own append-only observation rows "
+                    "and never sales or billing state: it declares "
+                    "SUPPORTS_APPLY = False and fails closed if asked to "
+                    "repair, because a disagreement does not establish which "
+                    "side is wrong and money repair needs its owner and finance "
+                    "approval. Settlement is read through PaymentAllocation, "
+                    "never through order-originated payments, which prove "
+                    "origin rather than application. Retire this owner when the "
+                    "boundary becomes structural and the stored columns are "
+                    "dropped - see docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md."
+                ),
+            ),
+            SOTService(
                 name="sales.selfserve",
                 module="app.services.sales.selfserve",
                 owns=("self-serve quote and signup flow",),
