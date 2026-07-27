@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 
 from sqlalchemy import select
@@ -17,11 +18,14 @@ from app.models.vendor_routes import (
 )
 from app.services import (
     customer_experience_handoffs,
+    sales_billing_position,
     sales_fulfillment,
 )
 from app.services import (
     sales_orders as sales_order_service,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SalesLifecycleReconciliationError(ValueError):
@@ -172,11 +176,20 @@ def reconcile_sales_to_service_lifecycle(
                 ) from exc
             counts["cx_handoffs_repaired"] += 1
 
+    # Sale -> Money shadow phase. Detect-only in both modes, deliberately: a
+    # disagreement between the stored Sale columns and the ledger is evidence
+    # for finance, never an input to an automatic money correction. See
+    # docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md.
+    shadow = sales_billing_position.scan_billing_shadow(db)
+    for drift in shadow.drifts:
+        logger.warning("sales_billing_shadow_drift %s", drift)
+
     if apply:
         db.commit()
     else:
         db.rollback()
     return {
+        **shadow.as_counts(),
         "apply": apply,
         "missing_implementation_scope": counts["missing_implementation_scope"],
         "implementation_scope_repaired": counts["implementation_scope_repaired"],
