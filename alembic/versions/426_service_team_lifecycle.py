@@ -1,7 +1,7 @@
 """Cut service-team identity and membership over to native Party-backed rows.
 
-Revision ID: 425_service_team_lifecycle
-Revises: 424_proposed_route_review_evidence
+Revision ID: 426_service_team_lifecycle
+Revises: 425_vendor_project_intake_evidence
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "425_service_team_lifecycle"
-down_revision = "424_proposed_route_review_evidence"
+revision = "426_service_team_lifecycle"
+down_revision = "425_vendor_project_intake_evidence"
 branch_labels = None
 depends_on = None
 

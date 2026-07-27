@@ -10,13 +10,13 @@ import pytest
 
 MIGRATION = (
     Path(__file__).resolve().parents[1]
-    / "alembic/versions/425_service_team_lifecycle.py"
+    / "alembic/versions/426_service_team_lifecycle.py"
 )
 
 
 def _load_migration():
     spec = importlib.util.spec_from_file_location(
-        "migration_425_service_team_lifecycle",
+        "migration_426_service_team_lifecycle",
         MIGRATION,
     )
     assert spec is not None and spec.loader is not None
@@ -57,7 +57,7 @@ def test_revision_is_linear_forward_only_party_identity_cutover() -> None:
     migration = _load_migration()
     source = MIGRATION.read_text(encoding="utf-8")
 
-    assert migration.revision == "425_service_team_lifecycle"
+    assert migration.revision == "426_service_team_lifecycle"
     assert migration.down_revision == "424_proposed_route_review_evidence"
     assert "fk_service_teams_manager_person_id_parties" in source
     assert "fk_service_team_members_person_id_parties" in source

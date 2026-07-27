@@ -90,7 +90,7 @@ def test_service_team_browser_journey_does_not_open_the_application_database() -
 
 def test_party_identity_is_enforced_at_team_storage_and_consumers() -> None:
     model = _source("app/models/service_team.py")
-    migration = _source("alembic/versions/425_service_team_lifecycle.py")
+    migration = _source("alembic/versions/426_service_team_lifecycle.py")
     assert "fk_service_team_members_person_id_parties" in model
     assert "fk_service_teams_manager_person_id_parties" in model
     consumer = _source("app/services/team_inbox_assignment.py")

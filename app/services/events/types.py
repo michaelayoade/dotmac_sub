@@ -98,6 +98,10 @@ class EventType(enum.Enum):
     ip_assignment_service_ownership_reconciled = (
         "ip_assignment.service_ownership_reconciled"
     )
+    ip_assignment_lifecycle_repaired = "ip_assignment.lifecycle_repaired"
+    ip_assignment_served_projection_repaired = (
+        "ip_assignment.served_projection_repaired"
+    )
 
     # Billing - Outage compensation
     service_extension_created = "billing.service_extension_created"
@@ -132,6 +136,8 @@ class EventType(enum.Enum):
     service_team_membership_changed = "service_team.membership_changed"
 
     # Operations - vendor installation project lifecycle
+    vendor_project_published = "vendor_project.published"
+    vendor_project_assigned = "vendor_project.assigned"
     vendor_project_started = "vendor_project.started"
     vendor_project_completed = "vendor_project.completed"
     vendor_quote_changed = "vendor_quote.changed"

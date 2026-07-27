@@ -219,7 +219,7 @@ def test_service_team_routes_record_native_replacements_without_retirement() -> 
         route["migration"]["callers"]["state"] == "verified"
         and route["migration"]["data"]["state"] == "in_progress"
         and route["migration"]["cutover"]["state"] == "in_progress"
-        and "alembic/versions/425_service_team_lifecycle.py"
+        and "alembic/versions/426_service_team_lifecycle.py"
         in route["migration"]["data"]["evidence"]
         and "tests/playwright/e2e/test_service_teams.py"
         in route["parity"]["behavior"]["evidence"]
