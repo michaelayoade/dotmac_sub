@@ -16,8 +16,8 @@ Additive only: no backfill here, no reader changes. The projection is
 populated by `communications.team_inbox_participants` and rebuilt from stored
 message headers by its maintenance command.
 
-Revision ID: 427_inbox_conversation_participants
-Revises: 426_service_team_lifecycle
+Revision ID: 429_inbox_conversation_participants
+Revises: 428_vendor_material_release_and_advances
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "427_inbox_conversation_participants"
-down_revision = "426_service_team_lifecycle"
+revision = "429_inbox_conversation_participants"
+down_revision = "428_vendor_material_release_and_advances"
 branch_labels = None
 depends_on = None
 
