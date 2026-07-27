@@ -14,9 +14,11 @@ Formerly this warmer batch-fetched Zabbix host availability for reconciled
 and SLA availability bridge are unchanged, but the data source moved to the
 native poll columns and the population is now source-agnostic: every active
 *pollable* device (same predicate as the poll sweep) gets a live_status,
-however its row was created. Unpollable devices keep a NULL live_status so
-surfaces with their own fallbacks (e.g. linked-router status) still apply
-them. The old ``uisp.status`` trapper fallback is gone: radio/CPE health
+however its row was created. Devices that were never pollable keep a NULL
+live_status so surfaces with their own fallbacks (e.g. linked-router status)
+still apply them; a device that LEAVES the pollable set is decayed to
+``unknown`` rather than frozen at its last state (see
+:func:`_decay_unwarmed_nodes`). The old ``uisp.status`` trapper fallback is gone: radio/CPE health
 feeds the outage pipeline natively via ``CPEDevice.last_uisp_status``
 (uisp_sync), and a pollable node with neither a fresh ping nor SNMP result
 reads ``unknown``, which every consumer already treats conservatively.
@@ -178,19 +180,39 @@ def live_status_observed_at(
     return None
 
 
-def _is_pollable(node) -> bool:
-    """Python mirror of :func:`pollable_device_criteria` for a loaded row.
+def poll_observation_at(node) -> datetime | None:
+    """When this node's reachability was last *observed*, or ``None``.
 
-    A node outside this set is never visited by the warmer, so whatever
-    ``live_status`` it carries is frozen and can only get older.
+    Only the poll columns count. ``last_ping_at`` / ``last_snmp_at`` are
+    re-stamped on every sweep, so they answer "is this observation fresh?".
+    ``live_status_at`` cannot: it is a dwell clock the warmer stamps only when
+    the derived state CHANGES (see :func:`warm_topology_status`), so a node
+    stably ``up`` for a week carries a week-old value. Treating that as
+    observation age would mark every stably-healthy device stale.
     """
-    if not getattr(node, "is_active", True):
-        return False
-    if not (
-        getattr(node, "ping_enabled", False) or getattr(node, "snmp_enabled", False)
-    ):
-        return False
-    return bool(getattr(node, "mgmt_ip", None) or getattr(node, "hostname", None))
+    stamps = [
+        stamp
+        for stamp in (
+            getattr(node, "last_ping_at", None),
+            getattr(node, "last_snmp_at", None),
+        )
+        if stamp is not None
+    ]
+    if not stamps:
+        return None
+    return max(
+        stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp for stamp in stamps
+    )
+
+
+def observation_at(node) -> datetime | None:
+    """Poll clock, falling back to the dwell clock for rows with no poll data.
+
+    The fallback exists only for device types that are never polled natively
+    (and for stub objects); prefer :func:`poll_observation_at` wherever a
+    missing observation must stay missing rather than becoming a stale one.
+    """
+    return poll_observation_at(node) or getattr(node, "live_status_at", None)
 
 
 def trusted_live_status(
@@ -210,39 +232,54 @@ def trusted_live_status(
     — NOT an area outage"), so a frozen ``up`` silently vetoes outage detection
     and the customer surface reports the cabinet healthy indefinitely.
 
-    The gate is therefore **asymmetric, deliberately**:
+    The gate is **asymmetric, deliberately**:
 
-    * a positive assertion (``up``) requires live support — the row must be
-      active, still pollable, its observation fresh, and the warmer alive.
-      Otherwise it decays to ``unknown``;
+    * a positive assertion (``up``) is withdrawn once something positively
+      contradicts it;
     * a negative assertion (``down``) is left alone. It fails safe: it opens an
       incident an operator can see and close. Decaying it too would let a dead
       warmer *suppress* real outages, trading a silent false-healthy for a
-      silent false-healthy.
+      silent suppression.
 
-    Anything that is not ``up`` passes through unchanged.
+    It also decays **only on positive evidence**, never on absent data. Missing
+    columns mean "we do not know"; inferring staleness from an unhydrated row
+    would fail closed on every caller that does not load the poll columns. The
+    three ways a positive can be contradicted map exactly to the three ways it
+    froze in production:
+
+    1. ``is_active is False`` — admitted out of service, so nothing polls it and
+       whatever it still claims is frozen.
+    2. the poll clock stopped — a poll observation exists but has aged past
+       ``stale_after_seconds``, so the poller is no longer covering it.
+    3. the warmer died while the poller kept running — the poll observation is
+       fresh, but ``warm_stale`` says nothing has recomputed ``live_status``
+       from it, so the cache is behind its own evidence. This is the case the
+       poll clock alone cannot catch, and it needs a *fresh* observation to be
+       meaningful: with no observation at all there is nothing for the cache to
+       lag behind, so the value stands.
+
+    ``warm_stale=None`` means the caller holds no dead-man reading. That is an
+    absence of evidence, not evidence of staleness, so it never decays; every
+    customer-facing reader passes a real reading (enforced by
+    ``tests/architecture/test_device_admission_lifecycle_boundary.py``).
+
+    Note what is deliberately NOT checked: poll *eligibility*
+    (``pollable_device_criteria``). Duplicating that predicate on the read path
+    would create a second source of truth for "is this being polled", and (2)
+    already proves it. Eligibility changes are repaired at the writer by
+    :func:`_decay_unwarmed_nodes` on the next warm.
     """
     value = str(getattr(node, "live_status", None) or "").strip().lower()
     if value != UP:
         return value or UNKNOWN
-    if not getattr(node, "is_active", True):
+    if getattr(node, "is_active", None) is False:
         return UNKNOWN
-    if not _is_pollable(node):
-        return UNKNOWN
+    observed = poll_observation_at(node)
+    if observed is None:
+        return UP
     current = now or _now()
-    observed = live_status_observed_at(
-        node,
-        now=current,
-        stale_after_seconds=stale_after_seconds,
-    )
-    if observed is not None:
-        return UP if _fresh(observed, current, stale_after_seconds) else UNKNOWN
-    # No per-node observation timestamp at all: fall back to the warmer's global
-    # dead-man switch rather than trusting an unsupported positive.
-    if warm_stale is None:
-        from app.services.device_operational_status import warmer_is_stale
-
-        warm_stale = warmer_is_stale(current)
+    if not _fresh(observed, current, stale_after_seconds):
+        return UNKNOWN
     return UNKNOWN if warm_stale else UP
 
 

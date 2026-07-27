@@ -55,6 +55,7 @@ from app.services.owner_commands import CommandContext
 from app.services.topology.health_classifier import (
     NODE_OUTAGE,
     SERVICE_FAULT,
+    UNKNOWN,
     classify_node,
 )
 from app.services.topology.live_status import (
@@ -161,7 +162,10 @@ def test_router_delete_cascade_decays_the_linked_monitoring_device(db_session):
     device = _fresh_up(db_session, "edge-router-node")
     router = Router(
         name="edge-router",
+        hostname="edge-router.dotmac.internal",
         management_ip=device.mgmt_ip,
+        rest_api_username="pytest",
+        rest_api_password="pytest",
         network_device_id=device.id,
         is_active=True,
     )
@@ -219,6 +223,11 @@ def test_reconcile_keeps_an_inactive_device_and_marks_it_instead_of_pruning(
 ):
     device = _fresh_up(db_session, "bb-dead-core")
     set_network_device_active(db_session, device, False, reason="test")
+    # The owner command refuses a session that still carries a caller
+    # transaction. Committing here ends the session-level transaction without
+    # ending the fixture's outer connection transaction, so the setup rows stay
+    # visible and the test still rolls back cleanly.
+    db_session.commit()
 
     reconcile_device_projections(db_session, _command())
 
@@ -263,19 +272,23 @@ def test_reconcile_gates_an_upstream_derivation_that_claims_inactive_is_working(
 
 
 def test_database_refuses_an_inactive_working_projection_row(db_session):
-    """The release gate as a schema invariant, not just a code path."""
-    db_session.add(
-        DeviceProjection(
-            device_type="core",
-            source_id=str(uuid.uuid4()),
-            operational_status="working",
-            lifecycle_state="inactive",
-            refreshed_at=datetime.now(UTC),
+    """The release gate as a schema invariant, not just a code path.
+
+    Scoped to a savepoint so the constraint violation unwinds only this insert
+    — the fixture session is rollback-only, so an unscoped rollback would
+    discard the whole test's state.
+    """
+    with pytest.raises(IntegrityError), db_session.begin_nested():
+        db_session.add(
+            DeviceProjection(
+                device_type="core",
+                source_id=str(uuid.uuid4()),
+                operational_status="working",
+                lifecycle_state="inactive",
+                refreshed_at=datetime.now(UTC),
+            )
         )
-    )
-    with pytest.raises(IntegrityError):
         db_session.flush()
-    db_session.rollback()
 
 
 # ── 4. The freshness gate on the read path ──────────────────────────────────
@@ -291,13 +304,17 @@ def test_trusted_live_status_decays_up_on_an_inactive_device(db_session):
     assert trusted_live_status(device) == "unknown"
 
 
-def test_trusted_live_status_decays_up_when_the_device_left_the_pollable_set(
-    db_session,
-):
-    # Checks disabled: the warmer never visits it again, so its "up" is frozen.
-    device = _fresh_up(db_session, "cc-unpollable", ping_enabled=False)
-    device.snmp_enabled = False
-    assert trusted_live_status(device) == "unknown"
+def test_trusted_live_status_does_not_decay_on_absent_data(db_session):
+    """Missing columns mean "unknown", not "stale".
+
+    The read gate decays only on positive evidence. A row that carries no poll
+    columns and no dead-man reading is not proof of anything, and inferring
+    staleness from an unhydrated row would fail closed on every caller that
+    does not load them.
+    """
+    bare = NetworkDevice(name="cc-bare", live_status="up")
+
+    assert trusted_live_status(bare) == "up"
 
 
 def test_trusted_live_status_decays_up_when_the_observation_went_stale(db_session):
@@ -313,10 +330,17 @@ def test_trusted_live_status_decays_up_when_the_observation_went_stale(db_sessio
     assert trusted_live_status(device) == "unknown"
 
 
-def test_trusted_live_status_decays_up_when_the_warmer_is_dead(db_session):
-    # No per-node observation timestamp at all -> fall back to the warmer's
-    # dead-man switch rather than trusting an unsupported positive.
-    device = _device(db_session, "cc-no-obs", live_status="up")
+def test_trusted_live_status_decays_up_when_the_warmer_died_under_a_live_poller(
+    db_session,
+):
+    """The case the poll clock alone cannot catch.
+
+    Poller alive, warmer dead: the poll columns keep advancing while
+    ``live_status`` is frozen at whatever it last held, so the cache is behind
+    its own evidence. Only the dead-man reading exposes that.
+    """
+    device = _fresh_up(db_session, "cc-warmer-dead")
+
     assert trusted_live_status(device, warm_stale=True) == "unknown"
     assert trusted_live_status(device, warm_stale=False) == "up"
 
@@ -344,18 +368,28 @@ def test_trusted_live_status_keeps_a_stale_down(db_session):
 # ── 5. The frozen "up" no longer vetoes outage detection ────────────────────
 
 
-def test_frozen_up_on_a_deactivated_node_classifies_as_node_outage(db_session):
-    """The customer-visible consequence, end to end.
+def test_frozen_up_stops_asserting_reachability_instead_of_vetoing(db_session):
+    """A frozen ``up`` must stop producing ``service_fault``.
 
-    Before: an inactive node still holding ``live_status='up'`` classified
-    ``service_fault`` — "reachable but serving nobody, NOT an area outage" —
-    so no incident opened and every customer behind it was told to reboot
-    their router. It must now classify ``node_outage``.
+    ``service_fault`` is an AFFIRMATIVE claim — "the node is reachable, it is
+    just serving nobody, this is NOT an area outage" — and that claim is the
+    veto: it is what suppressed the outage path and left the customer surface
+    reporting the cabinet healthy.
+
+    The correct replacement is ``unknown`` ("no mgmt evidence"), NOT
+    ``node_outage``. An inactive device is not polled, so we have no
+    observation of it at all; concluding "down" from an administrative flag
+    would be inventory lifecycle manufacturing a reachability verdict, which
+    is the same boundary violation this slice exists to remove, only inverted.
+    ``unknown`` withdraws the claim without inventing its opposite.
     """
     node = _fresh_up(db_session, "dd-frozen-up", is_active=False)
     assert node.live_status == "up"  # frozen, exactly as production had it
 
-    assert classify_node(node, online_count=0, had_prior_life=True) == NODE_OUTAGE
+    verdict = classify_node(node, online_count=0, had_prior_life=True)
+
+    assert verdict != SERVICE_FAULT  # the veto is gone
+    assert verdict == UNKNOWN
 
 
 def test_an_actually_reachable_node_still_classifies_as_service_fault(db_session):
@@ -368,30 +402,82 @@ def test_an_actually_reachable_node_still_classifies_as_service_fault(db_session
 
 
 def test_a_dead_warmer_cannot_certify_a_node_reachable(db_session):
-    node = _device(db_session, "dd-warmer-dead", live_status="up")
-    assert (
-        classify_node(node, online_count=0, had_prior_life=True, warm_stale=True)
-        == NODE_OUTAGE
-    )
+    # Fresh poll evidence, but nothing has recomputed live_status from it.
+    node = _fresh_up(db_session, "dd-warmer-dead")
+
+    verdict = classify_node(node, online_count=0, had_prior_life=True, warm_stale=True)
+
+    assert verdict != SERVICE_FAULT
+    assert verdict == UNKNOWN
+
+
+def test_an_inactive_node_observed_down_still_opens_a_node_outage(db_session):
+    """The gate must not make deactivated nodes un-outage-able.
+
+    Only the positive assertion is gated. Negative evidence survives
+    deactivation, so a node last seen ``down`` still reaches ``node_outage``
+    and can still open an incident — the asymmetry is what keeps the fix from
+    trading a silent false-healthy for a silent suppression.
+    """
+    node = _device(db_session, "dd-inactive-down", live_status="down", is_active=False)
+
+    assert classify_node(node, online_count=0, had_prior_life=True) == NODE_OUTAGE
+
+
+def test_frozen_up_no_longer_certifies_the_plant_and_blames_the_customer(
+    db_session, monkeypatch
+):
+    """The customer-facing consequence that actually changed.
+
+    ``_plant_is_up`` treats ``healthy``/``service_fault`` as proof the plant is
+    up. With a frozen ``up`` that returned True, so the last-mile diagnoser
+    concluded the fault was on the customer side and told them to check their
+    equipment. Degrading to ``unknown`` makes it return False, which routes the
+    customer to "we're still diagnosing" instead of a false accusation.
+    """
+    from app.services.topology import last_mile
+
+    def _impact(session, node):
+        return {"count": 12, "online_count": 0, "node_ids": [node.id]}
+
+    monkeypatch.setattr(last_mile, "affected_customers", _impact)
+
+    frozen = _fresh_up(db_session, "dd-plant-frozen", is_active=False)
+    reachable = _fresh_up(db_session, "dd-plant-real")
+
+    assert last_mile._plant_is_up(db_session, frozen, None, warm_stale=False) is False
+    # A genuinely reachable node is still certified up — no over-correction.
+    assert last_mile._plant_is_up(db_session, reachable, None, warm_stale=False) is True
 
 
 # ── 6. The warmer decays what it no longer visits ───────────────────────────
 
 
 def test_warm_topology_status_decays_nodes_that_left_the_pollable_set(db_session):
-    """Repairs rows already frozen in production, not just new deactivations."""
+    """Repairs rows already frozen in production, not just new deactivations.
+
+    Eligibility loss is repaired here, at the writer, rather than being
+    re-derived on every read: the warmer knows exactly which rows it visited,
+    so anything else holding a state is by definition unmaintained.
+    """
     warmed = _fresh_up(db_session, "ee-still-polled")
+    # Deactivated with a raw flag write, i.e. the pre-fix state: the derived
+    # cache was never decayed.
     frozen = _fresh_up(db_session, "ee-frozen")
-    # Simulate the pre-fix state: deactivated with a raw flag write, so the
-    # derived cache was never decayed.
     frozen.is_active = False
+    # Still active, but its checks were turned off — it silently left the poll
+    # sweep and nothing would ever expire its "up" again.
+    unchecked = _fresh_up(db_session, "ee-unchecked", ping_enabled=False)
+    unchecked.snmp_enabled = False
     db_session.flush()
     assert frozen.live_status == "up"
+    assert unchecked.live_status == "up"
 
     result = warm_topology_status(db_session)
 
-    assert result["decayed"] >= 1
+    assert result["decayed"] >= 2
     assert frozen.live_status == "unknown"
+    assert unchecked.live_status == "unknown"
     assert warmed.live_status == "up"
 
 

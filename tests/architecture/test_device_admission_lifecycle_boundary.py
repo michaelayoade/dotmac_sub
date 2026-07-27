@@ -111,6 +111,13 @@ def test_known_admission_callers_request_the_owner_transition(relative: str) -> 
     assert TRANSITION in _source(relative)
 
 
+def _function_named(tree: ast.AST, name: str) -> ast.FunctionDef:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} not found")
+
+
 def test_router_field_sync_does_not_copy_admission_as_a_field() -> None:
     """The cross-domain write this slice removed.
 
@@ -118,10 +125,31 @@ def test_router_field_sync_does_not_copy_admission_as_a_field() -> None:
     router_management writer performing a monitoring-inventory lifecycle
     transition, skipping the decay. Router inventory remains an authoritative
     INPUT to that admission, but it requests the transition.
+
+    Asserted over the AST, not the raw text: the helper's docstring names the
+    removed line to explain *why* the boundary moved, and that explanation is
+    worth keeping. What is forbidden is the assignment, not the mention.
     """
-    source = _source("app/services/monitoring_metrics.py")
-    assert "device.is_active = router.is_active" not in source
-    assert TRANSITION in source
+    tree = ast.parse(_source("app/services/monitoring_metrics.py"))
+    helper = _function_named(tree, "_sync_router_fields_to_device")
+
+    assignments = [
+        node.lineno
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr == "is_active"
+    ]
+    assert assignments == [], (
+        "the router field sync assigns admission directly instead of "
+        f"requesting {TRANSITION} (lines {assignments})"
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == TRANSITION
+        for node in ast.walk(helper)
+    )
 
 
 def test_the_transition_decays_the_derived_reachability_cache() -> None:
@@ -159,13 +187,67 @@ def test_customer_facing_readers_apply_the_freshness_gate() -> None:
         assert "warm_stale" in _source(relative), relative
 
 
+def test_every_classifier_call_site_supplies_the_dead_man_reading() -> None:
+    """``warm_stale`` is evidence the caller must supply, not a default.
+
+    The gate decays a positive only on positive evidence, and an omitted
+    ``warm_stale`` reads as "no evidence" — deliberately, so an unhydrated row
+    is never mistaken for a stale one. The cost is that a caller which forgets
+    to pass it silently loses the dead-man switch, so every call site is
+    checked here instead.
+    """
+    missing: list[str] = []
+    for path in sorted(APP.rglob("*.py")):
+        relative = path.relative_to(PROJECT_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"classify_node", "localize_outage"}
+                and not any(kw.arg == "warm_stale" for kw in node.keywords)
+            ):
+                missing.append(f"{relative}:{node.lineno} {node.func.id}")
+    assert missing == [], (
+        "these classifier calls omit the warmer dead-man reading, so a frozen "
+        f"live_status can still decide their verdict: {missing}"
+    )
+
+
 def test_retired_zabbix_provenance_module_is_gone() -> None:
-    """The dead drift filter keyed on a source string from a deleted importer."""
+    """The dead drift filter keyed on a source string from a deleted importer.
+
+    Precise about what is forbidden: the retired provenance must not appear as
+    *executable* code in the drift report — no string literal, no import of the
+    deleted module, no comparison against ``NetworkDevice.source``. Comments
+    explaining the retirement are the point of the change and stay.
+    """
     assert not (PROJECT_ROOT / "app/services/topology/sources.py").exists()
-    gaps = _source("app/services/topology/gaps.py")
-    assert "zabbix_reconcile" not in gaps
-    assert "RECONCILED_SOURCE" not in gaps
-    assert "NetworkDevice.source ==" not in gaps
+
+    tree = ast.parse(_source("app/services/topology/gaps.py"))
+
+    literals = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    assert "zabbix_reconcile" not in literals
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert node.module != "app.services.topology.sources"
+            assert all(alias.name != "RECONCILED_SOURCE" for alias in node.names)
+
+    source_comparisons = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Attribute)
+        and node.left.attr == "source"
+    ]
+    assert source_comparisons == [], (
+        f"the drift report still filters on provenance (lines {source_comparisons})"
+    )
 
 
 def test_ownership_is_recorded_in_the_map_and_registry() -> None:
