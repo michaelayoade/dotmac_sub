@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.field_vendor import VENDOR_USER_ROLES
 from app.services import vendor_admin, vendor_user_provisioning
+from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field import vendor_capabilities
 
@@ -235,7 +236,8 @@ def add_vendor_user_from_form(
 
 def revoke_vendor_user(db: Session, *, membership_id: str) -> None:
     db_session_adapter.release_read_transaction(db)
-    vendor_user_provisioning.revoke_committed(db, membership_id)
+    # The route hands this in as a path string; the owner command takes a UUID.
+    vendor_user_provisioning.revoke_committed(db, coerce_uuid(membership_id))
 
 
 def create_vendor_from_form(

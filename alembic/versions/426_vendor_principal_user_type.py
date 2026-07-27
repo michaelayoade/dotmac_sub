@@ -35,7 +35,9 @@ def downgrade() -> None:
     # Postgres cannot drop an enum value. Reclassify any vendor principal back
     # to the generic type and rebuild the type without 'vendor'. The vendor
     # membership rows are untouched, so re-upgrading restores the marker.
-    op.execute("UPDATE system_users SET user_type = 'system_user' WHERE user_type = 'vendor'")
+    op.execute(
+        "UPDATE system_users SET user_type = 'system_user' WHERE user_type = 'vendor'"
+    )
     op.execute("ALTER TYPE usertype RENAME TO usertype_old")
     op.execute("CREATE TYPE usertype AS ENUM ('system_user', 'customer', 'reseller')")
     op.execute(
