@@ -2014,6 +2014,110 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="billing.rating",
+                module="app.services.billing.rating",
+                owns=("deterministic obligation rating",),
+                depends_on=(
+                    "billing.contracts",
+                    "financial.tax_configuration",
+                ),
+                notes=(
+                    "ADR 0007 Phase 2. Read-only policy/resolver: the same "
+                    "contract version, line, period, coverage, and tax inputs "
+                    "always produce the same typed rated result. A contracted "
+                    "tax treatment code with no active tax rate fails closed "
+                    "instead of rating tax-free."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="deterministic obligation rating",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "recorded billing contract terms",
+                                "effective tax treatment inputs",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="recorded billing contract terms",
+                            owner="billing.contracts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "effective BillingContractVersion cadence, lines, "
+                                "price, currency, and tax inputs"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="effective tax treatment inputs",
+                            owner="financial.tax_configuration",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active TaxRate records addressed by code",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller owns the session; rating reads contract and "
+                            "tax records and completes no transaction."
+                        ),
+                        locking=(
+                            "No read lock. The obligation owner locks its own "
+                            "rows before recording a rated result."
+                        ),
+                        idempotency=(
+                            "Deterministic: identical version, line, period, "
+                            "coverage, and tax inputs produce an identical typed "
+                            "result."
+                        ),
+                        retries=(
+                            "Transient reads may be retried; a missing named tax "
+                            "code remains a deterministic fail-closed error."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="billing and invoicing adapters",
+                        fail_closed_on=(
+                            "a contracted tax treatment code with no active rate",
+                            "usage-metered rating without an observed quantity",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "invoice-generation amount arithmetic and prepaid "
+                            "renewal price resolution spread across billing tasks"
+                        ),
+                        new_owner="billing.rating",
+                        verification=(
+                            "Deterministic rating, proration, tax-inclusive, and "
+                            "fail-closed tax tests plus the ADR 0007 guards."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 2 gate: rated totals match current "
+                            "postpaid invoice generation and prepaid renewal "
+                            "previews for the complete active cohort."
+                        ),
+                        fallback_retirement=(
+                            "Parallel money formulas in invoice generation and "
+                            "renewal paths are removed once flows consume rated "
+                            "obligations."
+                        ),
+                    ),
+                    steward="billing and finance operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_rating.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.ledger",
                 module="app.services.billing.ledger",
                 owns=(
