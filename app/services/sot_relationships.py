@@ -14925,12 +14925,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "idempotent structural InstallationProject root creation",
                     "Project-to-InstallationProject subscriber alignment",
+                    "buildout-rooted installation scope creation",
                 ),
                 depends_on=("operations.project_lifecycle",),
                 notes=(
                     "This transaction-neutral owner creates only the installation "
                     "root. Vendor lifecycle decisions remain with "
-                    "operations.vendor_project_lifecycle."
+                    "operations.vendor_project_lifecycle. Two entry points reach "
+                    "the same root: a sold installation (subscriber-scoped, "
+                    "triggered by sales.fulfillment) and a network buildout "
+                    "(subscriber-less, rooted on a BuildoutProject) so every "
+                    "downstream vendor decision runs one path. The BuildoutProject "
+                    "is validated as a referent, not consumed as a decision input; "
+                    "app.services.qualification is not yet a declared owner."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -14952,6 +14959,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical native project state",
                                 "installation scope creation command",
                             ),
+                        ),
+                        ConcernContract(
+                            name="buildout-rooted installation scope creation",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("canonical native project state",),
+                            canonical_writer="operations.installation_scope",
                         ),
                     ),
                     authoritative_inputs=(
@@ -15052,6 +15065,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor start/complete and staff verify/rework "
                     "installation-project transitions",
+                    "staff bidding publication and direct vendor assignment",
                     "durable vendor lifecycle actor/time/reason/event evidence",
                     "typed vendor project lifecycle outbox events",
                 ),
@@ -15081,6 +15095,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "authenticated assigned-vendor transition evidence",
                                 "vendor lifecycle transition protocol",
                                 "work-order as-built evidence policy",
+                            ),
+                            canonical_writer="operations.vendor_project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "staff bidding publication and direct vendor assignment"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "vendor lifecycle transition protocol",
                             ),
                             canonical_writer="operations.vendor_project_lifecycle",
                         ),
@@ -15173,6 +15198,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_lifecycle.unsupported_action",
                             "operations.vendor_project_lifecycle.actor_required",
                             "operations.vendor_project_lifecycle.invalid_transition",
+                            "operations.vendor_project_lifecycle.invalid_bidding_window",
+                            "operations.vendor_project_lifecycle.already_assigned",
+                            "operations.vendor_project_lifecycle.vendor_not_found",
                             "operations.vendor_project_lifecycle.vendor_assignment_required",
                             "operations.vendor_project_lifecycle.reason_required",
                             "operations.vendor_project_lifecycle.reason_too_long",

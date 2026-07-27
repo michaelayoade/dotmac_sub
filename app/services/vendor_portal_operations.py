@@ -49,9 +49,12 @@ _EDITABLE_QUOTES = {
     ProjectQuoteStatus.revision_requested.value,
 }
 # Awarding a project (``approved``) and everything after it closes quoting:
-# post-award change is a variation, not another bid.
+# post-award change is a variation, not another bid. ``assigned`` is the
+# directed-work intake state: the vendor was named without a bidding round and
+# still has to quote.
 _QUOTE_CREATION_STATUSES = {
     InstallationProjectStatus.draft.value,
+    InstallationProjectStatus.assigned.value,
     InstallationProjectStatus.open_for_bidding.value,
     InstallationProjectStatus.quoted.value,
 }
