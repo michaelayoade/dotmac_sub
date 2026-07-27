@@ -16073,6 +16073,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "ticket.resolution_confirmed",
                             "ticket.resolution_disputed",
                             "support.resolution_confirmation_due",
+                            "support.ticket_sla_breach_due",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",

@@ -2016,6 +2016,45 @@ class Tickets:
         return result if result is not None else "replayed"
 
     @staticmethod
+    @ticket_owner_command("consume_sla_breach_due")
+    def consume_sla_breach_due(
+        db: Session,
+        *,
+        clock_id: str,
+        event_id,
+        context,
+    ) -> str:
+        """Receipt one fired SLA-clock timer into breach evaluation.
+
+        The breach records, escalation planning, and the unique
+        (consumer, event_id) receipt commit atomically; a clock that was
+        paused, completed, or re-targeted makes a stale firing a
+        state-guarded no-op inside check_sla_breaches.
+        """
+        from app.models.ticket_workflow import SlaClock
+        from app.services.events.owner_outputs import consume_owner_output
+        from app.services.sla_assignment import check_sla_breaches
+
+        def _effect() -> str:
+            uid = _coerce_uuid(str(clock_id))
+            clock = db.get(SlaClock, uid) if uid is not None else None
+            if clock is None:
+                return "skipped_missing"
+            breached = check_sla_breaches(db, clock.entity_id)
+            return "breached" if breached else "skipped_state"
+
+        result, _receipt = consume_owner_output(
+            db,
+            consumer="support.ticket_lifecycle",
+            event_id=event_id,
+            event_type="support.ticket_sla_breach_due",
+            producer_owner="runtime.durable_timers",
+            context=context,
+            operation=_effect,
+        )
+        return result if result is not None else "replayed"
+
+    @staticmethod
     @ticket_owner_command("add_attachments")
     def add_attachments(
         db: Session, ticket_id: str, attachments: list[dict] | None

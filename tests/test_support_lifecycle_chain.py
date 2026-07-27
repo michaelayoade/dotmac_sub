@@ -127,3 +127,63 @@ def test_snooze_timer_wakes_conversation_through_receipt(db_session):
         )
     ).scalar_one()
     assert receipt.outcome.value == "succeeded"
+
+
+def test_sla_clock_breach_fires_through_durable_timer(db_session):
+    from app.models.ticket_workflow import (
+        SlaBreach,
+        SlaClock,
+        SlaClockStatus,
+        SlaPolicy,
+        WorkflowEntityType,
+    )
+
+    db_session.add(
+        SlaPolicy(
+            name="Ticket Resolution SLA",
+            entity_type=WorkflowEntityType.ticket.value,
+            description="Default ticket SLA policy",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    subscriber = _subscriber(db_session)
+    from app.models.ticket_workflow import SlaClock as _SlaClock
+    from app.schemas.support import TicketCreate
+
+    # Create through the owner command so the clock stages its timer
+    # atomically with the ticket transition.
+    ticket = Tickets.create(
+        db_session,
+        TicketCreate(
+            subscriber_id=subscriber.id,
+            title="Slow repair",
+            priority="urgent",
+            due_at=datetime.now(UTC) - timedelta(minutes=5),
+        ),
+    )
+    db_session.commit()
+    clock = db_session.query(_SlaClock).filter(_SlaClock.entity_id == ticket.id).one()
+
+    timer = db_session.execute(
+        select(DurableTimer).where(DurableTimer.purpose == "sla_breach_due")
+    ).scalar_one()
+    assert str(timer.entity_id) == str(clock.id)
+
+    fired = _fire(db_session, datetime.now(UTC) + timedelta(seconds=1))
+    assert len(fired) == 1
+
+    db_session.expire_all()
+    clock = db_session.get(SlaClock, clock.id)
+    assert clock.status == SlaClockStatus.breached.value
+    assert db_session.query(SlaBreach).count() == 1
+    receipt = (
+        db_session.query(OwnerOutputReceipt)
+        .filter(
+            OwnerOutputReceipt.consumer == "support.ticket_lifecycle",
+            OwnerOutputReceipt.event_type == "support.ticket_sla_breach_due",
+        )
+        .one()
+    )
+    assert receipt.outcome.value == "succeeded"

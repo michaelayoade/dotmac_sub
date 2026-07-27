@@ -37,6 +37,7 @@ HANDLED_EVENT_TYPES = frozenset(
 # EventType.custom with the trigger in the payload).
 _RESOLUTION_GRACE_TRIGGER = "support.resolution_confirmation_due"
 _SNOOZE_WAKE_TRIGGER = "team_inbox.snooze_wake"
+_SLA_BREACH_TRIGGER = "support.ticket_sla_breach_due"
 
 
 class SupportLifecycleProjectionHandler:
@@ -52,6 +53,8 @@ class SupportLifecycleProjectionHandler:
                 self._auto_confirm_resolution(db, event)
             elif trigger == _SNOOZE_WAKE_TRIGGER:
                 self._wake_snoozed_conversation(db, event)
+            elif trigger == _SLA_BREACH_TRIGGER:
+                self._evaluate_sla_breach(db, event)
             # Any other custom payload belongs to other adapters.
 
     @staticmethod
@@ -122,4 +125,18 @@ class SupportLifecycleProjectionHandler:
                 conversation_id=coerce_uuid(conversation_id),
                 event_id=event.event_id,
                 context=self._context(event, str(conversation_id)),
+            )
+
+    def _evaluate_sla_breach(self, db: Session, event: Event) -> None:
+        clock_id = event.payload.get("entity_id")
+        if not clock_id:
+            return
+        from app.services.support import Tickets
+
+        with _owner_session(db) as owner_db:
+            Tickets.consume_sla_breach_due(
+                owner_db,
+                clock_id=str(clock_id),
+                event_id=event.event_id,
+                context=self._context(event, str(clock_id)),
             )
