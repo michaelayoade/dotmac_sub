@@ -409,6 +409,10 @@ def test_reconciler_observes_without_repairing(db_session, apply):
     order.payment_status = SalesOrderPaymentStatus.paid.value
     db_session.commit()
 
+    # Counted rather than asserted absolutely: the scan commits its evidence,
+    # so rows legitimately outlive a single test's transaction.
+    before = db_session.query(SalesBillingShadowRun).count()
+
     result = reconciler.reconcile_sales_to_service_lifecycle(db_session, apply=apply)
 
     assert result["sales_billing_shadow_drifting"] == 1
@@ -416,5 +420,5 @@ def test_reconciler_observes_without_repairing(db_session, apply):
     db_session.refresh(order)
     assert order.amount_paid == Decimal("40000.00")
 
-    # Evidence survives a detect-mode run, where the repair transaction rolls back.
-    assert db_session.query(SalesBillingShadowRun).count() == 1
+    # Evidence survives a detect-mode run, whose repair transaction rolls back.
+    assert db_session.query(SalesBillingShadowRun).count() == before + 1

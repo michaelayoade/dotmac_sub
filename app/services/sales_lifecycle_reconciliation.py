@@ -43,6 +43,30 @@ def reconcile_sales_to_service_lifecycle(
 ) -> dict[str, int | bool]:
     """Report drift and optionally request repair through canonical owners."""
 
+    # Sale -> Money shadow phase, observed FIRST and repaired never.
+    #
+    # First, because an observation is evidence of the state as found; taking
+    # it after the repair phase would describe a state this run had already
+    # changed. Committed immediately for the same reason, and because the
+    # repair transaction below rolls back in detect mode — evidence left inside
+    # it would be discarded exactly when it is most needed.
+    #
+    # Never repaired: a disagreement between the stored Sale columns and the
+    # ledger does not establish which side is wrong, and money repair belongs
+    # to its owner with finance approval. The check is called without `apply`
+    # deliberately; it fails closed if asked. See
+    # docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md.
+    shadow = sales_billing_position.scan_billing_shadow(db, actor_id=actor_id)
+    for drift in shadow.drifts:
+        logger.warning("sales_billing_shadow_drift %s", drift)
+    if not shadow.clean:
+        logger.warning(
+            "sales_billing_shadow_not_clean fingerprint=%s counts=%s",
+            shadow.cohort_fingerprint,
+            shadow.as_counts(),
+        )
+    db.commit()
+
     counts: Counter[str] = Counter()
     orders = list(
         db.scalars(
@@ -180,28 +204,6 @@ def reconcile_sales_to_service_lifecycle(
         db.commit()
     else:
         db.rollback()
-
-    # Sale -> Money shadow phase. Observed in both modes and repaired in
-    # neither: a disagreement between the stored Sale columns and the ledger is
-    # evidence for finance, never an input to an automatic money correction,
-    # and it does not establish which side is wrong. The check is called
-    # without `apply` on purpose — it fails closed if asked to repair.
-    #
-    # Deliberately after the repair transaction settles. The observation is
-    # read-only against business state, and its evidence row must survive a
-    # detect-mode run — inside the block above, the rollback would discard the
-    # very evidence the cutover gate depends on. See
-    # docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md.
-    shadow = sales_billing_position.scan_billing_shadow(db, actor_id=actor_id)
-    for drift in shadow.drifts:
-        logger.warning("sales_billing_shadow_drift %s", drift)
-    if not shadow.clean:
-        logger.warning(
-            "sales_billing_shadow_not_clean fingerprint=%s counts=%s",
-            shadow.cohort_fingerprint,
-            shadow.as_counts(),
-        )
-    db.commit()
 
     return {
         **shadow.as_counts(),
