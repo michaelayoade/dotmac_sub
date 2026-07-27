@@ -19,8 +19,8 @@ from app.models.vendor_routes import (
     ProjectQuoteLineItem,
     ProjectQuoteStatus,
     ProposedRouteRevision,
+    ProposedRouteRevisionReviewEvent,
     ProposedRouteRevisionStatus,
-    VendorAssignmentType,
 )
 from app.services.common import coerce_uuid
 from app.services.events import EventType, emit_event
@@ -44,6 +44,7 @@ from app.services.vendor_portal_operations import (
     _money,
     _project,
     _quote,
+    _quote_creation_eligibility,
     _serialize_as_built_review,
     _serialize_quote,
 )
@@ -52,6 +53,14 @@ from app.services.vendor_portal_operations import (
 @dataclass(frozen=True, slots=True)
 class StageVendorAsBuiltReview:
     as_built_id: str
+    action: str
+    actor_id: str
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StageVendorRouteRevisionReview:
+    revision_id: str
     action: str
     actor_id: str
     reason: str | None = None
@@ -108,15 +117,6 @@ def stage_create_quote(db: Session, command: CreateVendorQuoteCommand) -> dict:
             "Vendor quote currency and validity evidence are required.",
         )
     project = _project(db, str(command.payload.project_id), for_update=True)
-    if project.assignment_type == VendorAssignmentType.direct.value and str(
-        project.assigned_vendor_id
-    ) != str(command.vendor_id):
-        raise _error(
-            "project_not_assigned",
-            "Project is assigned to another vendor.",
-        )
-    if project.bidding_close_at and project.bidding_close_at <= _now():
-        raise _error("bidding_closed", "Bidding window has closed.")
     existing = (
         db.query(ProjectQuote)
         .filter(ProjectQuote.project_id == project.id)
@@ -126,7 +126,14 @@ def stage_create_quote(db: Session, command: CreateVendorQuoteCommand) -> dict:
         .first()
     )
     if existing:
+        # Returning the vendor's own open draft is a read of a row they already
+        # own, so it stays available regardless of the project's current state.
         return _serialize_quote(_quote(db, str(existing.id), command.vendor_id))
+    allowed, reason = _quote_creation_eligibility(
+        project, command.vendor_id, now=_now()
+    )
+    if not allowed:
+        raise _error("quote_creation_not_allowed", str(reason))
     quote = ProjectQuote(
         project_id=project.id,
         vendor_id=coerce_uuid(command.vendor_id),
@@ -390,6 +397,96 @@ def stage_submit_route_revision(
         vendor_id=revision.quote.vendor_id,
     )
     return {"id": revision.id, "status": revision.status}
+
+
+def stage_route_revision_review(
+    db: Session,
+    command: StageVendorRouteRevisionReview,
+) -> dict:
+    """Stage one locked staff proposed-route decision and immutable event."""
+
+    normalized_actor = command.actor_id.strip()
+    if not normalized_actor:
+        raise VendorPortalOperationError(
+            "actor_required",
+            "Review actor is required",
+            kind="invalid",
+        )
+    preview = VendorPortalOperations.preview_route_revision_review(
+        db,
+        command.revision_id,
+        action=command.action,
+        reason=command.reason,
+        for_update=True,
+    )
+    revision = (
+        db.query(ProposedRouteRevision)
+        .filter(ProposedRouteRevision.id == coerce_uuid(command.revision_id))
+        .with_for_update(of=ProposedRouteRevision)
+        .one()
+    )
+    previous = str(preview["state"]["from_status"])
+    target = str(preview["state"]["to_status"])
+    normalized_reason = preview["state"]["reason"]
+    event_type = (
+        EventType.vendor_route_revision_accepted
+        if command.action == "accept"
+        else EventType.vendor_route_revision_rejected
+    )
+    revision.status = target
+    revision.reviewed_at = _now()
+    revision.reviewed_by_person_id = coerce_uuid(normalized_actor)
+    revision.review_notes = normalized_reason
+    quote = revision.quote
+    project = quote.project
+    domain_event = emit_event(
+        db,
+        event_type,
+        {
+            "schema_version": 1,
+            "revision_id": str(revision.id),
+            "quote_id": str(revision.quote_id),
+            "project_id": str(quote.project_id),
+            "native_project_id": str(project.project_id),
+            "vendor_id": str(quote.vendor_id),
+            "revision_number": revision.revision_number,
+            "from_status": previous,
+            "to_status": target,
+            "actor_type": "staff_user",
+            "actor_id": normalized_actor,
+            "reason": normalized_reason,
+        },
+        actor=normalized_actor,
+        subscriber_id=project.subscriber_id,
+        account_id=project.subscriber_id,
+    )
+    evidence = ProposedRouteRevisionReviewEvent(
+        event_id=domain_event.event_id,
+        revision_id=revision.id,
+        quote_id=revision.quote_id,
+        project_id=quote.project_id,
+        vendor_id=quote.vendor_id,
+        event_type=domain_event.event_type.value,
+        from_status=previous,
+        to_status=target,
+        actor_type="staff_user",
+        actor_id=normalized_actor,
+        reason=normalized_reason,
+        occurred_at=domain_event.occurred_at,
+    )
+    db.add(evidence)
+    db.flush()
+    result = {
+        "id": revision.id,
+        "quote_id": revision.quote_id,
+        "project_id": quote.project_id,
+        "status": revision.status,
+        "review_notes": revision.review_notes,
+        "reviewed_at": domain_event.occurred_at,
+        "review_event_id": str(evidence.id),
+        "domain_event_id": str(domain_event.event_id),
+    }
+    return result
 
 
 def stage_as_built_submission(

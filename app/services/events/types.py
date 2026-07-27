@@ -78,6 +78,9 @@ class EventType(enum.Enum):
     topup_intent_direct_transfer_created = "topup_intent.direct_transfer_created"
     topup_intent_direct_transfer_canceled = "topup_intent.direct_transfer_canceled"
     topup_intent_direct_transfer_submitted = "topup_intent.direct_transfer_submitted"
+    topup_intent_direct_transfer_proof_rejected = (
+        "topup_intent.direct_transfer_proof_rejected"
+    )
     topup_intent_completed = "topup_intent.completed"
     topup_intent_expired = "topup_intent.expired"
     topup_intent_gateway_created = "topup_intent.gateway_created"
@@ -97,6 +100,10 @@ class EventType(enum.Enum):
     prepaid_draft_reconciled = "prepaid_draft.reconciled"
     ip_assignment_service_ownership_reconciled = (
         "ip_assignment.service_ownership_reconciled"
+    )
+    ip_assignment_lifecycle_repaired = "ip_assignment.lifecycle_repaired"
+    ip_assignment_served_projection_repaired = (
+        "ip_assignment.served_projection_repaired"
     )
 
     # Billing - Outage compensation
@@ -128,11 +135,15 @@ class EventType(enum.Enum):
     service_order_recovered = "service_order.recovered"
 
     # Operations - vendor installation project lifecycle
+    vendor_project_published = "vendor_project.published"
+    vendor_project_assigned = "vendor_project.assigned"
     vendor_project_started = "vendor_project.started"
     vendor_project_completed = "vendor_project.completed"
     vendor_quote_changed = "vendor_quote.changed"
     vendor_purchase_invoice_changed = "vendor_purchase_invoice.changed"
     vendor_route_revision_changed = "vendor_route_revision.changed"
+    vendor_route_revision_accepted = "vendor_route_revision.accepted"
+    vendor_route_revision_rejected = "vendor_route_revision.rejected"
     vendor_as_built_submitted = "vendor_as_built.submitted"
     vendor_submission_confirmed = "vendor_submission.confirmed"
     vendor_project_verified = "vendor_project.verified"
