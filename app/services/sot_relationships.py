@@ -2276,6 +2276,463 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="runtime.durable_timers",
+                module="app.services.runtime_durable_timers",
+                owns=(
+                    "owner-bound durable timer generations",
+                    "due-timer trigger emission",
+                ),
+                depends_on=("events.dispatcher", "events.store"),
+                notes=(
+                    "ADR 0007 Phase 5. The owning business transition stages "
+                    "its timer as a flush-only participant, so a transition "
+                    "requiring a future action cannot commit without it. The "
+                    "fire path scans due_at on an index with a bounded batch "
+                    "and emits only the declared trigger with its generation; "
+                    "it performs no customer, invoice, funding, or access "
+                    "decision. This replaces business-wide financial sweeps."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="owner-bound durable timer generations",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "owning transition command evidence",
+                                "recorded durable timers",
+                            ),
+                            canonical_writer="runtime.durable_timers",
+                        ),
+                        ConcernContract(
+                            name="due-timer trigger emission",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("recorded durable timers",),
+                            canonical_writer="runtime.durable_timers",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="owning transition command evidence",
+                            owner="events.dispatcher",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "the calling owner's active command context and "
+                                "declared output event type"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="recorded durable timers",
+                            owner="runtime.durable_timers",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="durable_timers rows and their generations",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "schedule_timer and cancel_timer are flush-only "
+                            "participants inside the owning transition's "
+                            "command; fire_due_timers enters "
+                            "execute_owner_command once on a transaction-free "
+                            "session."
+                        ),
+                        locking=(
+                            "The current timer row is locked FOR UPDATE before "
+                            "replacement; the due scan uses SKIP LOCKED so "
+                            "concurrent fire runs never double-emit."
+                        ),
+                        idempotency=(
+                            "One current timer per (owner, entity, purpose); "
+                            "replacement bumps the generation so a stale "
+                            "delivery is idempotently rejected by its consumer."
+                        ),
+                        retries=(
+                            "A failed fire batch rolls back whole; timers stay "
+                            "scheduled and the next run retries them."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "runtime.durable_timers.active_caller_transaction",
+                            "runtime.durable_timers.command_contract_violation",
+                            "runtime.durable_timers.invalid_command_context",
+                            "runtime.durable_timers.invalid_timer_due_at",
+                            "runtime.durable_timers.invalid_timer_output",
+                            "runtime.durable_timers.nested_owner_command",
+                            "runtime.durable_timers.nested_transaction_completion",
+                            "runtime.durable_timers.timer_requires_owner_command",
+                        ),
+                        mapping_owner="owning transitions and the timer runner task",
+                        fail_closed_on=(
+                            "staging a timer outside an owner command",
+                            "a timer without a declared output event type",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("runtime.timer_due",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive; the trigger payload names "
+                            "the declared output and generation."
+                        ),
+                        replay=(
+                            "A fired trigger redelivers at least once; consumers "
+                            "reject a stale generation."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "dunning_runner, prepaid_balance_sweep, and other "
+                            "scheduled account scans in scheduler_config"
+                        ),
+                        new_owner="runtime.durable_timers",
+                        verification=(
+                            "Generation replacement, stale rejection, bounded "
+                            "due-scan, and participant boundary tests plus the "
+                            "ADR 0007 sweep ratchet."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 5 gate: every open invoice, prepaid "
+                            "period, grace deadline, and escalation has exactly "
+                            "one current timer or a typed no-timer reason, and "
+                            "timer-triggered outcomes match the sweeps for the "
+                            "full candidate cohort."
+                        ),
+                        fallback_retirement=(
+                            "dunning_runner and prepaid_balance_sweep scheduled "
+                            "tasks are removed from scheduler_config and the "
+                            "sweep baseline after cutover."
+                        ),
+                    ),
+                    steward="platform and billing operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_durable_timers.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="collections.postpaid_policy",
+                module="app.services.collections.mode_policies",
+                owns=("typed overdue-receivable decision",),
+                depends_on=("billing.obligations",),
+                notes=(
+                    "ADR 0007 Phase 5. Read-only planner over one exact "
+                    "overdue collectible receivable obligation. Returns a "
+                    "typed proposal for collections.lifecycle; decides no "
+                    "consequence and mutates nothing."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="typed overdue-receivable decision",
+                            role=OwnerRole.POLICY,
+                            input_names=("recorded billing obligations",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="recorded billing obligations",
+                            owner="billing.obligations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="exact obligation state, due time, and amounts",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller owns the session; the planner reads one "
+                            "obligation and completes no transaction."
+                        ),
+                        locking=(
+                            "No read lock. collections.lifecycle locks its case "
+                            "before acting on the proposal."
+                        ),
+                        idempotency=(
+                            "Deterministic: identical obligation state and "
+                            "instant produce an identical proposal or None."
+                        ),
+                        retries="Reads may be retried without side effects.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="collections adapters",
+                        fail_closed_on=("a naive evaluation instant",),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner="dunning rule evaluation inside dunning tasks",
+                        new_owner="collections.postpaid_policy",
+                        verification=(
+                            "Overdue, partial-settlement, and non-receivable "
+                            "planner tests."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 5 gate: planner proposals match "
+                            "current dunning outcomes for the candidate cohort."
+                        ),
+                        fallback_retirement=(
+                            "Inline dunning rule evaluation is removed after "
+                            "cutover."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_collections_target_lifecycle.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="collections.prepaid_policy",
+                module="app.services.collections.mode_policies",
+                owns=("typed uncovered-service decision",),
+                depends_on=(
+                    "billing.obligations",
+                    "financial.customer_subledger",
+                ),
+                notes=(
+                    "ADR 0007 Phase 5. Read-only planner over one exact "
+                    "uncovered prepaid obligation and the typed per-currency "
+                    "funding position. No receivable is created for "
+                    "enforcement convenience."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="typed uncovered-service decision",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "recorded billing obligations",
+                                "typed per-currency subledger position",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="recorded billing obligations",
+                            owner="billing.obligations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="exact obligation state, period, and amounts",
+                        ),
+                        AuthorityInput(
+                            name="typed per-currency subledger position",
+                            owner="financial.customer_subledger",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "prepaid funding and unapplied credit lanes for "
+                                "the obligation's account and currency"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller owns the session; the planner reads exact "
+                            "facts and completes no transaction."
+                        ),
+                        locking=(
+                            "No read lock. collections.lifecycle locks its case "
+                            "before acting on the proposal."
+                        ),
+                        idempotency=(
+                            "Deterministic: identical obligation, position, and "
+                            "instant produce an identical proposal or None."
+                        ),
+                        retries="Reads may be retried without side effects.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="collections adapters",
+                        fail_closed_on=("a naive evaluation instant",),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "prepaid balance sweep threshold evaluation"
+                        ),
+                        new_owner="collections.prepaid_policy",
+                        verification=(
+                            "Underfunded, covered, and not-yet-started planner "
+                            "tests."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 5 gate: planner proposals match "
+                            "prepaid enforcement outcomes for the candidate "
+                            "cohort."
+                        ),
+                        fallback_retirement=(
+                            "Sweep threshold evaluation is removed after cutover."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_collections_target_lifecycle.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="collections.lifecycle",
+                module="app.services.collections.lifecycle",
+                owns=(
+                    "reason-scoped collections case workflow",
+                    "collections case close and reopen evidence",
+                ),
+                depends_on=(
+                    "collections.postpaid_policy",
+                    "collections.prepaid_policy",
+                    "events.owner_outputs",
+                    "runtime.durable_timers",
+                ),
+                notes=(
+                    "ADR 0007 Phase 5. One case per account/subscription/"
+                    "reason with warning and escalation states, exact durable "
+                    "timers, and idempotent consequence requests. It never "
+                    "mutates subscription or RADIUS state: only "
+                    "access.subscription_lifecycle applies or removes the "
+                    "matching reason-scoped restriction."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="reason-scoped collections case workflow",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed mode-policy proposals",
+                                "recorded collections cases",
+                            ),
+                            canonical_writer="collections.lifecycle",
+                        ),
+                        ConcernContract(
+                            name="collections case close and reopen evidence",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("recorded collections cases",),
+                            canonical_writer="collections.lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed mode-policy proposals",
+                            owner="collections.postpaid_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "CollectionsProposal values from the postpaid "
+                                "and prepaid planners"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="recorded collections cases",
+                            owner="collections.lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="collections_cases rows",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "advance and close each enter execute_owner_command "
+                            "once on a transaction-free session; timers and "
+                            "consequence outputs are staged as flush-only "
+                            "participants in the same transaction."
+                        ),
+                        locking=(
+                            "The live case row is locked FOR UPDATE before any "
+                            "transition; the partial unique index enforces one "
+                            "live case per (account, subscription, reason)."
+                        ),
+                        idempotency=(
+                            "Advancing a terminal case is a no-op; the "
+                            "consequence idempotency key is unique so access "
+                            "applies at most one restriction per request."
+                        ),
+                        retries=(
+                            "The complete command retries; a failed advance "
+                            "leaves the case, timer, and output unstaged."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "collections.lifecycle.active_caller_transaction",
+                            "collections.lifecycle.command_contract_violation",
+                            "collections.lifecycle.invalid_case_instant",
+                            "collections.lifecycle.invalid_command_context",
+                            "collections.lifecycle.missing_close_reason",
+                            "collections.lifecycle.nested_owner_command",
+                            "collections.lifecycle.nested_transaction_completion",
+                        ),
+                        mapping_owner="collections adapters and the timer runner",
+                        fail_closed_on=(
+                            "a naive case instant",
+                            "closing without close evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "collections.consequence_requested",
+                            "collections.case_closed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive; consequence requests carry "
+                            "their reason and idempotency key."
+                        ),
+                        replay=(
+                            "Outputs redeliver at least once; the access owner "
+                            "receipts them via events.owner_outputs."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "postpaid dunning workflow state and prepaid "
+                            "enforcement timer/notice fields"
+                        ),
+                        new_owner="collections.lifecycle",
+                        verification=(
+                            "Case ladder, consequence idempotency, close/"
+                            "restore, and timer replacement tests plus the ADR "
+                            "0007 guards."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 5 gate: shadow cases produce the "
+                            "same or explicitly approved outcomes as current "
+                            "dunning and prepaid enforcement for the full "
+                            "candidate cohort without duplicate consequences."
+                        ),
+                        fallback_retirement=(
+                            "dunning_runner, prepaid_balance_sweep, duplicate "
+                            "notice/timer fields, and parallel access actions "
+                            "are removed after cutover."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_collections_target_lifecycle.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.ledger",
                 module="app.services.billing.ledger",
                 owns=(
