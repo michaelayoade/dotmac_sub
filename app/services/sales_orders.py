@@ -130,6 +130,9 @@ def fulfill_from_customer_experience(
             "Only a fully paid or waived sales order can be fulfilled",
         )
     previous_status = order.status
+    assert_legal_sales_order_transition(
+        previous_status, SalesOrderStatus.fulfilled.value
+    )
     order.status = SalesOrderStatus.fulfilled.value
     metadata["cx_handoff_id"] = str(handoff_id)
     order.metadata_ = metadata
@@ -147,6 +150,62 @@ def fulfill_from_customer_experience(
     )
     db.flush()
     return True
+
+
+#: Legal edges of the SalesOrder's own lifecycle.
+#:
+#: This is the Sale pipeline's state machine, declared rather than scattered.
+#: Until now the edges lived as loose ``if`` guards across several functions,
+#: which is how a waived order came to be permanently stranded at ``confirmed``:
+#: no one could see the whole machine at once.
+#:
+#: ``payment_status`` deliberately has no table here. It is a Money-pipeline
+#: fact being migrated out to the ledger — giving it a Sale-owned state machine
+#: now would entrench the duplication. See SALE_TO_MONEY_HANDOFF_SOT.md.
+#:
+#: ``paid``/``fulfilled`` -> ``cancelled`` are deliberately absent. Cancelling
+#: an order that has taken money or delivered work strands a refund obligation
+#: and possibly a live subscription, and cancellation currently has NO owning
+#: command anywhere in the codebase — nothing assigns ``cancelled``; it is only
+#: ever read as a guard. Until that owner exists, the generic update may not
+#: perform it. Same reasoning as the deactivation guard in ``delete``.
+ALLOWED_SALES_ORDER_TRANSITIONS: dict[str, frozenset[str]] = {
+    SalesOrderStatus.draft.value: frozenset(
+        {
+            SalesOrderStatus.confirmed.value,
+            SalesOrderStatus.paid.value,
+            SalesOrderStatus.cancelled.value,
+        }
+    ),
+    SalesOrderStatus.confirmed.value: frozenset(
+        {
+            SalesOrderStatus.paid.value,
+            # A waived order rests at confirmed and is fulfilled from there.
+            SalesOrderStatus.fulfilled.value,
+            SalesOrderStatus.cancelled.value,
+        }
+    ),
+    SalesOrderStatus.paid.value: frozenset({SalesOrderStatus.fulfilled.value}),
+    SalesOrderStatus.fulfilled.value: frozenset(),
+    SalesOrderStatus.cancelled.value: frozenset(),
+}
+
+
+def assert_legal_sales_order_transition(
+    from_status: str | None, to_status: str | None
+) -> None:
+    """Reject an illegal SalesOrder lifecycle transition."""
+    if not to_status or not from_status or from_status == to_status:
+        return
+    if to_status not in ALLOWED_SALES_ORDER_TRANSITIONS.get(from_status, frozenset()):
+        detail = f"Illegal sales order transition {from_status} → {to_status}"
+        if to_status == SalesOrderStatus.cancelled.value:
+            detail += (
+                ". Cancelling an order that has taken money or delivered work "
+                "strands a refund obligation and has no owning command; it "
+                "cannot be done by setting a status"
+            )
+        raise HTTPException(status_code=409, detail=detail)
 
 
 #: Nothing further is owed on the order: either it was paid in full, or the
@@ -1773,6 +1832,11 @@ class SalesOrders(ListResponseMixin):
                     data.get("source") or sales_order.source or quote.lead.lead_source
                 )
 
+        # The declared machine governs every externally requested status
+        # change. Derived promotions below (a full payment moving the order to
+        # paid) are legal edges of the same table.
+        if "status" in data:
+            assert_legal_sales_order_transition(sales_order.status, data["status"])
         if data.get("payment_status") == _WAIVED and (
             sales_order.payment_status != _WAIVED
         ):
