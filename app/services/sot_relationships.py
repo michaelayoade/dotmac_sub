@@ -8883,6 +8883,131 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.as_built_plant_projection",
+                module="app.services.network.as_built_plant_projection",
+                owns=("fiber segment projection of accepted vendor as-built evidence",),
+                depends_on=("operations.vendor_project_records",),
+                notes=(
+                    "Accepted as-built geometry previously never reached the "
+                    "network record. This reconciler owns exactly one derived "
+                    "thing: the FiberSegment an accepted as-built represents and "
+                    "the as_built_routes.fiber_segment_id link. The evidence "
+                    "stays authoritative with operations.vendor_project_records, "
+                    "so a lost segment rebuilds from the accepted rows alone. It "
+                    "creates cable inactive: fiber_segments requires bound "
+                    "endpoints on an active row, and binding them into the graph "
+                    "is network.fiber_topology's decision. It never retires "
+                    "plant, never binds endpoints, and never deactivates a "
+                    "segment topology has since activated."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "fiber segment projection of accepted vendor "
+                                "as-built evidence"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=("accepted vendor as-built evidence",),
+                            canonical_writer="network.as_built_plant_projection",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="accepted vendor as-built evidence",
+                            owner="operations.vendor_project_records",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the accepted AsBuiltRoute, its route geometry, "
+                                "measured length, and line-item cable type and "
+                                "fiber count"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The acceptance decision owns the transaction; the "
+                            "projection stages the segment inside it. The repair "
+                            "sweep owns its own commit."
+                        ),
+                        locking=(
+                            "The accepted as-built row is already locked by the "
+                            "review decision that triggers the projection."
+                        ),
+                        idempotency=(
+                            "fiber_segment_id makes a replay refresh the same "
+                            "segment rather than mint a second cable."
+                        ),
+                        retries=(
+                            "Safe to re-run: reconcile_accepted_as_builts is a "
+                            "no-op for evidence already projected."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.as_built_plant_projection.as_built_not_found",
+                        ),
+                        mapping_owner="app.services.vendor_project_records",
+                    ),
+                    events=EventContract(
+                        event_types=("vendor_as_built.accepted",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Consumes the acceptance event emitted by "
+                            "operations.vendor_project_records; this owner emits "
+                            "none of its own, because a derived segment is not a "
+                            "new fact about the world."
+                        ),
+                        replay=(
+                            "Replaying an acceptance refreshes the same segment "
+                            "through fiber_segment_id rather than creating one."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name=(
+                                "fiber segment projection of accepted vendor "
+                                "as-built evidence"
+                            ),
+                            input_names=("accepted vendor as-built evidence",),
+                            writer="network.as_built_plant_projection",
+                            freshness=(
+                                "Written in the accepting transaction, so the "
+                                "fiber map cannot lag an acceptance already "
+                                "committed."
+                            ),
+                            stale_behavior=(
+                                "An unprojected acceptance leaves the segment "
+                                "absent rather than wrong; the map shows no "
+                                "cable instead of a stale route."
+                            ),
+                            drift_signal=(
+                                "An accepted as-built with NULL fiber_segment_id, "
+                                "reported by the dry-run reconcile."
+                            ),
+                            rebuild_operation=(
+                                "reconcile_accepted_as_builts(apply=True)"
+                            ),
+                            repair_owner="network.as_built_plant_projection",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="network.as_built_plant_projection",
+                        verification=(
+                            "Projection, idempotency, variation-refresh, "
+                            "unaccepted-evidence, missing-attribute, "
+                            "endpoint-abstention, and repair-sweep tests."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+                    test_refs=("tests/test_as_built_plant_projection.py",),
+                ),
+            ),
+            SOTService(
                 name="network.fiber_plant_integrity",
                 module="app.services.network.fiber_plant_integrity",
                 owns=(
@@ -13091,6 +13216,293 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
+        domain="workforce_operations",
+        services=(
+            SOTService(
+                name="operations.service_team_lifecycle",
+                module="app.services.service_team_lifecycle",
+                owns=(
+                    "service-team lifecycle",
+                    "service-team membership lifecycle",
+                    "staff service-team resolution",
+                    "active service-team selector projection",
+                    "service-team administration projection",
+                ),
+                depends_on=(
+                    "party.registry",
+                    "auth.staff_provisioning",
+                    "events.store",
+                    "observability.audit_log",
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="service-team lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed service-team command",
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            canonical_writer="operations.service_team_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="service-team membership lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed service-team command",
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            canonical_writer="operations.service_team_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="staff service-team resolution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="active service-team selector projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("current native service-team state",),
+                        ),
+                        ConcernContract(
+                            name="service-team administration projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed service-team command",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed create, update, activation, membership, and role "
+                                "commands with CommandContext and expected state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active staff authentication principal",
+                            owner="auth.staff_provisioning",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active SystemUser staff login and authorization principal"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Person Party identity",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active Person Party and reviewed "
+                                "SystemUser.person_party_id identity binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current native service-team state",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="ServiceTeam and ServiceTeamMember rows",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each public mutation enters execute_owner_command once on a "
+                            "transaction-free session; audit, outbox, team, and membership changes "
+                            "flush inside that root transaction."
+                        ),
+                        locking=(
+                            "Teams are selected by UUID, followed by staff-principal and Person "
+                            "Party identity then membership locks; case-insensitive team-name "
+                            "and team/person constraints arbitrate concurrent writes."
+                        ),
+                        idempotency=(
+                            "Create binds a caller-supplied team UUID; equivalent desired-state "
+                            "updates, activation changes, and membership commands replay while a "
+                            "deactivated row or changed evidence under one create identity fails "
+                            "closed."
+                        ),
+                        retries=(
+                            "Adapters retry the complete owner command only after full rollback "
+                            "and refetch current updated_at evidence after a stale rejection."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "service_team_invalid",
+                            "service_team_not_found",
+                            "service_team_staff_not_found",
+                            "service_team_staff_identity_unbound",
+                            "service_team_staff_identity_invalid",
+                            "service_team_name_conflict",
+                            "service_team_identity_collision",
+                            "service_team_stale",
+                            "service_team_reason_required",
+                            "service_team_inactive",
+                            "service_team_has_active_members",
+                            "service_team_member_not_found",
+                            "service_team_member_inactive",
+                            *owner_command_boundary_error_codes(
+                                "operations.service_team_lifecycle"
+                            ),
+                        ),
+                        mapping_owner="service-team web and API adapters",
+                        fail_closed_on=(
+                            "unknown, inactive, or Party-unbound selected staff identity",
+                            "reactivation or role change with retired staff identity",
+                            "stale lifecycle evidence",
+                            "team identity collision",
+                            "deactivation with active members",
+                            "zero or multiple active memberships during staff-team resolution",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "service_team.changed",
+                            "service_team.membership_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.store",
+                        compatibility=(
+                            "Version 1 carries team, command/correlation, operation, member, "
+                            "role, and actor identifiers without private staff payloads."
+                        ),
+                        replay=(
+                            "Native team/member rows plus transactional event and audit evidence "
+                            "reconstruct the lifecycle without workflow-setting mirrors."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="staff service-team resolution",
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            writer="operations.service_team_lifecycle",
+                            freshness="Transaction-current native database state.",
+                            stale_behavior=(
+                                "Return identity-unavailable, no-membership, or ambiguous; "
+                                "never select by row age or compare principal IDs to Party IDs."
+                            ),
+                            drift_signal=(
+                                "An active staff principal has zero or multiple matching active "
+                                "Party-backed memberships for a caller requiring one team."
+                            ),
+                            rebuild_operation=(
+                                "Requery the reviewed SystemUser-to-Party binding and native "
+                                "active memberships."
+                            ),
+                            repair_owner="operations.service_team_lifecycle",
+                        ),
+                        ProjectionContract(
+                            name="active service-team selector projection",
+                            input_names=("current native service-team state",),
+                            writer="operations.service_team_lifecycle",
+                            freshness="Transaction-current native database state.",
+                            stale_behavior=(
+                                "Fail the request rather than use workflow-setting fallback."
+                            ),
+                            drift_signal=(
+                                "Legacy workflow-setting team/member keys exist or differ from "
+                                "native row identity and active membership."
+                            ),
+                            rebuild_operation=(
+                                "Requery native ServiceTeam and ServiceTeamMember rows."
+                            ),
+                            repair_owner="operations.service_team_lifecycle",
+                        ),
+                        ProjectionContract(
+                            name="service-team administration projection",
+                            input_names=(
+                                "active staff authentication principal",
+                                "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            writer="operations.service_team_lifecycle",
+                            freshness="Transaction-current native database state.",
+                            stale_behavior=(
+                                "Render an explicit error; never fall back to retired settings."
+                            ),
+                            drift_signal=(
+                                "Membership references an absent staff principal or a duplicate "
+                                "case-insensitive team name exists."
+                            ),
+                            rebuild_operation=(
+                                "Recompose team, membership, and staff labels from native rows."
+                            ),
+                            repair_owner="operations.service_team_lifecycle",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "support.ticket_configuration workflow-setting team/member payloads "
+                            "and their settings-to-native mirror"
+                        ),
+                        new_owner="operations.service_team_lifecycle",
+                        verification=(
+                            "service-team owner behavior, migration, admin-surface, caller, and "
+                            "architecture tests"
+                        ),
+                        cutover_gate=(
+                            "settings payloads are backfilled and verified; every caller reads "
+                            "native projections; only this owner writes team/member rows"
+                        ),
+                        fallback_retirement=(
+                            "support_service_teams/support_service_team_members keys, ticket-"
+                            "settings editors, mirror helper, CRM hard-delete path, and direct "
+                            "team/member writers, including the old provider direct writer and "
+                            "email-matching agent projection, are absent"
+                        ),
+                    ),
+                    steward="operations administration",
+                    design_refs=(
+                        "docs/designs/SERVICE_TEAM_LIFECYCLE_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_service_team_lifecycle.py",
+                        "tests/test_service_team_web.py",
+                        "tests/architecture/test_service_team_lifecycle_boundary.py",
+                    ),
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.web.admin.service_teams",
+            "app.services.support_ticket_settings",
+            "app.services.team_inbox_*",
+            "app.services.workqueue.*",
+            "app.services.ticket_assignment.*",
+            "app.services.ticket_work_order_handoff",
+            "app.services.operational_escalation_delivery",
+            "app.services.projects",
+            "app.services.dispatch",
+        ),
+        rule=(
+            "Party and staff-principal owners supply identity; the service-team "
+            "owner supplies shared team topology and membership. Consumers "
+            "translate Party membership to their current principal-facing "
+            "identifiers through the owner's resolver and never write team rows "
+            "or restore settings mirrors."
+        ),
+    ),
+    DomainSOT(
         domain="support_operations",
         services=(
             SOTService(
@@ -15468,6 +15880,117 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="auth.vendor_user_provisioning",
+                module="app.services.vendor_user_provisioning",
+                owns=(
+                    "vendor portal login provisioning and revocation",
+                    "vendor organisation role assignment",
+                ),
+                depends_on=("auth.permission_gate",),
+                notes=(
+                    "One vendor login is a SystemUser marked UserType.vendor, a "
+                    "must-change local credential, and the FieldVendorUser "
+                    "membership auth resolves through; any subset is a broken "
+                    "identity, so all three are staged together. This owner never "
+                    "mints or delivers a usable secret. Capability for the "
+                    "assigned role is declared by field.vendor_capabilities; this "
+                    "owner stores the role and never decides what it may do."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor portal login provisioning and revocation",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("vendor portal login command",),
+                            canonical_writer="auth.vendor_user_provisioning",
+                        ),
+                        ConcernContract(
+                            name="vendor organisation role assignment",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("vendor portal login command",),
+                            canonical_writer="auth.vendor_user_provisioning",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="vendor portal login command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "staff-authorized vendor, identity, and role "
+                                "identifiers from the admin vendor surface"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Principal, credential, and membership commit together "
+                            "or not at all."
+                        ),
+                        locking="Email uniqueness is rechecked before the write.",
+                        idempotency=(
+                            "Email uniqueness on system_users makes a repeated "
+                            "provisioning attempt a refusal, never a duplicate "
+                            "principal."
+                        ),
+                        retries=(
+                            "No automatic retry: a collision is an identity "
+                            "question for staff to resolve."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.vendor_user_provisioning.vendor_not_found",
+                            "auth.vendor_user_provisioning.vendor_inactive",
+                            "auth.vendor_user_provisioning.email_in_use",
+                            "auth.vendor_user_provisioning.email_required",
+                            "auth.vendor_user_provisioning.name_required",
+                            "auth.vendor_user_provisioning.unknown_role",
+                            "auth.vendor_user_provisioning.membership_not_found",
+                            "auth.vendor_user_provisioning.active_caller_transaction",
+                            "auth.vendor_user_provisioning.command_contract_violation",
+                            "auth.vendor_user_provisioning.invalid_command_context",
+                            "auth.vendor_user_provisioning.nested_owner_command",
+                            "auth.vendor_user_provisioning.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.admin.vendors",
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_user.provisioned",
+                            "vendor_user.revoked",
+                            "vendor_user.role_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and carries vendor-user, "
+                            "field-vendor, principal, and role identity. It never "
+                            "carries a credential."
+                        ),
+                        replay=(
+                            "FieldVendorUser and its SystemUser rebuild membership "
+                            "and capability; the credential is never replayed."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="auth.vendor_user_provisioning",
+                        verification=(
+                            "Provisioning, identity-collision, inactive-vendor, "
+                            "role, revocation, and route-capability tests."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+                    test_refs=(
+                        "tests/test_vendor_identity.py",
+                        "tests/test_vendor_portal_auth.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="operations.installation_scope",
                 module="app.services.installation_projects",
                 owns=(
@@ -15605,6 +16128,343 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_sales_orders_services.py",
                         "tests/test_sot_relationships.py",
                     ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_material_release",
+                module="app.services.vendor_material_release",
+                owns=(
+                    "vendor project material release need and approval",
+                    "backoffice material issue outcome projection for vendors",
+                ),
+                depends_on=("operations.vendor_project_lifecycle",),
+                notes=(
+                    "field_material_requests is work-order scoped with a "
+                    "TechnicianProfile requester, so it models an employee on a "
+                    "customer job; this owner models a contractor drawing "
+                    "Dotmac-owned material for a project. Sub decides whether "
+                    "material is released and records the evidence; the "
+                    "configured provider owns the stock issue. Sub never posts "
+                    "stock and never selects a warehouse, and a provider refusal "
+                    "is recorded as an observation that never reverses a "
+                    "committed Sub approval."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor project material release need and approval",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer="operations.vendor_material_release",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "backoffice material issue outcome projection "
+                                "for vendors"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=("backoffice material issue outcome",),
+                            canonical_writer="operations.vendor_material_release",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle state",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the assigned vendor and the approved or "
+                                "in-progress state that makes material releasable"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="backoffice material issue outcome",
+                            owner="integration.dotmac_erp_material_support_adapter",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "the configured provider's issue or refusal, "
+                                "carried as a provider-neutral reference plus an "
+                                "explicit source-system name"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The vendor or staff adapter owns commit; this owner "
+                            "stages the request, review, or outcome."
+                        ),
+                        locking=(
+                            "Review and outcome application lock the release row."
+                        ),
+                        idempotency=(
+                            "Re-applying the same provider outcome writes the same "
+                            "values and never double-issues."
+                        ),
+                        retries=(
+                            "Provider delivery retries are the adapter's concern; "
+                            "the Sub approval stands regardless."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_material_release.release_not_found",
+                            "operations.vendor_material_release.project_not_found",
+                            "operations.vendor_material_release.project_not_assigned",
+                            "operations.vendor_material_release.project_not_releasable",
+                            "operations.vendor_material_release.items_required",
+                            "operations.vendor_material_release.invalid_quantity",
+                            "operations.vendor_material_release.not_reviewable",
+                            "operations.vendor_material_release.reason_required",
+                            "operations.vendor_material_release.outcome_not_applicable",
+                        ),
+                        mapping_owner="app.web.admin.vendor_operations",
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_material_release.requested",
+                            "vendor_material_release.reviewed",
+                            "vendor_material_release.issued",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries release, project, vendor, and "
+                            "provider-reference identity. It never carries stock "
+                            "levels or warehouse identity, which Sub does not own."
+                        ),
+                        replay=(
+                            "The release row and its items rebuild the request and "
+                            "the last observed provider outcome."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name=(
+                                "backoffice material issue outcome projection "
+                                "for vendors"
+                            ),
+                            input_names=("backoffice material issue outcome",),
+                            writer="operations.vendor_material_release",
+                            freshness=(
+                                "As fresh as the last provider observation; the "
+                                "row records when it was observed."
+                            ),
+                            stale_behavior=(
+                                "A stale or absent outcome leaves the release "
+                                "approved rather than claiming stock moved."
+                            ),
+                            drift_signal=(
+                                "An approved release with no support_status after "
+                                "the provider reports an issue."
+                            ),
+                            rebuild_operation=(
+                                "apply_provider_outcome with the provider's current "
+                                "state for the release"
+                            ),
+                            repair_owner=(
+                                "integration.dotmac_erp_material_support_adapter"
+                            ),
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="operations.vendor_material_release",
+                        verification=(
+                            "Request, assignment, releasable-state, line "
+                            "validation, approval, provider outcome, and "
+                            "idempotency tests."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/BACKOFFICE_INTEGRATION_BOUNDARY.md",
+                    ),
+                    test_refs=("tests/test_vendor_supply.py",),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_advances",
+                module="app.services.vendor_advances",
+                owns=(
+                    "vendor advance eligibility, ceiling, and approval",
+                    "payables settlement observation for vendor advances",
+                ),
+                depends_on=(
+                    "control.settings_spec",
+                    "operations.vendor_project_lifecycle",
+                ),
+                notes=(
+                    "Sub decides whether to advance money to a vendor and how "
+                    "much; the payables provider owns the payment and any netting "
+                    "against the vendor's later invoice. The amount is entered, "
+                    "not derived: staff approval is the control. Sub applies two "
+                    "limits only — a hard bound at the approved quote total, "
+                    "which is arithmetic rather than policy and counts advances "
+                    "already committed so it cannot be evaded by splitting a "
+                    "request, and an optional percentage guard rail from "
+                    "projects.vendor_advance_max_percent that defaults to no cap "
+                    "and can only lower that bound, never raise it. A settled "
+                    "advance is an observation of the provider, never a Sub "
+                    "decision; Sub never computes settlement and never adjusts an "
+                    "invoice total."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor advance eligibility, ceiling, and approval",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
+                                "vendor advance cap policy",
+                            ),
+                            canonical_writer="operations.vendor_advances",
+                        ),
+                        ConcernContract(
+                            name="payables settlement observation for vendor advances",
+                            role=OwnerRole.RECONCILER,
+                            input_names=("vendor payables settlement observation",),
+                            canonical_writer="operations.vendor_advances",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle state",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the assigned vendor and the approved or "
+                                "in-progress state that makes an advance available"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor project records",
+                            owner="operations.vendor_project_records",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the approved quote total and currency the advance "
+                                "draws against"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor advance cap policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "projects.vendor_advance_max_percent, an optional "
+                                "guard rail that defaults to no cap"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor payables settlement observation",
+                            owner="integration.dotmac_erp_payables_adapter",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "the payables provider's settlement state for the "
+                                "advance, carried as a provider-neutral reference"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The vendor or staff adapter owns commit; this owner "
+                            "stages the request, review, or observation."
+                        ),
+                        locking=(
+                            "Review and observation application lock the advance."
+                        ),
+                        idempotency=(
+                            "Re-applying the same settlement observation writes the "
+                            "same values; the ceiling check counts committed "
+                            "advances so a retry cannot double-commit."
+                        ),
+                        retries=(
+                            "Provider delivery retries are the adapter's concern; "
+                            "the Sub approval stands regardless."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_advances.advance_not_found",
+                            "operations.vendor_advances.project_not_found",
+                            "operations.vendor_advances.project_not_assigned",
+                            "operations.vendor_advances.project_not_advanceable",
+                            "operations.vendor_advances.approved_quote_required",
+                            "operations.vendor_advances.advance_ceiling_exceeded",
+                            "operations.vendor_advances.invalid_amount",
+                            "operations.vendor_advances.not_reviewable",
+                            "operations.vendor_advances.reason_required",
+                            "operations.vendor_advances.observation_not_applicable",
+                        ),
+                        mapping_owner="app.web.admin.vendor_operations",
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_advance.requested",
+                            "vendor_advance.reviewed",
+                            "vendor_advance.settled",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries advance, project, vendor, quote, "
+                            "amount, and currency. Settlement identity is a "
+                            "provider reference, never a Sub payment record."
+                        ),
+                        replay=(
+                            "The advance row rebuilds the decision and the last "
+                            "observed payables state; Sub never recomputes "
+                            "settlement."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name=(
+                                "payables settlement observation for vendor advances"
+                            ),
+                            input_names=("vendor payables settlement observation",),
+                            writer="operations.vendor_advances",
+                            freshness=(
+                                "As fresh as the last payables observation; the row "
+                                "records when it was observed."
+                            ),
+                            stale_behavior=(
+                                "A stale or unavailable observation retains the last "
+                                "good one and leaves the advance approved rather "
+                                "than claiming it was paid."
+                            ),
+                            drift_signal=(
+                                "An approved advance whose payables_status has not "
+                                "advanced since approval."
+                            ),
+                            rebuild_operation=(
+                                "apply_payables_observation with the provider's "
+                                "current state for the advance"
+                            ),
+                            repair_owner="integration.dotmac_erp_payables_adapter",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="operations.vendor_advances",
+                        verification=(
+                            "Quote-total bound, stacking, released-ceiling, "
+                            "configured-cap, cap-cannot-raise-the-bound, "
+                            "assignment, advanceable-state, approval, and "
+                            "observed-settlement tests."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/BACKOFFICE_INTEGRATION_BOUNDARY.md",
+                    ),
+                    test_refs=("tests/test_vendor_supply.py",),
                 ),
             ),
             SOTService(
@@ -16068,6 +16928,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     design_refs=(
                         "docs/designs/VENDOR_PROJECT_REVIEW_UI.md",
                         "docs/designs/UI_PROJECTION_CONTRACTS.md",
+                        "docs/designs/VENDOR_ROUTE_REVISION_AUTHORING.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
@@ -16076,6 +16937,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_vendor_submission_proposals.py",
                         "tests/test_vendor_project_review.py",
                         "tests/test_vendor_as_built_review.py",
+                        "tests/test_vendor_route_revision_authoring.py",
                         "tests/architecture/test_vendor_project_workspace_boundary.py",
                         "tests/test_vendor_action_eligibility.py",
                     ),
@@ -16267,6 +17129,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     steward="vendor operations",
                     design_refs=(
                         "docs/designs/VENDOR_PROJECT_REVIEW_UI.md",
+                        "docs/designs/VENDOR_ROUTE_REVISION_AUTHORING.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
@@ -16275,6 +17138,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_vendor_submission_proposals.py",
                         "tests/test_vendor_route_review.py",
                         "tests/test_vendor_as_built_review.py",
+                        "tests/test_vendor_route_revision_authoring.py",
                         "tests/architecture/test_vendor_project_workspace_boundary.py",
                     ),
                 ),

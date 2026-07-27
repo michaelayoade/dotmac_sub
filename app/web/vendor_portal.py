@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -16,6 +17,7 @@ from app.schemas.vendor_portal import (
     VendorAsBuiltCreate,
     VendorQuoteCreate,
     VendorQuoteLineCreate,
+    VendorRouteRevisionCreate,
 )
 from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceCreate,
@@ -25,11 +27,14 @@ from app.services import vendor_submission_proposals
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.field import vendor_capabilities
 from app.services.field.vendor_auth import vendor_context
 from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_operations import (
     AddVendorQuoteLineCommand,
     CreateVendorQuoteCommand,
+    CreateVendorRouteRevisionCommand,
+    SubmitVendorRouteRevisionCommand,
     vendor_portal_operations,
 )
 from app.services.vendor_purchase_invoices import (
@@ -38,7 +43,7 @@ from app.services.vendor_purchase_invoices import (
     UploadVendorPurchaseInvoiceAttachmentCommand,
     vendor_purchase_invoices,
 )
-from app.services.vendor_routes_api import build_project_route_geojson
+from app.services.vendor_routes_api import build_vendor_project_route_geojson
 from app.services.vendor_submission_proposals import (
     ConfirmVendorSubmissionCommand,
 )
@@ -75,6 +80,8 @@ def _submission_http_error(exc: DomainError) -> HTTPException:
         "quote_not_submittable": 409,
         "quote_not_reviewable": 409,
         "quote_line_required": 422,
+        "route_revision_not_found": 404,
+        "route_revision_not_draft": 409,
         "as_built_evidence_required": 422,
         "invalid_as_built_route": 422,
         "invoice_not_found": 404,
@@ -107,12 +114,22 @@ def _command_context(auth: dict, *, vendor_id: str, reason: str) -> CommandConte
     )
 
 
-def _context(auth: dict, db: Session) -> dict:
+def _context(auth: dict, db: Session, capability: str | None = None) -> dict:
     context = vendor_context(db, auth)
     if not context.get("native_vendor_id"):
         raise HTTPException(
             status_code=409,
             detail="Vendor account is not linked to the native vendor domain",
+        )
+    # The API gates capability with a FastAPI dependency; these handlers resolve
+    # the vendor context themselves, so the same check lands here instead. Both
+    # read from the one declaring owner.
+    if capability is not None and not vendor_capabilities.has_capability(
+        context, capability
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=vendor_capabilities.refusal_message(capability),
         )
     return context
 
@@ -122,13 +139,30 @@ def _redirect(project_id: str, message: str | None = None) -> RedirectResponse:
     return RedirectResponse(f"/vendor/projects/{project_id}{suffix}", status_code=303)
 
 
+def _route_revision_payload(
+    geojson: str,
+    length_meters: float | None,
+) -> VendorRouteRevisionCreate:
+    try:
+        geometry = json.loads(geojson)
+        return VendorRouteRevisionCreate(
+            geojson=geometry,
+            length_meters=length_meters,
+        )
+    except (json.JSONDecodeError, TypeError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Trace a valid route with at least two map points.",
+        ) from exc
+
+
 @router.get("", response_class=HTMLResponse)
 def vendor_dashboard(
     request: Request,
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.PROJECT_READ)
     vendor_id = str(context["native_vendor_id"])
     return templates.TemplateResponse(
         "vendor/dashboard.html",
@@ -153,7 +187,7 @@ def vendor_project_detail(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.PROJECT_READ)
     vendor_id = str(context["native_vendor_id"])
     project = next(
         (
@@ -186,7 +220,11 @@ def vendor_project_detail(
     # the planned route as tracing context. Rendered server-side rather than a
     # client fetch — the vendor portal authenticates by ownership, not the
     # admin route API.
-    route_geojson = build_project_route_geojson(db, str(project["id"]))
+    route_geojson = build_vendor_project_route_geojson(
+        db,
+        str(project["id"]),
+        vendor_id,
+    )
     return templates.TemplateResponse(
         "vendor/project_detail.html",
         {
@@ -208,7 +246,7 @@ def vendor_create_quote(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
     vendor_id = str(context["native_vendor_id"])
     command_context = _command_context(
         auth,
@@ -240,7 +278,7 @@ def vendor_start_project(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.PROJECT_EXECUTE)
     proposal = _submission_call(
         lambda: vendor_submission_proposals.issue_project_lifecycle(
             db,
@@ -267,7 +305,7 @@ def vendor_complete_project(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.PROJECT_EXECUTE)
     proposal = _submission_call(
         lambda: vendor_submission_proposals.issue_project_lifecycle(
             db,
@@ -298,7 +336,7 @@ def vendor_add_quote_line(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
     vendor_id = str(context["native_vendor_id"])
     command_context = _command_context(
         auth,
@@ -333,7 +371,7 @@ def vendor_submit_quote(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
     proposal = _submission_call(
         lambda: vendor_submission_proposals.issue_quote_submission(
             db,
@@ -352,6 +390,70 @@ def vendor_submit_quote(
     )
 
 
+@router.post("/projects/{project_id}/quotes/{quote_id}/route-revisions")
+def vendor_create_route_revision(
+    project_id: str,
+    quote_id: str,
+    geojson: str = Form(...),
+    length_meters: float | None = Form(default=None),
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(get_db),
+):
+    context = _context(auth, db)
+    vendor_id = str(context["native_vendor_id"])
+    payload = _route_revision_payload(geojson, length_meters)
+    command_context = _command_context(
+        auth,
+        vendor_id=vendor_id,
+        reason="vendor_route_revision_creation",
+    )
+    db_session_adapter.release_read_transaction(db)
+    result = _submission_call(
+        lambda: vendor_portal_operations.create_route_revision(
+            db,
+            CreateVendorRouteRevisionCommand(
+                context=command_context,
+                quote_id=quote_id,
+                payload=payload,
+                vendor_id=vendor_id,
+            ),
+        )
+    )
+    return _redirect(
+        project_id,
+        f"Route revision {result['revision_number']} saved as draft",
+    )
+
+
+@router.post("/projects/{project_id}/route-revisions/{revision_id}/submit")
+def vendor_submit_route_revision(
+    project_id: str,
+    revision_id: str,
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(get_db),
+):
+    context = _context(auth, db)
+    vendor_id = str(context["native_vendor_id"])
+    command_context = _command_context(
+        auth,
+        vendor_id=vendor_id,
+        reason="vendor_route_revision_submission",
+    )
+    db_session_adapter.release_read_transaction(db)
+    _submission_call(
+        lambda: vendor_portal_operations.submit_route_revision(
+            db,
+            SubmitVendorRouteRevisionCommand(
+                context=command_context,
+                revision_id=revision_id,
+                vendor_id=vendor_id,
+                user_id=str(auth["principal_id"]),
+            ),
+        )
+    )
+    return _redirect(project_id, "Route revision submitted for review")
+
+
 @router.post("/projects/{project_id}/as-built")
 def vendor_submit_as_built(
     request: Request,
@@ -362,7 +464,7 @@ def vendor_submit_as_built(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.AS_BUILT_WRITE)
     proposal = _submission_call(
         lambda: vendor_submission_proposals.issue_as_built_submission(
             db,
@@ -394,7 +496,7 @@ def vendor_create_invoice(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
     vendor_id = str(context["native_vendor_id"])
     command_context = _command_context(
         auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_creation"
@@ -429,7 +531,7 @@ def vendor_add_invoice_line(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
     vendor_id = str(context["native_vendor_id"])
     command_context = _command_context(
         auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_line_addition"
@@ -462,7 +564,7 @@ async def vendor_upload_invoice_attachment(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
     vendor_id = str(context["native_vendor_id"])
     command_context = _command_context(
         auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_attachment_upload"
@@ -493,7 +595,7 @@ def vendor_submit_invoice(
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
+    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
     proposal = _submission_call(
         lambda: vendor_submission_proposals.issue_purchase_invoice_submission(
             db,
