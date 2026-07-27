@@ -61,6 +61,7 @@ class TopupIntentStatus(str, Enum):
     completed = "completed"
     expired = "expired"
     canceled = "canceled"
+    rejected = "rejected"
     # A charge the gateway declined. Distinct from ``canceled`` (the customer
     # walked away) and ``expired`` (we gave up waiting). The saved-card path was
     # already passing "failed" — it just was not a member, so the write raised
@@ -113,11 +114,19 @@ class TopupIntentFailureReason(str, Enum):
     gateway_charge_failed = "gateway_charge_failed"
 
 
+class DirectTransferProofRejectionSource(str, Enum):
+    """Named evidence paths allowed to reject a proof-linked transfer intent."""
+
+    payment_proof_review = "payment_proof_review"
+    rejected_proof_reconciliation = "rejected_proof_reconciliation"
+
+
 _VALID_TOPUP_STATUSES: frozenset[str] = frozenset(s.value for s in TopupIntentStatus)
 _TOPUP_TERMINAL_STATUSES: frozenset[str] = frozenset(
     {
         TopupIntentStatus.expired.value,
         TopupIntentStatus.canceled.value,
+        TopupIntentStatus.rejected.value,
         # A declined charge that later settles is a late recovery worth seeing,
         # exactly like the other two.
         TopupIntentStatus.failed.value,
@@ -264,6 +273,30 @@ class TopupIntentProofLinkResult:
     intent_id: UUID
     proof_id: UUID
     status: TopupIntentStatus
+
+
+@dataclass(frozen=True, slots=True)
+class RejectDirectTransferProofIntentCommand:
+    """Exact rejected-proof evidence admitted by the intent participant."""
+
+    proof_id: UUID
+    account_id: UUID
+    reference: str
+    amount: Decimal
+    currency: str
+    rejected_at: datetime
+    source: DirectTransferProofRejectionSource
+    intent_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TopupIntentProofRejectionResult:
+    """Immutable result of rejecting one linked direct-transfer intent."""
+
+    intent_id: UUID | None
+    proof_id: UUID
+    status: TopupIntentStatus | None
+    changed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1223,4 +1256,133 @@ def stage_direct_transfer_proof_submission(
         intent_id=intent.id,
         proof_id=proof_id,
         status=TopupIntentStatus.submitted,
+    )
+
+
+def stage_direct_transfer_proof_rejection(
+    db: Session,
+    command: RejectDirectTransferProofIntentCommand,
+    *,
+    context: CommandContext,
+) -> TopupIntentProofRejectionResult:
+    """Reject the exact transfer intent linked to a rejected payment proof.
+
+    A payment proof may also be submitted outside the customer direct-transfer
+    flow. In that case no linked intent exists and this participant is a
+    deliberate no-op. Supplying ``intent_id`` makes absence an error and is used
+    by the evidence-bound reconciliation command.
+    """
+
+    query = select(TopupIntent).where(
+        TopupIntent.provider_type == DIRECT_TRANSFER_PROVIDER,
+        TopupIntent.metadata_["payment_proof_id"].as_string() == str(command.proof_id),
+    )
+    if command.intent_id is not None:
+        query = query.where(TopupIntent.id == command.intent_id)
+    intents = tuple(db.scalars(query.order_by(TopupIntent.id).with_for_update()).all())
+    if not intents:
+        if command.intent_id is None:
+            return TopupIntentProofRejectionResult(
+                intent_id=None,
+                proof_id=command.proof_id,
+                status=None,
+                changed=False,
+            )
+        raise _error(
+            "proof_link_not_found",
+            "Rejected payment proof is not linked to the expected top-up intent",
+            intent_id=str(command.intent_id),
+            payment_proof_id=str(command.proof_id),
+        )
+    if len(intents) != 1:
+        raise _error(
+            "proof_link_ambiguous",
+            "Rejected payment proof is linked to multiple top-up intents",
+            payment_proof_id=str(command.proof_id),
+            intent_ids=[str(intent.id) for intent in intents],
+        )
+
+    intent = intents[0]
+    reference = command.reference.strip()
+    currency = command.currency.strip().upper()
+    amount = round_money(to_decimal(command.amount))
+    if intent.account_id != command.account_id:
+        raise _error(
+            "account_mismatch",
+            "Rejected payment proof does not belong to the linked top-up account",
+            intent_id=str(intent.id),
+            account_id=str(command.account_id),
+        )
+    if (
+        intent.reference != reference
+        or intent.currency != currency
+        or round_money(intent.requested_amount) != amount
+    ):
+        raise _error(
+            "proof_evidence_mismatch",
+            "Rejected payment proof does not match its linked top-up intent",
+            intent_id=str(intent.id),
+            payment_proof_id=str(command.proof_id),
+        )
+    if intent.status == TopupIntentStatus.rejected.value:
+        return TopupIntentProofRejectionResult(
+            intent_id=intent.id,
+            proof_id=command.proof_id,
+            status=TopupIntentStatus.rejected,
+            changed=False,
+        )
+    if intent.status != TopupIntentStatus.submitted.value:
+        raise _error(
+            "invalid_transition",
+            "Only a submitted direct-transfer intent can be rejected with its proof",
+            intent_id=str(intent.id),
+            status=intent.status,
+        )
+
+    rejected_at = _as_utc(command.rejected_at)
+    if rejected_at is None:
+        raise _error(
+            "rejection_time_invalid",
+            "Direct-transfer rejection time is required",
+            intent_id=str(intent.id),
+        )
+    set_topup_intent_status(
+        intent,
+        TopupIntentStatus.rejected,
+        source=command.source.value,
+    )
+    metadata = dict(intent.metadata_ or {})
+    metadata.update(
+        {
+            "rejected_payment_proof_id": str(command.proof_id),
+            "rejection_source": command.source.value,
+            "rejected_at": rejected_at.isoformat(),
+        }
+    )
+    intent.metadata_ = metadata
+    db.add(intent)
+    emit_event(
+        db,
+        EventType.topup_intent_direct_transfer_rejected,
+        {
+            "schema_version": 1,
+            "topup_intent_id": str(intent.id),
+            "payment_proof_id": str(command.proof_id),
+            "account_id": str(intent.account_id),
+            "status": intent.status,
+            "source": command.source.value,
+            "rejected_at": rejected_at.isoformat(),
+            "command_id": str(context.command_id),
+            "correlation_id": str(context.correlation_id),
+        },
+        actor=context.actor,
+        subscriber_id=intent.account_id,
+        account_id=intent.account_id,
+    )
+    db.flush()
+    return TopupIntentProofRejectionResult(
+        intent_id=intent.id,
+        proof_id=command.proof_id,
+        status=TopupIntentStatus.rejected,
+        changed=True,
     )

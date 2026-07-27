@@ -109,7 +109,14 @@ def _submit(db_session, sub, amount="5000", reference=None, file_path="x.png"):
     )
 
 
-def _direct_transfer_intent(db_session, sub, *, status="pending") -> TopupIntent:
+def _direct_transfer_intent(
+    db_session,
+    sub,
+    *,
+    status="pending",
+    account_credit_deposit=False,
+) -> TopupIntent:
+    intent_idempotency_key = f"payment-proof-test-{uuid4()}"
     intent = TopupIntent(
         account_id=sub.id,
         reference=f"TRF-{uuid4().hex[:12].upper()}",
@@ -117,7 +124,20 @@ def _direct_transfer_intent(db_session, sub, *, status="pending") -> TopupIntent
         currency="NGN",
         requested_amount=Decimal("5000.00"),
         status=status,
-        metadata_={"payment_method": "bank_transfer"},
+        purpose="account_credit_deposit" if account_credit_deposit else None,
+        allocation_policy="credit_only" if account_credit_deposit else None,
+        credit_application_policy=(
+            "pay_eligible_invoices" if account_credit_deposit else None
+        ),
+        policy_version=1 if account_credit_deposit else None,
+        preview_fingerprint="a" * 64 if account_credit_deposit else None,
+        idempotency_key=(intent_idempotency_key if account_credit_deposit else None),
+        channel="customer_selfcare" if account_credit_deposit else None,
+        created_by=str(sub.id) if account_credit_deposit else None,
+        metadata_={
+            "payment_method": "bank_transfer",
+            "payment_flow": "account_topup" if account_credit_deposit else "",
+        },
     )
     db_session.add(intent)
     db_session.commit()
@@ -229,6 +249,84 @@ def test_direct_transfer_submission_rolls_back_proof_when_intent_staging_fails(
         .count()
         == 0
     )
+
+
+def test_reject_closes_linked_deposit_intent_and_unblocks_new_deposit(db_session):
+    sub = _account(db_session)
+    intent = _direct_transfer_intent(
+        db_session,
+        sub,
+        account_credit_deposit=True,
+    )
+    proof = _submit_direct_transfer(db_session, sub, intent)
+
+    assert (
+        AccountCreditDeposits.active_request(db_session, account_id=sub.id) is not None
+    )
+
+    result = _reject(
+        db_session,
+        proof.id,
+        verified_by="admin-1",
+        review_notes="Receipt could not be matched",
+    )
+
+    db_session.expire_all()
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert result["status"] == "rejected"
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.rejected.value
+    assert persisted_intent.metadata_["rejected_payment_proof_id"] == str(proof.id)
+    assert persisted_intent.metadata_["rejection_source"] == "payment_proof_review"
+    assert AccountCreditDeposits.active_request(db_session, account_id=sub.id) is None
+    rejected = AccountCreditDeposits.latest_rejected_request(
+        db_session,
+        account_id=sub.id,
+    )
+    assert rejected is not None
+    assert rejected.intent_id == intent.id
+    assert (
+        db_session.query(EventStore)
+        .filter(
+            EventStore.event_type == "topup_intent.direct_transfer_rejected",
+        )
+        .count()
+        == 1
+    )
+
+
+def test_reject_rolls_back_proof_when_linked_intent_rejection_fails(
+    db_session, monkeypatch
+):
+    from app.services import topup_intents
+
+    sub = _account(db_session)
+    intent = _direct_transfer_intent(db_session, sub)
+    proof = _submit_direct_transfer(db_session, sub, intent)
+
+    def fail_intent_rejection(*_args, **_kwargs):
+        raise RuntimeError("intent rejection unavailable")
+
+    monkeypatch.setattr(
+        topup_intents,
+        "stage_direct_transfer_proof_rejection",
+        fail_intent_rejection,
+    )
+    with pytest.raises(RuntimeError, match="intent rejection unavailable"):
+        _reject(
+            db_session,
+            proof.id,
+            verified_by="admin-1",
+            review_notes="Receipt could not be matched",
+        )
+
+    db_session.expire_all()
+    persisted_proof = db_session.get(PaymentProof, proof.id)
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert persisted_proof is not None
+    assert persisted_proof.status is PaymentProofStatus.submitted
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.submitted.value
 
 
 def test_direct_transfer_submission_rejects_stale_intent_before_proof_creation(

@@ -79,12 +79,34 @@ def test_payment_proof_commands_are_transport_neutral_and_complete_once() -> Non
         "reject_proof",
     }
     assert all("context" in arguments for arguments in public_commands.values())
-    assert source.count("execute_owner_command(") == 4
+    assert "def repair_rejected_deposit_intents(" in source
+    assert source.count("execute_owner_command(") == 5
     assert "commit" not in calls
     assert "rollback" not in calls
     assert "begin_nested" not in calls
     assert "HTTPException" not in source
     assert "fastapi" not in source
+
+
+def test_rejected_intent_repair_is_dry_run_first_and_owner_managed() -> None:
+    service = sot_relationships.service_relationship("financial.payment_proofs")
+    concern = next(
+        item
+        for item in service.contract.concerns
+        if item.name == "rejected payment-proof top-up intent reconciliation"
+    )
+    adapter = (ROOT / "scripts/one_off/repair_rejected_deposit_intents.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert concern.canonical_writer == "financial.payment_proofs"
+    assert "preview_rejected_deposit_intent_repairs(" in adapter
+    assert "repair_rejected_deposit_intents(" in adapter
+    assert "if not args.apply:" in adapter
+    assert "--confirm-fingerprint" in adapter
+    assert "--target" in adapter
+    for forbidden in ("db.commit(", "db.rollback(", "TopupIntent(", "PaymentProof("):
+        assert forbidden not in adapter
 
 
 def test_payment_proof_owner_stages_named_transition_events() -> None:

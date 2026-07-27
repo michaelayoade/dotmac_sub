@@ -140,6 +140,18 @@ class ActiveDepositRequest:
     observed_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class RejectedDepositRequest:
+    """Latest rejected request shown until the customer starts another deposit."""
+
+    intent_id: uuid.UUID
+    reference: str
+    amount: Decimal
+    currency: str
+    rejected_at: datetime
+    observed_at: datetime
+
+
 @dataclass(frozen=True)
 class DepositPreview:
     account_id: uuid.UUID
@@ -416,6 +428,41 @@ class AccountCreditDeposits:
             created_at=intent.created_at,
             expires_at=intent.expires_at,
             observed_at=observed,
+        )
+
+    @staticmethod
+    def latest_rejected_request(
+        db: Session,
+        *,
+        account_id: uuid.UUID,
+        observed_at: datetime | None = None,
+    ) -> RejectedDepositRequest | None:
+        """Return a rejection only when it is the account's latest deposit request."""
+
+        intent = db.scalar(
+            select(TopupIntent)
+            .where(
+                TopupIntent.account_id == account_id,
+                TopupIntent.purpose == PURPOSE,
+            )
+            .order_by(TopupIntent.created_at.desc(), TopupIntent.id.desc())
+        )
+        if intent is None or intent.status != TopupIntentStatus.rejected.value:
+            return None
+        raw_rejected_at = str((intent.metadata_ or {}).get("rejected_at") or "")
+        try:
+            rejected_at = datetime.fromisoformat(raw_rejected_at)
+        except ValueError:
+            rejected_at = intent.updated_at
+        if rejected_at.tzinfo is None:
+            rejected_at = rejected_at.replace(tzinfo=UTC)
+        return RejectedDepositRequest(
+            intent_id=intent.id,
+            reference=intent.reference,
+            amount=round_money(intent.requested_amount),
+            currency=intent.currency,
+            rejected_at=rejected_at.astimezone(UTC),
+            observed_at=observed_at or datetime.now(UTC),
         )
 
     @staticmethod
@@ -890,6 +937,7 @@ __all__ = [
     "AccountCreditDepositSettlementSource",
     "DepositEligibilityError",
     "DepositPreview",
+    "RejectedDepositRequest",
     "DepositSettlementResult",
     "SettleAccountCreditDepositCommand",
     "StagedDepositSettlement",

@@ -235,7 +235,14 @@ def _active_direct_transfer_deposit(
         requested_amount=Decimal("20000.00"),
         status=status,
         expires_at=expires_at,
-        metadata_={"payment_flow": "account_credit_deposit"},
+        metadata_={
+            "payment_flow": "account_credit_deposit",
+            **(
+                {"rejected_at": "2026-07-27T10:00:00+00:00"}
+                if status == "rejected"
+                else {}
+            ),
+        },
     )
     db_session.add(intent)
     db_session.commit()
@@ -333,6 +340,36 @@ def test_get_topup_page_ignores_expired_deposit_request(
 
     assert page["deposit_allowed"] is True
     assert "active_deposit_request" not in page
+
+
+def test_get_topup_page_allows_replacement_and_explains_latest_rejection(
+    monkeypatch,
+    db_session,
+    subscriber,
+):
+    _patch_topup_settings(monkeypatch)
+    intent = _active_direct_transfer_deposit(
+        db_session,
+        subscriber,
+        status="rejected",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["deposit_allowed"] is True
+    assert "active_deposit_request" not in page
+    assert page["rejected_deposit_request"] == {
+        "intent_id": str(intent.id),
+        "reference": intent.reference,
+        "amount": Decimal("20000.00"),
+        "currency": "NGN",
+        "rejected_at": datetime(2026, 7, 27, 10, 0, tzinfo=UTC),
+        "observed_at": page["rejected_deposit_request"]["observed_at"],
+    }
 
 
 def test_get_topup_page_degrades_runtime_failure_to_direct_transfer(

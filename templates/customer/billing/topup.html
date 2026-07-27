@@ -60,6 +60,13 @@
         {% endif %}
     </div>
     {% endif %}
+    {% if rejected_deposit_request %}
+    <div class="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-900 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-200">
+        <p class="font-semibold">Your previous transfer receipt was rejected.</p>
+        <p class="mt-1">Reference {{ rejected_deposit_request.reference }} for {{ rejected_deposit_request.currency }} {{ "{:,.2f}".format(rejected_deposit_request.amount) }} could not be verified. You can start a new deposit below.</p>
+        <p class="mt-1">Check your billing notification for the review reason or contact support if you need help.</p>
+    </div>
+    {% endif %}
 
     {% if eligible_unpaid_invoices %}
     <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/40 dark:bg-amber-900/20">

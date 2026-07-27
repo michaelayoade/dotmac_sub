@@ -76,6 +76,15 @@ Expired and terminal requests are not active blockers. Customer adapters render
 this result and disable a replacement deposit while it is active; they do not
 filter `TopupIntent.status` or infer the next action independently.
 
+Payment-proof rejection and the linked direct-transfer intent transition are
+atomic. `financial.payment_proofs` owns the review command and composes the
+flush-only `financial.topup_intents` participant. Exact proof, intent, account,
+reference, amount, and currency evidence must match before a submitted intent
+can become terminal `rejected`. The customer may then start another deposit
+immediately. The portal shows the latest rejection until a newer deposit
+request exists; the payment-proof notification remains the owner of the
+staff-supplied review reason.
+
 The owner-generated preview is mandatory before checkout starts. For the exact
 requested amount it reports:
 
@@ -155,6 +164,15 @@ invoices with unused compatible credit, overallocated payments, completed
 deposit intents without exact settlement evidence, duplicate provider
 references and unresolved deposit webhooks. Repair invokes the canonical
 applicator; it never invents payments or infers cash from memo text.
+
+Legacy drift where a rejected proof remains linked to a submitted Deposit
+Account Credit intent is repaired through
+`scripts.one_off.repair_rejected_deposit_intents`. The adapter is dry-run first,
+prints a deterministic fingerprint, and requires that exact fresh fingerprint
+plus a named target, attributable actor, and reason for apply. The
+`financial.payment_proofs` reconciliation owner re-locks and rechecks every
+proof/intent pair, quarantines incomplete or mismatched evidence, stages the
+canonical intent rejection, and records item and batch audit evidence.
 
 Customer-facing pages say “Deposit Account Credit”, show current credit, show
 the live owner-generated allocation preview, and permit checkout even when

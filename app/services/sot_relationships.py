@@ -2009,6 +2009,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "direct bank-transfer availability and configured-account projection",
                     "invoice direct-transfer intent record creation and replacement",
                     "direct-transfer top-up intent proof submission transition",
+                    "direct-transfer top-up intent proof rejection transition",
                     "gateway invoice and reseller checkout intent record creation",
                     "saved-card top-up intent failure projection",
                     "top-up intent completed-payment projection",
@@ -2027,6 +2028,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "The participant derives direct-transfer availability from canonical "
                     "active collection-account destinations and customer "
                     "instructions. It is the canonical invoice-intent, proof-link, "
+                    "proof-rejection, "
                     "completed-payment, and gateway-expiry projection writer. Cash remains "
                     "authoritative in the payment owner; callers compose or idempotently "
                     "repair the intent projection without parallel field writers."
@@ -2065,6 +2067,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical direct-transfer top-up intent",
                                 "direct-transfer proof-link command evidence",
+                                "top-up intent transition protocol",
+                            ),
+                            canonical_writer="financial.topup_intents",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "direct-transfer top-up intent proof rejection transition"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical direct-transfer top-up intent",
+                                "direct-transfer proof-rejection command evidence",
                                 "top-up intent transition protocol",
                             ),
                             canonical_writer="financial.topup_intents",
@@ -2224,13 +2238,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="direct-transfer proof-rejection command evidence",
+                            owner="financial.payment_proofs",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed rejected PaymentProof identity, account, reference, "
+                                "amount, currency, rejection time/source, optional expected "
+                                "intent identity, and correlated CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="top-up intent transition protocol",
                             owner="financial.topup_intents",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "canonical provider identity, status vocabulary, pending-to-"
-                                "submitted eligibility, proof-link uniqueness, and event "
-                                "vocabulary"
+                                "submitted and submitted-to-rejected eligibility, proof-link "
+                                "uniqueness, and event vocabulary"
                             ),
                         ),
                     ),
@@ -2239,7 +2263,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         boundary=(
                             "A creation, payment-proof, payment-settlement, webhook, portal, "
                             "reseller, or reconciliation caller supplies the transaction; "
-                            "this participant stages intent creation, replacement, proof, "
+                            "this participant stages intent creation, replacement, proof "
+                            "submission/rejection, "
                             "failure/completion/expiry projection, and events without "
                             "committing or rolling back. Cash-first payment owners may commit confirmed "
                             "money before invoking this idempotent repairable projection."
@@ -2247,7 +2272,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         locking=(
                             "Creation holds the canonical account lock before pending intent "
                             "replacement. Gateway creation locks the account or billing "
-                            "account before its reference; proof submission locks the exact intent. Completion "
+                            "account before its reference; proof submission/rejection locks "
+                            "the exact intent. Completion "
                             "locks subscriber or billing-account scope, exact intent, then "
                             "succeeded Payment before scope/provider/currency/link evidence "
                             "is rechecked; expiry uses the same scope and intent locks."
@@ -2255,7 +2281,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         idempotency=(
                             "A stable creation key replays the matching pending invoice "
                             "intent; a fresh creation explicitly cancels prior pending "
-                            "attempts. One pending intent accepts one proof link. Replaying "
+                            "attempts. One pending intent accepts one proof link. Rejected "
+                            "proof evidence moves only its exact submitted intent to a "
+                            "terminal rejected state; replay is a no-op. Replaying "
                             "the same succeeded Payment or expired state performs no second "
                             "field transition or event; a different payment link conflicts."
                         ),
@@ -2275,6 +2303,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.topup_intents.provider_mismatch",
                             "financial.topup_intents.invalid_transition",
                             "financial.topup_intents.proof_link_conflict",
+                            "financial.topup_intents.proof_link_not_found",
+                            "financial.topup_intents.proof_link_ambiguous",
+                            "financial.topup_intents.proof_evidence_mismatch",
+                            "financial.topup_intents.rejection_time_invalid",
                             "financial.topup_intents.amount_non_positive",
                             "financial.topup_intents.idempotency_key_invalid",
                             "financial.topup_intents.idempotency_conflict",
@@ -2306,6 +2338,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "incomplete configured-bank evidence",
                             "non-pending intent lifecycle state",
                             "an existing proof evidence link",
+                            "missing, ambiguous, mismatched, or non-submitted rejected-proof "
+                            "intent evidence",
                             "missing or conflicting creation idempotency evidence",
                             "missing, inactive, unsettled, wrong-scope, wrong-currency, or "
                             "wrong-provider payment evidence",
@@ -2318,6 +2352,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "topup_intent.direct_transfer_created",
                             "topup_intent.direct_transfer_canceled",
                             "topup_intent.direct_transfer_submitted",
+                            "topup_intent.direct_transfer_rejected",
                             "topup_intent.completed",
                             "topup_intent.expired",
                             "topup_intent.gateway_created",
@@ -2348,18 +2383,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         new_owner="financial.topup_intents",
                         verification=(
                             "Configured-account projection, atomic create/replace/proof-link, "
-                            "typed completion/expiry success, idempotent replay/repair, "
+                            "typed rejection/completion/expiry success, idempotent replay/repair, "
                             "rollback, mismatch rejection, caller, event, and architecture "
                             "tests."
                         ),
                         cutover_gate=(
-                            "Every completion/expiry caller supplies typed evidence; only "
+                            "Every proof-rejection/completion/expiry caller supplies typed "
+                            "evidence; only "
                             "this participant writes completion identity, provider evidence, "
                             "amount/time, completed/expired status, and lifecycle events."
                         ),
                         fallback_retirement=(
                             "Portal-owned direct-transfer construction/replacement/proof "
-                            "writes and all caller-owned completion/expiry field assignments "
+                            "writes and all caller-owned rejection/completion/expiry field "
+                            "assignments "
                             "are removed; local reconciliation expiry constants are retired."
                         ),
                     ),
@@ -3974,6 +4011,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "payment-proof review lifecycle",
                     "proof-backed payment request",
+                    "rejected payment-proof top-up intent reconciliation",
                     "payment-proof reviewer notification request lifecycle",
                 ),
                 depends_on=(
@@ -4031,6 +4069,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         ConcernContract(
                             name=(
+                                "rejected payment-proof top-up intent reconciliation"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "payment-proof command context",
+                                "canonical payment-proof record",
+                                "canonical direct-transfer top-up intent protocol",
+                                "reviewed rejected-intent repair manifest",
+                            ),
+                            canonical_writer="financial.payment_proofs",
+                        ),
+                        ConcernContract(
+                            name=(
                                 "payment-proof reviewer notification request lifecycle"
                             ),
                             role=OwnerRole.EVENT_POLICY,
@@ -4081,6 +4132,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="reviewed rejected-intent repair manifest",
+                            owner="financial.payment_proofs",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "dry-run classified exact proof/intent/account/reference/"
+                                "amount/currency pairs, deterministic fingerprint, named "
+                                "target, actor, scope, and operator reason"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="canonical subscriber account target",
                             owner="customer.accounts",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -4104,7 +4165,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "locked pending intent validation plus participant staging "
-                                "of the submitted status, exact proof/configured-bank link, "
+                                "of the submitted or rejected status, exact proof/configured-"
+                                "bank link, "
                                 "versioned intent event, and immutable invoice WHT snapshot "
                                 "metadata when present"
                             ),
@@ -4158,7 +4220,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "Each submit, verify, or reject command starts on a clean "
+                            "Each submit, verify, reject, or rejected-intent reconciliation "
+                            "command starts on a clean "
                             "adapter session and commits proof state, any direct-transfer "
                             "intent link, canonical payment, "
                             "tax-owner WHT source evidence, review work items, audit rows, "
@@ -4168,7 +4231,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         locking=(
                             "Direct-transfer submission locks the exact TopupIntent before "
                             "creating proof evidence. Review commands select the "
-                            "PaymentProof FOR UPDATE before rechecking submitted state, "
+                            "PaymentProof FOR UPDATE before rechecking submitted/rejected "
+                            "state, "
                             "then lock the credited subscriber or billing account through "
                             "its canonical settlement owner."
                         ),
@@ -4177,7 +4241,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "link. A locked proof can leave submitted state once; payment and "
                             "consolidated-settlement provenance keys bind the resulting "
                             "money movement to the proof identity. Duplicate submitted "
-                            "references remain explicit review evidence, not silent replay."
+                            "references remain explicit review evidence, not silent replay. "
+                            "The repair fingerprint plus batch audit makes an exact repair "
+                            "manifest replay a no-op."
                         ),
                         retries=(
                             "Adapters may retry only after a transient transaction failure. "
@@ -4207,6 +4273,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.payment_proofs.verified_amount_conflict",
                             "financial.payment_proofs.verified_net_exceeds_gross",
                             "financial.payment_proofs.rejection_reason_required",
+                            "financial.payment_proofs.repair_limit_invalid",
+                            "financial.payment_proofs.repair_target_invalid",
+                            "financial.payment_proofs.repair_fingerprint_mismatch",
+                            "financial.payment_proofs.repair_manifest_empty",
+                            "financial.payment_proofs.repair_manifest_duplicate",
+                            "financial.payment_proofs.repair_source_changed",
                             "financial.payment_proofs.invalid_command_context",
                             "financial.payment_proofs.command_contract_violation",
                             "financial.payment_proofs.nested_owner_command",
@@ -4225,6 +4297,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "failure to stage an eligible payment, tax source, review work "
                             "item, top-up intent link, audit, notification, or event "
                             "consequence",
+                            "missing, stale, duplicated, ambiguous, or mismatched rejected-"
+                            "proof repair evidence",
                             "active caller transaction or manifest mismatch",
                         ),
                     ),
@@ -4247,6 +4321,37 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "the underlying payment."
                         ),
                     ),
+                    projections=(
+                        ProjectionContract(
+                            name=(
+                                "rejected payment-proof top-up intent lifecycle projection"
+                            ),
+                            input_names=(
+                                "canonical payment-proof record",
+                                "canonical direct-transfer top-up intent protocol",
+                                "reviewed rejected-intent repair manifest",
+                            ),
+                            writer="financial.topup_intents",
+                            freshness=(
+                                "Immediate in the payment-proof rejection transaction; "
+                                "legacy drift remains explicit until reviewed repair."
+                            ),
+                            stale_behavior=(
+                                "A stale submitted intent may incorrectly block another "
+                                "deposit; adapters must show canonical active-request state "
+                                "and operators run the guarded reconciliation."
+                            ),
+                            drift_signal=(
+                                "Dry-run candidates where a rejected proof is linked to a "
+                                "submitted Deposit Account Credit intent."
+                            ),
+                            rebuild_operation=(
+                                "preview_rejected_deposit_intent_repairs followed by "
+                                "fingerprint-gated repair_rejected_deposit_intents."
+                            ),
+                            repair_owner="financial.payment_proofs",
+                        ),
+                    ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.COMPLETE,
                         old_owner=(
@@ -4256,16 +4361,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.payment_proofs",
                         verification=(
-                            "Submission, direct-transfer intent linkage, duplicate, "
+                            "Submission, direct-transfer intent linkage/rejection, duplicate, "
                             "subscriber settlement, consolidated/WHT, reviewer notification, "
-                            "customer notification, route, locking, rollback, typed-result, "
+                            "customer notification, rejected-intent dry-run/apply repair, "
+                            "route, locking, rollback, typed-result, "
                             "and architecture tests."
                         ),
                         cutover_gate=(
                             "Every API, admin web, customer portal, reseller portal, and "
                             "test caller supplies CommandContext on a clean session and "
                             "serializes only PaymentProofResult; direct transfer supplies a "
-                            "typed intent/bank evidence command."
+                            "typed intent/bank evidence command; repair apply requires a "
+                            "fresh fingerprint and named target/actor/reason."
                         ),
                         fallback_retirement=(
                             "Service HTTPException inheritance, Request parameters, helper "
@@ -4285,6 +4392,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_payment_proof_reviewer_notifications.py",
                         "tests/test_reseller_proof_double_credit.py",
                         "tests/test_payment_proof_admin_routes.py",
+                        "tests/test_rejected_deposit_intent_repair.py",
                         "tests/architecture/test_payment_proof_reviewer_notification_ownership.py",
                     ),
                 ),

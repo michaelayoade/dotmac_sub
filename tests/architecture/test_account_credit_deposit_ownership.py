@@ -140,7 +140,9 @@ def test_customer_topup_page_uses_owner_active_request_state() -> None:
     )
 
     assert "active_request" in _calls(page)
+    assert "latest_rejected_request" in _calls(page)
     assert "_latest_pending_direct_transfer_intent" not in _named_calls(page)
     assert "active_deposit_request.phase" in template
     assert 'active_deposit_request.next_action == "upload_receipt"' in template
     assert "Your transfer receipt is under review." in template
+    assert "Your previous transfer receipt was rejected." in template

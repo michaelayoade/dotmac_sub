@@ -12,12 +12,15 @@ request closes only after verification or rejection.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import uuid as uuid_mod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
@@ -25,7 +28,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.billing import (
     BillingAccount,
     Invoice,
@@ -33,6 +36,7 @@ from app.models.billing import (
     PaymentSettlementOrigin,
     PaymentStatus,
     TopupIntent,
+    TopupIntentPurpose,
 )
 from app.models.payment_proof import (
     PaymentProof,
@@ -51,6 +55,9 @@ from app.services.owner_commands import (
 from app.services.topup_intents import (
     DIRECT_TRANSFER_PROVIDER,
     DirectTransferBankAccountEvidence,
+    DirectTransferProofRejectionSource,
+    RejectDirectTransferProofIntentCommand,
+    TopupIntentStatus,
 )
 
 if TYPE_CHECKING:
@@ -68,6 +75,7 @@ _REVIEW_ENTITY_TYPE = "payment_proof"
 _REVIEW_SLA_TRIGGER = "payment_proof.review_requested"
 SUBMISSION_SCOPE = "payment-proof:submit"
 REVIEW_SCOPE = "payment-proof:review"
+REPAIR_SCOPE = "payment-proof:rejected-intent-repair"
 _MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -97,6 +105,18 @@ _REJECT_COMMAND = OwnerCommandDefinition(
     concern="payment-proof review lifecycle",
     name="reject_payment_proof",
 )
+_REPAIR_REJECTED_INTENTS_COMMAND = OwnerCommandDefinition(
+    owner="financial.payment_proofs",
+    concern="rejected payment-proof top-up intent reconciliation",
+    name="repair_rejected_payment_proof_topup_intents",
+)
+
+REJECTED_INTENT_REPAIR_ITEM_AUDIT_ACTION = (
+    "rejected_payment_proof_topup_intent_repaired"
+)
+REJECTED_INTENT_REPAIR_BATCH_AUDIT_ACTION = (
+    "rejected_payment_proof_topup_intent_repair_applied"
+)
 
 
 class PaymentProofUpload(Protocol):
@@ -124,6 +144,70 @@ class PaymentProofError(DomainError):
 
 class PaymentProofReviewError(PaymentProofError):
     """Stable rejection from payment-proof verification or rejection."""
+
+
+class RejectedIntentRepairClassification(str, Enum):
+    """Dry-run classification for one submitted Deposit Account Credit intent."""
+
+    eligible = "eligible"
+    missing_proof_link = "missing_proof_link"
+    proof_not_found = "proof_not_found"
+    proof_not_rejected = "proof_not_rejected"
+    evidence_mismatch = "evidence_mismatch"
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedIntentRepairCandidate:
+    """PII-minimal dry-run evidence for one stale submitted deposit intent."""
+
+    intent_id: UUID
+    proof_id: UUID | None
+    account_id: UUID | None
+    reference: str
+    amount: Decimal
+    currency: str
+    classification: RejectedIntentRepairClassification
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedIntentRepairItem:
+    """Exact evidence that an apply command must recheck under lock."""
+
+    intent_id: UUID
+    proof_id: UUID
+    account_id: UUID
+    reference: str
+    amount: Decimal
+    currency: str
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedIntentRepairPreview:
+    """Read-only repair plan bound to a deterministic fingerprint."""
+
+    observed_at: datetime
+    fingerprint: str
+    candidates: tuple[RejectedIntentRepairCandidate, ...]
+    repairs: tuple[RejectedIntentRepairItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RepairRejectedIntentCommand:
+    """Reviewed stale-intent repair manifest."""
+
+    context: CommandContext
+    preview_fingerprint: str
+    target: str
+    repairs: tuple[RejectedIntentRepairItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RepairRejectedIntentOutcome:
+    """Immutable result from applying one repair manifest."""
+
+    preview_fingerprint: str
+    applied_count: int
+    already_applied: bool
 
 
 def _error(
@@ -1239,6 +1323,22 @@ def _reject_proof(
     proof.status = PaymentProofStatus.rejected
     proof.verified_by = str(verified_by)
     proof.review_notes = review_notes.strip()
+    from app.services import topup_intents
+
+    if proof.account_id is not None:
+        topup_intents.stage_direct_transfer_proof_rejection(
+            db,
+            RejectDirectTransferProofIntentCommand(
+                proof_id=proof.id,
+                account_id=proof.account_id,
+                reference=str(proof.reference or ""),
+                amount=proof.amount,
+                currency=proof.currency,
+                rejected_at=datetime.now(UTC),
+                source=DirectTransferProofRejectionSource.payment_proof_review,
+            ),
+            context=context,
+        )
     _resolve_reviewer_confirmation(db, proof)
     _audit(
         db,
@@ -1261,6 +1361,290 @@ def _reject_proof(
         event_type=EventType.payment_proof_rejected,
     )
     return PaymentProofResult.from_model(proof)
+
+
+def _repair_fingerprint(repairs: tuple[RejectedIntentRepairItem, ...]) -> str:
+    payload = {
+        "version": 1,
+        "action": "repair_rejected_payment_proof_topup_intents",
+        "repairs": [
+            {
+                "intent_id": str(item.intent_id),
+                "proof_id": str(item.proof_id),
+                "account_id": str(item.account_id),
+                "reference": item.reference,
+                "amount": f"{round_money(item.amount):.2f}",
+                "currency": item.currency,
+            }
+            for item in sorted(repairs, key=lambda item: str(item.intent_id))
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def preview_rejected_deposit_intent_repairs(
+    db: Session,
+    *,
+    observed_at: datetime | None = None,
+    limit: int | None = None,
+) -> RejectedIntentRepairPreview:
+    """Classify stale submitted deposit intents without changing the session."""
+
+    if limit is not None and limit <= 0:
+        raise _error("repair_limit_invalid", "Repair preview limit must be positive")
+    query = (
+        select(TopupIntent)
+        .where(
+            TopupIntent.purpose == TopupIntentPurpose.account_credit_deposit.value,
+            TopupIntent.provider_type == DIRECT_TRANSFER_PROVIDER,
+            TopupIntent.status == TopupIntentStatus.submitted.value,
+        )
+        .order_by(TopupIntent.created_at, TopupIntent.id)
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    intents = tuple(db.scalars(query).all())
+
+    proof_ids: set[UUID] = set()
+    parsed_proof_ids: dict[UUID, UUID | None] = {}
+    for intent in intents:
+        raw_proof_id = str((intent.metadata_ or {}).get("payment_proof_id") or "")
+        try:
+            proof_id = UUID(raw_proof_id)
+        except (TypeError, ValueError):
+            proof_id = None
+        parsed_proof_ids[intent.id] = proof_id
+        if proof_id is not None:
+            proof_ids.add(proof_id)
+    proofs = (
+        tuple(
+            db.scalars(
+                select(PaymentProof)
+                .where(PaymentProof.id.in_(proof_ids))
+                .order_by(PaymentProof.id)
+            ).all()
+        )
+        if proof_ids
+        else ()
+    )
+    proof_by_id = {proof.id: proof for proof in proofs}
+
+    candidates: list[RejectedIntentRepairCandidate] = []
+    repairs: list[RejectedIntentRepairItem] = []
+    for intent in intents:
+        proof_id = parsed_proof_ids[intent.id]
+        proof = proof_by_id.get(proof_id) if proof_id is not None else None
+        if proof_id is None:
+            classification = RejectedIntentRepairClassification.missing_proof_link
+        elif proof is None:
+            classification = RejectedIntentRepairClassification.proof_not_found
+        elif proof.status is not PaymentProofStatus.rejected:
+            classification = RejectedIntentRepairClassification.proof_not_rejected
+        elif (
+            intent.account_id is None
+            or proof.account_id != intent.account_id
+            or str(proof.reference or "") != intent.reference
+            or proof.currency != intent.currency
+            or round_money(proof.amount) != round_money(intent.requested_amount)
+        ):
+            classification = RejectedIntentRepairClassification.evidence_mismatch
+        else:
+            classification = RejectedIntentRepairClassification.eligible
+            repairs.append(
+                RejectedIntentRepairItem(
+                    intent_id=intent.id,
+                    proof_id=proof.id,
+                    account_id=intent.account_id,
+                    reference=intent.reference,
+                    amount=round_money(intent.requested_amount),
+                    currency=intent.currency,
+                )
+            )
+        candidates.append(
+            RejectedIntentRepairCandidate(
+                intent_id=intent.id,
+                proof_id=proof_id,
+                account_id=intent.account_id,
+                reference=intent.reference,
+                amount=round_money(intent.requested_amount),
+                currency=intent.currency,
+                classification=classification,
+            )
+        )
+    repair_tuple = tuple(repairs)
+    return RejectedIntentRepairPreview(
+        observed_at=observed_at or datetime.now(UTC),
+        fingerprint=_repair_fingerprint(repair_tuple),
+        candidates=tuple(candidates),
+        repairs=repair_tuple,
+    )
+
+
+def _repair_rejected_deposit_intents(
+    db: Session,
+    command: RepairRejectedIntentCommand,
+) -> RepairRejectedIntentOutcome:
+    fingerprint = command.preview_fingerprint.strip().lower()
+    target = command.target.strip()
+    if not target:
+        raise _error(
+            "repair_target_invalid",
+            "Rejected-intent repair target is required",
+        )
+    expected_fingerprint = _repair_fingerprint(command.repairs)
+    if fingerprint != expected_fingerprint:
+        raise _error(
+            "repair_fingerprint_mismatch",
+            "Rejected-intent repair fingerprint does not match its items",
+        )
+    if not command.repairs:
+        raise _error(
+            "repair_manifest_empty",
+            "Rejected-intent repair manifest has no eligible items",
+        )
+    intent_ids = tuple(sorted((item.intent_id for item in command.repairs), key=str))
+    proof_ids = tuple(sorted((item.proof_id for item in command.repairs), key=str))
+    if len(set(intent_ids)) != len(command.repairs) or len(set(proof_ids)) != len(
+        command.repairs
+    ):
+        raise _error(
+            "repair_manifest_duplicate",
+            "Rejected-intent repair manifest repeats an intent or proof",
+        )
+
+    prior = db.scalar(
+        select(AuditEvent.id).where(
+            AuditEvent.action == REJECTED_INTENT_REPAIR_BATCH_AUDIT_ACTION,
+            AuditEvent.entity_type == "topup_intent_reconciliation",
+            AuditEvent.entity_id == fingerprint,
+        )
+    )
+    if prior is not None:
+        return RepairRejectedIntentOutcome(
+            preview_fingerprint=fingerprint,
+            applied_count=0,
+            already_applied=True,
+        )
+
+    proofs = tuple(
+        db.scalars(
+            select(PaymentProof)
+            .where(PaymentProof.id.in_(proof_ids))
+            .order_by(PaymentProof.id)
+            .with_for_update()
+        ).all()
+    )
+    proof_by_id = {proof.id: proof for proof in proofs}
+    if set(proof_by_id) != set(proof_ids):
+        raise _error(
+            "repair_source_changed",
+            "A rejected payment proof in the repair manifest no longer exists",
+        )
+
+    from app.services import audit as audit_service
+    from app.services import topup_intents
+
+    repaired_at = datetime.now(UTC)
+    applied_count = 0
+    for item in sorted(command.repairs, key=lambda item: str(item.intent_id)):
+        proof = proof_by_id[item.proof_id]
+        if (
+            proof.status is not PaymentProofStatus.rejected
+            or proof.account_id != item.account_id
+            or str(proof.reference or "") != item.reference
+            or proof.currency != item.currency
+            or round_money(proof.amount) != round_money(item.amount)
+        ):
+            raise _error(
+                "repair_source_changed",
+                "Rejected payment-proof evidence changed after the repair preview",
+                proof_id=str(item.proof_id),
+                intent_id=str(item.intent_id),
+            )
+        result = topup_intents.stage_direct_transfer_proof_rejection(
+            db,
+            RejectDirectTransferProofIntentCommand(
+                intent_id=item.intent_id,
+                proof_id=item.proof_id,
+                account_id=item.account_id,
+                reference=item.reference,
+                amount=item.amount,
+                currency=item.currency,
+                rejected_at=repaired_at,
+                source=(
+                    DirectTransferProofRejectionSource.rejected_proof_reconciliation
+                ),
+            ),
+            context=command.context,
+        )
+        if result.changed:
+            applied_count += 1
+        audit_service.audit_events.stage(
+            db,
+            AuditEventCreate(
+                actor_type=AuditActorType.service,
+                actor_id=command.context.actor,
+                action=REJECTED_INTENT_REPAIR_ITEM_AUDIT_ACTION,
+                entity_type="topup_intent",
+                entity_id=str(item.intent_id),
+                status_code=200,
+                is_success=True,
+                metadata_={
+                    "payment_proof_id": str(item.proof_id),
+                    "preview_fingerprint": fingerprint,
+                    "reason": command.context.reason,
+                    "scope": command.context.scope,
+                    "target": target,
+                    "changed": result.changed,
+                    "command_id": str(command.context.command_id),
+                    "correlation_id": str(command.context.correlation_id),
+                },
+            ),
+        )
+
+    audit_service.audit_events.stage(
+        db,
+        AuditEventCreate(
+            actor_type=AuditActorType.service,
+            actor_id=command.context.actor,
+            action=REJECTED_INTENT_REPAIR_BATCH_AUDIT_ACTION,
+            entity_type="topup_intent_reconciliation",
+            entity_id=fingerprint,
+            status_code=200,
+            is_success=True,
+            metadata_={
+                "preview_fingerprint": fingerprint,
+                "reason": command.context.reason,
+                "scope": command.context.scope,
+                "target": target,
+                "requested_count": len(command.repairs),
+                "applied_count": applied_count,
+                "command_id": str(command.context.command_id),
+                "correlation_id": str(command.context.correlation_id),
+            },
+        ),
+    )
+    db.flush()
+    return RepairRejectedIntentOutcome(
+        preview_fingerprint=fingerprint,
+        applied_count=applied_count,
+        already_applied=False,
+    )
+
+
+def repair_rejected_deposit_intents(
+    db: Session,
+    command: RepairRejectedIntentCommand,
+) -> RepairRejectedIntentOutcome:
+    """Apply one reviewed rejected-proof repair manifest atomically."""
+
+    return execute_owner_command(
+        db,
+        definition=_REPAIR_REJECTED_INTENTS_COMMAND,
+        context=command.context,
+        operation=lambda: _repair_rejected_deposit_intents(db, command),
+    )
 
 
 def _emit_transition(

@@ -81,6 +81,12 @@ def test_direct_transfer_intent_participant_has_complete_contract() -> None:
         )
         == service
     )
+    assert (
+        sot_relationships.owning_service_for(
+            "direct-transfer top-up intent proof rejection transition"
+        )
+        == service
+    )
 
 
 def test_direct_transfer_creation_coordinator_has_complete_contract() -> None:
@@ -136,6 +142,18 @@ def test_payment_proof_owner_composes_locked_intent_participant() -> None:
 
     assert "lock_direct_transfer_intent_for_proof" in calls
     assert "stage_direct_transfer_proof_submission" in calls
+    assert "commit" not in calls
+    assert "rollback" not in calls
+
+
+def test_payment_proof_rejection_composes_intent_rejection_participant() -> None:
+    rejection = _function(
+        "app/services/payment_proofs.py",
+        "_reject_proof",
+    )
+    calls = _attribute_calls(rejection)
+
+    assert "stage_direct_transfer_proof_rejection" in calls
     assert "commit" not in calls
     assert "rollback" not in calls
 

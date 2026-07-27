@@ -42,7 +42,7 @@ def test_same_status_is_noop():
 def test_terminal_recovery_is_allowed_not_blocked():
     # A late real payment must still complete an expired/canceled intent —
     # blocking would drop money; this is allowed (and logged elsewhere).
-    for terminal in ("expired", "canceled"):
+    for terminal in ("expired", "canceled", "rejected"):
         intent = TopupIntent(status=terminal)
         assert set_topup_intent_status(intent, "completed", source="webhook") is True
         assert intent.status == "completed"

@@ -31,6 +31,7 @@ from app.services.account_credit_deposits import (
     AccountCreditDeposits,
     AccountCreditDepositSettlementSource,
     ActiveDepositRequest,
+    RejectedDepositRequest,
     SettleAccountCreditDepositCommand,
 )
 from app.services.billing import collection_account_directory
@@ -131,6 +132,19 @@ def _serialize_active_deposit_request(
         "currency": request.currency,
         "created_at": request.created_at,
         "expires_at": request.expires_at,
+        "observed_at": request.observed_at,
+    }
+
+
+def _serialize_rejected_deposit_request(
+    request: RejectedDepositRequest,
+) -> dict[str, object]:
+    return {
+        "intent_id": str(request.intent_id),
+        "reference": request.reference,
+        "amount": request.amount,
+        "currency": request.currency,
+        "rejected_at": request.rejected_at,
         "observed_at": request.observed_at,
     }
 
@@ -1378,6 +1392,14 @@ def get_topup_page(
         if account_id
         else None
     )
+    rejected_deposit_request = (
+        AccountCreditDeposits.latest_rejected_request(
+            db,
+            account_id=uuid.UUID(str(account_id)),
+        )
+        if account_id and active_deposit_request is None
+        else None
+    )
     context = {
         "provider_type": provider_type,
         "payment_options": _payment_options_for_runtime_ready_routes(
@@ -1415,6 +1437,10 @@ def get_topup_page(
     if active_deposit_request:
         context["active_deposit_request"] = _serialize_active_deposit_request(
             active_deposit_request
+        )
+    elif rejected_deposit_request:
+        context["rejected_deposit_request"] = _serialize_rejected_deposit_request(
+            rejected_deposit_request
         )
 
     if gateway_context:
