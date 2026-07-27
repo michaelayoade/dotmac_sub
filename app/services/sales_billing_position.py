@@ -420,21 +420,33 @@ def scan_billing_shadow(
     report.assert_exhaustive()
 
     if persist:
-        db.add(
-            SalesBillingShadowRun(
-                contract_version=report.contract_version,
-                cohort_fingerprint=report.cohort_fingerprint,
-                scanned=report.scanned,
-                bucket_counts={
-                    bucket.value: report.buckets.get(bucket, 0)
-                    for bucket in SalesBillingShadowBucket
-                },
-                clean=report.clean,
-                actor_id=actor_id,
-            )
-        )
-        db.flush()
+        persist_run(db, report, actor_id=actor_id)
     return report
+
+
+def persist_run(
+    db: Session, report: BillingShadowReport, *, actor_id: str | None = None
+) -> SalesBillingShadowRun:
+    """Append one observation and commit it.
+
+    Committed on its own rather than left for the caller: a sweep that rolls
+    back its repair attempt must not be able to erase the observation it made
+    beforehand. Evidence of what was true is not part of what was attempted.
+    """
+    run = SalesBillingShadowRun(
+        contract_version=report.contract_version,
+        cohort_fingerprint=report.cohort_fingerprint,
+        scanned=report.scanned,
+        bucket_counts={
+            bucket.value: report.buckets.get(bucket, 0)
+            for bucket in SalesBillingShadowBucket
+        },
+        clean=report.clean,
+        actor_id=actor_id,
+    )
+    db.add(run)
+    db.commit()
+    return run
 
 
 def consecutive_clean_runs(db: Session) -> int:

@@ -45,18 +45,19 @@ def reconcile_sales_to_service_lifecycle(
 
     # Sale -> Money shadow phase, observed FIRST and repaired never.
     #
-    # First, because an observation is evidence of the state as found; taking
-    # it after the repair phase would describe a state this run had already
-    # changed. Committed immediately for the same reason, and because the
-    # repair transaction below rolls back in detect mode — evidence left inside
-    # it would be discarded exactly when it is most needed.
+    # Observed first because an observation is evidence of the state as found;
+    # taking it after the repair phase would describe a state this run had
+    # already changed. Recorded last (below) so a detect-mode rollback cannot
+    # erase it — when the observation happened and when it was written down are
+    # different things.
     #
     # Never repaired: a disagreement between the stored Sale columns and the
     # ledger does not establish which side is wrong, and money repair belongs
-    # to its owner with finance approval. The check is called without `apply`
-    # deliberately; it fails closed if asked. See
-    # docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md.
-    shadow = sales_billing_position.scan_billing_shadow(db, actor_id=actor_id)
+    # to its owner with finance approval. Called without `apply` deliberately;
+    # it fails closed if asked. See docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md.
+    shadow = sales_billing_position.scan_billing_shadow(
+        db, persist=False, actor_id=actor_id
+    )
     for drift in shadow.drifts:
         logger.warning("sales_billing_shadow_drift %s", drift)
     if not shadow.clean:
@@ -65,7 +66,6 @@ def reconcile_sales_to_service_lifecycle(
             shadow.cohort_fingerprint,
             shadow.as_counts(),
         )
-    db.commit()
 
     counts: Counter[str] = Counter()
     orders = list(
@@ -204,6 +204,10 @@ def reconcile_sales_to_service_lifecycle(
         db.commit()
     else:
         db.rollback()
+
+    # Written down only now, and committed on its own: the sweep's rollback
+    # above must not be able to erase the observation it made before it.
+    sales_billing_position.persist_run(db, shadow, actor_id=actor_id)
 
     return {
         **shadow.as_counts(),

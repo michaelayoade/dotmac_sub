@@ -24807,6 +24807,103 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "boundary becomes structural and the stored columns are "
                     "dropped - see docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md."
                 ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="Sale-to-Money shadow observation evidence",
+                            role=OwnerRole.OBSERVATION_COLLECTOR,
+                            input_names=(
+                                "stored SalesOrder money columns",
+                                "canonical invoice position",
+                                "canonical payment application",
+                            ),
+                            canonical_writer="sales.billing_shadow_observation",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="stored SalesOrder money columns",
+                            owner="sales.orders",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "the amount_paid, balance_due and payment_status "
+                                "columns whose authority is being migrated away"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice position",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active invoices reachable from the sales order, "
+                                "with their totals and open balances"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical payment application",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active PaymentAllocation rows against those "
+                                "invoices; order-originated payments prove "
+                                "origin, not application, and are read as "
+                                "provenance only"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Reads sales and billing state without writing it. "
+                            "Commits only its own append-only observation row, "
+                            "outside any caller repair transaction so a "
+                            "rolled-back sweep cannot erase its own evidence."
+                        ),
+                        locking="None; the scan takes no locks and blocks nothing.",
+                        idempotency=(
+                            "Every run appends one observation. Re-running is "
+                            "safe and expected: a consecutive clean window is "
+                            "the cutover evidence."
+                        ),
+                        retries=(
+                            "Freely retryable. A failed scan writes nothing and "
+                            "the next scheduled sweep re-observes."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("shadow_check_cannot_repair",),
+                        mapping_owner="sales lifecycle reconciliation adapter",
+                        fail_closed_on=("shadow_check_cannot_repair",),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        new_owner="financial.invoices / financial.payments",
+                        old_owner="sales.orders",
+                        verification=(
+                            "Nine mutually exclusive buckets covering every "
+                            "active sales order, asserted exhaustive against the "
+                            "scanned total, persisted per run with a cohort "
+                            "fingerprint and contract version."
+                        ),
+                        cutover_gate=(
+                            "No blocking bucket populated, across a consecutive "
+                            "clean observation window at one contract version, "
+                            "with structural writer coverage, verified backfill, "
+                            "validated constraints, zero metadata fallback reads "
+                            "and finance sign-off."
+                        ),
+                        fallback_retirement=(
+                            "Retire this owner once the SalesOrder money columns "
+                            "are dropped and _apply_payment_fields is deleted."
+                        ),
+                    ),
+                    steward="sales",
+                    design_refs=(
+                        "docs/designs/SALE_TO_MONEY_HANDOFF_SOT.md",
+                        "docs/designs/SOT_PIPELINE_CLASSIFICATION.md",
+                    ),
+                    test_refs=("tests/test_sales_billing_position.py",),
+                ),
             ),
             SOTService(
                 name="sales.selfserve",
