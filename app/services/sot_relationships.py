@@ -1683,6 +1683,337 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="financial_access",
         services=(
             SOTService(
+                name="billing.contracts",
+                module="app.services.billing.contracts",
+                owns=(
+                    "versioned billing contract terms",
+                    "billing contract version supersession",
+                    "effective billing contract resolution",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                    "financial.tax_configuration",
+                    "sales.orders",
+                ),
+                notes=(
+                    "ADR 0007 Phase 1. Customer-specific contracted terms are "
+                    "versioned and immutable; a catalog or policy change "
+                    "supersedes a version instead of rewriting history. Rows "
+                    "stay BillingRecordAuthority.shadow while this contract "
+                    "declares migration state 'shadowing', so nothing reads "
+                    "them as money before the Phase 1 cutover gate."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="versioned billing contract terms",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "accepted commercial order line",
+                                "canonical subscription projection",
+                                "effective tax treatment inputs",
+                                "recorded billing contract terms",
+                            ),
+                            canonical_writer="billing.contracts",
+                        ),
+                        ConcernContract(
+                            name="billing contract version supersession",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("recorded billing contract terms",),
+                            canonical_writer="billing.contracts",
+                        ),
+                        ConcernContract(
+                            name="effective billing contract resolution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("recorded billing contract terms",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="accepted commercial order line",
+                            owner="sales.orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "accepted SalesOrderLine identity and negotiated "
+                                "commercial terms"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription projection",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscription identity, account, and lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="effective tax treatment inputs",
+                            owner="financial.tax_configuration",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="effective tax rate and treatment vocabulary",
+                        ),
+                        AuthorityInput(
+                            name="recorded billing contract terms",
+                            owner="billing.contracts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "billing_contracts, billing_contract_versions, and "
+                                "billing_contract_lines rows"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Adapters own the session; record_version and "
+                            "cancel_version each enter execute_owner_command once "
+                            "on a transaction-free session."
+                        ),
+                        locking=(
+                            "The BillingContract row and the current effective "
+                            "version are locked FOR UPDATE before a new version is "
+                            "inserted, so concurrent term changes serialise."
+                        ),
+                        idempotency=(
+                            "One version per (contract, business idempotency key). "
+                            "A replay returns the recorded version and reports "
+                            "replayed=True without writing a second version."
+                        ),
+                        retries=(
+                            "The complete command is retryable. A unique-constraint "
+                            "loss fails closed rather than duplicating terms."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "billing.contracts.active_caller_transaction",
+                            "billing.contracts.command_contract_violation",
+                            "billing.contracts.contract_account_mismatch",
+                            "billing.contracts.contract_version_not_found",
+                            "billing.contracts.duplicate_contract_line",
+                            "billing.contracts.invalid_command_context",
+                            "billing.contracts.invalid_contract_terms",
+                            "billing.contracts.missing_idempotency_key",
+                            "billing.contracts.mixed_currency_contract",
+                            "billing.contracts.nested_owner_command",
+                            "billing.contracts.nested_transaction_completion",
+                            "billing.contracts.out_of_order_contract_version",
+                        ),
+                        mapping_owner="billing and sales adapters",
+                        fail_closed_on=(
+                            "mixed currency between contract and line",
+                            "a version starting before the current effective one",
+                            "missing business idempotency key",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "billing.contract.activated",
+                            "billing.contract.superseded",
+                            "billing.contract.canceled",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive. Consumers validate identity and "
+                            "never re-decide the producer's contracted terms."
+                        ),
+                        replay=(
+                            "Rebuildable from billing_contract_versions. Phase 1 is "
+                            "shadow and stages no delivery; ADR 0007 Phase 4 adds "
+                            "the transactional outbox and consumer receipts that "
+                            "make these outputs durable."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "Subscription.billing_mode/billing_cycle/unit_price plus "
+                            "catalog offer price cadence and account billing mode"
+                        ),
+                        new_owner="billing.contracts",
+                        verification=(
+                            "Contract version, supersession, cadence, currency, and "
+                            "idempotency tests plus the ADR 0007 ratchet guards."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 1 gate: every accepted order or service "
+                            "change creates one structural contract, every active "
+                            "subscription has one proposed effective version, and "
+                            "the ambiguous and unexpected-unlinked cohorts are zero."
+                        ),
+                        fallback_retirement=(
+                            "Duplicate account/catalog effective billing-mode reads "
+                            "and metadata Sale-to-Money joins are removed once the "
+                            "Phase 1 gate passes."
+                        ),
+                    ),
+                    steward="billing and finance operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_contracts.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="billing.obligations",
+                module="app.services.billing.obligations",
+                owns=(
+                    "unique billing obligation identity",
+                    "billing obligation state transition",
+                ),
+                depends_on=(
+                    "billing.contracts",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "ADR 0007 Phase 1. The obligation is the finite billable "
+                    "unit. Its natural identity is enforced by a database unique "
+                    "constraint so replay and concurrency produce one obligation "
+                    "rather than a duplicate charge. An obligation is not an "
+                    "invoice, a payment, or an entitlement, and its state is "
+                    "never inferred from an invoice label or payment origin."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="unique billing obligation identity",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "recorded billing contract terms",
+                                "recorded billing obligations",
+                            ),
+                            canonical_writer="billing.obligations",
+                        ),
+                        ConcernContract(
+                            name="billing obligation state transition",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("recorded billing obligations",),
+                            canonical_writer="billing.obligations",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="recorded billing contract terms",
+                            owner="billing.contracts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "effective BillingContractVersion cadence, currency, "
+                                "and line identity"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="recorded billing obligations",
+                            owner="billing.obligations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="billing_obligations rows and their natural identity",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Adapters own the session; schedule, open, and resolve "
+                            "each enter execute_owner_command once on a "
+                            "transaction-free session."
+                        ),
+                        locking=(
+                            "The contract version is locked before an obligation is "
+                            "inserted and the obligation row is locked before any "
+                            "state transition or application."
+                        ),
+                        idempotency=(
+                            "The natural identity unique constraint is the "
+                            "guarantee. A replay returns the existing obligation "
+                            "with replayed=True; a concurrent loser fails closed on "
+                            "billing.obligations.duplicate_obligation."
+                        ),
+                        retries=(
+                            "The complete command is retryable. Applications can "
+                            "never exceed the obligation's gross amount."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "billing.obligations.active_caller_transaction",
+                            "billing.obligations.command_contract_violation",
+                            "billing.obligations.contract_line_not_found",
+                            "billing.obligations.contract_version_not_found",
+                            "billing.obligations.duplicate_obligation",
+                            "billing.obligations.invalid_command_context",
+                            "billing.obligations.invalid_obligation_amount",
+                            "billing.obligations.invalid_obligation_transition",
+                            "billing.obligations.missing_idempotency_key",
+                            "billing.obligations.nested_owner_command",
+                            "billing.obligations.nested_transaction_completion",
+                            "billing.obligations.obligation_not_found",
+                            "billing.obligations.period_outside_contract_version",
+                            "billing.obligations.resolution_exceeds_obligation",
+                        ),
+                        mapping_owner="billing, invoicing, and collections adapters",
+                        fail_closed_on=(
+                            "a duplicate natural identity under concurrency",
+                            "an application exceeding the obligation gross amount",
+                            "a period outside the contract version interval",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "billing.obligation.opened",
+                            "billing.obligation.resolved",
+                            "billing.obligation.canceled",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive. Consumers validate the "
+                            "obligation identity and never re-decide its state."
+                        ),
+                        replay=(
+                            "Rebuildable from billing_obligations. Phase 1 is shadow "
+                            "and stages no delivery; ADR 0007 Phase 4 adds the "
+                            "transactional outbox and consumer receipts."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        old_owner=(
+                            "postpaid invoice-period generation and monthly-specific "
+                            "prepaid renewal decision forks"
+                        ),
+                        new_owner="billing.obligations",
+                        verification=(
+                            "Natural-identity uniqueness, replay, calendar period, "
+                            "and state-transition tests plus the ADR 0007 guards."
+                        ),
+                        cutover_gate=(
+                            "ADR 0007 Phase 2 gate: exact period and amount parity "
+                            "against current invoice generation and prepaid renewal "
+                            "for the active cohort, with zero duplicate, gapped, or "
+                            "overlapping obligations outside typed policy."
+                        ),
+                        fallback_retirement=(
+                            "Independent _period_end and monthly-only renewal "
+                            "calculations are removed once invoices and prepaid "
+                            "flows consume obligations."
+                        ),
+                    ),
+                    steward="billing and finance operations",
+                    design_refs=(
+                        "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_obligations.py",
+                        "tests/architecture/test_billing_target_architecture.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.ledger",
                 module="app.services.billing.ledger",
                 owns=(

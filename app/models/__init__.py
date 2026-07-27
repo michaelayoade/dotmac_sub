@@ -71,6 +71,25 @@ from app.models.billing import (  # noqa: F401
     TopupIntent,
     TopupIntentPurpose,
 )
+from app.models.billing_contract import (  # noqa: F401
+    AccountingTreatment,
+    BillingContract,
+    BillingContractLine,
+    BillingContractSourceKind,
+    BillingContractVersion,
+    BillingContractVersionStatus,
+    BillingObligation,
+    BillingRecordAuthority,
+    CadenceAlignment,
+    ChargeComponent,
+    CollectionTiming,
+    EndOfMonthRule,
+    IntervalUnit,
+    ObligationResolutionKind,
+    ObligationState,
+    ProrationPolicy,
+    RateBasis,
+)
 from app.models.branding import BrandProfile  # noqa: F401
 from app.models.catalog import (  # noqa: F401
     AccessCredential,
