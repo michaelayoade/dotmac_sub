@@ -12327,10 +12327,197 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "persisted outage incident status vocabulary",
                     "outage incident lifecycle",
                     "typed outage lifecycle output emission",
+                    "committed outage output consumption",
                 ),
                 depends_on=(
                     "network.outage_impact",
                     "events.dispatcher",
+                    "events.owner_outputs",
+                    "operations.sla_escalation",
+                ),
+                notes=(
+                    "Every incident transition stages its typed outage output "
+                    "(plus the legacy network.alert webhook fan-out) atomically "
+                    "with the status write; the registered projection handler "
+                    "delivers those outputs back to the receipted consume_* "
+                    "commands, which attach operational owners/watchers and "
+                    "plan or cancel SLA escalations through the escalation "
+                    "participants. Outage resolution emits recovery evidence "
+                    "only and never closes support Tickets or WorkOrders."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="persisted outage incident status vocabulary",
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=("recorded outage incidents",),
+                        ),
+                        ConcernContract(
+                            name="outage incident lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "recorded outage incidents",
+                                "resolved outage impact",
+                            ),
+                            canonical_writer="network.outage_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="typed outage lifecycle output emission",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("recorded outage incidents",),
+                            canonical_writer="network.outage_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="committed outage output consumption",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "recorded outage incidents",
+                                "operational escalation surface",
+                                "receipted owner-output deliveries",
+                            ),
+                            canonical_writer="network.outage_lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="recorded outage incidents",
+                            owner="network.outage_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "outage_incidents rows with operator/classifier "
+                                "provenance and lifecycle timestamps"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="resolved outage impact",
+                            owner="network.outage_impact",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "affected-customer impact resolved from the "
+                                "authoritative forwarding topology"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="operational escalation surface",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "operational owners, watchers, room links, "
+                                "escalation events, and deliveries"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="receipted owner-output deliveries",
+                            owner="events.owner_outputs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique (consumer, event_id) receipts committing "
+                                "atomically with each consumed outage effect"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Incident transitions flush into their calling "
+                            "adapter's transaction and stage outputs atomically; "
+                            "consume_outage_activation and "
+                            "consume_outage_termination each enter "
+                            "execute_owner_command once on a transaction-free "
+                            "session."
+                        ),
+                        locking=(
+                            "Transitions operate on the loaded incident row inside "
+                            "the reconcile scan's advisory-locked pass or the "
+                            "operator adapter's transaction; consumers reload the "
+                            "incident before applying consequences."
+                        ),
+                        idempotency=(
+                            "Escalation participants are idempotent per trigger; "
+                            "consumer receipts make redelivery an exact no-op, and "
+                            "a terminal incident skips fresh planning."
+                        ),
+                        retries=(
+                            "A failed consequence leaves no receipt; the outbox "
+                            "redelivers until the consumer commits or the failure "
+                            "is reviewed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.outage_lifecycle.active_caller_transaction",
+                            "network.outage_lifecycle.command_contract_violation",
+                            "network.outage_lifecycle.invalid_command_context",
+                            "network.outage_lifecycle.nested_owner_command",
+                            "network.outage_lifecycle.nested_transaction_completion",
+                        ),
+                        mapping_owner="network monitoring and event adapters",
+                        fail_closed_on=(
+                            "an unknown outage status value",
+                            "operator termination of a classifier incident",
+                            "consequence application outside an owner command",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "outage.created",
+                            "outage.suspected",
+                            "outage.confirmed",
+                            "outage.clearing",
+                            "outage.reopened",
+                            "outage.rerooted",
+                            "outage.discarded",
+                            "outage.resolved",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries incident identity, status, "
+                            "provenance, scope, severity, affected count, and "
+                            "lifecycle timestamps; the legacy network.alert "
+                            "fan-out keeps the identical payload for external "
+                            "webhook subscribers."
+                        ),
+                        replay=(
+                            "Incident rows and EventStore evidence reconstruct "
+                            "each transition; consumer receipts make redelivered "
+                            "consequences exact no-ops."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "inline cross-owner escalation calls and a pre-commit "
+                            "swallowed network.alert-only fan-out"
+                        ),
+                        new_owner="network.outage_lifecycle",
+                        verification=(
+                            "Chain behavior tests (atomic staging, receipts, "
+                            "replay, failed-delivery visibility, ticket/work-order "
+                            "non-closure) and the outage boundary architecture "
+                            "test."
+                        ),
+                        cutover_gate=(
+                            "Typed outputs and receipted consumers are the only "
+                            "consequence path; no inline cross-owner call remains "
+                            "in the transitions."
+                        ),
+                        fallback_retirement=(
+                            "The pre-commit swallowed emission and inline "
+                            "ensure/plan/cancel calls are removed from the "
+                            "lifecycle transitions."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/NETWORK_OUTAGE_RESPONSE_LIFECYCLE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/services/topology/test_outage_lifecycle_chain.py",
+                        "tests/architecture/test_outage_lifecycle_chain_boundary.py",
+                        "tests/services/topology/test_outage_reconcile.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -27527,6 +27714,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "SalesOrder implementation-scope coordination",
                     "verified implementation release coordination",
+                    "committed lifecycle output consumption",
                 ),
                 depends_on=(
                     "control.settings_spec",
@@ -27535,10 +27723,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.vendor_project_lifecycle",
                     "operations.service_order_lifecycle",
                     "events.dispatcher",
+                    "events.owner_outputs",
                 ),
                 notes=(
                     "Coordinates exact structural identifiers while each domain "
-                    "owner remains the only writer of its own root."
+                    "owner remains the only writer of its own root. The "
+                    "verified-implementation, service-order-release, and CX-"
+                    "acceptance outputs are consumed through receipted owner "
+                    "commands so each effect commits atomically with its "
+                    "unique (consumer, event_id) receipt."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -27560,6 +27753,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical native project state",
                                 "canonical sales ServiceOrder state",
                             ),
+                        ),
+                        ConcernContract(
+                            name="committed lifecycle output consumption",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical vendor verification evidence",
+                                "canonical sales ServiceOrder state",
+                                "canonical SalesOrder implementation contract",
+                                "receipted owner-output deliveries",
+                            ),
+                            canonical_writer="sales.fulfillment",
                         ),
                     ),
                     authoritative_inputs=(
@@ -27614,13 +27818,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "creation and identity"
                             ),
                         ),
+                        AuthorityInput(
+                            name="receipted owner-output deliveries",
+                            owner="events.owner_outputs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique (consumer, event_id) receipts committing "
+                                "atomically with each consumed lifecycle effect"
+                            ),
+                        ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
                             "Scope and release commands may own the root transaction or "
-                            "flush into the invoking order/event coordinator; each called "
-                            "domain owner remains transaction-neutral in nested use."
+                            "flush into the invoking order/event coordinator; the "
+                            "consume_* commands each enter execute_owner_command once "
+                            "on a transaction-free session; each called domain owner "
+                            "remains transaction-neutral in nested use."
                         ),
                         locking=(
                             "The exact SalesOrder or InstallationProject is selected FOR "

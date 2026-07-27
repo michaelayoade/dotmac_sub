@@ -62,6 +62,24 @@ def test_projection_handler_consumes_the_full_chain():
     # Consequences must not be wrapped in a swallow: the handler module
     # delegates to owners and lets failures propagate to the dispatcher.
     assert "except Exception" not in src
+    # The verified/release/acceptance hops run through sales.fulfillment's
+    # receipted consumer commands on fresh owner-command sessions.
+    assert "_owner_session(" in src
+    for consumer in (
+        "consume_verified_implementation",
+        "consume_service_order_release",
+        "consume_cx_acceptance",
+    ):
+        assert consumer in src
+
+
+def test_fulfillment_consumers_are_receipted_owner_commands():
+    src = _source("app/services/sales_fulfillment.py")
+    assert "consume_owner_output" in src
+    assert "execute_owner_command" in src
+    assert 'concern="committed lifecycle output consumption"' in src or (
+        '_CONSUME_CONCERN = "committed lifecycle output consumption"' in src
+    )
 
 
 def test_released_output_carries_sales_linkage():

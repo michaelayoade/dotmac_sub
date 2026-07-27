@@ -108,9 +108,22 @@ def test_transition_outputs_commit_atomically_and_apply_consequences(db_session)
 
     db_session.commit()
 
-    assert _events(db_session, "outage.created")[0].status == EventStatus.completed
+    delivered = _events(db_session, "outage.created")[0]
+    assert delivered.status == EventStatus.completed
     assert db_session.query(OperationalOwner).count() == 1
     assert db_session.query(OperationalEscalationEvent).count() == 1
+    # The consumer effect committed atomically with its unique receipt.
+    from app.models.owner_output import OwnerOutputReceipt
+
+    receipt = (
+        db_session.query(OwnerOutputReceipt)
+        .filter(
+            OwnerOutputReceipt.consumer == "network.outage_lifecycle",
+            OwnerOutputReceipt.event_id == delivered.event_id,
+        )
+        .one()
+    )
+    assert receipt.outcome.value == "succeeded"
 
 
 def test_replaying_the_consequence_is_idempotent(db_session):

@@ -47,6 +47,13 @@ A consequence that cannot be applied raises, so the event delivery stays a
 failed, visible, retryable `event_store` row — never a warning log. A stale
 replay after the incident terminated plans nothing.
 
+Each consequence runs through the owner's receipted consumer commands
+(`consume_outage_activation` / `consume_outage_termination`) inside
+`execute_owner_command` on a fresh session: the effect and its unique
+`(consumer, event_id)` receipt (`events.owner_outputs`, ADR 0007 §2) commit
+atomically, so a redelivery is an exact no-op. `network.outage_lifecycle`
+carries a complete typed `ServiceContract` in the executable registry.
+
 ## Named owners
 
 | Decision or fact | Owner |
@@ -83,14 +90,12 @@ are surfaced (never auto-resolved) by the existing stale-incident alarm.
 
 ## Deferred (later slices)
 
-- Durable per-entity SLA timers (per-level delays) — pending the
-  `runtime.durable_timers` owner from the billing target architecture
-  (ADR 0007, delivered on `feat/billing-target-architecture`); today
-  escalation timing lives on `OperationalEscalationDelivery.cooldown_until`
-  drained by the delivery runner. Once that branch merges, the projection
-  handlers should also adopt `events.owner_outputs` consumer receipts.
+- Durable per-entity SLA timers (per-level delays) via
+  `runtime.durable_timers` (ADR 0007, merged); today escalation timing
+  lives on `OperationalEscalationDelivery.cooldown_until` drained by the
+  delivery runner.
 - Field/support verification before resolution — recovery is currently a
   sustained-absence timer (`W_resolve`); a verification hop would be a new
   feature, not a chaining conversion.
-- Typed `ServiceContract` entries for `network.outage_lifecycle` and
-  `network.outage_impact` (both currently uncontracted registry entries).
+- A typed `ServiceContract` for `network.outage_impact` (still
+  uncontracted; `network.outage_lifecycle` is now fully contracted).

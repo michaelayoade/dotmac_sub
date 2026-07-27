@@ -30,15 +30,28 @@ def test_lifecycle_outputs_are_atomic_not_swallowed():
     assert "EventType.network_alert" in src
 
 
-def test_detection_owner_no_longer_applies_cross_owner_consequences_inline():
+def test_transitions_never_apply_cross_owner_consequences_inline():
     src = _source("app/services/topology/outage.py")
-    for retired_call in (
+    marker = "receipted lifecycle-output consumption"
+    assert marker in src
+    transitions = src.split(marker, 1)[0]
+    consumers = src.split(marker, 1)[1]
+    for consequence_call in (
         "ensure_outage_operations(",
         "ensure_outage_customer_watchers(",
         "plan_outage_escalations(",
         "cancel_entity_events(",
     ):
-        assert retired_call not in src
+        # Consequences run only through the receipted consumer commands,
+        # never inline inside a transition.
+        assert consequence_call not in transitions
+    for receipt_marker in (
+        "consume_owner_output",
+        "execute_owner_command",
+        "def consume_outage_activation",
+        "def consume_outage_termination",
+    ):
+        assert receipt_marker in consumers
 
 
 def test_projection_handler_consumes_the_lifecycle_outputs():
@@ -53,6 +66,11 @@ def test_projection_handler_consumes_the_lifecycle_outputs():
     # Consequences must not be wrapped in a swallow: failures propagate so
     # the delivery stays failed and retryable.
     assert "except Exception" not in src
+    # The handler is a delivery adapter over the receipted consumer
+    # commands, each on a fresh owner-command session.
+    assert "_owner_session(" in src
+    assert "consume_outage_activation" in src
+    assert "consume_outage_termination" in src
 
 
 def test_handler_is_registered_and_scoped():

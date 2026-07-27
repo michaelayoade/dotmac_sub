@@ -352,3 +352,16 @@ def test_cx_acceptance_fulfils_order_through_committed_output(
         .one()
     )
     assert accepted.status == EventStatus.completed
+    # The fulfilment effect committed atomically with its unique receipt;
+    # a redelivery of the same event is an exact no-op.
+    from app.models.owner_output import OwnerOutputReceipt
+
+    receipt = (
+        db_session.query(OwnerOutputReceipt)
+        .filter(
+            OwnerOutputReceipt.consumer == "sales.fulfillment",
+            OwnerOutputReceipt.event_id == accepted.event_id,
+        )
+        .one()
+    )
+    assert receipt.outcome.value == "succeeded"

@@ -625,3 +625,122 @@ def list_stale_open_incidents(
         .order_by(OutageIncident.started_at.asc())
         .all()
     )
+
+
+# --- receipted lifecycle-output consumption --------------------------------
+#
+# The registered OutageLifecycleProjectionHandler delivers this owner's
+# committed outputs back to these commands. Each runs on a transaction-free
+# owner-command session and wraps its cross-owner effect (operational
+# escalation participants) in a unique ``(consumer, event_id)`` receipt via
+# ``events.owner_outputs`` — the effect and receipt commit atomically, a
+# redelivery is an exact no-op, and a raised failure leaves the delivery
+# durably failed and retryable. The incident transitions above never apply
+# these consequences inline.
+
+
+def _consume_definition(name: str):
+    from app.services.owner_commands import OwnerCommandDefinition
+
+    return OwnerCommandDefinition(
+        owner="network.outage_lifecycle",
+        concern="committed outage output consumption",
+        name=name,
+    )
+
+
+def consume_outage_activation(
+    session: Session,
+    *,
+    incident_id,
+    event_id,
+    event_type: str,
+    context,
+) -> str | None:
+    """Receipt one declared/confirmed output into operational consequences."""
+    from app.services.events.owner_outputs import consume_owner_output
+    from app.services.owner_commands import execute_owner_command
+
+    def _effect() -> str:
+        from app.services.topology.outage_operations import (
+            ensure_outage_customer_watchers,
+            ensure_outage_operations,
+            plan_outage_escalations,
+        )
+
+        incident = session.get(OutageIncident, incident_id)
+        if incident is None:
+            logger.warning(
+                "outage activation consequence: incident %s missing", incident_id
+            )
+            return "skipped_missing"
+        # A stale replay after the incident already terminated must not plan
+        # fresh escalations that nothing would cancel.
+        if incident.status in CLASSIFIER_TERMINAL_STATUSES:
+            return "skipped_terminal"
+        ensure_outage_operations(session, incident)
+        ensure_outage_customer_watchers(session, incident)
+        plan_outage_escalations(session, incident, trigger=event_type)
+        return "applied"
+
+    return execute_owner_command(
+        session,
+        definition=_consume_definition("consume_outage_activation"),
+        context=context,
+        operation=lambda: consume_owner_output(
+            session,
+            consumer="network.outage_lifecycle",
+            event_id=event_id,
+            event_type=event_type,
+            producer_owner="network.outage_lifecycle",
+            context=context,
+            operation=_effect,
+        )[0],
+    )
+
+
+def consume_outage_termination(
+    session: Session,
+    *,
+    incident_id,
+    event_id,
+    event_type: str,
+    resolved_at: datetime | None,
+    context,
+) -> str | None:
+    """Receipt one resolved/discarded output into escalation cancellation."""
+    from app.models.operational_escalation import OperationalEntityType
+    from app.services import operational_escalation
+    from app.services.events.owner_outputs import consume_owner_output
+    from app.services.owner_commands import execute_owner_command
+
+    def _effect() -> str:
+        incident = session.get(OutageIncident, incident_id)
+        if incident is None:
+            logger.warning(
+                "outage termination consequence: incident %s missing", incident_id
+            )
+            return "skipped_missing"
+        operational_escalation.cancel_entity_events(
+            session,
+            entity_type=OperationalEntityType.outage,
+            entity_id=incident.id,
+            reason=event_type,
+            canceled_at=resolved_at,
+        )
+        return "applied"
+
+    return execute_owner_command(
+        session,
+        definition=_consume_definition("consume_outage_termination"),
+        context=context,
+        operation=lambda: consume_owner_output(
+            session,
+            consumer="network.outage_lifecycle",
+            event_id=event_id,
+            event_type=event_type,
+            producer_owner="network.outage_lifecycle",
+            context=context,
+            operation=_effect,
+        )[0],
+    )

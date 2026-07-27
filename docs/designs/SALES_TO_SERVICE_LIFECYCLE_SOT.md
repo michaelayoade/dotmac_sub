@@ -37,6 +37,17 @@ retry, and the registered `SalesLifecycleProjectionHandler` adapter asks the
 next owner to apply the consequence. A failed consequence stays a failed
 event delivery — visible and retryable — never a warning log.
 
+The verified-implementation, service-order-release, and CX-acceptance hops
+are consumed through `sales.fulfillment`'s receipted owner commands
+(`consume_verified_implementation` / `consume_service_order_release` /
+`consume_cx_acceptance`): each effect commits atomically with its unique
+`(consumer, event_id)` receipt via `events.owner_outputs` (ADR 0007 §2), so
+a redelivery is an exact no-op. The funding consequence remains idempotent
+on business keys only — its effect creates subscriptions and invoices
+through billing/catalog creators that commit internally, which an owner
+command correctly forbids; it adopts a receipt when those creators become
+commit-free participants.
+
 ```text
 sales_order.funding_satisfied   (sales.orders, atomically with the paid edge)
   -> pending Subscription + draft ServiceOrder per service line

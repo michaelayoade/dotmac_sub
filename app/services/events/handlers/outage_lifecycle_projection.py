@@ -1,13 +1,14 @@
 """Project committed outage lifecycle facts into downstream owners.
 
-The handler is deliberately orchestration-only: incident transitions remain
-facts owned by ``network.outage_lifecycle``, while this adapter asks the
-operational-escalation owner to apply the consequence — attach operational
-owners/watchers and plan SLA escalations when an incident becomes
-customer-visible, and cancel escalations when it terminates. Detection and
-recovery remain observation loops; outage resolution never closes support
-Tickets or WorkOrders (Support and Field owners transition their own cases
-from recovery evidence).
+The handler is a thin delivery adapter: incident transitions remain facts
+owned by ``network.outage_lifecycle``, and each consequence runs through
+that owner's receipted consumer commands (``consume_outage_activation`` /
+``consume_outage_termination``) on a fresh owner-command session — the
+effect and its unique ``(consumer, event_id)`` receipt commit atomically,
+so a redelivery is an exact no-op. Detection and recovery remain
+observation loops; outage resolution never closes support Tickets or
+WorkOrders (Support and Field owners transition their own cases from
+recovery evidence).
 
 A consequence that cannot be applied raises so the event delivery stays
 failed and retryable instead of a warning log.
@@ -20,6 +21,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.services.events.handlers.owner_session import owner_session as _owner_session
 from app.services.events.types import Event, EventType
 
 logger = logging.getLogger(__name__)
@@ -35,67 +37,69 @@ HANDLED_EVENT_TYPES = frozenset(
 
 
 class OutageLifecycleProjectionHandler:
-    """Request idempotent downstream outage consequences after commit."""
+    """Deliver committed outage outputs to their receipted consumers."""
 
     def handle(self, db: Session, event: Event) -> None:
-        if event.event_type in {
-            EventType.outage_created,
-            EventType.outage_confirmed,
-        }:
-            self._apply_activation_consequences(db, event)
-        elif event.event_type in {
-            EventType.outage_discarded,
-            EventType.outage_resolved,
-        }:
-            self._cancel_escalations(db, event)
-
-    @staticmethod
-    def _incident(db: Session, event: Event):
-        from app.models.network_monitoring import OutageIncident
-        from app.services.common import coerce_uuid
-
         incident_id = event.payload.get("incident_id")
         if not incident_id:
             logger.warning(
                 "outage lifecycle event %s has no incident id", event.event_id
             )
-            return None
-        return db.get(OutageIncident, coerce_uuid(incident_id))
+            return
+        if event.event_type in {
+            EventType.outage_created,
+            EventType.outage_confirmed,
+        }:
+            self._apply_activation_consequences(db, event, incident_id)
+        elif event.event_type in {
+            EventType.outage_discarded,
+            EventType.outage_resolved,
+        }:
+            self._cancel_escalations(db, event, incident_id)
 
-    def _apply_activation_consequences(self, db: Session, event: Event) -> None:
-        from app.services.topology.outage import CLASSIFIER_TERMINAL_STATUSES
-        from app.services.topology.outage_operations import (
-            ensure_outage_customer_watchers,
-            ensure_outage_operations,
-            plan_outage_escalations,
+    @staticmethod
+    def _context(event: Event, incident_id: str):
+        from app.services.owner_commands import CommandContext
+
+        return CommandContext.system(
+            actor=str(event.actor or "system:outage_lifecycle_projection"),
+            scope=str(incident_id),
+            reason=event.event_type.value,
+            command_id=event.event_id,
+            correlation_id=event.event_id,
+            causation_id=event.event_id,
+            idempotency_key=f"event:{event.event_id}",
         )
 
-        incident = self._incident(db, event)
-        if incident is None:
-            return
-        # A stale replay after the incident already terminated must not plan
-        # fresh escalations that nothing would cancel.
-        if incident.status in CLASSIFIER_TERMINAL_STATUSES:
-            return
-        ensure_outage_operations(db, incident)
-        ensure_outage_customer_watchers(db, incident)
-        plan_outage_escalations(db, incident, trigger=event.event_type.value)
+    def _apply_activation_consequences(
+        self, db: Session, event: Event, incident_id: str
+    ) -> None:
+        from app.services.common import coerce_uuid
+        from app.services.topology import outage
 
-    def _cancel_escalations(self, db: Session, event: Event) -> None:
-        from app.models.operational_escalation import OperationalEntityType
-        from app.services import operational_escalation
+        with _owner_session(db) as owner_db:
+            outage.consume_outage_activation(
+                owner_db,
+                incident_id=coerce_uuid(incident_id),
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+                context=self._context(event, incident_id),
+            )
 
-        incident = self._incident(db, event)
-        if incident is None:
-            return
+    def _cancel_escalations(self, db: Session, event: Event, incident_id: str) -> None:
+        from app.services.common import coerce_uuid
+        from app.services.topology import outage
+
         canceled_at: datetime | None = None
         resolved_at = event.payload.get("resolved_at")
         if resolved_at:
             canceled_at = datetime.fromisoformat(resolved_at)
-        operational_escalation.cancel_entity_events(
-            db,
-            entity_type=OperationalEntityType.outage,
-            entity_id=incident.id,
-            reason=event.event_type.value,
-            canceled_at=canceled_at,
-        )
+        with _owner_session(db) as owner_db:
+            outage.consume_outage_termination(
+                owner_db,
+                incident_id=coerce_uuid(incident_id),
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+                resolved_at=canceled_at,
+                context=self._context(event, incident_id),
+            )
