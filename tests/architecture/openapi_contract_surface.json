@@ -17098,6 +17098,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/sales-orders/{sales_order_id}/waive": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:sales_order_id!"
+   ],
+   "request": "f81589a422b2",
+   "responses": {
+    "200": "7d3d7446914f",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/scheduler/tasks": {
    "params": [
     "header:authorization",
@@ -19380,13 +19392,14 @@
   "RouterSotIntentInput": "bb4ccfc36038",
   "RouterUpdate": "b488b0b52d62",
   "SalesOrderCreate": "7253271450b0",
-  "SalesOrderLineCreate": "1e82b5cf1f0d",
-  "SalesOrderLineRead": "b51fa4402bf6",
-  "SalesOrderLineUpdate": "02ec939fcb7e",
+  "SalesOrderLineCreate": "40ea274f4572",
+  "SalesOrderLineRead": "6e9b6d82b372",
+  "SalesOrderLineUpdate": "01008375ca08",
   "SalesOrderPaymentStatus": "f35fa961d17a",
   "SalesOrderRead": "0cf8e68a83b8",
   "SalesOrderStatus": "c4e8325ddc57",
   "SalesOrderUpdate": "f0a42bcded23",
+  "SalesOrderWaiveRequest": "22644ff36211",
   "ScheduleType": "be67068873a3",
   "ScheduledTaskCreate": "c2447ba32ccf",
   "ScheduledTaskRead": "56b8c0be8019",

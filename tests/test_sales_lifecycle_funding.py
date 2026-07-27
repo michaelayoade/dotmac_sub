@@ -289,10 +289,11 @@ def test_waiver_survives_a_line_edit(db_session, billing_calls):
     order = sales_order_service.sales_orders.create(
         db_session, SalesOrderCreate(subscriber_id=subscriber.id)
     )
-    order = sales_order_service.sales_orders.update(
+    order = sales_order_service.record_waiver(
         db_session,
-        str(order.id),
-        SalesOrderUpdate(payment_status=SalesOrderPaymentStatus.waived),
+        sales_order_id=order.id,
+        actor_id="staff:folake",
+        reason="Free relocation for a goodwill case",
     )
     assert order.payment_status == SalesOrderPaymentStatus.waived.value
 
@@ -317,10 +318,11 @@ def test_waiver_is_still_revocable_explicitly(db_session, billing_calls):
         db_session,
         SalesOrderCreate(subscriber_id=subscriber.id, total=Decimal("100.00")),
     )
-    sales_order_service.sales_orders.update(
+    sales_order_service.record_waiver(
         db_session,
-        str(order.id),
-        SalesOrderUpdate(payment_status=SalesOrderPaymentStatus.waived),
+        sales_order_id=order.id,
+        actor_id="staff:folake",
+        reason="Waived, then reinstated",
     )
 
     order = sales_order_service.sales_orders.update(

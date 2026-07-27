@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice
 from app.models.provisioning import ServiceOrder
 from app.models.sales import SalesOrderPaymentStatus, SalesOrderStatus
 from app.models.subscriber import Subscriber
@@ -262,8 +262,16 @@ def test_waiver_posts_no_money_to_the_ledger(db_session, billing_calls):
     assert "record_external_payment" not in [name for name, _ in billing_calls]
 
 
-def test_waived_order_gets_a_settled_zero_invoice(db_session, billing_calls):
-    """An accounting document that can never age into collections."""
+def test_waived_order_gets_a_zero_invoice_that_is_never_collectible(
+    db_session, billing_calls
+):
+    """An accounting document for every order, carrying no debt.
+
+    Asserted through the collections predicate rather than a status string,
+    because not being chased is the behaviour that actually matters.
+    """
+    from app.services.invoice_collectibility import open_invoice_filters
+
     order, _line = _order_with_service_line(db_session)
 
     sales_order_service.record_waiver(
@@ -280,7 +288,14 @@ def test_waived_order_gets_a_settled_zero_invoice(db_session, billing_calls):
     )
     assert len(invoices) == 1
     assert invoices[0].total == Decimal("0.00")
-    assert invoices[0].status == InvoiceStatus.paid
+    assert invoices[0].balance_due == Decimal("0.00")
+
+    collectible = (
+        db_session.query(Invoice)
+        .filter(*open_invoice_filters(order.subscriber_id))
+        .count()
+    )
+    assert collectible == 0
 
 
 def test_waiver_replay_is_idempotent(db_session, billing_calls):

@@ -477,19 +477,15 @@ def ensure_installation_invoice_for_sales_order(db: Session, sales_order_id) -> 
         )
         return
 
-    from app.models.billing import InvoiceStatus
-
-    waived = sales_order.payment_status == _WAIVED
-    if waived:
-        # A waived order still gets its accounting document, at zero. It is
-        # created already settled: an ``issued`` zero invoice would age into
-        # ``overdue`` on its due date and show up in collections owing nothing.
+    if sales_order.payment_status == _WAIVED:
+        # A waived order still gets its accounting document, at zero, so every
+        # order has one. It carries no debt: collections selects on
+        # ``balance_due > 0`` (see ``invoice_collectibility``), so a zero
+        # invoice is never chased regardless of the status it rests in.
         amount = Decimal("0.00")
-        invoice_status = InvoiceStatus.paid
         description = "Installation cost (waived)"
     else:
         amount = _resolve_installation_amount(db, project)
-        invoice_status = InvoiceStatus.issued
         description = "Installation cost"
         if amount <= 0:
             logger.info("invoice_skip_no_installation_cost project_id=%s", project.id)
@@ -509,7 +505,6 @@ def ensure_installation_invoice_for_sales_order(db: Session, sales_order_id) -> 
             description=description,
             external_ref=f"project:{project.id}",
             currency=sales_order.currency or "NGN",
-            status=invoice_status,
         )
     except LookupError as exc:
         # Record the failure so it surfaces and a later trigger (or operator)
@@ -605,9 +600,13 @@ def _ensure_provisioning_order_for_sales_line(
     subscription: Subscription,
 ) -> None:
     """Stage one idempotent provisioning order for a closed sale line."""
-    if not funding_is_settled(sales_order) and sales_order.status != (
-        SalesOrderStatus.fulfilled.value
-    ):
+    # Widened, not narrowed: the order lifecycle statuses that already meant
+    # "closed" still qualify, and a waived order now qualifies too.
+    closed = sales_order.status in {
+        SalesOrderStatus.paid.value,
+        SalesOrderStatus.fulfilled.value,
+    }
+    if not closed and not funding_is_settled(sales_order):
         return
 
     from app.models.provisioning import (
