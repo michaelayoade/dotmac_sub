@@ -58,7 +58,7 @@ def test_revision_is_linear_forward_only_party_identity_cutover() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
 
     assert migration.revision == "426_service_team_lifecycle"
-    assert migration.down_revision == "424_proposed_route_review_evidence"
+    assert migration.down_revision == "425_vendor_project_intake_evidence"
     assert "fk_service_teams_manager_person_id_parties" in source
     assert "fk_service_team_members_person_id_parties" in source
     assert "ux_service_teams_name_ci" in source
