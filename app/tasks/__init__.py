@@ -156,6 +156,7 @@ from app.tasks.router_sync import (
     sync_all_interfaces,
     sync_all_system_info,
 )
+from app.tasks.sales_lifecycle import reconcile_sales_to_service_lifecycle
 from app.tasks.security import run_scheduled_credential_rotation
 from app.tasks.support_tickets import auto_confirm_resolved_tickets
 from app.tasks.team_inbox import (
@@ -364,4 +365,7 @@ __all__ = [
     "reconcile_quote_mirror",
     "reconcile_referral_mirror",
     "send_scheduled_ncc_report",
+    # Sales-to-service lifecycle drift backstop. Importing here registers it
+    # with the worker; without that the scheduled task name never resolves.
+    "reconcile_sales_to_service_lifecycle",
 ]

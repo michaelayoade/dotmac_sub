@@ -547,6 +547,17 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         LOG,
         "Retired CRM mirror task tombstone.",
     ),
+    "app.tasks.sales_lifecycle.reconcile_sales_to_service_lifecycle": _c(
+        "sales",
+        SWEEP,
+        IDEMP,
+        LOG,
+        "Detect-only by default; the sweep is a deterministic rescan of "
+        "authoritative state and every repair is requested from the owning "
+        "service, so a repeat run converges. A rejected repair rolls back the "
+        "whole sweep and the next beat reselects the same drift, which is why "
+        "the counts are logged at WARNING rather than silently retried.",
+    ),
     "app.tasks.support_tickets.auto_confirm_resolved_tickets": _c(
         "support",
         SWEEP,
