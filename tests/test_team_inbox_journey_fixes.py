@@ -144,6 +144,70 @@ def test_an_email_conversation_reaches_the_customer_scoped_read(db_session):
     assert result.count == 1
 
 
+# --- Journey: a reply only joins a live thread -------------------------------
+
+
+def _inbound(db_session, *, message_id: str, in_reply_to: str | None = None):
+    return team_inbox_receive.receive_inbound_email(
+        db_session,
+        team_inbox_receive.InboundEmailPayload(
+            from_address="ada@example.com",
+            to_addresses=["support@dotmac.io"],
+            subject="Line fault",
+            body="Body.",
+            message_id=message_id,
+            in_reply_to=in_reply_to,
+        ),
+    )
+
+
+def test_a_reply_joins_the_thread_it_references(db_session):
+    first = _inbound(db_session, message_id="<a@example.com>")
+    db_session.commit()
+    second = _inbound(
+        db_session, message_id="<b@example.com>", in_reply_to="<a@example.com>"
+    )
+    db_session.commit()
+
+    assert second.conversation_id == first.conversation_id
+
+
+def test_a_reply_to_a_resolved_thread_opens_a_new_one(db_session):
+    """It used to attach, and inbound email never reopens a thread.
+
+    So the message landed in a closed conversation nobody was watching. The
+    channel path has always started a fresh thread in this case; email is the
+    one that differed.
+    """
+    first = _inbound(db_session, message_id="<c@example.com>")
+    conversation = db_session.get(InboxConversation, first.conversation_id)
+    conversation.status = InboxConversationStatus.resolved.value
+    db_session.commit()
+
+    second = _inbound(
+        db_session, message_id="<d@example.com>", in_reply_to="<c@example.com>"
+    )
+    db_session.commit()
+
+    assert second.conversation_id != first.conversation_id
+    db_session.refresh(conversation)
+    assert conversation.status == InboxConversationStatus.resolved.value
+
+
+def test_a_reply_to_a_deleted_thread_opens_a_new_one(db_session):
+    first = _inbound(db_session, message_id="<e@example.com>")
+    conversation = db_session.get(InboxConversation, first.conversation_id)
+    conversation.is_active = False
+    db_session.commit()
+
+    second = _inbound(
+        db_session, message_id="<f@example.com>", in_reply_to="<e@example.com>"
+    )
+    db_session.commit()
+
+    assert second.conversation_id != first.conversation_id
+
+
 # --- Journey: inbound social traffic lands on a team --------------------------
 
 

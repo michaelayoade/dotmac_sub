@@ -121,12 +121,28 @@ def _find_thread_conversation(
     *,
     message_ids: list[str],
 ) -> InboxConversation | None:
+    """The live conversation a referenced Message-ID belongs to, if any.
+
+    Only a live thread is joinable. The referenced message used to be matched
+    with no conditions on its conversation at all, so a reply could attach to a
+    soft-deleted thread, or to a resolved one — and since inbound email never
+    changes status, a resolved thread did not reopen either, so the message
+    landed where nobody was looking.
+
+    This mirrors the channel path's ``_find_open_conversation``, which has
+    always required an active, unresolved conversation. A reply that finds no
+    live thread opens a new one, exactly as a WhatsApp reply after resolution
+    already does.
+    """
     if not message_ids:
         return None
     message = (
         db.query(InboxMessage)
+        .join(InboxConversation, InboxConversation.id == InboxMessage.conversation_id)
         .filter(InboxMessage.channel_type == InboxChannelType.email.value)
         .filter(InboxMessage.external_message_id.in_(message_ids))
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
         .order_by(InboxMessage.created_at.desc())
         .first()
     )

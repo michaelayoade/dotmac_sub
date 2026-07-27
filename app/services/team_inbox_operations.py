@@ -1245,10 +1245,20 @@ def wake_on_inbound(db: Session, *, conversation: InboxConversation) -> bool:
     return True
 
 
+@dataclass(frozen=True)
+class RenderedTranscript:
+    subject: str
+    html: str
+    # How many messages actually left with the export. The audit records it,
+    # and deriving it here rather than in the caller keeps it honest: the
+    # renderer already decides what is included.
+    message_count: int
+
+
 def render_conversation_transcript(
     db: Session, *, conversation: InboxConversation
-) -> tuple[str, str]:
-    """Render a conversation as (subject, html) for emailing.
+) -> RenderedTranscript:
+    """Render a conversation for emailing.
 
     Internal notes and comments are deliberately excluded: a transcript is
     often forwarded to the customer or a third party, and internal
@@ -1285,11 +1295,12 @@ def render_conversation_transcript(
             f"<span style='color:#64748b'>{when}</span><br>{body}</p>"
         )
 
+    message_count = len(rows)
     if not rows:
         rows.append("<p><em>No messages were exchanged.</em></p>")
 
     html = f"<h2 style='margin:0 0 16px'>{_escape(subject)}</h2>" + "".join(rows)
-    return subject, html
+    return RenderedTranscript(subject=subject, html=html, message_count=message_count)
 
 
 # Kept as a module constant so the transcript filter cannot drift from the
