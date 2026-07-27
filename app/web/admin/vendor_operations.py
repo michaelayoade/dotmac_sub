@@ -9,11 +9,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.vendor_routes import (
-    InstallationProject,
-    InstallationProjectStatus,
-    Vendor,
-)
 from app.services import (
     vendor_as_built_review_proposals,
     vendor_project_review_proposals,
@@ -131,18 +126,16 @@ def vendor_operations_queue(
     )
     context.update(
         {
-            "draft_projects": db.query(InstallationProject)
-            .filter(InstallationProject.status == InstallationProjectStatus.draft.value)
-            .limit(100)
-            .all()
-            if show_field_reviews
-            else [],
-            "active_vendors": db.query(Vendor)
-            .filter(Vendor.is_active.is_(True))
-            .order_by(Vendor.name)
-            .all()
-            if show_field_reviews
-            else [],
+            "draft_projects": (
+                vendor_portal_operations.list_draft_projects(db)
+                if show_field_reviews
+                else []
+            ),
+            "active_vendors": (
+                vendor_portal_operations.list_active_vendors(db)
+                if show_field_reviews
+                else []
+            ),
             "message": message,
             "show_field_reviews": show_field_reviews,
             "show_route_reviews": show_route_reviews,

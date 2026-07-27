@@ -21,6 +21,7 @@ from app.models.vendor_routes import (
     ProjectQuoteStatus,
     ProposedRouteRevision,
     ProposedRouteRevisionStatus,
+    Vendor,
     VendorAssignmentType,
 )
 from app.models.work_order import WorkOrder
@@ -898,6 +899,30 @@ class VendorPortalOperations:
     @staticmethod
     def get_as_built_review(db: Session, as_built_id: str) -> dict:
         return _serialize_as_built_review(_as_built(db, as_built_id))
+
+    @staticmethod
+    def list_draft_projects(
+        db: Session, *, limit: int = 100
+    ) -> list[InstallationProject]:
+        """Draft installation projects awaiting vendor assignment."""
+
+        return (
+            db.query(InstallationProject)
+            .filter(InstallationProject.status == InstallationProjectStatus.draft.value)
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+
+    @staticmethod
+    def list_active_vendors(db: Session) -> list[Vendor]:
+        """Active vendors, for the assignment pickers on the operations page."""
+
+        return (
+            db.query(Vendor)
+            .filter(Vendor.is_active.is_(True))
+            .order_by(Vendor.name)
+            .all()
+        )
 
     @staticmethod
     def list_reviewable_projects(db: Session, *, limit: int = 200) -> list[dict]:
