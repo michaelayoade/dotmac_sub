@@ -2419,7 +2419,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
             SOTService(
                 name="collections.postpaid_policy",
-                module="app.services.collections.mode_policies",
+                module="app.services.collections.postpaid_policy",
                 owns=("typed overdue-receivable decision",),
                 depends_on=("billing.obligations",),
                 notes=(
@@ -2494,7 +2494,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
             SOTService(
                 name="collections.prepaid_policy",
-                module="app.services.collections.mode_policies",
+                module="app.services.collections.prepaid_policy",
                 owns=("typed uncovered-service decision",),
                 depends_on=(
                     "billing.obligations",

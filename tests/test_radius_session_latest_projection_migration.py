@@ -31,7 +31,27 @@ def test_radius_session_projection_remains_in_the_single_migration_chain() -> No
 
     assert module.revision == "408_radius_session_latest_projection"
     assert module.down_revision == "407_retire_parallel_radius_refresh"
-    assert script.get_heads() == ["426_service_team_lifecycle"]
+    assert script.get_heads() == ["431_sales_funding_erp_exports"]
+    assert (
+        script.get_revision("431_sales_funding_erp_exports").down_revision
+        == "430_durable_timers_collections_cases"
+    )
+    assert (
+        script.get_revision("430_durable_timers_collections_cases").down_revision
+        == "429_owner_output_receipts"
+    )
+    assert (
+        script.get_revision("429_owner_output_receipts").down_revision
+        == "428_customer_subledger_postings"
+    )
+    assert (
+        script.get_revision("428_customer_subledger_postings").down_revision
+        == "427_billing_contract_obligation_identity"
+    )
+    assert (
+        script.get_revision("427_billing_contract_obligation_identity").down_revision
+        == "426_service_team_lifecycle"
+    )
     assert (
         script.get_revision("426_service_team_lifecycle").down_revision
         == "425_vendor_project_intake_evidence"

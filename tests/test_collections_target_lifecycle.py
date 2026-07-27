@@ -28,11 +28,9 @@ from app.models.collections_case import (
 from app.models.durable_timer import DurableTimer, TimerStatus
 from app.models.event_store import EventStore
 from app.services.collections.lifecycle import CollectionsLifecycle
-from app.services.collections.mode_policies import (
-    CollectionsProposal,
-    plan_postpaid_consequence,
-    plan_prepaid_consequence,
-)
+from app.services.collections.mode_policies import CollectionsProposal
+from app.services.collections.postpaid_policy import plan_postpaid_consequence
+from app.services.collections.prepaid_policy import plan_prepaid_consequence
 from app.services.owner_commands import CommandContext
 
 NOW = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
