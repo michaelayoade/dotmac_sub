@@ -44,11 +44,13 @@ UNKNOWN = "unknown"
 STALE_POLL_AFTER_SECONDS = 900
 
 # Heartbeat written on every warm run so the customer-facing connection-status
-# reader can tell whether live_status is being refreshed. If the warmer dies,
-# this key ages out and good states stop being trusted (see topology.selfcare).
-# TTL is far longer than the staleness window so the timestamp survives to be
-# age-compared (a TTL-expired key reads as "missing", which we treat as
-# unknown-freshness, not stale — see selfcare._warm_is_stale).
+# readers can tell whether live_status is being refreshed at all. If the warmer
+# dies this key ages out and positive states stop being trusted — that is the
+# warmer's dead-man switch, read through
+# ``device_operational_status.warmer_is_stale`` and applied by
+# :func:`trusted_live_status` below. TTL is far longer than the staleness window
+# so the timestamp survives to be age-compared; a missing key reads as stale
+# (fail closed), never as fresh.
 WARM_HEARTBEAT_KEY = "topology:live_status:warmed_at"
 _WARM_HEARTBEAT_TTL_SECONDS = 86_400
 
@@ -176,18 +178,124 @@ def live_status_observed_at(
     return None
 
 
+def _is_pollable(node) -> bool:
+    """Python mirror of :func:`pollable_device_criteria` for a loaded row.
+
+    A node outside this set is never visited by the warmer, so whatever
+    ``live_status`` it carries is frozen and can only get older.
+    """
+    if not getattr(node, "is_active", True):
+        return False
+    if not (
+        getattr(node, "ping_enabled", False) or getattr(node, "snmp_enabled", False)
+    ):
+        return False
+    return bool(getattr(node, "mgmt_ip", None) or getattr(node, "hostname", None))
+
+
+def trusted_live_status(
+    node,
+    *,
+    now: datetime | None = None,
+    warm_stale: bool | None = None,
+    stale_after_seconds: int = STALE_POLL_AFTER_SECONDS,
+) -> str:
+    """``live_status`` with the freshness gate applied — the read-side contract.
+
+    ``live_status`` is a warmed cache. Nothing in the schema stops it from going
+    stale, and before this gate existed a node that left the pollable set (or a
+    dead warmer) kept whatever value it last held, forever. A frozen ``up`` is
+    the dangerous case: ``health_classifier.classify_node`` treats mgmt ``up``
+    with zero online customers as ``service_fault`` ("reachable, serving nobody
+    — NOT an area outage"), so a frozen ``up`` silently vetoes outage detection
+    and the customer surface reports the cabinet healthy indefinitely.
+
+    The gate is therefore **asymmetric, deliberately**:
+
+    * a positive assertion (``up``) requires live support — the row must be
+      active, still pollable, its observation fresh, and the warmer alive.
+      Otherwise it decays to ``unknown``;
+    * a negative assertion (``down``) is left alone. It fails safe: it opens an
+      incident an operator can see and close. Decaying it too would let a dead
+      warmer *suppress* real outages, trading a silent false-healthy for a
+      silent false-healthy.
+
+    Anything that is not ``up`` passes through unchanged.
+    """
+    value = str(getattr(node, "live_status", None) or "").strip().lower()
+    if value != UP:
+        return value or UNKNOWN
+    if not getattr(node, "is_active", True):
+        return UNKNOWN
+    if not _is_pollable(node):
+        return UNKNOWN
+    current = now or _now()
+    observed = live_status_observed_at(
+        node,
+        now=current,
+        stale_after_seconds=stale_after_seconds,
+    )
+    if observed is not None:
+        return UP if _fresh(observed, current, stale_after_seconds) else UNKNOWN
+    # No per-node observation timestamp at all: fall back to the warmer's global
+    # dead-man switch rather than trusting an unsupported positive.
+    if warm_stale is None:
+        from app.services.device_operational_status import warmer_is_stale
+
+        warm_stale = warmer_is_stale(current)
+    return UNKNOWN if warm_stale else UP
+
+
+def _decay_unwarmed_nodes(session: Session, warmed_ids: set, *, now: datetime) -> int:
+    """Decay every node the warmer no longer visits to ``unknown``.
+
+    The missing half of the warm loop. A device that leaves the pollable set —
+    soft-deleted, checks disabled, management address removed — is simply not
+    selected any more, so its last ``live_status`` was frozen in place with
+    nothing to expire it. This pass is the repair: it converges those rows to
+    ``unknown`` on the next warm, including rows already frozen in production
+    before this fix shipped.
+
+    Idempotent: rows already ``unknown``/NULL are skipped.
+    """
+    stale_rows = (
+        session.query(NetworkDevice)
+        .filter(
+            NetworkDevice.live_status.isnot(None),
+            NetworkDevice.live_status != UNKNOWN,
+        )
+        .all()
+    )
+    decayed = 0
+    for node in stale_rows:
+        if node.id in warmed_ids:
+            continue
+        node.live_status = UNKNOWN
+        node.live_status_at = now
+        decayed += 1
+    return decayed
+
+
 def warm_topology_status(
     session: Session,
     *,
     now: datetime | None = None,
     stale_after_seconds: int = STALE_POLL_AFTER_SECONDS,
 ) -> dict:
-    """Refresh live_status for every active pollable device."""
-    nodes = session.query(NetworkDevice).filter(*pollable_device_criteria()).all()
-    if not nodes:
-        return {"nodes": 0}
+    """Refresh live_status for every active pollable device, and decay the rest.
 
+    Two halves, both required: pollable nodes get a freshly derived state, and
+    every other node carrying a stale state is decayed to ``unknown`` so no row
+    can keep asserting reachability nothing is checking.
+    """
+    nodes = session.query(NetworkDevice).filter(*pollable_device_criteria()).all()
     now = now or _now()
+    if not nodes:
+        decayed = _decay_unwarmed_nodes(session, set(), now=now)
+        if decayed:
+            session.flush()
+        return {"nodes": 0, "decayed": decayed}
+
     sla_logging = _sla_log_enabled()
     coverage = _coverage() if sla_logging else None
     counts: Counter = Counter()
@@ -211,5 +319,6 @@ def warm_topology_status(
             n.live_status = status
             n.live_status_at = now
         counts[status] += 1
+    decayed = _decay_unwarmed_nodes(session, {n.id for n in nodes}, now=now)
     session.flush()
-    return {"nodes": len(nodes), **counts}
+    return {"nodes": len(nodes), "decayed": decayed, **counts}

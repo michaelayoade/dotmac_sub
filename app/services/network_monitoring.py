@@ -68,6 +68,73 @@ def _commit(db: Session, action: Callable[[], T]) -> T:
         raise
 
 
+# ── Device admission lifecycle (owned by network.monitoring_inventory) ───────
+#
+# The single transition every ``NetworkDevice.is_active`` change goes through.
+# Before it existed, three callers each flipped the flag directly and each got
+# only half a deactivation: the row left the pollable set (so the topology
+# warmer stopped visiting it) but kept whatever ``live_status`` it last held,
+# forever. A device frozen at ``up`` then vetoed outage detection
+# (``health_classifier.classify_node``: mgmt up + nobody online = "service
+# fault, NOT an area outage"), so no incident opened and the customer surface
+# reported the cabinet healthy indefinitely.
+#
+# Deactivation is therefore one atomic slice, not a flag:
+#   1. leave polling eligibility (``is_active``);
+#   2. DECAY the derived reachability cache to ``unknown`` — withdraw the
+#      unsupported assertion rather than freeze it;
+#   3. stay visible in inventory, marked inactive (``collect_devices`` no longer
+#      filters the flag, so the row cannot vanish from the staff ledger and get
+#      pruned out of ``device_projections``).
+#
+# (2) is the owner writing a *derived cache* it is retiring, not an
+# observation: it asserts nothing about reachability, it withdraws an
+# assertion nothing is checking any more. Reachability observations still flow
+# only from the poller, and they never drive inventory lifecycle.
+
+_INACTIVE_LIVE_STATUS = "unknown"
+
+
+def set_network_device_active(
+    db: Session,
+    device: NetworkDevice,
+    active: bool,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> NetworkDevice:
+    """Transition a monitoring device's admission state. The only writer.
+
+    ``reason`` is a short machine string naming the caller (``manual_delete``,
+    ``router_delete_cascade``, ``router_inventory_sync``) so the log line
+    identifies which upstream drove the transition.
+
+    Idempotent: re-applying the current state still normalises the derived
+    cache, so a row that was deactivated before this transition existed is
+    repaired the next time anything touches it.
+    """
+    stamp = now or datetime.now(UTC)
+    changed = bool(device.is_active) != bool(active)
+    device.is_active = bool(active)
+
+    # Both directions decay: deactivation removes the device from polling, and
+    # reactivation must not resurrect a pre-deactivation verdict. Either way the
+    # next warm/poll cycle is what re-establishes a real state.
+    if device.live_status not in (None, _INACTIVE_LIVE_STATUS):
+        device.live_status = _INACTIVE_LIVE_STATUS
+        device.live_status_at = stamp
+
+    db.flush()
+    if changed:
+        logger.info(
+            "network device %s admission -> %s (reason=%s)",
+            device.id,
+            "active" if active else "inactive",
+            reason,
+        )
+    return device
+
+
 def _round_percent(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -808,8 +875,16 @@ class NetworkDevices(ListResponseMixin):
         device = db.get(NetworkDevice, device_id)
         if not device:
             raise HTTPException(status_code=404, detail="Network device not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
+        fields = payload.model_dump(exclude_unset=True)
+        # Admission is a lifecycle transition, not a field copy — it must carry
+        # the derived-cache decay with it, so it never lands via setattr.
+        admission = fields.pop("is_active", None)
+        for key, value in fields.items():
             setattr(device, key, value)
+        if admission is not None:
+            set_network_device_active(
+                db, device, bool(admission), reason="inventory_update"
+            )
         db.flush()
         db.refresh(device)
         return device
@@ -823,8 +898,7 @@ class NetworkDevices(ListResponseMixin):
         device = db.get(NetworkDevice, device_id)
         if not device:
             raise HTTPException(status_code=404, detail="Network device not found")
-        device.is_active = False
-        db.flush()
+        set_network_device_active(db, device, False, reason="manual_delete")
 
     @staticmethod
     def delete_committed(db: Session, device_id: str):
