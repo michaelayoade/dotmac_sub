@@ -12052,7 +12052,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     transaction_mode=TransactionMode.PARTICIPANT,
                     projections=("inbox_conversation_participants",),
-                    test_refs=("tests/test_team_inbox_participants.py",),
+                    design_refs=("docs/designs/INBOX_CONVERSATION_PARTICIPANTS.md",),
+                    test_refs=(
+                        "tests/test_team_inbox_participants.py",
+                        "tests/architecture/test_team_inbox_boundaries.py",
+                        "tests/architecture/test_team_inbox_sot_contracts.py",
+                    ),
                 ),
             ),
             SOTService(
