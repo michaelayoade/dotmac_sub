@@ -76,6 +76,44 @@ def test_web_payload_maps_invalid_geometry_to_safe_validation_error() -> None:
     assert "at least two map points" in str(exc.value.detail)
 
 
+def _revision(
+    revision_id,
+    *,
+    revision_number: int,
+    status: str,
+    length_meters: float | None,
+    review_notes: str | None,
+) -> SimpleNamespace:
+    """A revision shaped for both projections ``_serialize_quote`` builds.
+
+    ``route_authoring`` (this branch) only needs the presentation fields, but the
+    same call also builds the staff ``route_revisions`` review list, which walks
+    ``revision.quote`` out to the project and vendor. A fixture that omits those
+    would only pass by accident of which projection got read.
+    """
+    return SimpleNamespace(
+        id=revision_id,
+        quote_id=None,
+        revision_number=revision_number,
+        status=status,
+        length_meters=length_meters,
+        review_notes=review_notes,
+        submitted_at=None,
+        submitted_by_person_id=None,
+        reviewed_at=None,
+        reviewed_by_person_id=None,
+        route_geom=None,
+        review_events=[],
+        quote=SimpleNamespace(
+            vendor_id=None,
+            vendor=SimpleNamespace(name="Vendor"),
+            project=SimpleNamespace(
+                id=None, project=SimpleNamespace(name=None, code=None)
+            ),
+        ),
+    )
+
+
 def test_quote_projection_owns_route_status_and_actions() -> None:
     draft_id = uuid4()
     submitted_id = uuid4()
@@ -96,15 +134,15 @@ def test_quote_projection_owns_route_status_and_actions() -> None:
         review_notes=None,
         line_items=[],
         route_revisions=[
-            SimpleNamespace(
-                id=draft_id,
+            _revision(
+                draft_id,
                 revision_number=1,
                 status=ProposedRouteRevisionStatus.draft.value,
                 length_meters=100.0,
                 review_notes=None,
             ),
-            SimpleNamespace(
-                id=submitted_id,
+            _revision(
+                submitted_id,
                 revision_number=2,
                 status=ProposedRouteRevisionStatus.submitted.value,
                 length_meters=None,
