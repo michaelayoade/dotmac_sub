@@ -237,6 +237,11 @@ from app.models.enforcement_lock import (  # noqa: F401
     EnforcementLock,
     EnforcementReason,
 )
+from app.models.erp_billing_export import (  # noqa: F401
+    ErpBillingExport,
+    ErpBillingFlow,
+    ErpExportStatus,
+)
 from app.models.erp_domain_sync import ErpDomainSyncCursor  # noqa: F401
 from app.models.event_store import (  # noqa: F401
     EventHandlerAttempt,
@@ -771,6 +776,11 @@ from app.models.sales import (  # noqa: F401
     SalesOrderLine,
     SalesOrderPaymentStatus,
     SalesOrderStatus,
+)
+from app.models.sales_order_funding import (  # noqa: F401
+    FundingGateState,
+    SalesOrderFundingGate,
+    SalesOrderFundingObligation,
 )
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
 from app.models.sequence import DocumentSequence  # noqa: F401
