@@ -179,8 +179,13 @@ def _append_billing_health_snapshot(session, result: dict) -> None:
             "unbilled_no_path": health.unbilled_no_path,
             "active_subs_on_terminal_account": (health.active_subs_on_terminal_account),
             "negative_prepaid_balance_count": health.negative_prepaid_balance_count,
-            "negative_prepaid_balance_total": str(
-                health.negative_prepaid_balance_total
+            "negative_prepaid_balance_total": (
+                None
+                if health.negative_prepaid_balance_total is None
+                else str(health.negative_prepaid_balance_total)
+            ),
+            "negative_prepaid_funding_quarantined_count": (
+                health.negative_prepaid_funding_quarantined_count
             ),
             "anomalies": sorted(anomalies),
         }
@@ -233,6 +238,16 @@ def _append_billing_health_snapshot(session, result: dict) -> None:
                 "wallet balance below zero (total exposure %s)",
                 health.negative_prepaid_balance_count,
                 health.negative_prepaid_balance_total,
+            )
+        if "prepaid_funding_quarantined" in anomalies:
+            # Warning, not error: quarantine is the correct, deliberate outcome
+            # for an account with no reviewed opening baseline. It is a data
+            # remediation backlog to work down, not a defect to page on.
+            logger.warning(
+                "billing_prepaid_funding_quarantined: %d prepaid account(s) "
+                "have no reviewed opening baseline, so they are excluded from "
+                "funding enforcement and from the negative-exposure figures",
+                health.negative_prepaid_funding_quarantined_count,
             )
     except SoftTimeLimitExceeded:
         raise

@@ -1487,6 +1487,101 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="customer.field_job_chat",
+                module="app.services.customer_field_job_chat",
+                owns=("subscriber-scoped job chat read and send",),
+                depends_on=(
+                    "customer.identity_scope",
+                    "communications.team_inbox_field_job",
+                    "operations.work_orders",
+                ),
+                notes=(
+                    "Portal adapter for the technician chat. It scopes every "
+                    "call to the caller's own work order and delegates the "
+                    "inbox write to communications.team_inbox_field_job; it "
+                    "decides nothing about when a chat exists."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="subscriber-scoped job chat read and send",
+                            role=OwnerRole.TRANSPORT,
+                            input_names=(
+                                "authenticated subscriber identity",
+                                "canonical job chat conversation",
+                                "canonical work order ownership",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated subscriber identity",
+                            owner="customer.identity_scope",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Portal session principal id.",
+                        ),
+                        AuthorityInput(
+                            name="canonical job chat conversation",
+                            owner="communications.team_inbox_field_job",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "field_job conversation keyed by work order, with "
+                                "its open/closed lifecycle."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical work order ownership",
+                            owner="operations.work_orders",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="WorkOrder.subscriber_id and public_id.",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "Holds no transaction. The inbox owner writes and "
+                            "commits the message and returns an inert snapshot; "
+                            "this service only scopes the request and broadcasts "
+                            "afterwards, which never rolls the write back."
+                        ),
+                        locking="None: it takes no locks of its own.",
+                        idempotency=(
+                            "None: a repeated send is a genuinely new message, as "
+                            "in any chat."
+                        ),
+                        retries=(
+                            "A closed or undeparted visit fails closed rather than "
+                            "creating a conversation the technician never opened."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "customer.field_job_chat.empty_body",
+                            "customer.field_job_chat.not_found",
+                            "customer.field_job_chat.not_departed",
+                            "customer.field_job_chat.closed",
+                        ),
+                        mapping_owner="app.api.me",
+                        fail_closed_on=(
+                            "customer.field_job_chat.not_found",
+                            "customer.field_job_chat.not_departed",
+                            "customer.field_job_chat.closed",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="customer.field_job_chat",
+                        verification=(
+                            "tests/test_field_job_chat.py asserts subscriber "
+                            "scoping and the not-departed and closed refusals."
+                        ),
+                    ),
+                    steward="customer experience platform",
+                    design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+                    test_refs=("tests/test_field_job_chat.py",),
+                ),
+            ),
+            SOTService(
                 name="subscriber.growth_reports",
                 module="app.services.subscriber_growth",
                 owns=(
@@ -1898,6 +1993,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "all-or-nothing exact invoice credit application",
                     "invoice-void release of exact account-credit allocations",
                     "account-credit application invariant monitoring",
+                    "bounded account-credit invariant summary",
                 ),
                 depends_on=("financial.payments", "financial.invoices"),
                 notes=(
@@ -6586,23 +6682,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "stranded prepaid draft classification",
                     "stranded prepaid draft invoice reconciliation",
+                    "reviewed opening funding invoice consumption",
+                    "prepaid draft reconciliation exceptions and operator alerts",
                 ),
                 depends_on=(
                     "financial.account_credit_applications",
                     "financial.invoices",
+                    "financial.ledger",
                     "financial.payments",
+                    "financial.prepaid_funding_reconstruction",
                     "financial.prepaid_service_renewals",
+                    "communications.staff_notifications",
                     "observability.audit_log",
                 ),
                 notes=(
-                    "The read-only classifier distinguishes exact native payment "
-                    "funding, insufficient funding, legacy/unbacked credit, exact "
-                    "direct-renewal overlap, and ambiguity. Confirmation either "
-                    "fully settles from exact payment-backed credit or voids a "
-                    "duplicate direct-renewal draft at zero economic delta. During "
-                    "cutover, the funding-change owner invokes the same flush-only "
-                    "classification/action participant before any invoice-less "
-                    "renewal; every existing draft blocks that parallel path."
+                    "The invoice-first classifier distinguishes exact settlement-"
+                    "backed payments, reviewed opening funding, insufficient or "
+                    "unbacked funding, direct-renewal overlap, and ambiguity. "
+                    "Reviewed confirmation consumes payment settlements first and "
+                    "then records only the exact remainder as typed opening-funding "
+                    "consumption; opening funding is never represented as a Payment. "
+                    "Automatic funding changes create a durable operator exception "
+                    "instead of silently leaving an authoritatively funded draft. "
+                    "Every existing draft blocks the parallel invoice-less renewal "
+                    "path, and generic Restore cannot bypass an unresolved prepaid "
+                    "financial lock."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -6623,9 +6727,34 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "reviewed reconciliation command",
                                 "canonical prepaid draft invoice",
                                 "canonical payment-backed account credit",
+                                "reviewed opening funding",
                                 "canonical funded service entitlement",
                                 "canonical direct-renewal debit",
                                 "invoice and payment participant protocols",
+                            ),
+                            canonical_writer="financial.prepaid_draft_reconciliation",
+                        ),
+                        ConcernContract(
+                            name="reviewed opening funding invoice consumption",
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "reviewed reconciliation command",
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "reviewed opening funding",
+                            ),
+                            canonical_writer="financial.prepaid_draft_reconciliation",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "prepaid draft reconciliation exceptions and "
+                                "operator alerts"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical prepaid draft invoice",
+                                "canonical payment-backed account credit",
+                                "reviewed opening funding",
                             ),
                             canonical_writer="financial.prepaid_draft_reconciliation",
                         ),
@@ -6662,6 +6791,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="reviewed opening funding",
+                            owner="financial.prepaid_funding_reconstruction",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active typed opening baseline, signed reviewed "
+                                "manifest, approval evidence, prior immutable "
+                                "invoice consumptions, and current verified prepaid "
+                                "funding position"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="canonical funded service entitlement",
                             owner="financial.prepaid_service_renewals",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -6694,20 +6834,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         boundary=(
                             "Reviewed confirmation enters execute_owner_command once "
                             "on a transaction-free session and commits or rolls back "
-                            "the invoice lifecycle, exact payment applications, audit, "
-                            "and idempotency evidence together. The funding-change "
-                            "cutover caller uses the same required flush-only "
-                            "participant inside its existing owner transaction."
+                            "the invoice lifecycle, exact payment applications, typed "
+                            "opening-funding consumption and structural ledger link, "
+                            "entitlement, billing anchor, access restoration, audit, "
+                            "event, exception resolution, and idempotency evidence "
+                            "together. The funding-change caller uses the same "
+                            "flush-only classifier inside its existing transaction."
                         ),
                         locking=(
-                            "Lock account first, then invoice, then re-read payment, "
-                            "entitlement, adjustment, and allocation evidence. A "
-                            "multiple-draft account is not automatically repaired."
+                            "Lock account first, then invoice, eligible payment and "
+                            "settlement records, and the opening-funding baseline; "
+                            "re-read consumption, entitlement, adjustment, and "
+                            "allocation evidence before writing. A multiple-draft "
+                            "account is not automatically repaired."
                         ),
                         idempotency=(
                             "A caller-supplied key is reserved per invoice; invoice "
-                            "metadata and participant idempotency keys replay the same "
-                            "paid or void result and reject changed evidence."
+                            "metadata, one-per-invoice opening-consumption uniqueness, "
+                            "and participant idempotency keys replay the same paid or "
+                            "void result and reject changed evidence."
                         ),
                         retries=(
                             "Retry transient database failures with the same key and "
@@ -6725,6 +6870,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.prepaid_draft_reconciliation.not_actionable",
                             "financial.prepaid_draft_reconciliation.participant_rejected",
                             "financial.prepaid_draft_reconciliation.incomplete_repair",
+                            "financial.prepaid_draft_reconciliation.opening_funding_unavailable",
+                            "financial.prepaid_draft_reconciliation.opening_funding_changed",
+                            "financial.prepaid_draft_reconciliation.review_required",
                             "financial.prepaid_draft_reconciliation.invalid_command_context",
                             "financial.prepaid_draft_reconciliation.command_contract_violation",
                             "financial.prepaid_draft_reconciliation.nested_owner_command",
@@ -6738,7 +6886,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "legacy or unbacked account credit",
                             "multiple drafts or positive lines",
                             "partial or ambiguous entitlement overlap",
-                            "stale preview or changed payment capacity",
+                            "stale preview, changed payment capacity, or already "
+                            "consumed opening funding",
                         ),
                     ),
                     events=EventContract(
@@ -6762,6 +6911,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical prepaid draft invoice",
                                 "canonical payment-backed account credit",
+                                "reviewed opening funding",
                                 "canonical funded service entitlement",
                                 "canonical direct-renewal debit",
                             ),
@@ -6773,8 +6923,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             drift_signal=(
                                 "An active prepaid draft classified as exact-payment "
-                                "fundable, already renewed, legacy-unbacked, insufficient, "
-                                "or manual review remains visible in the cohort."
+                                "fundable, reviewed-opening-fundable, already renewed, "
+                                "legacy-unbacked, insufficient, or manual review "
+                                "remains visible in the cohort; a durable open "
+                                "exception signals automatic review work."
                             ),
                             rebuild_operation=(
                                 "preview_prepaid_draft_cohort deterministically "
@@ -6791,9 +6943,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="financial.prepaid_draft_reconciliation",
                         verification=(
-                            "Exact-funding, fifty-kobo shortfall, unbacked credit, "
-                            "direct-renewal overlap, stale preview, replay, funding-"
-                            "change, and architecture tests."
+                            "Exact mixed funding, partial funding, fifty-kobo "
+                            "shortfall, unbacked or reversed payment evidence, "
+                            "direct-renewal overlap, multiple drafts, stale preview, "
+                            "replay, concurrency, lapsed re-anchoring, opening-funding "
+                            "double-spend, Restore guard, and architecture tests."
                         ),
                         cutover_gate=(
                             "Funding-change handling checks the authoritative draft "
@@ -6814,6 +6968,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_prepaid_draft_reconciliation.py",
                         "tests/test_prepaid_service_renewals.py",
+                        "tests/test_subscription_lifecycle_commands.py",
+                        "tests/integration/test_prepaid_draft_reconciliation_concurrency.py",
                         "tests/architecture/test_prepaid_draft_reconciliation_ownership.py",
                     ),
                 ),
@@ -7572,7 +7728,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "Billing health is monitoring evidence, never a financial "
-                    "balance owner or direct suspension/restoration decision."
+                    "balance owner or direct suspension/restoration decision. "
+                    "The frequent snapshot consumes typed aggregate counts; "
+                    "record-level forensic inspection stays with the financial "
+                    "owner and is not used merely to calculate a metric count."
                 ),
             ),
             SOTService(
@@ -10073,21 +10232,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
-                name="network.ip_assignment_service_ownership",
-                module="app.services.ip_assignment_repair",
-                owns=("exact service ownership of active IPv4 assignments",),
+                name="network.ip_assignment_lifecycle",
+                module="app.services.ip_assignment_lifecycle",
+                owns=(
+                    "exact service ownership of active IPv4 assignments",
+                    "reviewed exact-service IPv4 assignment lifecycle repair",
+                    "reviewed exact-service IPv4 served projection repair",
+                ),
                 depends_on=(
+                    "access.radius_projection",
+                    "access.session_enforcement",
                     "access.subscription_lifecycle",
                     "events.dispatcher",
+                    "network.identity",
                     "observability.audit_log",
+                    "sessions.radius_reconciliation",
                 ),
                 notes=(
-                    "IPAssignment remains the address-allocation authority. This "
-                    "migration owner repairs only a missing subscription_id when "
-                    "one active assignment, one active service, the subscriber, "
-                    "and the served-address compatibility projection agree. It "
-                    "never creates, moves, releases, reclaims, or deactivates an "
-                    "address and never writes Subscription.ipv4_address or RADIUS."
+                    "IPAssignment remains the desired-address authority. This "
+                    "shadowing owner retains the safe ownership-only backfill and "
+                    "fingerprinted exact-service create/link/deactivate repair. The "
+                    "reviewed projection command may converge only the exact "
+                    "Subscription.ipv4_address copy; its durable event delegates "
+                    "RADIUS and old-IP session consequences to their owners. Normal "
+                    "provisioning writers remain declared migration debt until the "
+                    "later runtime cutover."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -10100,15 +10269,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "served IPv4 compatibility projection",
                                 "reviewed ownership repair command",
                             ),
-                            canonical_writer=(
-                                "network.ip_assignment_service_ownership"
+                            canonical_writer=("network.ip_assignment_lifecycle"),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "reviewed exact-service IPv4 assignment lifecycle repair"
                             ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "serviceable IPv4 address inventory",
+                                "reviewed lifecycle repair command",
+                            ),
+                            canonical_writer="network.ip_assignment_lifecycle",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "reviewed exact-service IPv4 served projection repair"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "served IPv4 compatibility projection",
+                                "observed RADIUS IPv4 projection",
+                                "active RADIUS session observation",
+                                "reviewed served projection repair command",
+                            ),
+                            canonical_writer="network.ip_assignment_lifecycle",
                         ),
                     ),
                     authoritative_inputs=(
                         AuthorityInput(
                             name="canonical active IPv4 assignment",
-                            owner="network.ip_assignment_service_ownership",
+                            owner="network.ip_assignment_lifecycle",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
                                 "active IPAssignment identity, address, subscriber, "
@@ -10125,7 +10320,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="served IPv4 compatibility projection",
-                            owner="network.ip_assignment_service_ownership",
+                            owner="network.ip_assignment_lifecycle",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
                                 "Subscription.ipv4_address used only to verify an "
@@ -10135,25 +10330,77 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="reviewed ownership repair command",
-                            owner="network.ip_assignment_service_ownership",
+                            owner="network.ip_assignment_lifecycle",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
                                 "exact assignment cohort, preview SHA-256, actor, "
                                 "reason, and idempotency key"
                             ),
                         ),
+                        AuthorityInput(
+                            name="serviceable IPv4 address inventory",
+                            owner="network.ip_assignment_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IPv4Address and IpPool identity, active state, "
+                                "reservation, management allocation, ONT binding, "
+                                "network-device address identity, and active "
+                                "routed-block exclusions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed lifecycle repair command",
+                            owner="network.ip_assignment_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact subscription, desired IPv4 address, exact "
+                                "deactivation cohort, preview SHA-256, actor, reason, "
+                                "and idempotency key"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="observed RADIUS IPv4 projection",
+                            owner="access.radius_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "DB-configured external radcheck and radreply state "
+                                "for the exact selected service login"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active RADIUS session observation",
+                            owner="sessions.radius_reconciliation",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "active exact-subscription session identities and "
+                                "their currently framed IPv4 addresses"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed served projection repair command",
+                            owner="network.ip_assignment_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "exact subscription and assignment identifiers, "
+                                "preview SHA-256, actor, reason, and idempotency key"
+                            ),
+                        ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "The public reconciliation command enters "
+                            "Each public ownership, lifecycle, or served-projection "
+                            "command enters "
                             "execute_owner_command once on a transaction-free "
                             "session; the operator adapter owns session lifecycle."
                         ),
                         locking=(
-                            "Selected IPAssignment, Subscriber, and proposed "
-                            "Subscription rows are locked in stable identifier "
-                            "order before evidence is recomputed."
+                            "The exact Subscription, Subscriber, selected "
+                            "IPAssignment, desired IPv4Address, desired IpPool, and "
+                            "all relevant assignment rows are locked. PostgreSQL "
+                            "also holds routed-block and device-IP inventories in "
+                            "SHARE mode for ledger repair; every command recomputes "
+                            "its complete evidence before mutation."
                         ),
                         idempotency=(
                             "A durable audit row binds the idempotency key to the "
@@ -10167,38 +10414,52 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     errors=ErrorContract(
                         domain_codes=(
-                            "network.ip_assignment_service_ownership.active_caller_transaction",
-                            "network.ip_assignment_service_ownership.assignment_not_found",
-                            "network.ip_assignment_service_ownership.command_contract_violation",
-                            "network.ip_assignment_service_ownership.duplicate_assignment",
-                            "network.ip_assignment_service_ownership.empty_cohort",
-                            "network.ip_assignment_service_ownership.idempotency_conflict",
-                            "network.ip_assignment_service_ownership.invalid_command_context",
-                            "network.ip_assignment_service_ownership.missing_idempotency_key",
-                            "network.ip_assignment_service_ownership.nested_owner_command",
-                            "network.ip_assignment_service_ownership.nested_transaction_completion",
-                            "network.ip_assignment_service_ownership.stale_preview",
-                            "network.ip_assignment_service_ownership.unsafe_cohort",
+                            "network.ip_assignment_lifecycle.active_caller_transaction",
+                            "network.ip_assignment_lifecycle.assignment_not_found",
+                            "network.ip_assignment_lifecycle.command_contract_violation",
+                            "network.ip_assignment_lifecycle.duplicate_assignment",
+                            "network.ip_assignment_lifecycle.empty_cohort",
+                            "network.ip_assignment_lifecycle.idempotency_conflict",
+                            "network.ip_assignment_lifecycle.invalid_command_context",
+                            "network.ip_assignment_lifecycle.missing_idempotency_key",
+                            "network.ip_assignment_lifecycle.nested_owner_command",
+                            "network.ip_assignment_lifecycle.nested_transaction_completion",
+                            "network.ip_assignment_lifecycle.stale_preview",
+                            "network.ip_assignment_lifecycle.subscriber_not_found",
+                            "network.ip_assignment_lifecycle.subscription_not_found",
+                            "network.ip_assignment_lifecycle.unsafe_projection_repair",
+                            "network.ip_assignment_lifecycle.unsafe_repair",
+                            "network.ip_assignment_lifecycle.unsafe_cohort",
                         ),
                         mapping_owner="operator CLI and future administrative adapters",
                         fail_closed_on=(
                             "ambiguous service ownership",
                             "multiple active services or assignments",
                             "subscriber or served-address disagreement",
+                            "cross-service deactivation or address ownership",
+                            "reserved, management, routed, or inactive-pool address",
                             "changed preview evidence",
+                            "RADIUS or session observation disagreement",
+                            "shared-login selection disagreement",
                         ),
                     ),
                     events=EventContract(
-                        event_types=("ip_assignment.service_ownership_reconciled",),
+                        event_types=(
+                            "ip_assignment.service_ownership_reconciled",
+                            "ip_assignment.lifecycle_repaired",
+                            "ip_assignment.served_projection_repaired",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
-                            "Version 1 carries only the exact assignment cohort, "
-                            "preview fingerprint, and linked count."
+                            "Version 1 events carry exact assignment identifiers, "
+                            "subscription identity, preview fingerprint, bounded "
+                            "mutation counts, and old/new address consequence "
+                            "evidence without customer identity data."
                         ),
                         replay=(
                             "The durable batch audit row and item audit rows "
-                            "reconstruct the ownership-only outcome."
+                            "reconstruct each ownership or lifecycle outcome."
                         ),
                     ),
                     projections=(
@@ -10210,7 +10471,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "served IPv4 compatibility projection",
                                 "reviewed ownership repair command",
                             ),
-                            writer="network.ip_assignment_service_ownership",
+                            writer="network.ip_assignment_lifecycle",
                             freshness=(
                                 "A linked active assignment is current only while "
                                 "its active service, subscriber, and address "
@@ -10228,37 +10489,77 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "Re-run the dry-run preview and confirm only the "
                                 "reviewed repairable cohort with its exact SHA-256."
                             ),
-                            repair_owner=("network.ip_assignment_service_ownership"),
+                            repair_owner=("network.ip_assignment_lifecycle"),
+                        ),
+                        ProjectionContract(
+                            name="exact-service served IPv4 compatibility projection",
+                            input_names=(
+                                "canonical active IPv4 assignment",
+                                "canonical active subscription identity",
+                                "served IPv4 compatibility projection",
+                                "observed RADIUS IPv4 projection",
+                                "active RADIUS session observation",
+                                "reviewed served projection repair command",
+                            ),
+                            writer="network.ip_assignment_lifecycle",
+                            freshness=(
+                                "Subscription.ipv4_address is current only while it "
+                                "equals the single active exact-service assignment; "
+                                "RADIUS and session observations are checked at each "
+                                "preview and again under the command lock."
+                            ),
+                            stale_behavior=(
+                                "Missing, multiple, shared-login, RADIUS-disagreed, "
+                                "or session-conflicted evidence fails closed."
+                            ),
+                            drift_signal=(
+                                "The exact-service IP consistency audit compares one "
+                                "unambiguous assignment to served and policy-aware "
+                                "RADIUS projections."
+                            ),
+                            rebuild_operation=(
+                                "Run the dry-run exact-service projection adapter, "
+                                "apply its exact fingerprint, then let the durable "
+                                "event reconcile RADIUS and old-IP sessions."
+                            ),
+                            repair_owner="network.ip_assignment_lifecycle",
                         ),
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.SHADOWING,
                         old_owner=(
-                            "subscriber-level ip_assignment_repair that treated "
-                            "Subscription.ipv4_address as allocation authority"
+                            "generic IPAssignments CRUD, provisioning_helpers, "
+                            "web_network_ip, subscriber_wan_ipam, and ip_lifecycle "
+                            "direct writers"
                         ),
-                        new_owner="network.ip_assignment_service_ownership",
+                        new_owner="network.ip_assignment_lifecycle",
                         verification=(
-                            "Full-fleet classification plus focused contract, "
-                            "stale-preview, idempotency, and sole-writer tests."
+                            "Full-fleet classification, exact-service ledger and "
+                            "served-projection previews, and focused contract, "
+                            "stale-preview, consequence, and idempotency tests."
                         ),
                         cutover_gate=(
                             "Every active assignment has an exact service link or "
-                            "reviewed blocker, and safe ownership-only backfill is "
-                            "verified before exact-service runtime cutover."
+                            "reviewed quarantine reason; reviewed repair converges "
+                            "the IPAM ledger and served/RADIUS/session projections; "
+                            "remaining projection drift is near zero before "
+                            "unconditional exact-service runtime cutover."
                         ),
                         fallback_retirement=(
-                            "Legacy create, repoint, reclaim, deactivate, and "
-                            "per-item commit behavior is removed."
+                            "Normal provisioning, admin assignment, terminal release, "
+                            "WAN claim, and generic CRUD writers delegate to this "
+                            "owner or are removed before migration completion."
                         ),
                     ),
                     steward="network operations",
                     design_refs=(
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md",
                     ),
                     test_refs=(
                         "tests/test_ip_assignment_repair.py",
+                        "tests/test_ip_assignment_lifecycle.py",
                         "tests/architecture/test_ip_assignment_service_ownership.py",
                     ),
                 ),
@@ -11357,6 +11658,40 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="communications.team_inbox_field_job",
+                module="app.services.team_inbox_field_job",
+                owns=(
+                    "field job chat conversation lifecycle",
+                    "work order to inbox conversation link",
+                ),
+                depends_on=("communications.team_inbox_routing",),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_field_job",
+                    concerns=(
+                        (
+                            "field job chat conversation lifecycle",
+                            OwnerRole.POLICY,
+                        ),
+                        (
+                            "work order to inbox conversation link",
+                            OwnerRole.AUTHORITATIVE_RECORD,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="committed field job departure",
+                            owner="operations.field_completion",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Technician en_route/complete transition, row-locked "
+                                "and idempotent on the client event id."
+                            ),
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.PARTICIPANT,
+                ),
+            ),
+            SOTService(
                 name="communications.team_inbox_processing",
                 module="app.services.team_inbox_processing",
                 owns=("provider observation consequence coordination",),
@@ -11726,6 +12061,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "customer.identity_scope",
                     "communications.team_inbox_threads",
+                    "control.settings_spec",
+                ),
+                notes=(
+                    "ADR 0006 temporarily assigns portal live-chat authority to CRM "
+                    "when comms.chat_session_authority=crm. This native command owner "
+                    "then fails closed for both new and previously issued widget tokens; "
+                    "it never mirrors or falls back to a local write."
                 ),
                 contract=_team_inbox_contract(
                     service_name="communications.team_inbox_widget",
@@ -11748,11 +12090,34 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source="Native chat-widget conversation and message chronology.",
                         ),
+                        AuthorityInput(
+                            name="live-chat authority selection",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "Database-authoritative "
+                                "comms.chat_session_authority control; native commands "
+                                "are accepted only when the value resolves to selfcare."
+                            ),
+                        ),
                     ),
                     transaction_mode=TransactionMode.OWNER_MANAGED,
                     event_types=(
                         "team_inbox.widget_message_recorded.v1",
                         "team_inbox.widget_read_state_changed.v1",
+                    ),
+                    design_refs=(
+                        "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+                        "docs/adr/0006-temporary-crm-chat-authority.md",
+                        "docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_chat_session.py",
+                        "tests/test_team_inbox_widget_native.py",
+                        "tests/architecture/test_team_inbox_boundaries.py",
+                        "tests/architecture/test_team_inbox_sot_contracts.py",
                     ),
                 ),
             ),
@@ -12277,6 +12642,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "poll heartbeat result counters",
                 ),
                 depends_on=("runtime.db_sessions",),
+                notes=(
+                    "Polling and topology warming use reserved monitoring-queue "
+                    "capacity. Bulk ingestion, including independently bounded "
+                    "per-OLT MAC harvests, does not share that worker; queue "
+                    "placement does not change observation ownership."
+                ),
             ),
             SOTService(
                 name="runtime.infrastructure_health",
@@ -15151,6 +15522,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "quote submission eligibility and impact snapshot",
                     "as-built submission eligibility and impact snapshot",
                     "staff project-review eligibility and impact snapshot",
+                    "staff proposed-route review eligibility and impact snapshot",
                     "staff as-built-review eligibility and impact snapshot",
                 ),
                 depends_on=(
@@ -15215,6 +15587,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical installation-project lifecycle state",
                                 "canonical vendor project records",
                                 "work-order as-built evidence policy",
+                                "vendor workspace mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "staff proposed-route review eligibility and "
+                                "impact snapshot"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
                                 "vendor workspace mutation protocol",
                             ),
                         ),
@@ -15320,6 +15704,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_not_reviewable",
                             "operations.vendor_project_workspace.quote_line_required",
                             "operations.vendor_project_workspace.route_revision_not_draft",
+                            "operations.vendor_project_workspace.route_revision_not_reviewable",
                             "operations.vendor_project_workspace.as_built_evidence_required",
                             "operations.vendor_project_workspace.as_built_submission_not_allowed",
                             "operations.vendor_project_workspace.as_built_not_reviewable",
@@ -15371,6 +15756,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="vendor operations",
                     design_refs=(
+                        "docs/designs/VENDOR_PROJECT_REVIEW_UI.md",
                         "docs/designs/UI_PROJECTION_CONTRACTS.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
@@ -15391,6 +15777,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor installation-project quote lifecycle",
                     "proposed vendor route-revision lifecycle",
+                    "staff proposed-route review state and immutable evidence",
                     "vendor as-built route and line-item lifecycle",
                     "staff as-built review state and immutable evidence",
                 ),
@@ -15416,6 +15803,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ConcernContract(
                             name="proposed vendor route-revision lifecycle",
                             role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "validated vendor project record transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer="operations.vendor_project_records",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "staff proposed-route review state and immutable evidence"
+                            ),
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
                             input_names=(
                                 "validated vendor project record transition",
                                 "canonical installation-project lifecycle state",
@@ -15493,6 +15891,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_not_reviewable",
                             "operations.vendor_project_workspace.quote_line_required",
                             "operations.vendor_project_workspace.route_revision_not_draft",
+                            "operations.vendor_project_workspace.route_revision_not_reviewable",
                             "operations.vendor_project_workspace.as_built_evidence_required",
                             "operations.vendor_project_workspace.as_built_submission_not_allowed",
                             "operations.vendor_project_workspace.as_built_not_reviewable",
@@ -15517,6 +15916,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         event_types=(
                             "vendor_quote.changed",
                             "vendor_route_revision.changed",
+                            "vendor_route_revision.accepted",
+                            "vendor_route_revision.rejected",
                             "vendor_as_built.submitted",
                             "vendor_as_built.accepted",
                             "vendor_as_built.rejected",
@@ -15554,12 +15955,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     steward="vendor operations",
                     design_refs=(
+                        "docs/designs/VENDOR_PROJECT_REVIEW_UI.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
                     test_refs=(
                         "tests/test_vendor_project_workspace.py",
                         "tests/test_vendor_submission_proposals.py",
+                        "tests/test_vendor_route_review.py",
                         "tests/test_vendor_as_built_review.py",
                         "tests/architecture/test_vendor_project_workspace_boundary.py",
                     ),
@@ -16347,6 +16750,198 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_vendor_project_review.py",
                         "tests/architecture/test_vendor_project_lifecycle_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_route_review_confirmation",
+                module="app.services.vendor_route_review_proposals",
+                owns=(
+                    "short-lived signed staff proposed-route review proposal",
+                    "staff proposed-route review stale-preview verification",
+                    "staff proposed-route review idempotency and replay result",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "auth.token_signing",
+                    "operations.vendor_project_records",
+                    "operations.vendor_project_workspace",
+                ),
+                notes=(
+                    "This supporting service carries no quote or project decision "
+                    "policy. It binds staff to the vendor operations owner's "
+                    "proposed-route preview and invokes that owner after revalidation."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "short-lived signed staff proposed-route "
+                                "review proposal"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated staff proposed-route review context",
+                                "canonical staff proposed-route review preview",
+                                "capability signing envelope",
+                                "staff proposed-route review confirmation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "staff proposed-route review stale-preview verification"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated staff proposed-route review context",
+                                "canonical staff proposed-route review preview",
+                                "capability signing envelope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "staff proposed-route review idempotency "
+                                "and replay result"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated staff proposed-route review context",
+                                "canonical staff proposed-route review preview",
+                                "capability signing envelope",
+                                "canonical staff proposed-route review replay record",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated staff proposed-route review context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated staff actor, action, reason, command, "
+                                "and correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff proposed-route review preview",
+                            owner="operations.vendor_project_workspace",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked proposed-route state, immutable evidence impact, "
+                                "geometry identity, and state fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="capability signing envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="configured context-signing key and algorithm",
+                        ),
+                        AuthorityInput(
+                            name="staff proposed-route review confirmation protocol",
+                            owner="operations.vendor_route_review_confirmation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "versioned purpose, issuer, claim allowlist, ten-minute "
+                                "lifetime, and accept/reject scopes"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff proposed-route review replay record",
+                            owner="operations.vendor_route_review_confirmation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IdempotencyKey row keyed by signed proposal jti and "
+                                "staff proposed-route review scope"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "A typed confirmation command owns locked stale "
+                            "verification, replay reservation, record participant "
+                            "mutation, result evidence, and one root commit."
+                        ),
+                        locking=(
+                            "The ProposedRouteRevision aggregate is locked before "
+                            "replay reservation and fingerprint comparison."
+                        ),
+                        idempotency=(
+                            "Signed jti plus accept/reject scope identifies one "
+                            "immutable review-event result."
+                        ),
+                        retries=(
+                            "Invalid or stale proposals are terminal; concurrency "
+                            "failures retry the complete typed command."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_route_review_confirmation.invalid_proposal",
+                            "operations.vendor_route_review_confirmation.expired_proposal",
+                            "operations.vendor_route_review_confirmation.proposal_context_mismatch",
+                            "operations.vendor_route_review_confirmation.confirmation_in_progress",
+                            "operations.vendor_route_review_confirmation.stale_proposal",
+                            "operations.vendor_route_review_confirmation.missing_result_evidence",
+                            "operations.vendor_route_review_confirmation.invalid_command_context",
+                            "operations.vendor_route_review_confirmation.command_contract_violation",
+                            "operations.vendor_route_review_confirmation.nested_owner_command",
+                            "operations.vendor_route_review_confirmation.active_caller_transaction",
+                            "operations.vendor_route_review_confirmation.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.admin.vendor_operations",
+                        fail_closed_on=(
+                            "invalid, expired, or context-mismatched proposal",
+                            "proposed-route state, geometry, or evidence drift",
+                            "ambiguous concurrent confirmation",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_route_revision.accepted",
+                            "vendor_route_revision.rejected",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries revision, quote, project, vendor, "
+                            "transition, actor, and reason fields additively."
+                        ),
+                        replay=(
+                            "ProposedRouteRevisionReviewEvent and the idempotency "
+                            "row rebuild the decision and stable replay result."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "read-only staff route page with no proposed-route "
+                            "decision owner"
+                        ),
+                        new_owner="operations.vendor_route_review_confirmation",
+                        verification=(
+                            "Proposal, stale-state, replay, rollback, "
+                            "immutable-evidence, event, and adapter-mapping tests."
+                        ),
+                        cutover_gate=(
+                            "Staff confirmation routes pass a typed command on a "
+                            "clean session and route writes remain participant-only."
+                        ),
+                        fallback_retirement=(
+                            "Direct route-page status mutation and unsigned "
+                            "accept/reject paths are absent."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/designs/VENDOR_PROJECT_REVIEW_UI.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_route_review.py",
+                        "tests/architecture/test_vendor_project_workspace_boundary.py",
                     ),
                 ),
             ),
@@ -21812,6 +22407,163 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.project_vendor_delivery_projection",
+                module="app.services.project_vendor_delivery",
+                owns=(
+                    "admin project vendor-delivery composition",
+                    "admin project vendor-delivery current-record selection",
+                    "admin project vendor-delivery field visibility",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "integration.dotmac_erp_payables_adapter",
+                    "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_records",
+                    "operations.vendor_purchase_invoices",
+                    "ui.status_presentation",
+                ),
+                notes=(
+                    "Read-only, permission-scoped composition for the native project "
+                    "detail page. It selects the approved or current active quote, "
+                    "that quote's latest route revision, the latest as-built record, "
+                    "and the assigned vendor's active purchase invoice. It delegates "
+                    "ERP payment availability and freshness to the existing payment "
+                    "projection and never creates or updates installation scope."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin project vendor-delivery composition",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical installation-project lifecycle facts",
+                                "canonical vendor project records",
+                                "canonical vendor purchase-invoice projection",
+                                "timestamped ERP accounts-payable observation",
+                                "canonical vendor status presentation",
+                                "project-detail read capabilities",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "admin project vendor-delivery current-record selection"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical vendor project records",
+                                "canonical vendor purchase-invoice projection",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin project vendor-delivery field visibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "project-detail read capabilities",
+                                "canonical installation-project lifecycle facts",
+                                "canonical vendor project records",
+                                "canonical vendor purchase-invoice projection",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle facts",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active InstallationProject status, assignment, and "
+                                "native Project UUID"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor project records",
+                            owner="operations.vendor_project_records",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active quote, proposed route revision, and as-built "
+                                "records linked to the InstallationProject"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor purchase-invoice projection",
+                            owner="operations.vendor_purchase_invoices",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "active purchase invoice for the installation project "
+                                "and currently assigned vendor"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="timestamped ERP accounts-payable observation",
+                            owner="integration.dotmac_erp_payables_adapter",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "validated payment status, total, paid, balance, source "
+                                "timestamp, observation timestamp, and refresh error"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor status presentation",
+                            owner="ui.status_presentation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "server-owned labels, semantic tones, and icon keys for "
+                                "vendor delivery lifecycle values"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="project-detail read capabilities",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "inventory:read, network:fiber:read, and "
+                                "finance:ap:read results supplied by the admin adapter"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Loads and composes vendor-delivery records without "
+                            "committing, flushing, mutating ORM state, or calling a "
+                            "business command."
+                        ),
+                        locking=(
+                            "No locks; the projection reads one committed snapshot and "
+                            "uses stable native UUID tie-breakers."
+                        ),
+                        idempotency=(
+                            "The same project facts, observation time, and capability "
+                            "scope produce the same projection."
+                        ),
+                        retries=(
+                            "Read availability failures may be retried; missing "
+                            "installation scope is a successful empty result."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="admin project web adapter",
+                        fail_closed_on=("missing project-detail read capability",),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="ui.project_vendor_delivery_projection",
+                    ),
+                    steward="service delivery UI",
+                    design_refs=(
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_project_vendor_delivery_projection.py",
+                        "tests/test_web_admin_projects_render.py",
+                        "tests/architecture/test_projects_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="ui.audit_events_list_projection",
                 module="app.services.web_system_audit",
                 owns=(
@@ -23215,6 +23967,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "service access availability labels, semantic tones, and icon keys",
                     "support-ticket status labels, semantic tones, and icon keys",
                     "field work-order status labels, semantic tones, and icon keys",
+                    "vendor installation-project status labels, semantic tones, and icon keys",
+                    "vendor quote status labels, semantic tones, and icon keys",
+                    "vendor proposed-route status labels, semantic tones, and icon keys",
+                    "vendor as-built status labels, semantic tones, and icon keys",
                     "supplier-invoice status labels, semantic tones, and icon keys",
                     "status presentation fallback semantics",
                 ),
@@ -23227,6 +23983,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.outage_lifecycle",
                     "support.ticket_lifecycle",
                     "operations.work_order_status",
+                    "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_workspace",
                     "integration.dotmac_erp_payables_adapter",
                 ),
                 notes=(

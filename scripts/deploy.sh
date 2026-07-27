@@ -13,6 +13,21 @@
 #   HEALTH_CURL_TIMEOUT=N ...    cap each health-check curl attempt at N seconds
 #                                (default 5) so a hung health endpoint can't stall
 #                                a retry indefinitely
+#   BACKGROUND_STABILITY_SECONDS=N
+#                              require workers and Beat to remain restart-free
+#                              for N seconds before accepting the release
+#   REQUIRE_PROXY_HANDOFF=0    skip the Nginx warm-candidate contract, for hosts
+#                              with no proxy in front of the app (staging).
+#                              Defaults to 1 — production must keep it.
+#   IGNORE_COMPOSE_OVERRIDE=1  ignore docker-compose.override.yml even if present
+#
+# Compose files: docker-compose.yml, plus docker-compose.override.yml when it
+# exists — matching what a bare `docker compose` on the host resolves. Services
+# are then intersected with `compose config --services`, so a profile-gated
+# service (e.g. staging's celery-beat) is never force-started by being named.
+#
+# Host-specific values (HEALTH_URL, DB_CONTAINER) fall back to .env when not
+# set in the environment.
 #
 # RUN IT DETACHED over SSH -- `nohup ./scripts/deploy.sh sha-... &` or inside
 # tmux. A dropped SSH session sends SIGHUP and kills the deploy mid-flight; the
@@ -22,7 +37,8 @@
 # Procedure:
 #   verify image on GHCR -> DB backup -> pull -> verify OCI revision ->
 #   pin APP_IMAGE + GIT_SHA in .env ->
-#   migrate + verify -> warm candidate -> recreate app+workers -> health gate.
+#   migrate + verify -> warm candidate -> recreate app+workers ->
+#   web + background-runtime health gates.
 #
 # On a failed health gate the previous image is re-pinned and the services are
 # recreated on it. Migrations are NOT reverted automatically — new revisions must
@@ -32,8 +48,25 @@ set -euo pipefail
 # Deploy dir == repo root (sub deploys in place). Override with DEPLOY_DIR.
 DEPLOY_DIR="${DEPLOY_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REPO_DIR="${REPO_DIR:-${DEPLOY_DIR}}"
+cd "${DEPLOY_DIR}"
+
+# Read a key out of .env without sourcing it (sourcing a deploy .env pulls in
+# every secret and DATABASE_URL as shell state). Defined up here because
+# DB_CONTAINER is needed by the orphaned-pg_dump guard below, long before the
+# rest of the config block.
+env_value() {
+  local key="$1"
+  local value
+  value="$(grep -E "^${key}=" .env 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+  printf '%s\n' "${value}"
+}
+
 IMAGE_REPO="ghcr.io/michaelayoade/dotmac_sub"
 APP_CONTAINER="dotmac_sub_app"
+# Host-specific, so resolve shell env > .env > default. The default assumes the
+# app publishes on loopback; staging binds its port to a host-internal address
+# instead, and a wrong default here fails the gate rather than passing it.
+HEALTH_URL="${HEALTH_URL:-$(env_value HEALTH_URL)}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 # Per-attempt cap on the health-check curl itself, distinct from the overall
@@ -48,11 +81,19 @@ CANDIDATE_CONTAINER="${CANDIDATE_CONTAINER:-dotmac_sub_app_candidate}"
 CANDIDATE_PORT="${CANDIDATE_PORT:-18001}"
 CANDIDATE_HEALTH_URL="${CANDIDATE_HEALTH_URL:-http://127.0.0.1:${CANDIDATE_PORT}/health}"
 CANDIDATE_DRAIN_SECONDS="${CANDIDATE_DRAIN_SECONDS:-2}"
+BACKGROUND_RUNTIME_TIMEOUT_SECONDS="${BACKGROUND_RUNTIME_TIMEOUT_SECONDS:-90}"
+BACKGROUND_STABILITY_SECONDS="${BACKGROUND_STABILITY_SECONDS:-15}"
+CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
 # Every service that runs the app image and must be recreated on a new build.
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
-  celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller \
-  syslog-listener)
+  celery-worker-monitoring celery-worker-billing celery-worker-tr069 celery-beat \
+  bandwidth-poller syslog-listener)
+CELERY_WORKER_SERVICES=(celery-worker celery-worker-bandwidth \
+  celery-worker-ingestion celery-worker-monitoring celery-worker-billing \
+  celery-worker-tr069)
+CELERY_BEAT_SERVICE="celery-beat"
 
+DB_CONTAINER="${DB_CONTAINER:-$(env_value DB_CONTAINER)}"
 DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
 
 # --- One deploy at a time -------------------------------------------------
@@ -111,8 +152,104 @@ wait_for_health() {
   done
 }
 
+service_container_id() {
+  local service="$1"
+  "${COMPOSE[@]}" ps -q "${service}" 2>/dev/null | tail -n 1
+}
+
+assert_background_service_running() {
+  local service="$1"
+  local container
+  local state
+  local restart_count
+
+  container="$(service_container_id "${service}")"
+  if [[ -z "${container}" ]]; then
+    echo "BACKGROUND RUNTIME FAILURE: ${service} has no Compose container." >&2
+    return 1
+  fi
+  state="$(docker inspect "${container}" \
+    --format '{{.State.Status}}' 2>/dev/null || true)"
+  restart_count="$(docker inspect "${container}" \
+    --format '{{.RestartCount}}' 2>/dev/null || true)"
+  if [[ "${state}" != "running" ]]; then
+    echo "BACKGROUND RUNTIME FAILURE: ${service} is ${state:-unavailable}." >&2
+    return 1
+  fi
+  if [[ ! "${restart_count}" =~ ^[0-9]+$ ]] || ((restart_count != 0)); then
+    echo "BACKGROUND RUNTIME FAILURE: ${service} restart count is ${restart_count:-unknown}; expected 0." >&2
+    return 1
+  fi
+}
+
+background_runtime_ready() {
+  local service
+  local container
+  local hostname
+  local probe_container=""
+  local -a expected_nodes=()
+
+  # Beat is profile-gated off on staging (it must never originate production
+  # work there), so assert it only where it is actually declared.
+  if service_is_declared "${CELERY_BEAT_SERVICE}"; then
+    assert_background_service_running "${CELERY_BEAT_SERVICE}" || return 1
+  fi
+  for service in "${CELERY_WORKER_SERVICES[@]}"; do
+    assert_background_service_running "${service}" || return 1
+    container="$(service_container_id "${service}")"
+    hostname="$(docker inspect "${container}" \
+      --format '{{.Config.Hostname}}' 2>/dev/null || true)"
+    if [[ -z "${hostname}" ]]; then
+      echo "BACKGROUND RUNTIME FAILURE: cannot resolve ${service} Celery node name." >&2
+      return 1
+    fi
+    if [[ -z "${probe_container}" ]]; then
+      probe_container="${container}"
+    fi
+    expected_nodes+=("celery@${hostname}")
+  done
+
+  if ! docker exec "${probe_container}" \
+    python -m scripts.verify_celery_workers \
+    --timeout "${CELERY_INSPECT_TIMEOUT_SECONDS}" \
+    "${expected_nodes[@]}" >/dev/null 2>&1; then
+    echo "BACKGROUND RUNTIME FAILURE: not every declared Celery worker answered ping." >&2
+    return 1
+  fi
+}
+
+wait_for_background_runtime() {
+  local deadline=$((SECONDS + BACKGROUND_RUNTIME_TIMEOUT_SECONDS))
+
+  until background_runtime_ready; do
+    if ((SECONDS >= deadline)); then
+      echo "Background runtime health gate failed after ${BACKGROUND_RUNTIME_TIMEOUT_SECONDS}s." >&2
+      return 1
+    fi
+    sleep 5
+  done
+
+  if ((BACKGROUND_STABILITY_SECONDS > 0)); then
+    log "Celery workers and Beat are ready; verifying ${BACKGROUND_STABILITY_SECONDS}s restart-free stability"
+    sleep "${BACKGROUND_STABILITY_SECONDS}"
+  fi
+  if ! background_runtime_ready; then
+    echo "Background runtime health gate failed during the restart-free stability check." >&2
+    return 1
+  fi
+}
+
+# The warm-candidate handoff keeps the site served while Compose replaces the
+# primary, so it is required wherever the app is public-facing. Staging has no
+# nginx in front of it and nothing to keep warm; without an opt-out the gate
+# aborts the deploy on its very first step. Default 1 preserves the production
+# contract exactly -- a host must opt OUT deliberately.
 assert_proxy_handoff_contract() {
   local config
+  if [[ "${REQUIRE_PROXY_HANDOFF:-1}" != "1" ]]; then
+    log "Skipping Nginx warm-handoff contract (REQUIRE_PROXY_HANDOFF=${REQUIRE_PROXY_HANDOFF})"
+    return 0
+  fi
   if ! command -v nginx >/dev/null; then
     echo "DEPLOY AVAILABILITY FAILURE: nginx is not installed or not on PATH." >&2
     return 1
@@ -178,11 +315,15 @@ run_migrations() {
 
 # Deploy-integrity gate. The immutable image must not be shadowed by a host
 # source bind-mount: a `/app/app` mount means a dev overlay (docker-compose.dev.yml,
-# or a legacy auto-loaded docker-compose.override.yml) got layered on, so the
-# RUNNING code is the host working tree — not the tag we just deployed. This is
+# or an override carrying a working-tree mount) got layered on, so the RUNNING
+# code is the host working tree — not the tag we just deployed. This is
 # invisible to the health gate (host code can be perfectly healthy), so check it
 # explicitly. `/app/uploads` and other named volumes are fine; only `/app/app`
 # (the Python package) shadowing the image is the failure.
+#
+# This — not excluding docker-compose.override.yml — is what actually guards
+# deploy integrity. An override may legitimately carry deployment config
+# (profiles, host-specific storage); it is a source bind-mount that is fatal.
 assert_no_source_mount() {
   local container="${1:-${APP_CONTAINER}}"
   local mounts
@@ -191,21 +332,59 @@ assert_no_source_mount() {
   if grep -qx '/app/app' <<<"${mounts}"; then
     echo "DEPLOY INTEGRITY FAILURE: ${container} has a host bind-mount at /app/app —" >&2
     echo "the working tree is shadowing the image, so '${TAG:-?}' is NOT the running code." >&2
-    echo "Cause: a dev overlay was loaded (stray docker-compose.override.yml, or a bare" >&2
-    echo "'docker compose up/restart' on the host). Fix on the host, then redeploy:" >&2
-    echo "  docker compose -f docker-compose.yml up -d --force-recreate ${APP_SERVICES[*]}" >&2
+    echo "Cause: a dev overlay was loaded (a compose file mounting the working tree," >&2
+    echo "or a bare 'docker compose up/restart' on the host). Fix on the host, then redeploy:" >&2
+    echo "  ${COMPOSE[*]} up -d --force-recreate ${APP_SERVICES[*]}" >&2
     return 1
   fi
 }
 
-cd "${DEPLOY_DIR}"
+# Compose file set.
+#
+# This used to be `-f docker-compose.yml` alone, which silently diverges from
+# every bare `docker compose` command on the host: Compose auto-loads
+# docker-compose.override.yml, this script did not. On a host whose override
+# carries real deployment configuration that divergence is not cosmetic --
+# staging's override gates `celery-beat` behind a `production-scheduler`
+# profile (added after a staging scheduler wrote to production) and pins
+# staging-only object storage. Deploying without it resurrects both.
+#
+# Production has no override file, so this resolves to exactly the previous
+# single-file behaviour there. Set IGNORE_COMPOSE_OVERRIDE=1 to force it.
 COMPOSE=(docker compose -f docker-compose.yml)
+COMPOSE_FILES_DESC="docker-compose.yml"
+if [[ "${IGNORE_COMPOSE_OVERRIDE:-0}" != "1" && -f docker-compose.override.yml ]]; then
+  COMPOSE+=(-f docker-compose.override.yml)
+  COMPOSE_FILES_DESC+=" + docker-compose.override.yml"
+fi
 
-env_value() {
-  local key="$1"
-  local value
-  value="$(grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- || true)"
-  printf '%s\n' "${value}"
+# Restrict the services this deploy touches to the ones the resolved Compose
+# config actually declares. Naming a profile-gated service explicitly ACTIVATES
+# its profile, so a hardcoded `up -d ... celery-beat` would create the very
+# scheduler the staging override exists to suppress. Also drops services a host
+# genuinely does not run, instead of failing the deploy on them.
+DECLARED_SERVICES=""
+load_declared_services() {
+  if ! DECLARED_SERVICES="$("${COMPOSE[@]}" config --services 2>&1)"; then
+    echo "DEPLOY CONFIG FAILURE: cannot resolve Compose services from ${COMPOSE_FILES_DESC}." >&2
+    printf '%s\n' "${DECLARED_SERVICES}" >&2
+    return 1
+  fi
+  DECLARED_SERVICES=" $(tr '\n' ' ' <<<"${DECLARED_SERVICES}") "
+}
+
+service_is_declared() {
+  [[ "${DECLARED_SERVICES}" == *" $1 "* ]]
+}
+
+# Prints the subset of "$@" that the resolved Compose config declares.
+declared_subset() {
+  local service
+  for service in "$@"; do
+    if service_is_declared "${service}"; then
+      printf '%s\n' "${service}"
+    fi
+  done
 }
 
 set_env_value() {
@@ -278,9 +457,22 @@ if [[ "${IMAGE}" == "${PREV_IMAGE}" ]]; then
 fi
 
 log "Deploying ${IMAGE} (currently pinned: ${PREV_IMAGE:-none})"
+log "Compose files: ${COMPOSE_FILES_DESC}"
 
+# Cheap, local preconditions first: this gate must be able to refuse without
+# having touched anything, including read-only queries.
 log "Verifying Nginx warm-handoff contract"
 assert_proxy_handoff_contract
+
+log "Resolving declared Compose services"
+load_declared_services
+mapfile -t APP_SERVICES < <(declared_subset "${APP_SERVICES[@]}")
+mapfile -t CELERY_WORKER_SERVICES < <(declared_subset "${CELERY_WORKER_SERVICES[@]}")
+if ((${#APP_SERVICES[@]} == 0)); then
+  echo "DEPLOY CONFIG FAILURE: none of the app services are declared in ${COMPOSE_FILES_DESC}." >&2
+  exit 1
+fi
+log "Services this deploy will recreate: ${APP_SERVICES[*]}"
 
 log "Verifying image exists on registry"
 docker manifest inspect "${IMAGE}" >/dev/null
@@ -404,6 +596,20 @@ if ! wait_for_health "${HEALTH_URL}" "Primary app"; then
   else
     cleanup_candidate
     log "No previous image recorded — cannot auto-roll-back. Investigate the app container."
+  fi
+  exit 1
+fi
+
+log "Verifying Celery workers and Beat (timeout ${BACKGROUND_RUNTIME_TIMEOUT_SECONDS}s)"
+if ! wait_for_background_runtime; then
+  trap - ERR
+  log "Background runtime health gate FAILED — rolling back to ${PREV_IMAGE:-none}"
+  if [[ -n "${PREV_IMAGE}" ]]; then
+    restore_prev
+    log "Rolled back to ${PREV_IMAGE}. NOTE: migrations from ${TAG} were NOT reverted."
+  else
+    cleanup_candidate
+    log "No previous image recorded — cannot auto-roll-back. Investigate the Celery containers."
   fi
   exit 1
 fi

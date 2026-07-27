@@ -6,6 +6,20 @@ from pathlib import Path
 
 REVISION = "32eebc1a6ac05a21275ed4db6f3d1dd28514a045"
 
+# Everything the deploy recreates when a host declares the full stack.
+FULL_SERVICES = (
+    "app",
+    "celery-worker",
+    "celery-worker-bandwidth",
+    "celery-worker-ingestion",
+    "celery-worker-monitoring",
+    "celery-worker-billing",
+    "celery-worker-tr069",
+    "celery-beat",
+    "bandwidth-poller",
+    "syslog-listener",
+)
+
 
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content)
@@ -21,6 +35,10 @@ def _run_deploy(
     migration_lock_failures: int = 0,
     manifest_pins_ready: bool = True,
     crm_ticket_ready: bool = True,
+    background_runtime_ready: bool = True,
+    declared_services: tuple[str, ...] = FULL_SERVICES,
+    write_override: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     deploy_dir = tmp_path / "deploy"
     bin_dir = tmp_path / "bin"
@@ -34,6 +52,13 @@ def _run_deploy(
         "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
         "GIT_SHA=old0000000000000000000000000000000000000\n"
     )
+    declared_services_literal = " ".join(
+        f"'{service}'" for service in declared_services
+    )
+    if write_override:
+        (deploy_dir / "docker-compose.override.yml").write_text(
+            "services:\n  app: {}\n"
+        )
     _write_executable(
         bin_dir / "docker",
         f"""#!/usr/bin/env bash
@@ -55,6 +80,29 @@ if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
 fi
 if [[ "$*" == *"scripts.integrations.verify_crm_ticket_readiness"* ]]; then
   exit {0 if crm_ticket_ready else 1}
+fi
+if [[ "$*" == *"config --services"* ]]; then
+  printf '%s\\n' {declared_services_literal}
+  exit 0
+fi
+if [[ "$*" == "compose "*" ps -q "* ]]; then
+  printf 'container-%s\\n' "${{@: -1}}"
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *".State.Status"* ]]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *".RestartCount"* ]]; then
+  printf '0\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *".Config.Hostname"* ]]; then
+  printf '%s\\n' "$2"
+  exit 0
+fi
+if [[ "$1" == "exec" && "$*" == *"scripts.verify_celery_workers"* ]]; then
+  exit {0 if background_runtime_ready else 1}
 fi
 exit 0
 """,
@@ -87,9 +135,12 @@ printf '%s\\n' "{nginx_config}"
         "IMAGE_RETAIN_COUNT": "0",
         "HEALTH_TIMEOUT_SECONDS": "0" if not health_success else "180",
         "CANDIDATE_DRAIN_SECONDS": "0",
+        "BACKGROUND_RUNTIME_TIMEOUT_SECONDS": "0",
+        "BACKGROUND_STABILITY_SECONDS": "0",
         "MIGRATION_RETRY_SECONDS": "0",
         "DOCKER_LOG": str(docker_log),
         "MIGRATION_ATTEMPTS": str(migration_attempts),
+        **(extra_env or {}),
     }
     result = subprocess.run(
         ["bash", str(repo_root / "scripts/deploy.sh"), "sha-32eebc1"],
@@ -236,3 +287,120 @@ def test_deploy_retries_a_bounded_migration_lock_timeout(tmp_path: Path) -> None
         if "alembic upgrade heads" in command
     ]
     assert len(attempts) == 3
+
+
+def test_deploy_verifies_every_worker_and_beat_before_success(tmp_path: Path) -> None:
+    result, _env_file, docker_log = _run_deploy(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    commands = docker_log.read_text().splitlines()
+    ping_commands = [
+        command for command in commands if "scripts.verify_celery_workers" in command
+    ]
+    assert len(ping_commands) == 2
+    for service in (
+        "celery-worker",
+        "celery-worker-bandwidth",
+        "celery-worker-ingestion",
+        "celery-worker-monitoring",
+        "celery-worker-billing",
+        "celery-worker-tr069",
+        "celery-beat",
+    ):
+        assert any(f"ps -q {service}" in command for command in commands)
+        if service != "celery-beat":
+            assert all(
+                f"celery@container-{service}" in command for command in ping_commands
+            )
+
+
+def test_deploy_rolls_back_when_a_celery_worker_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        background_runtime_ready=False,
+    )
+
+    assert result.returncode != 0
+    assert "Background runtime health gate failed" in result.stderr
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in (
+        env_file.read_text()
+    )
+    assert any(
+        "scripts.verify_celery_workers" in command
+        for command in docker_log.read_text().splitlines()
+    )
+
+
+def test_deploy_never_starts_a_service_the_host_does_not_declare(
+    tmp_path: Path,
+) -> None:
+    """Staging gates celery-beat behind a profile so it cannot originate
+    production work. Naming a profile-gated service on the command line
+    activates it, so the deploy must recreate only declared services."""
+    staging_services = tuple(
+        service for service in FULL_SERVICES if service != "celery-beat"
+    )
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=staging_services,
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate_commands = [
+        command
+        for command in docker_log.read_text().splitlines()
+        if " up -d " in command
+    ]
+    assert recreate_commands
+    assert not any("celery-beat" in command for command in recreate_commands)
+    # ...and it must not be health-gated as if it were running either.
+    assert "BACKGROUND RUNTIME FAILURE: celery-beat" not in result.stderr
+
+
+def test_deploy_loads_the_compose_override_when_the_host_has_one(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(tmp_path, write_override=True)
+
+    assert result.returncode == 0, result.stderr
+    compose_commands = [
+        command
+        for command in docker_log.read_text().splitlines()
+        if command.startswith("compose ")
+    ]
+    assert compose_commands
+    assert all(
+        "-f docker-compose.yml -f docker-compose.override.yml" in command
+        for command in compose_commands
+    )
+
+
+def test_deploy_ignores_the_compose_override_when_told_to(tmp_path: Path) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        write_override=True,
+        extra_env={"IGNORE_COMPOSE_OVERRIDE": "1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not any(
+        "docker-compose.override.yml" in command
+        for command in docker_log.read_text().splitlines()
+    )
+
+
+def test_deploy_requires_the_proxy_contract_unless_explicitly_opted_out(
+    tmp_path: Path,
+) -> None:
+    """Production must keep the warm-handoff gate; a host with no proxy in
+    front of the app has to opt out deliberately."""
+    result, _env_file, _docker_log = _run_deploy(
+        tmp_path,
+        proxy_ready=False,
+        extra_env={"REQUIRE_PROXY_HANDOFF": "0"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "DEPLOY AVAILABILITY FAILURE" not in result.stderr

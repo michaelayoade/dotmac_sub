@@ -98,6 +98,10 @@ class EventType(enum.Enum):
     ip_assignment_service_ownership_reconciled = (
         "ip_assignment.service_ownership_reconciled"
     )
+    ip_assignment_lifecycle_repaired = "ip_assignment.lifecycle_repaired"
+    ip_assignment_served_projection_repaired = (
+        "ip_assignment.served_projection_repaired"
+    )
 
     # Billing - Outage compensation
     service_extension_created = "billing.service_extension_created"
@@ -133,6 +137,8 @@ class EventType(enum.Enum):
     vendor_quote_changed = "vendor_quote.changed"
     vendor_purchase_invoice_changed = "vendor_purchase_invoice.changed"
     vendor_route_revision_changed = "vendor_route_revision.changed"
+    vendor_route_revision_accepted = "vendor_route_revision.accepted"
+    vendor_route_revision_rejected = "vendor_route_revision.rejected"
     vendor_as_built_submitted = "vendor_as_built.submitted"
     vendor_submission_confirmed = "vendor_submission.confirmed"
     vendor_project_verified = "vendor_project.verified"

@@ -143,6 +143,21 @@ entitlement. `Subscription.next_billing_at` is also a projection: a future
 anchor without exact evidence is `unresolved_projection`, blocks adverse
 action, and enters reconciliation.
 
+When an existing prepaid draft is covered by settlement-backed Payments plus a
+signed reviewed opening balance, `financial.prepaid_draft_reconciliation` owns
+the invoice-first repair. It allocates Payments first, records the remainder as
+typed opening-funding consumption (never as a Payment), creates the entitlement,
+then projects `next_billing_at` from the entitlement end. Automatic discovery
+creates a durable operator exception; it does not silently leave a generic
+`draft_invoice_pending` outcome.
+
+Generic subscription Restore cannot clear an active prepaid financial lock.
+The lifecycle preview reports
+`prepaid_financial_reconciliation_required` and the admin UI routes the
+operator to the draft-invoice reconciliation queue. Only the financial access
+owner may clear the prepaid lock after exact funding and coverage evidence
+commits.
+
 Current exact coverage wins over reserve balance. A customer is not suspended
 during a funded or explicitly granted service period merely because they do not
 hold the next period's reserve. `min_balance` is a top-up target and becomes an
@@ -412,25 +427,26 @@ deletion requires a separate reviewed decision.
 
 ## Continuous operations
 
-### IPAM service-ownership migration
+### IPAM assignment-lifecycle migration
 
 `IPAssignment` remains the desired-address authority; a subscription's IPv4
 column and RADIUS rows are projections and cannot manufacture, move, or reclaim
-an allocation. The `network.ip_assignment_service_ownership` reconciler audits
-all active IPv4 assignments and may fill only a missing `subscription_id` when
-one active assignment, one active service, subscriber identity, and served-IP
-compatibility evidence all agree.
+an allocation. The shadowing `network.ip_assignment_lifecycle` owner audits all
+active IPv4 assignments and retains the safe missing-`subscription_id`
+backfill. It also previews reviewed exact-service create, link, deactivate, and
+terminal-release repairs without changing the served column, RADIUS, or
+sessions.
 
 Begin with a read-only preview:
 
 ```bash
-python scripts/one_off/repair_ipam_to_served.py
+python -m scripts.one_off.repair_ipam_to_served
 ```
 
 Apply only the reviewed cohort using the exact printed repair fingerprint:
 
 ```bash
-python scripts/one_off/repair_ipam_to_served.py \
+python -m scripts.one_off.repair_ipam_to_served \
   --apply --limit 25 --fingerprint REVIEWED_REPAIR_SHA256 \
   --idempotency-key STABLE_OPERATION_KEY --actor APPROVING_OPERATOR \
   --reason "Reviewed exact service-ownership backfill evidence"
@@ -441,6 +457,21 @@ immediately before apply. Any changed assignment, subscription, or served-IP
 compatibility evidence fails closed and requires a new review. This migration
 does not itself cut RADIUS or runtime readers over to exact-service ownership.
 
+For an explicitly adjudicated service-level ledger repair, preview first:
+
+```bash
+python -m scripts.one_off.repair_service_ipv4_assignment \
+  --subscription-id SUBSCRIPTION_UUID \
+  --desired-address-id IPV4_ADDRESS_UUID \
+  --deactivate-assignment-id STALE_ASSIGNMENT_UUID
+```
+
+Apply only the identical current preview with its exact fingerprint,
+idempotency key, actor, and reason. Use `--release` instead of
+`--desired-address-id` only for an exact canceled or expired service. The
+complete command, safety policy, migration boundary, and projection cutover are
+defined in `docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md`.
+
 ### Daily review
 
 1. Review billing-health, funding, coverage, renewal, dunning, notification,
@@ -450,9 +481,13 @@ does not itself cut RADIUS or runtime readers over to exact-service ownership.
    or provider service.
 3. Run read-only previews before historical repair. Apply only the reviewed,
    fingerprinted cohort through the owner command.
-4. Verify money facts, entitlement, subscription anchor, lock, RADIUS state,
-   receipt, and customer-visible outcome.
-5. Keep unresolved evidence quarantined. Never fabricate zero funding, a paid
+4. Process exact cases in small canary batches. For mixed-source prepaid drafts,
+   verify the opening baseline, approval evidence, and prior consumption before
+   confirmation.
+5. Verify money facts, opening consumption, entitlement, subscription anchor,
+   lock, billing event, RADIUS state, receipt, and customer-visible outcome
+   after every batch.
+6. Keep unresolved evidence quarantined. Never fabricate zero funding, a paid
    period, or a restoration/suspension decision.
 
 ### Continuous acceptance signals
