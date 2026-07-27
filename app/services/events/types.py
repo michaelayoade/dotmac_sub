@@ -137,6 +137,7 @@ class EventType(enum.Enum):
     # Shared operational service-team lifecycle
     service_team_changed = "service_team.changed"
     service_team_membership_changed = "service_team.membership_changed"
+    workqueue_action_coordinated = "workqueue.action_coordinated"
 
     # Operations - vendor installation project lifecycle
     vendor_project_published = "vendor_project.published"
