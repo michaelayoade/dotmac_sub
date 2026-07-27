@@ -108,6 +108,12 @@ def test_metrics_scrape_policy_is_checked_in() -> None:
     assert (ROOT / "docs/METRICS_SCRAPE_SAFETY.md").is_file()
 
 
+def test_billing_health_producer_does_not_call_forensic_invariant_scan() -> None:
+    source = (ROOT / "app/services/billing_health.py").read_text(encoding="utf-8")
+    assert "AccountCreditApplications.summarize_invariants(" in source
+    assert "AccountCreditApplications.inspect_invariants(" not in source
+
+
 def test_prometheus_callbacks_stay_in_reviewed_exporter_module() -> None:
     violations = []
     for path in (ROOT / "app").rglob("*.py"):
