@@ -27,6 +27,7 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceRead,
     VendorPurchaseInvoiceUpdate,
 )
+from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field import vendor_capabilities
@@ -734,7 +735,7 @@ def request_material_release(
 
     command = vendor_material_release.RequestMaterialRelease(
         project_id=payload.project_id,
-        vendor_id=_vendor_id(context),
+        vendor_id=coerce_uuid(_vendor_id(context)),
         requested_by_person_id=context["principal_id"],
         items=tuple(item.model_dump() for item in payload.items),
         notes=payload.notes,
@@ -759,7 +760,7 @@ def request_vendor_advance(
 
     command = vendor_advances.RequestVendorAdvance(
         project_id=payload.project_id,
-        vendor_id=_vendor_id(context),
+        vendor_id=coerce_uuid(_vendor_id(context)),
         amount=payload.amount,
         requested_by_person_id=context["principal_id"],
         reason=payload.reason,
