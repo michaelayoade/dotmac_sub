@@ -1450,6 +1450,7 @@ def create_installation_invoice(
     description: str,
     external_ref: str | None = None,
     currency: str = "NGN",
+    status: InvoiceStatus = InvoiceStatus.issued,
 ) -> Invoice:
     """Create a one-time installation invoice (header + single line) for a
     CRM-driven subscriber. Replaces the old Splynx installation-invoice path.
@@ -1481,7 +1482,7 @@ def create_installation_invoice(
         currency=currency,
         total=amount,
         memo=description,
-        status=InvoiceStatus.issued,
+        status=status,
         issued_at=datetime.now(UTC),
     )
     invoice = BillingAdapter().create_invoice_with_lines(

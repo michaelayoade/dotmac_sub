@@ -153,6 +153,7 @@ class EventType(enum.Enum):
     lead_account_converted = "lead.account_converted"
     quote_accepted = "quote.accepted"
     sales_order_paid = "sales_order.paid"
+    sales_order_waived = "sales_order.waived"
     sales_order_fulfilled = "sales_order.fulfilled"
     project_created = "project.created"
     installation_scope_created = "installation_scope.created"

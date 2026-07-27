@@ -647,6 +647,12 @@ class SalesOrderLine(Base):
     native rewire these point at sub's own subscription/invoice rows."""
 
     __tablename__ = "sales_order_lines"
+    __table_args__ = (
+        CheckConstraint(
+            "discount_percent >= 0 AND discount_percent <= 100",
+            name="ck_sales_order_lines_discount_percent_range",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -659,6 +665,12 @@ class SalesOrderLine(Base):
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=Decimal("1.000"))
     unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    # Line discount percent (0-100); amount is net of discount. Mirrors
+    # QuoteLineItem so an accepted discount survives quote -> order and is not
+    # silently restored to gross by the next line edit (migration 425).
+    discount_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("0.00"), server_default="0.00", nullable=False
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())

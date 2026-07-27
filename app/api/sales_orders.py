@@ -8,7 +8,7 @@ CRM left sales orders auth-only; sub gates them on
 ``crm:sales_order:{read,write}``, which are part of the native sales RBAC contract.
 """
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db, require_permission
@@ -20,6 +20,7 @@ from app.schemas.sales_order import (
     SalesOrderLineUpdate,
     SalesOrderRead,
     SalesOrderUpdate,
+    SalesOrderWaiveRequest,
 )
 from app.services import sales_orders as sales_order_service
 
@@ -101,6 +102,30 @@ def update_sales_order(
     return sales_order_service.sales_orders.update(
         db, sales_order_id, payload, actor_id=_actor_id(current_user)
     )
+
+
+@router.post(
+    "/{sales_order_id}/waive",
+    response_model=SalesOrderRead,
+    dependencies=[Depends(require_permission("crm:sales_order:write"))],
+)
+def waive_sales_order(
+    sales_order_id: str,
+    payload: SalesOrderWaiveRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Waive the charge and authorize delivery without a payment."""
+    try:
+        return sales_order_service.record_waiver(
+            db,
+            sales_order_id=sales_order_id,
+            actor_id=_actor_id(current_user) or "",
+            reason=payload.reason,
+        )
+    except sales_order_service.SalesOrderLifecycleError as exc:
+        code = {"not_found": 404, "invalid": 400}.get(exc.kind, 409)
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
 
 
 @router.delete(

@@ -54,6 +54,7 @@ from app.services.common import (
     apply_ordering,
     apply_pagination,
     coerce_uuid,
+    net_line_amount,
     round_money,
     validate_enum,
 )
@@ -428,20 +429,9 @@ def _prepare_quote_ownership(
         data["sent_at"] = datetime.now(UTC)
 
 
-def _line_amount(quantity, unit_price, discount_percent) -> Decimal:
-    """Net line amount: quantity * unit_price, less the line discount percent."""
-    qty = Decimal(quantity or 0)
-    price = Decimal(unit_price or 0)
-    discount = Decimal(discount_percent or 0)
-    if discount < 0:
-        discount = Decimal("0")
-    if discount > 100:
-        discount = Decimal("100")
-    gross = qty * price
-    net = gross * (Decimal("100") - discount) / Decimal("100")
-    if net < 0:
-        net = Decimal("0")
-    return net.quantize(Decimal("0.01"))
+#: Quote lines and sales-order lines share one net-amount implementation so a
+#: discount cannot mean different things on either side of the handoff.
+_line_amount = net_line_amount
 
 
 def _recalculate_quote_totals(db: Session, quote: Quote) -> None:

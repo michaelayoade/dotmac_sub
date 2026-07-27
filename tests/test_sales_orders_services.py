@@ -201,19 +201,36 @@ def test_payment_field_transitions(db_session):
     assert order.paid_at is not None
 
 
-def test_waived_payment_confirms_draft_order(db_session):
+def test_waived_payment_confirms_draft_order(db_session, billing_calls):
     subscriber = _make_subscriber(db_session)
     order = sales_order_service.sales_orders.create(
         db_session, SalesOrderCreate(subscriber_id=subscriber.id)
     )
     assert order.status == SalesOrderStatus.draft.value
-    order = sales_order_service.sales_orders.update(
+    # Waiving now goes through the command that records who and why; the
+    # generic update refuses it so the evidence cannot be bypassed.
+    order = sales_order_service.record_waiver(
         db_session,
-        str(order.id),
-        SalesOrderUpdate(payment_status=SalesOrderPaymentStatus.waived),
+        sales_order_id=order.id,
+        actor_id="staff:folake",
+        reason="Goodwill replacement after a failed install",
     )
     assert order.payment_status == SalesOrderPaymentStatus.waived.value
     assert order.status == SalesOrderStatus.confirmed.value
+
+
+def test_generic_update_cannot_waive_an_order(db_session):
+    subscriber = _make_subscriber(db_session)
+    order = sales_order_service.sales_orders.create(
+        db_session, SalesOrderCreate(subscriber_id=subscriber.id)
+    )
+    with pytest.raises(HTTPException) as exc:
+        sales_order_service.sales_orders.update(
+            db_session,
+            str(order.id),
+            SalesOrderUpdate(payment_status=SalesOrderPaymentStatus.waived),
+        )
+    assert exc.value.status_code == 409
 
 
 def test_update_from_input_parses_strings(db_session):

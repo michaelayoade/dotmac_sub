@@ -192,6 +192,28 @@ def round_money(value: Decimal | int | float | str) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def net_line_amount(quantity, unit_price, discount_percent) -> Decimal:
+    """Net line amount: quantity * unit_price, less the line discount percent.
+
+    One implementation for quote lines and sales-order lines. They used to
+    disagree — quote lines applied the discount, order lines multiplied gross —
+    so an accepted discount was flattened into an opaque ``amount`` at order
+    time and restored to gross by the next edit.
+    """
+    qty = Decimal(quantity or 0)
+    price = Decimal(unit_price or 0)
+    discount = Decimal(discount_percent or 0)
+    if discount < 0:
+        discount = Decimal("0")
+    if discount > 100:
+        discount = Decimal("100")
+    gross = qty * price
+    net = gross * (Decimal("100") - discount) / Decimal("100")
+    if net < 0:
+        net = Decimal("0")
+    return net.quantize(Decimal("0.01"))
+
+
 def to_decimal(
     value: Decimal | int | float | str | None, default: Decimal = Decimal("0.00")
 ) -> Decimal:

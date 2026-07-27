@@ -66,6 +66,7 @@ from app.services.common import (
     apply_pagination,
     coerce_uuid,
     get_by_id,
+    net_line_amount,
     round_money,
     validate_enum,
 )
@@ -120,11 +121,15 @@ def fulfill_from_customer_experience(
                 "Sales order was fulfilled by different CX evidence",
             )
         return False
-    if order.status != SalesOrderStatus.paid.value:
+    # A waived order is settled too — nothing is owed on it — so it must be
+    # able to reach fulfilled. Gating on status == paid stranded every waived
+    # order at confirmed for good.
+    if not funding_is_settled(order):
         raise SalesOrderLifecycleError(
-            "sales_order_not_paid",
-            "Only a fully paid sales order can be fulfilled",
+            "sales_order_not_settled",
+            "Only a fully paid or waived sales order can be fulfilled",
         )
+    previous_status = order.status
     order.status = SalesOrderStatus.fulfilled.value
     metadata["cx_handoff_id"] = str(handoff_id)
     order.metadata_ = metadata
@@ -134,7 +139,7 @@ def fulfill_from_customer_experience(
         {
             "sales_order_id": str(order.id),
             "cx_handoff_id": str(handoff_id),
-            "from_status": SalesOrderStatus.paid.value,
+            "from_status": previous_status,
             "to_status": SalesOrderStatus.fulfilled.value,
         },
         actor=actor,
@@ -142,6 +147,17 @@ def fulfill_from_customer_experience(
     )
     db.flush()
     return True
+
+
+#: Nothing further is owed on the order: either it was paid in full, or the
+#: charge was explicitly waived. Both authorize delivery; they differ only in
+#: whether money changed hands, which is what ``payment_status`` records.
+_FUNDING_SETTLED = frozenset({_PAID, _WAIVED})
+
+
+def funding_is_settled(sales_order: SalesOrder) -> bool:
+    """Whether the sale is settled enough to create the service contract."""
+    return sales_order.payment_status in _FUNDING_SETTLED
 
 
 def _enum_str(value, enum_cls, label: str) -> str | None:
@@ -461,10 +477,23 @@ def ensure_installation_invoice_for_sales_order(db: Session, sales_order_id) -> 
         )
         return
 
-    amount = _resolve_installation_amount(db, project)
-    if amount <= 0:
-        logger.info("invoice_skip_no_installation_cost project_id=%s", project.id)
-        return
+    from app.models.billing import InvoiceStatus
+
+    waived = sales_order.payment_status == _WAIVED
+    if waived:
+        # A waived order still gets its accounting document, at zero. It is
+        # created already settled: an ``issued`` zero invoice would age into
+        # ``overdue`` on its due date and show up in collections owing nothing.
+        amount = Decimal("0.00")
+        invoice_status = InvoiceStatus.paid
+        description = "Installation cost (waived)"
+    else:
+        amount = _resolve_installation_amount(db, project)
+        invoice_status = InvoiceStatus.issued
+        description = "Installation cost"
+        if amount <= 0:
+            logger.info("invoice_skip_no_installation_cost project_id=%s", project.id)
+            return
 
     subscriber_id = sales_order.subscriber_id or project.subscriber_id
     if not subscriber_id:
@@ -477,9 +506,10 @@ def ensure_installation_invoice_for_sales_order(db: Session, sales_order_id) -> 
             db,
             subscriber_id=str(subscriber_id),
             amount=amount,
-            description="Installation cost",
+            description=description,
             external_ref=f"project:{project.id}",
             currency=sales_order.currency or "NGN",
+            status=invoice_status,
         )
     except LookupError as exc:
         # Record the failure so it surfaces and a later trigger (or operator)
@@ -575,10 +605,9 @@ def _ensure_provisioning_order_for_sales_line(
     subscription: Subscription,
 ) -> None:
     """Stage one idempotent provisioning order for a closed sale line."""
-    if sales_order.status not in {
-        SalesOrderStatus.paid.value,
-        SalesOrderStatus.fulfilled.value,
-    }:
+    if not funding_is_settled(sales_order) and sales_order.status != (
+        SalesOrderStatus.fulfilled.value
+    ):
         return
 
     from app.models.provisioning import (
@@ -1074,7 +1103,7 @@ def unprovisioned_service_lines(
     one pending Subscription per service line, so a non-empty result here is a
     contract violation the reconciler must repair.
     """
-    if sales_order.payment_status != _PAID or not sales_order.is_active:
+    if not funding_is_settled(sales_order) or not sales_order.is_active:
         return []
     if sales_order.status == SalesOrderStatus.cancelled.value:
         return []
@@ -1163,13 +1192,16 @@ def _sync_sales_order_financials(
     about it, so re-posting here would double-count it. The service
     consequences of full funding still run.
     """
-    if sales_order.payment_status not in {_PAID, _PARTIAL}:
+    if sales_order.payment_status not in {_PAID, _PARTIAL, _WAIVED}:
         return
     # A partial receipt is financial evidence only.  It must not create a
-    # service contract or provisioning order before the sale is fully funded.
-    if sales_order.payment_status == _PAID:
+    # service contract or provisioning order before the sale is settled.
+    if funding_is_settled(sales_order):
         _push_sales_order_subscriptions(db, sales_order)
     if record_ledger_payment:
+        # A waiver moves no money, so there is nothing to post; the helper's
+        # own amount_paid <= 0 guard makes that a no-op, but saying so here
+        # keeps the intent legible.
         _record_sales_order_payment(db, sales_order)
 
 
@@ -1416,6 +1448,97 @@ def record_deposit_receipt(
     return order
 
 
+def record_waiver(
+    db: Session,
+    *,
+    sales_order_id: UUID | str,
+    actor_id: str,
+    reason: str,
+) -> SalesOrder:
+    """Waive the charge on a sales order and authorize delivery.
+
+    A waiver is a decision to give the work away, so it is evidenced the same
+    way every other consequential transition in this chain is — actor, reason,
+    timestamp — rather than being a bare status string anyone can set.
+
+    Distinct from a discount: a discount reduces what is owed and the customer
+    still pays the remainder through the normal funding path. A waiver says
+    nothing is owed at all, and is what authorizes provisioning in place of a
+    payment.
+
+    Refuses an order that already carries money. Reversing a real receipt is a
+    refund, which belongs to billing, not to a status flip here.
+    """
+    actor = str(actor_id or "").strip()
+    if not actor:
+        raise SalesOrderLifecycleError(
+            "actor_required", "Waiver actor is required", kind="invalid"
+        )
+    normalized_reason = str(reason or "").strip()
+    if not normalized_reason:
+        raise SalesOrderLifecycleError(
+            "reason_required", "Waiver reason is required", kind="invalid"
+        )
+
+    order = db.scalars(
+        select(SalesOrder)
+        .where(SalesOrder.id == coerce_uuid(str(sales_order_id)))
+        .with_for_update()
+    ).one_or_none()
+    if order is None or not order.is_active:
+        raise SalesOrderLifecycleError(
+            "sales_order_not_found", "Sales order not found", kind="not_found"
+        )
+    if order.status == SalesOrderStatus.cancelled.value:
+        raise SalesOrderLifecycleError(
+            "sales_order_canceled", "Cancelled order cannot be waived"
+        )
+
+    metadata = dict(order.metadata_ or {})
+    existing = metadata.get("waiver")
+    if order.payment_status == _WAIVED and isinstance(existing, dict):
+        return order
+    if Decimal(str(order.amount_paid or 0)) > 0:
+        raise SalesOrderLifecycleError(
+            "sales_order_already_funded",
+            "Sales order has recorded payments; refund it through billing "
+            "rather than waiving it",
+        )
+
+    metadata["waiver"] = {
+        "reason": normalized_reason,
+        "waived_by": actor,
+        "waived_at": datetime.now(UTC).isoformat(),
+        "waived_total": str(order.total or 0),
+    }
+    order.metadata_ = metadata
+    order.payment_status = _WAIVED
+    order.balance_due = Decimal("0.00")
+    if order.status == SalesOrderStatus.draft.value:
+        order.status = SalesOrderStatus.confirmed.value
+    emit_event(
+        db,
+        EventType.sales_order_waived,
+        {
+            "sales_order_id": str(order.id),
+            "order_number": order.order_number,
+            "waived_total": str(order.total or 0),
+            "currency": order.currency,
+            "reason": normalized_reason,
+        },
+        actor=actor,
+        subscriber_id=order.subscriber_id,
+    )
+    db.flush()
+    db.commit()
+    db.refresh(order)
+    # Settled funding authorizes the service contract, exactly as a full
+    # payment does. No ledger payment is posted — no money moved.
+    _sync_sales_order_financials(db, order, record_ledger_payment=False)
+    ensure_installation_invoice_for_sales_order(db, order.id)
+    return order
+
+
 def _ensure_project_for_manual_sales_order(db: Session, sales_order: SalesOrder):
     """Compatibility wrapper around the canonical fulfillment coordinator."""
     if sales_order.quote_id:
@@ -1517,15 +1640,22 @@ class SalesOrders(ListResponseMixin):
         db.flush()
 
         for item in quote.line_items:
+            discount_percent = item.discount_percent or Decimal("0.00")
             amount = item.amount
             if amount is None:
-                amount = Decimal(item.quantity or 0) * Decimal(item.unit_price or 0)
+                amount = net_line_amount(
+                    item.quantity, item.unit_price, discount_percent
+                )
             line = SalesOrderLine(
                 sales_order_id=sales_order.id,
                 inventory_item_id=item.inventory_item_id,
                 description=item.description,
                 quantity=item.quantity,
                 unit_price=item.unit_price,
+                # Carry the discount, not just the net amount it produced —
+                # otherwise the order cannot explain its own price and the
+                # next line edit recomputes it back to gross.
+                discount_percent=discount_percent,
                 amount=amount,
                 metadata_=dict(item.metadata_) if item.metadata_ else None,
             )
@@ -1644,6 +1774,19 @@ class SalesOrders(ListResponseMixin):
                     data.get("source") or sales_order.source or quote.lead.lead_source
                 )
 
+        if data.get("payment_status") == _WAIVED and (
+            sales_order.payment_status != _WAIVED
+        ):
+            # Waiving is a decision to give away revenue, so it goes through
+            # the command that demands an actor and a reason. Allowing it here
+            # too would leave the evidence trivially bypassable.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Waive the order through the waiver command so the actor "
+                    "and reason are recorded"
+                ),
+            )
         amount_source = AMOUNT_OBSERVED if "amount_paid" in data else None
         if data.get("payment_status") == _PAID:
             resolved_total = Decimal(data.get("total") or sales_order.total or 0)
@@ -1803,8 +1946,10 @@ class SalesOrderLines(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Sales order not found")
         data = payload.model_dump()
         if not data.get("amount"):
-            data["amount"] = Decimal(data.get("quantity") or 0) * Decimal(
-                data.get("unit_price") or 0
+            data["amount"] = net_line_amount(
+                data.get("quantity"),
+                data.get("unit_price"),
+                data.get("discount_percent"),
             )
         line = SalesOrderLine(**data)
         db.add(line)
@@ -1825,8 +1970,13 @@ class SalesOrderLines(ListResponseMixin):
         data = payload.model_dump(exclude_unset=True)
         for key, value in data.items():
             setattr(line, key, value)
-        if "quantity" in data or "unit_price" in data:
-            line.amount = Decimal(line.quantity or 0) * Decimal(line.unit_price or 0)
+        # Recompute from every input that shapes the amount. Omitting the
+        # discount here is what used to restore a negotiated line to full price
+        # the first time anyone touched its quantity.
+        if {"quantity", "unit_price", "discount_percent"} & set(data):
+            line.amount = net_line_amount(
+                line.quantity, line.unit_price, line.discount_percent
+            )
         db.flush()
         _recalculate_order_totals(db, str(line.sales_order_id))
         db.commit()
