@@ -2,14 +2,21 @@
 
 **doc_kind:** design
 **status:** proposed
-**authority:** none until approved; `SOT_RELATIONSHIP_MAP.md` remains the
-contracted ownership manifest.
+**authority:** none. Nothing here is normative until Michael approves the
+taxonomy. `app/services/sot_relationships.py` remains the executable
+concern/role owner registry and `docs/SOT_RELATIONSHIP_MAP.md` the generated
+relationship map.
+
+**Owner / system of record:** Michael decides the taxonomy. The candidate and
+its open findings are tracked in the project memory
+`dotmac-sub-pipeline-and-document-taxonomy-candidate`, which is authoritative
+for status; this document is the working draft.
 
 **Classification base:** `origin/main` — 324 distinct `SOTService` owners across
-26 namespaces in `app/services/sot_relationships.py`. Deliberately not a feature
-branch: `feat/external-connector-runtime` still carries the old Team Inbox
-catch-all, whereas main carries the decomposed owner family and the
-conversation-to-ticket handoff. Classify against main.
+26 namespaces. Deliberately not a feature branch:
+`feat/external-connector-runtime` still carries the old Team Inbox catch-all,
+whereas main carries the decomposed owner family and the conversation-to-ticket
+handoff.
 
 ## Why this exists
 
@@ -20,39 +27,36 @@ cross-chain state be copied instead of read — a distinct, recurring defect cla
 
 ## Three independent axes
 
-A namespace does not determine placement. Each owner is classified on three axes
-that vary independently:
+A namespace does not determine placement. Classify each owner separately on:
 
-| Axis | Question | Values |
-| --- | --- | --- |
-| **Owning domain** | which service writes this fact | the namespace, e.g. `auth`, `sales` |
-| **Manifest role** | what kind of thing it is | pipeline, handoff, workflow hub, projection, transport, control plane, observation collector |
-| **Journey position** | where a customer or operator meets it | acquisition, onboarding, delivery, service, billing, support, incident |
+| Axis | Question |
+| --- | --- |
+| **Owning domain** | which service writes the fact |
+| **Manifest role** | pipeline, handoff, bounded operational workflow, projection, transport, control plane, observation collector |
+| **End-to-end journey** | where a customer or operator meets it |
 
 `auth.customer_credential_enrollment` is the worked example: owning domain
-`auth`, manifest role *handoff*, journey position *onboarding*. Reading any one
-axis alone places it wrongly.
+`auth`, manifest role *handoff*, journey *onboarding*. Reading any one axis
+alone places it wrongly.
 
 ## The pipeline test
 
-A candidate is a **pipeline** only if all four hold:
+A top-level pipeline has:
 
-1. A durable object with identity that outlives any single operation.
-2. **Irreversible terminal states** — you cannot un-fulfil, un-provision,
-   un-write-off, un-decommission, un-resolve.
-3. It crosses more than one owner.
-4. It has its own evidence trail and its own reconciler.
+1. one durable **work-item spine**;
+2. explicit **entry and terminal/closure semantics**;
+3. **staff or policy commands that advance it**;
+4. **preserved identity and provenance across owner handoffs**;
+5. an accountable **end-to-end business or operational outcome**.
 
-Fails (3) → a stage inside another pipeline. Fails (2) → it accumulates rather
-than progresses; a projection. Fails (1) → control plane or transport.
-
-**Namespace size is not pipeline count.** `network` (55) holds an asset
-lifecycle *and* the incident lifecycle. `financial` (52) holds the money
-pipeline *and* several of its control planes.
+**Not pipeline criteria:** service count, module prefix, UI size, or the
+presence of a handoff link. `network` (55 owners) holds both an asset lifecycle
+and the incident lifecycle; `financial` (52) holds the money pipeline and
+several of its control planes. Size indicates decomposition, not boundary.
 
 ## The eight pipelines
 
-| # | Pipeline | Durable object | Terminal states | Principal owners |
+| # | Pipeline | Work-item spine | Closure | Principal owners |
 | --- | --- | --- | --- | --- |
 | 1 | **Party / identity** | Party | merged, departed | `party.*` |
 | 2 | **Sale** | Lead → Quote → SalesOrder | fulfilled, cancelled | `sales.*`, `referrals.*` |
@@ -61,76 +65,58 @@ pipeline *and* several of its control planes.
 | 5 | **Service** | ServiceOrder → Subscription → access | terminated | `service_intent.*`, `access.*`, `operations.service_order_lifecycle`, `operations.provisioning_lifecycle` |
 | 6 | **Support** | Ticket | resolved, closed | `support.*` |
 | 7 | **Network asset** | NAS, ONT, fibre plant, splitter | decommissioned | `network.*` (inventory, fiber, ont, device state) |
-| 8 | **Outage / incident** | Outage | resolved | `network.outage_lifecycle`, `outage_impact`, `outage_auto_notify` |
+| 8 | **Outage / incident** | Outage | suspected → confirmed → clearing → resolved / discarded | `network.outage_lifecycle`, `outage_impact`, `outage_auto_notify` |
 
-### Why Outage is its own pipeline
+### Why Outage is the eighth
 
-The incident is an outcome-bearing durable object with explicit closure.
-Recovery completes the network incident even if individual support exceptions
-remain open — the incident's terminal state is not derived from, and does not
-wait on, the Support pipeline. It advances on staff decision as well as observed
-device state, so it is not a projection of Network asset either.
+`network.outage_lifecycle` owns a persisted incident with an explicit
+suspected / confirmed / clearing / resolved / discarded vocabulary.
+Authoritative observations **and staff decisions** advance it, so it is not a
+projection of asset state. Its consequences cross network impact,
+communications and staff notification, SLA, and Support/field verification.
+Support tickets may outlive incident resolution without becoming part of the
+outage aggregate — the incident closes on recovery regardless.
 
-### Boundaries between them
-
-Eight pipelines do not produce twenty-eight handoffs. The real ones:
-
-| Handoff | Carries | Contract today |
-| --- | --- | --- |
-| Party → all | reviewed identity, the spine every chain binds to | `PARTY_ROLE_RELATIONSHIP_SOT.md` |
-| Party → credential | account conversion enables credential enrollment | `auth.customer_credential_enrollment` (see below) |
-| Sale → Money | what is owed for an agreed sale | **none — currently a copied column** |
-| Sale → Delivery | authorized implementation scope | `SALES_TO_SERVICE_LIFECYCLE_SOT.md` |
-| Delivery → Service | verified implementation releases provisioning | `SALES_TO_SERVICE_LIFECYCLE_SOT.md` |
-| Service → Money | active service becomes billable | `adr/0003-permanent-customer-financial-lifecycle.md` |
-| Support → Delivery | a fault becomes field work | `TICKET_WORK_ORDER_HANDOFF_SOT.md` |
-| Network asset → Service | plant availability constrains delivery | partial (`FIBER_TOPOLOGY_SOT.md`) |
-| Outage → Support | an incident raises customer exceptions | partial (`outage_auto_notify`) |
-| Team Inbox → Support | a conversation issues a ticket | `communications.conversation_ticket_handoff` |
-
-## Operational workflow hub
+## Bounded operational workflow
 
 A distinct manifest role, not a weaker pipeline.
 
-**Team Inbox** — `communications.team_inbox_*` (17 owners) plus
-`communications.conversation_ticket_handoff`.
+**Team Inbox** — `communications.team_inbox_*`, a communications
+intake-and-collaboration workspace.
 
-It owns real state: conversation, routing, assignment, collaboration and
-resolution. It is not a pipeline because **closing a conversation does not
-resolve the underlying billing, network, sales or support case**. Ticket
-issuance is an independent one-to-many handoff, not the conversation's next
-lifecycle state — one conversation may raise several tickets, or none, and the
-conversation can close while every ticket it raised stays open.
+The family owns durable provider observations, conversation and message
+chronology, contact resolution, routing, assignment and escalation, operator
+state, outbound intents, receipts, commands, repair and projections. **Providers
+and realtime remain transports and projections** — the role is not uniform
+across the family.
 
-A workflow hub therefore:
+`communications.conversation_ticket_handoff` is an **issuance and provenance
+edge**, not a lifecycle transition: one conversation may issue many tickets,
+issuance does not transition the conversation, and Support owns the ticket
+lifecycle throughout. The 18-service count reflects ownership decomposition, not
+a pipeline boundary.
 
-- owns its own working state and may be reconciled;
-- must never be read as the authority on any case it touches;
-- reaches other pipelines only through declared handoffs.
+A bounded workflow owns its working state, must never be read as the authority
+on any case it touches, and reaches other pipelines only through declared edges.
 
 ## Everything else
 
-These have owners. None is a chain.
+### Projections — derived read models
 
-### Projections — derived read models, no terminal state
+`ui.*` (31) · `observability.*` (6) · `subscriber.growth_reports` (1) ·
+parts of `customer.*` (`financial_position`, `network_context`,
+`service_status`, `usage_summary`, `data_completeness`) · the notification and
+delivery projections in `communications.*` outside the Team Inbox workspace.
 
-| Namespace | Note |
-| --- | --- |
-| `ui.*` (31) | Entirely projection; already governed by the UI Projection Boundary |
-| `observability.*` (6) | Instrumentation over other pipelines' facts |
-| `subscriber.growth_reports` (1) | Reporting projection |
-| `customer.*` (partial) | `financial_position`, `network_context`, `service_status`, `usage_summary`, `data_completeness` |
-| `communications.*` (partial) | Notification and delivery projections, outside the Team Inbox hub |
-
-### Transports — carry facts between owners, decide nothing
+### Transports — carry facts, decide nothing
 
 `integration.*` (10) · `events.*` (2) · `app_sessions.*` (3)
 
 ### Control planes — decide configuration, not business state
 
 `control.*` (6) · `secrets.*` (8) · `scheduler.*` (3) · `runtime.*` (6) ·
-`ai.*` (3, advisory only — never authoritative over a domain fact) ·
-`vpn.*` (4) · `gis.*` (2) · and the control-plane half of `auth.*` below.
+`ai.*` (3, advisory only) · `vpn.*` (4) · `gis.*` (2) · the control-plane half
+of `auth.*`.
 
 ### Observation collectors — write facts, derive nothing
 
@@ -140,34 +126,41 @@ These have owners. None is a chain.
 
 ## `auth.*` split by concern
 
-Namespace alone does not determine corpus placement.
+Split in **corpus presentation** by concern rather than namespace. This is a
+presentation split; no owner is renamed or moved.
 
-| Owner | Owning domain | Manifest role | Journey position |
-| --- | --- | --- | --- |
-| `auth.permission_gate` | auth | control plane | — |
-| `auth.rbac_catalog` | auth | control plane | — |
-| `auth.token_signing` | auth | control plane | — |
-| `auth.staff_provisioning` | auth | control plane | — |
-| `auth.subscriber_assignments` | auth | control plane | — |
-| `auth.system_user_assignments` | auth | control plane | — |
-| `auth.credential_recovery` | auth | control plane | support |
-| `auth.customer_credential_enrollment` | auth | **handoff** | onboarding |
-| `auth.reseller_onboarding` | auth | **coordinator** | onboarding (reseller) |
+| Owner | Manifest role | Journey |
+| --- | --- | --- |
+| `permission_gate`, `rbac_catalog`, `token_signing`, `staff_provisioning`, `subscriber_assignments`, `system_user_assignments` | control plane | — |
+| `credential_recovery` | control plane | support |
+| `customer_credential_enrollment` | **handoff** | onboarding |
+| `reseller_onboarding` | **cross-domain application coordinator** | reseller / Party onboarding |
 
-**`auth.customer_credential_enrollment`** is an identity/credential lifecycle
-shown as a handoff **following** Party/account conversion — explicitly *not* a
-Party-owned stage. It cannot activate a Party, verify Party contact points, or
-change account or subscription state. It consumes the conversion outcome; it
-does not advance the Party pipeline.
+`auth.customer_credential_enrollment` is an identity/credential lifecycle that
+**follows** account conversion. It explicitly owns no Party activation, no
+contact verification, no account lifecycle and no subscription state. Show it as
+a journey handoff while keeping `auth` ownership.
 
-**`auth.reseller_onboarding`** is a cross-domain onboarding **coordinator**, not
-a control plane. It belongs in the reseller/Party journey view while **retaining
-its current owning service** until an intentional contract migration says
-otherwise. Placement in a journey view is not a transfer of ownership.
+`auth.reseller_onboarding` coordinates reseller/account/principal bootstrap and
+belongs in the reseller/Party onboarding journey view. **Its owner namespace
+must not be renamed without a deliberate contract migration.**
+
+## Document metadata
+
+`doc_kind` is orthogonal to `status`, authority and supersession. Classification
+is **semantic, not purely mechanical** — the label is a judgement about what the
+document is for.
+
+- **doc_kind**: normative standards/maps · decisions · designs · runbooks ·
+  audits/evidence · references/guides · generated artifacts
+- **status**: proposed · approved · implemented · superseded · historical
+- **authority**: what it binds; absent means it binds nothing
+
+Labels aid retrieval and stop plans and audits being read as current authority.
+They do **not** replace the executable SOT manifest or the checked-in precedence
+rules.
 
 ## What this catches
-
-The classification is a standing test:
 
 > State belonging to pipeline A must not be **stored** inside pipeline B's
 > object. B reads it across the boundary, or asks A to change it.
@@ -177,71 +170,34 @@ time. `SalesOrder` stores `amount_paid`, `balance_due`, `payment_status` and
 `paid_at` — Money-pipeline facts held as Sale-pipeline columns, derived by ad-hoc
 assignment rather than by the invoice state machine
 (`ALLOWED_INVOICE_TRANSITIONS`). One duplicated boundary produced four money
-bugs:
+bugs: a waiver revoked by a totals recalculation; a line discount restored to
+gross by an unrelated edit; `amount_paid` inferred from `total` and posted to the
+ledger unevidenced; a second deposit overwriting the first. Each was fixed
+individually; none would have existed had the boundary been a read.
 
-- a waiver silently revoked by a totals recalculation;
-- a line discount restored to gross price by an unrelated edit;
-- `amount_paid` inferred from `total` and posted to the ledger unevidenced;
-- a second deposit overwriting the first instead of accumulating.
+**Sale owns the price. Money owns the money.**
 
-Each was fixed individually. None would have existed had the boundary been a
-read instead of a copy.
+## Open findings — unresolved, not decided
 
-**Sale owns the price. Money owns the money.** `subtotal`, `tax_total`, `total`
-and line discounts are the commercial agreement. `amount_paid`, `balance_due`,
-`payment_status` and `paid_at` are ledger facts.
+The five findings below are recorded as **unresolved observations, not approved
+renames, moves, mergers or contract changes.** The classification recommendations
+in this document do **not** close any of them. They must remain visible whenever
+this taxonomy is revised. Each requires separate adjudication.
 
-## Document metadata
+| # | Finding | Status |
+| --- | --- | --- |
+| 1 | `customer.*` is a grab bag rather than a coherent ownership/domain boundary | open |
+| 2 | Duplicate `subscription_lifecycle` owners (`access.*`, `service_intent.*`) | open |
+| 3 | `financial.*` mixes business pipelines with control planes | open |
+| 4 | `operations.*` holds Service owners (`service_order_lifecycle`, `provisioning_lifecycle`) | open |
+| 5 | Sale → Money has no explicit handoff contract | open |
 
-`doc_kind`, `status` and `authority` are independent. A design document can be
-approved without being normative; a normative document can be superseded.
+Reaffirmed unchanged by Michael on 2026-07-27.
 
-**doc_kind** — what the document is:
+## Next action
 
-| Value | Meaning |
-| --- | --- |
-| `normative` | states rules that bind implementation |
-| `decision` | records a choice and its rationale (ADR) |
-| `design` | proposes a shape; not binding until adopted |
-| `runbook` | operational procedure |
-| `audit` | findings from an inspection at a point in time |
-| `reference` | descriptive map of what exists |
-| `generated` | produced by tooling; edit the source, not the file |
-
-**status** — where it is in its life: `proposed`, `approved`, `implemented`,
-`superseded`, `historical`.
-
-**authority** — what it binds, if anything. Absent means it binds nothing.
-
-These prevent proposals, audits and historical plans from reading like active
-authority. Relabelling the existing SOT corpus is mechanical **only after these
-semantics are fixed** — the vocabulary is the decision; applying it is typing.
-
-## Findings
-
-1. **`customer.*` is a grab bag.** Twenty owners spanning pipeline stages
-   (`experience_handoff`, `experience_lifecycle`), projections
-   (`financial_position`, `service_status`) and Party-adjacent commands
-   (`accounts`, `profile_commands`). Decompose into the pipelines it serves.
-2. **Two owners named `subscription_lifecycle`** — `access.*` and
-   `service_intent.*`. Inside one pipeline that is ambiguity, not layering.
-3. **`financial.*` mixes the Money pipeline with its control planes** —
-   `payment_routing`, `tax_configuration`, `grace_policy`,
-   `payment_configuration_staff_actions` decide configuration; the rest move
-   money.
-4. **`operations.*` mixes Delivery with Service** — `service_order_lifecycle`
-   and `provisioning_lifecycle` advance Service from the Delivery namespace.
-5. **Sale → Money has no handoff contract** — the one boundary that is a copied
-   column rather than a documented read.
-
-## If adopted
-
-1. Fix the `doc_kind` / `status` / `authority` semantics above, then relabel the
-   21 SOT documents.
-2. Record the eight pipelines in `SOT_RELATIONSHIP_MAP.md` and classify every
-   namespace that is not one, on all three axes.
-3. Write the missing Sale → Money handoff contract and migrate the sales money
-   columns to reads behind it — explicit authority migration with old owner, new
-   owner, shadow phase, cutover gate and boundary tests.
-4. Add an architecture test asserting no pipeline object stores another
-   pipeline's state, seeded from this classification.
+Michael approves or adjusts the classification recommendations, and
+**separately** adjudicates the five open boundary/handoff findings. Only then
+encode the resulting pipeline definitions, domain boundaries, handoff contracts
+and document-kind/status schema in the canonical corpus documentation — and only
+after that relabel documents mechanically.
