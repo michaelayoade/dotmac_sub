@@ -251,18 +251,28 @@ def test_a_thread_shared_by_two_of_my_teams_is_listed_once(db_session):
     assert len(result.items) == 1
 
 
-def test_both_team_filters_at_once_still_answers(db_session):
-    """Two filters over the same relation used to be two joins, which failed."""
+def test_both_team_filters_at_once_intersect(db_session):
+    """Two filters over the same relation used to be two joins, which failed.
+
+    They are subqueries now, so setting both narrows rather than erroring.
+    """
     support = _team(db_session, "Support")
-    _conversation_on_teams(db_session, support)
+    field = _team(db_session, "Field")
+    _conversation_on_teams(db_session, support, field)
+    _conversation_on_teams(db_session, field)
     db_session.commit()
 
-    result = team_inbox_read.list_conversations(
+    both = team_inbox_read.list_conversations(
         db_session,
         service_team_id=str(support.id),
-        service_team_ids=(str(support.id),),
+        service_team_ids=(str(field.id),),
     )
-    assert result.count == 1
+    assert both.count == 1
+
+    scope_only = team_inbox_read.list_conversations(
+        db_session, service_team_ids=(str(field.id),)
+    )
+    assert scope_only.count == 2
 
 
 # --- Journey: snooze ---------------------------------------------------------

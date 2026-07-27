@@ -517,17 +517,17 @@ def build_queue_projection(
         if raw_channel in {item.value for item in InboxChannelType}
         else None
     )
-    # One team scope, decided here. The multi-team "My team" cohort and the
-    # single-team dropdown both filter the same relation, so letting both
-    # through joined `InboxConversationTeam` twice — SQLAlchemy refuses that,
-    # and the page 500s. The broader operator-owned scope wins.
+    # Ill-formed team ids are dropped here rather than passed down, so the
+    # echoed filter state and the canonical URL carry what was actually
+    # applied. The single-team dropdown and the multi-team "My team" cohort
+    # now intersect cleanly in the read model — they used to be two joins on
+    # the same relation, which SQLAlchemy refuses.
     team_id_scope = tuple(
         str(value)
         for value in (_uuid(item) for item in request.service_team_ids)
         if value is not None
     )
-    team_id = None if team_id_scope else _uuid(raw_team_id)
-    raw_team_text = None if team_id_scope else raw_team_text
+    team_id = _uuid(raw_team_id)
     assignee_id = _uuid(raw_assignee_id)
     contact_status = str(raw_contact_status or "").strip() or None
     priority = (
