@@ -251,6 +251,33 @@ def _align_start(start: datetime, cadence: BillingCadence) -> datetime:
     return anchored.replace(tzinfo=zone, fold=0).astimezone(UTC)
 
 
+def _nth_interval(
+    *,
+    aligned: datetime,
+    unit: IntervalUnit,
+    count: int,
+    index: int,
+    cadence: BillingCadence,
+) -> Interval:
+    """Return period ``index`` measured from the original anchor.
+
+    Both boundaries are shifted from ``aligned`` rather than each period being
+    shifted from its predecessor. That keeps the contract anchor: a contract
+    starting on the 31st clamps to the 28th in February and returns to the 31st
+    in March, instead of staying clamped for the rest of its life. It also
+    keeps consecutive periods exactly contiguous, because period ``i``'s end
+    and period ``i+1``'s start are the same computation.
+    """
+
+    start = (
+        aligned
+        if index == 0
+        else _shift(aligned, unit=unit, count=count * index, cadence=cadence)
+    )
+    end = _shift(aligned, unit=unit, count=count * (index + 1), cadence=cadence)
+    return Interval(starts_at=start, ends_at=end)
+
+
 def service_period(
     *,
     cadence: BillingCadence,
@@ -268,16 +295,13 @@ def service_period(
         )
 
     aligned = _align_start(contract_start, cadence)
-    unit = cadence.service_interval_unit
-    count = cadence.service_interval_count
-
-    start = (
-        aligned
-        if index == 0
-        else _shift(aligned, unit=unit, count=count * index, cadence=cadence)
+    return _nth_interval(
+        aligned=aligned,
+        unit=cadence.service_interval_unit,
+        count=cadence.service_interval_count,
+        index=index,
+        cadence=cadence,
     )
-    end = _shift(start, unit=unit, count=count, cadence=cadence)
-    return Interval(starts_at=start, ends_at=end)
 
 
 def invoice_period(
@@ -301,16 +325,13 @@ def invoice_period(
         )
 
     aligned = _align_start(contract_start, cadence)
-    unit = cadence.invoice_interval_unit
-    count = cadence.invoice_interval_count
-
-    start = (
-        aligned
-        if index == 0
-        else _shift(aligned, unit=unit, count=count * index, cadence=cadence)
+    return _nth_interval(
+        aligned=aligned,
+        unit=cadence.invoice_interval_unit,
+        count=cadence.invoice_interval_count,
+        index=index,
+        cadence=cadence,
     )
-    end = _shift(start, unit=unit, count=count, cadence=cadence)
-    return Interval(starts_at=start, ends_at=end)
 
 
 def period_containing(
