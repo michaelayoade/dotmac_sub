@@ -197,14 +197,14 @@ FINANCIAL_SEGMENTS = {
 
 
 def _financial_segment(campaign: Campaign) -> str | None:
-    segment = campaign.segment_filter if isinstance(campaign.segment_filter, dict) else {}
+    segment = (
+        campaign.segment_filter if isinstance(campaign.segment_filter, dict) else {}
+    )
     value = str(segment.get("financial_position") or "").strip().lower()
     return value if value in FINANCIAL_SEGMENTS else None
 
 
-def _financial_excluded(
-    db: Session, campaign: Campaign, subscribers: list
-) -> set:
+def _financial_excluded(db: Session, campaign: Campaign, subscribers: list) -> set:
     """Subscriber ids the financial segment excludes.
 
     Read in bulk for the same reason suppression is: a campaign audience is
