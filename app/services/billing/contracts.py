@@ -17,7 +17,7 @@ requires the registry change that records the passed cutover gate.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -72,6 +72,19 @@ def _error(suffix: str, message: str, **details: object) -> BillingContractError
     return BillingContractError(
         code=f"{OWNER}.{suffix}", message=message, details=dict(details)
     )
+
+
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    """Restore UTC tzinfo on instants read back from persistence.
+
+    SQLite drops timezone metadata in tests; production PostgreSQL preserves
+    the UTC offset the owner wrote.
+    """
+
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
 
 def permitted_authority() -> BillingRecordAuthority:
@@ -264,13 +277,16 @@ class BillingContracts:
             )
 
         current = BillingContracts._current_effective(db, contract_id=contract.id)
-        if current is not None and command.starts_at <= current.starts_at:
+        current_starts_at = (
+            _aware_utc(current.starts_at) if current is not None else None
+        )
+        if current_starts_at is not None and command.starts_at <= current_starts_at:
             # Equal starts would close the previous version into a zero-length
             # interval, which its own check constraint forbids.
             raise _error(
                 "out_of_order_contract_version",
                 "A new version must start after the current effective one.",
-                current_starts_at=current.starts_at.isoformat(),
+                current_starts_at=current_starts_at.isoformat(),
                 requested_starts_at=command.starts_at.isoformat(),
             )
 

@@ -41,6 +41,13 @@ LAGOS = "Africa/Lagos"
 START = datetime(2026, 3, 1, tzinfo=UTC)
 
 
+def _utc(value):
+    """SQLite hands persisted instants back naive; restore UTC for asserts."""
+
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+
 def _context(key: str | None = None) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
@@ -142,8 +149,8 @@ def test_scheduling_creates_one_shadow_obligation_for_an_exact_period(
     assert result.gross_amount == Decimal("25000.00")
 
     obligation = db_session.get(BillingObligation, result.obligation_id)
-    assert obligation.period_start == START
-    assert obligation.period_end.astimezone(UTC).month == 4
+    assert _utc(obligation.period_start) == START
+    assert _utc(obligation.period_end).astimezone(UTC).month == 4
     assert obligation.accounting_treatment is AccountingTreatment.receivable
     assert obligation.collection_timing is CollectionTiming.advance
 

@@ -35,6 +35,13 @@ from app.services.owner_commands import CommandContext
 LAGOS = "Africa/Lagos"
 
 
+def _utc(value):
+    """SQLite hands persisted instants back naive; restore UTC for asserts."""
+
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+
 def _context(key: str | None = None) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
@@ -184,8 +191,8 @@ def test_supersession_closes_the_previous_version_contiguously(db_session, ids):
 
     assert previous.status is BillingContractVersionStatus.superseded
     # Half-open and contiguous: no gap, no overlap, no rewritten history.
-    assert previous.ends_at == change_at
-    assert current.starts_at == change_at
+    assert _utc(previous.ends_at) == change_at
+    assert _utc(current.starts_at) == change_at
     assert current.supersedes_id == previous.id
     assert current.version == 2
     assert previous.contracted_price == Decimal("25000.00")

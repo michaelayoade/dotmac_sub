@@ -125,9 +125,11 @@ def _period(version_id, db_session, index=0):
 
     version = db_session.get(BillingContractVersion, version_id)
     cadence = BillingContracts.cadence_of(version)
-    return service_period(
-        cadence=cadence, contract_start=version.starts_at, index=index
-    )
+    # SQLite hands persisted instants back naive; restore UTC.
+    starts_at = version.starts_at
+    if starts_at.tzinfo is None:
+        starts_at = starts_at.replace(tzinfo=UTC)
+    return service_period(cadence=cadence, contract_start=starts_at, index=index)
 
 
 def test_fixed_period_rating_is_the_contracted_line_amount(db_session, ids):

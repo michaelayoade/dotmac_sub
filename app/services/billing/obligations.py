@@ -19,7 +19,7 @@ state, so nothing here can be promoted by a runtime flag.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -77,6 +77,19 @@ def _error(suffix: str, message: str, **details: object) -> BillingObligationErr
     return BillingObligationError(
         code=f"{OWNER}.{suffix}", message=message, details=dict(details)
     )
+
+
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    """Restore UTC tzinfo on instants read back from persistence.
+
+    SQLite drops timezone metadata in tests; production PostgreSQL preserves
+    the UTC offset the owner wrote.
+    """
+
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
 
 def permitted_authority() -> BillingRecordAuthority:
@@ -189,15 +202,16 @@ class BillingObligations:
         cadence = BillingContracts.cadence_of(version)
         period = service_period(
             cadence=cadence,
-            contract_start=version.starts_at,
+            contract_start=_aware_utc(version.starts_at),
             index=command.period_index,
         )
-        if version.ends_at is not None and period.starts_at >= version.ends_at:
+        version_ends_at = _aware_utc(version.ends_at)
+        if version_ends_at is not None and period.starts_at >= version_ends_at:
             raise _error(
                 "period_outside_contract_version",
                 "Obligation period starts after this version stopped applying.",
                 period_start=period.starts_at.isoformat(),
-                version_ends_at=version.ends_at.isoformat(),
+                version_ends_at=version_ends_at.isoformat(),
             )
 
         gross = command.net_amount + command.tax_amount
