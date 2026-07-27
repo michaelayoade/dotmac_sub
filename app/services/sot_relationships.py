@@ -14298,37 +14298,135 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="ai_advisory",
         services=(
             SOTService(
+                name="ai.gateway",
+                module="app.services.ai.gateway",
+                owns=(
+                    "LLM provider transport",
+                    "provider circuit-breaker and endpoint health",
+                ),
+                notes=(
+                    "The same species as a payment gateway: an external system "
+                    "Sub calls. Holds no business rule and owns no domain "
+                    "state. Credentials resolve through secrets (OpenBao), "
+                    "never settings rows. See docs/designs/AI_SOT.md."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="LLM provider transport",
+                            role=OwnerRole.TRANSPORT,
+                            input_names=(
+                                "assembled advisory prompt",
+                                "resolved provider credential",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="provider circuit-breaker and endpoint health",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("observed provider response",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="assembled advisory prompt",
+                            owner="ai.generation",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "System prompt plus the caller's owned "
+                                "projection, already redacted to the advisor's "
+                                "declared input sensitivity."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="resolved provider credential",
+                            owner="secrets.reference_store",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="OpenBao-backed provider API key.",
+                        ),
+                        AuthorityInput(
+                            name="observed provider response",
+                            owner="external:llm_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="HTTP status, latency and token counts.",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "Holds no transaction and writes no row. Circuit "
+                            "state is process-local."
+                        ),
+                        locking="None.",
+                        idempotency=(
+                            "None: a repeated generation is a new provider "
+                            "call and new spend."
+                        ),
+                        retries=(
+                            "Falls back to the secondary endpoint, then fails "
+                            "closed. An open circuit refuses before calling."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ai.gateway.disabled",
+                            "ai.gateway.circuit_open",
+                            "ai.gateway.provider_unavailable",
+                        ),
+                        mapping_owner="app.services.ai.engine",
+                        retryable_codes=("ai.gateway.provider_unavailable",),
+                        fail_closed_on=(
+                            "ai.gateway.disabled",
+                            "ai.gateway.circuit_open",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="ai.gateway",
+                        verification=(
+                            "tests/test_ai_engine.py exercises the transport "
+                            "through the advisory port."
+                        ),
+                    ),
+                    steward="customer experience platform",
+                    design_refs=("docs/designs/AI_SOT.md",),
+                    test_refs=(
+                        "tests/test_ai_engine.py",
+                        "tests/architecture/test_ai_boundaries.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="ai.insights",
                 module="app.services.ai_operations",
                 owns=(
                     "AI insight rows",
                     "insight lifecycle: create, acknowledge, expire",
-                    "per-scope AI intake configuration",
                 ),
                 notes=(
                     "The canonical writer of AIInsight. Generated insights "
-                    "land here and nowhere else; AiIntakeConfig owns the "
-                    "per-scope/channel decision to run AI at all. AI is "
-                    "advisory: it never mutates domain state — acting on a "
-                    "recommendation means calling the domain's declared "
-                    "owner. See docs/designs/AI_SOT.md."
+                    "land here and nowhere else. AI is advisory: it never "
+                    "mutates domain state — acting on a recommendation means "
+                    "calling the domain's declared owner. AiIntakeConfig is a "
+                    "CRM import for an unimplemented conversational-intake "
+                    "feature and gates nothing; see docs/designs/AI_SOT.md."
                 ),
             ),
             SOTService(
                 name="ai.generation",
                 module="app.services.ai.engine",
                 owns=(
-                    "the report-advisory generation path",
+                    "the advisory generation path",
                     "advisor lookup, token budget, and prompt assembly",
+                    "input-sensitivity redaction before a prompt leaves",
                 ),
-                depends_on=("ai.insights",),
+                depends_on=("ai.insights", "ai.gateway"),
                 notes=(
-                    "advise() takes the CALLER's owned report projection and "
-                    "never queries a domain model, so the AI boundary holds by "
-                    "construction. It persists only through ai.insights (the "
-                    "single AIInsight writer). Behind the default-OFF "
-                    "ai.generation control. Called on demand from the admin "
-                    "report surface (app.web.admin.reports)."
+                    "advise() takes the CALLER's owned projection and never "
+                    "queries a domain model, so the AI boundary holds by "
+                    "construction rather than by vigilance — this is why "
+                    "personas were removed from the design. It persists only "
+                    "through ai.insights. Behind the default-OFF ai.generation "
+                    "control. Called on demand from the admin report surface."
                 ),
             ),
         ),
@@ -14338,10 +14436,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.reports",
         ),
         rule=(
-            "AI observes, derives, and recommends; it never decides domain "
-            "state. Insight consequences are requested from the owning domain "
-            "service, which applies its own guards, events, and audit. No "
-            "app/services/ai* module writes a non-AI ORM row."
+            "AI advises ON an owned projection and never re-derives one: the "
+            "caller hands in what it already computes, so the boundary holds "
+            "by construction. AI observes, derives, and recommends; it never "
+            "decides domain state. Insight consequences are requested from the "
+            "owning domain service, which applies its own guards, events, and "
+            "audit. No app/services/ai* module writes a non-AI ORM row."
         ),
     ),
     DomainSOT(
@@ -15373,12 +15473,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "idempotent structural InstallationProject root creation",
                     "Project-to-InstallationProject subscriber alignment",
+                    "buildout-rooted installation scope creation",
                 ),
                 depends_on=("operations.project_lifecycle",),
                 notes=(
                     "This transaction-neutral owner creates only the installation "
                     "root. Vendor lifecycle decisions remain with "
-                    "operations.vendor_project_lifecycle."
+                    "operations.vendor_project_lifecycle. Two entry points reach "
+                    "the same root: a sold installation (subscriber-scoped, "
+                    "triggered by sales.fulfillment) and a network buildout "
+                    "(subscriber-less, rooted on a BuildoutProject) so every "
+                    "downstream vendor decision runs one path. The BuildoutProject "
+                    "is validated as a referent, not consumed as a decision input; "
+                    "app.services.qualification is not yet a declared owner."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -15400,6 +15507,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical native project state",
                                 "installation scope creation command",
                             ),
+                        ),
+                        ConcernContract(
+                            name="buildout-rooted installation scope creation",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("canonical native project state",),
+                            canonical_writer="operations.installation_scope",
                         ),
                     ),
                     authoritative_inputs=(
@@ -15500,6 +15613,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor start/complete and staff verify/rework "
                     "installation-project transitions",
+                    "staff bidding publication and direct vendor assignment",
                     "durable vendor lifecycle actor/time/reason/event evidence",
                     "typed vendor project lifecycle outbox events",
                 ),
@@ -15529,6 +15643,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "authenticated assigned-vendor transition evidence",
                                 "vendor lifecycle transition protocol",
                                 "work-order as-built evidence policy",
+                            ),
+                            canonical_writer="operations.vendor_project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "staff bidding publication and direct vendor assignment"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "vendor lifecycle transition protocol",
                             ),
                             canonical_writer="operations.vendor_project_lifecycle",
                         ),
@@ -15621,6 +15746,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_lifecycle.unsupported_action",
                             "operations.vendor_project_lifecycle.actor_required",
                             "operations.vendor_project_lifecycle.invalid_transition",
+                            "operations.vendor_project_lifecycle.invalid_bidding_window",
+                            "operations.vendor_project_lifecycle.already_assigned",
+                            "operations.vendor_project_lifecycle.vendor_not_found",
                             "operations.vendor_project_lifecycle.vendor_assignment_required",
                             "operations.vendor_project_lifecycle.reason_required",
                             "operations.vendor_project_lifecycle.reason_too_long",
@@ -15691,6 +15819,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor project workspace read and action projections",
                     "vendor project workspace mutation coordination",
+                    "quote creation eligibility",
                     "quote submission eligibility and impact snapshot",
                     "as-built submission eligibility and impact snapshot",
                     "staff project-review eligibility and impact snapshot",
@@ -15730,6 +15859,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical vendor project records",
                                 "vendor quote currency and validity policy",
                                 "vendor workspace mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="quote creation eligibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "canonical vendor project records",
                             ),
                         ),
                         ConcernContract(
@@ -15870,6 +16007,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_line_not_found",
                             "operations.vendor_project_workspace.route_revision_not_found",
                             "operations.vendor_project_workspace.project_not_assigned",
+                            "operations.vendor_project_workspace.quote_creation_not_allowed",
                             "operations.vendor_project_workspace.bidding_closed",
                             "operations.vendor_project_workspace.quote_not_editable",
                             "operations.vendor_project_workspace.quote_not_submittable",
@@ -16057,6 +16195,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.quote_line_not_found",
                             "operations.vendor_project_workspace.route_revision_not_found",
                             "operations.vendor_project_workspace.project_not_assigned",
+                            "operations.vendor_project_workspace.quote_creation_not_allowed",
                             "operations.vendor_project_workspace.bidding_closed",
                             "operations.vendor_project_workspace.quote_not_editable",
                             "operations.vendor_project_workspace.quote_not_submittable",
