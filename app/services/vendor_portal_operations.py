@@ -20,6 +20,7 @@ from app.models.vendor_routes import (
     InstallationProjectStatus,
     ProjectQuote,
     ProjectQuoteStatus,
+    ProposedRouteRevision,
     ProposedRouteRevisionStatus,
 )
 from app.models.work_order import WorkOrder
@@ -51,6 +52,16 @@ from app.services.vendor_portal_errors import (
 _EDITABLE_QUOTES = {
     ProjectQuoteStatus.draft.value,
     ProjectQuoteStatus.revision_requested.value,
+}
+# Awarding a project (``approved``) and everything after it closes quoting:
+# post-award change is a variation, not another bid. ``assigned`` is the
+# directed-work intake state: the vendor was named without a bidding round and
+# still has to quote.
+_QUOTE_CREATION_STATUSES = {
+    InstallationProjectStatus.draft.value,
+    InstallationProjectStatus.assigned.value,
+    InstallationProjectStatus.open_for_bidding.value,
+    InstallationProjectStatus.quoted.value,
 }
 ResultT = TypeVar("ResultT")
 
@@ -205,6 +216,52 @@ def _money(value) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Bidding-window columns are ``timezone=True``, but SQLite hands back naive
+    values. Compare everything in UTC rather than raising on a mixed pair."""
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _quote_creation_eligibility(
+    project: InstallationProject,
+    vendor_id: str,
+    *,
+    now: datetime,
+) -> tuple[bool, str | None]:
+    """Whether this vendor may open a *new* quote on this installation project.
+
+    Visibility is the rule: a vendor may quote work directed at them, or work
+    genuinely published for bidding — nothing else. The marketplace read
+    (``list_projects(available=True)``) already applied this shape as a query
+    filter; stating it here makes it a decision the command owner enforces
+    under lock instead of an assumption the listing happened to imply.
+    """
+    assigned_vendor_id = project.assigned_vendor_id
+    if assigned_vendor_id is not None and str(assigned_vendor_id) != str(vendor_id):
+        return False, "Project is assigned to another vendor."
+    if project.status not in _QUOTE_CREATION_STATUSES:
+        return False, "Project is no longer accepting quotes."
+    if assigned_vendor_id is not None:
+        # Directed work: the assignment itself is the invitation, so it does
+        # not depend on a bidding window.
+        return True, None
+    if project.status != InstallationProjectStatus.open_for_bidding.value and (
+        project.status != InstallationProjectStatus.quoted.value
+    ):
+        return False, "Project is not open for bidding."
+    opens_at = _as_utc(project.bidding_open_at)
+    closes_at = _as_utc(project.bidding_close_at)
+    if opens_at is None or closes_at is None:
+        return False, "Project has no open bidding window."
+    if now < opens_at:
+        return False, "Bidding has not opened yet."
+    if now > closes_at:
+        return False, "Bidding window has closed."
+    return True, None
+
+
 def _as_built_submission_eligibility(
     project: InstallationProject,
 ) -> tuple[bool, str | None]:
@@ -340,8 +397,11 @@ def _quote(
         db.query(ProjectQuote)
         .options(
             selectinload(ProjectQuote.line_items),
-            selectinload(ProjectQuote.route_revisions),
-            joinedload(ProjectQuote.project),
+            joinedload(ProjectQuote.vendor),
+            joinedload(ProjectQuote.project).joinedload(InstallationProject.project),
+            selectinload(ProjectQuote.route_revisions).selectinload(
+                ProposedRouteRevision.review_events
+            ),
         )
         .filter(ProjectQuote.id == coerce_uuid(quote_id))
         .filter(ProjectQuote.is_active.is_(True))
@@ -375,6 +435,35 @@ def _as_built(
     if row is None:
         raise VendorPortalOperationError(
             "as_built_not_found", "As-built evidence not found", kind="not_found"
+        )
+    return row
+
+
+def _route_revision(
+    db: Session,
+    revision_id: str,
+    *,
+    for_update: bool = False,
+) -> ProposedRouteRevision:
+    query = (
+        db.query(ProposedRouteRevision)
+        .options(
+            joinedload(ProposedRouteRevision.quote).joinedload(ProjectQuote.vendor),
+            joinedload(ProposedRouteRevision.quote)
+            .joinedload(ProjectQuote.project)
+            .joinedload(InstallationProject.project),
+            selectinload(ProposedRouteRevision.review_events),
+        )
+        .filter(ProposedRouteRevision.id == coerce_uuid(revision_id))
+    )
+    if for_update:
+        query = query.with_for_update(of=ProposedRouteRevision)
+    row = query.one_or_none()
+    if row is None:
+        raise VendorPortalOperationError(
+            "route_revision_not_found",
+            "Proposed route revision not found",
+            kind="not_found",
         )
     return row
 
@@ -509,10 +598,20 @@ def _serialize_quote(row: ProjectQuote) -> dict:
             reverse=True,
         )
     )
+    reviewable = row.status in {
+        ProjectQuoteStatus.submitted.value,
+        ProjectQuoteStatus.under_review.value,
+    }
+    project = getattr(row, "project", None)
+    native_project = getattr(project, "project", None)
+    vendor = getattr(row, "vendor", None)
     return {
         "id": row.id,
         "project_id": row.project_id,
+        "project_name": getattr(native_project, "name", None),
+        "project_code": getattr(native_project, "code", None),
         "vendor_id": row.vendor_id,
+        "vendor_name": getattr(vendor, "name", None),
         "status": row.status,
         # Editability is projected from the same set the mutation paths enforce;
         # the template consumes allowed/reason and never re-derives status rules.
@@ -544,6 +643,38 @@ def _serialize_quote(row: ProjectQuote) -> dict:
             ),
             revisions=route_revisions,
         ),
+        "route_revisions": [
+            _serialize_route_revision_review(revision)
+            for revision in sorted(
+                getattr(row, "route_revisions", ()),
+                key=lambda item: (item.revision_number, str(item.id)),
+                reverse=True,
+            )
+        ],
+        "approve_action": Action(
+            key="approve_quote",
+            label="Approve quote",
+            allowed=reviewable,
+            reason=(
+                None
+                if reviewable
+                else f"A {row.status.replace('_', ' ')} quote is not reviewable"
+            ),
+            affected=1,
+        ),
+        "revision_action": Action(
+            key="request_quote_revision",
+            label="Request revision",
+            allowed=reviewable,
+            reason=(
+                None
+                if reviewable
+                else f"A {row.status.replace('_', ' ')} quote is not reviewable"
+            ),
+            affected=1,
+        ),
+        "approve_url": f"/admin/vendors/operations/quotes/{row.id}/approve",
+        "revision_url": (f"/admin/vendors/operations/quotes/{row.id}/request-revision"),
     }
 
 
@@ -615,7 +746,130 @@ def _serialize_as_built_review(row: AsBuiltRoute) -> dict:
     }
 
 
+def _serialize_route_revision_review(row: ProposedRouteRevision) -> dict:
+    quote = row.quote
+    project = quote.project
+    vendor = quote.vendor
+    reviewable = row.status == ProposedRouteRevisionStatus.submitted.value
+    blocked_reason = None if reviewable else f"Route revision is already {row.status}"
+    detail_url = f"/admin/vendors/routes/{project.id}?revision_id={row.id}"
+    return {
+        "id": row.id,
+        "quote_id": row.quote_id,
+        "project_id": project.id,
+        "project_name": getattr(project.project, "name", None),
+        "project_code": getattr(project.project, "code", None),
+        "vendor_id": quote.vendor_id,
+        "vendor_name": getattr(vendor, "name", None),
+        "revision_number": row.revision_number,
+        "status": row.status,
+        "length_meters": row.length_meters,
+        "submitted_at": row.submitted_at,
+        "submitted_by_person_id": row.submitted_by_person_id,
+        "reviewed_at": row.reviewed_at,
+        "reviewed_by_person_id": row.reviewed_by_person_id,
+        "review_notes": row.review_notes,
+        "has_geometry": row.route_geom is not None,
+        "review_events": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "from_status": event.from_status,
+                "to_status": event.to_status,
+                "actor_type": event.actor_type,
+                "actor_id": event.actor_id,
+                "reason": event.reason,
+                "occurred_at": event.occurred_at,
+            }
+            for event in row.review_events
+        ],
+        "detail_url": detail_url,
+        "accept_action": Action(
+            key="accept_route_revision",
+            label="Accept route",
+            allowed=reviewable,
+            reason=blocked_reason,
+            permission="inventory:write",
+            preview_url=(f"/admin/vendors/operations/routes/{row.id}/accept/preview"),
+            affected=1,
+            requires_confirmation=True,
+        ),
+        "reject_action": Action(
+            key="reject_route_revision",
+            label="Reject route",
+            allowed=reviewable,
+            reason=blocked_reason,
+            permission="inventory:write",
+            preview_url=(f"/admin/vendors/operations/routes/{row.id}/reject/preview"),
+            affected=1,
+            requires_confirmation=True,
+        ),
+    }
+
+
 class VendorPortalOperations:
+    @staticmethod
+    def list_reviewable_route_revisions(
+        db: Session,
+        *,
+        limit: int = 200,
+    ) -> list[dict]:
+        rows = (
+            db.query(ProposedRouteRevision)
+            .join(ProjectQuote, ProposedRouteRevision.quote_id == ProjectQuote.id)
+            .join(
+                InstallationProject,
+                ProjectQuote.project_id == InstallationProject.id,
+            )
+            .options(
+                joinedload(ProposedRouteRevision.quote).joinedload(ProjectQuote.vendor),
+                joinedload(ProposedRouteRevision.quote)
+                .joinedload(ProjectQuote.project)
+                .joinedload(InstallationProject.project),
+                selectinload(ProposedRouteRevision.review_events),
+            )
+            .filter(
+                InstallationProject.is_active.is_(True),
+                ProjectQuote.is_active.is_(True),
+                ProposedRouteRevision.status
+                == ProposedRouteRevisionStatus.submitted.value,
+            )
+            .order_by(
+                ProposedRouteRevision.submitted_at.asc(),
+                ProposedRouteRevision.id.asc(),
+            )
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+        return [_serialize_route_revision_review(row) for row in rows]
+
+    @staticmethod
+    def list_route_revisions_for_project(
+        db: Session,
+        project_id: str,
+    ) -> list[dict]:
+        rows = (
+            db.query(ProposedRouteRevision)
+            .join(ProjectQuote, ProposedRouteRevision.quote_id == ProjectQuote.id)
+            .options(
+                joinedload(ProposedRouteRevision.quote).joinedload(ProjectQuote.vendor),
+                joinedload(ProposedRouteRevision.quote)
+                .joinedload(ProjectQuote.project)
+                .joinedload(InstallationProject.project),
+                selectinload(ProposedRouteRevision.review_events),
+            )
+            .filter(
+                ProjectQuote.project_id == coerce_uuid(project_id),
+                ProjectQuote.is_active.is_(True),
+            )
+            .order_by(
+                ProposedRouteRevision.revision_number.desc(),
+                ProposedRouteRevision.id.desc(),
+            )
+            .all()
+        )
+        return [_serialize_route_revision_review(row) for row in rows]
+
     @staticmethod
     def list_reviewable_as_builts(db: Session, *, limit: int = 200) -> list[dict]:
         rows = (
@@ -648,6 +902,10 @@ class VendorPortalOperations:
             .all()
         )
         return [_serialize_as_built_review(row) for row in rows]
+
+    @staticmethod
+    def get_as_built_review(db: Session, as_built_id: str) -> dict:
+        return _serialize_as_built_review(_as_built(db, as_built_id))
 
     @staticmethod
     def list_reviewable_projects(db: Session, *, limit: int = 200) -> list[dict]:
@@ -814,6 +1072,10 @@ class VendorPortalOperations:
     @staticmethod
     def get_quote(db: Session, quote_id: str, vendor_id: str) -> dict:
         return _serialize_quote(_quote(db, quote_id, vendor_id))
+
+    @staticmethod
+    def get_quote_for_review(db: Session, quote_id: str) -> dict:
+        return _serialize_quote(_quote(db, quote_id))
 
     @staticmethod
     def preview_quote_submission(
@@ -1259,6 +1521,138 @@ class VendorPortalOperations:
                 ],
             },
         }
+
+    @staticmethod
+    def preview_route_revision_review(
+        db: Session,
+        revision_id: str,
+        *,
+        action: str,
+        reason: str | None = None,
+        for_update: bool = False,
+    ) -> dict:
+        """Own accept/reject eligibility and the exact route preview."""
+
+        row = _route_revision(db, revision_id, for_update=for_update)
+        if row.status != ProposedRouteRevisionStatus.submitted.value:
+            raise VendorPortalOperationError(
+                "route_revision_not_reviewable",
+                "Only submitted proposed routes can be reviewed",
+            )
+        normalized_reason = str(reason or "").strip() or None
+        if normalized_reason and len(normalized_reason) > 2000:
+            raise VendorPortalOperationError(
+                "reason_too_long",
+                "Review reason must be 2,000 characters or fewer",
+                kind="invalid",
+            )
+        transitions = {
+            "accept": (
+                ProposedRouteRevisionStatus.accepted.value,
+                "Accept proposed route",
+                "Records that staff accepted this proposed route",
+            ),
+            "reject": (
+                ProposedRouteRevisionStatus.rejected.value,
+                "Reject proposed route",
+                "Records why this proposed route must be revised",
+            ),
+        }
+        if action not in transitions:
+            raise VendorPortalOperationError(
+                "unsupported_action",
+                "Unsupported proposed-route review action",
+                kind="invalid",
+            )
+        if action == "reject" and normalized_reason is None:
+            raise VendorPortalOperationError(
+                "reason_required",
+                "A rejection reason is required",
+                kind="invalid",
+            )
+        target, title, summary = transitions[action]
+        quote = row.quote
+        project = quote.project
+        return {
+            "review_type": f"route_revision_{action}",
+            "revision_id": str(row.id),
+            "quote_id": str(row.quote_id),
+            "project_id": str(project.id),
+            "title": title,
+            "summary": summary,
+            "details": [
+                (
+                    "Project",
+                    getattr(project.project, "name", None) or str(project.id),
+                ),
+                ("Vendor", getattr(quote.vendor, "name", None) or "—"),
+                ("Revision", str(row.revision_number)),
+                ("Current route state", row.status.replace("_", " ").title()),
+                ("Result", target.title()),
+                (
+                    "Route geometry",
+                    "Provided" if row.route_geom is not None else "None",
+                ),
+                (
+                    "Estimated length",
+                    (
+                        f"{row.length_meters:,.1f} m"
+                        if row.length_meters is not None
+                        else "Not provided"
+                    ),
+                ),
+                ("Review reason", normalized_reason or "No additional note"),
+                (
+                    "Quote effect",
+                    "None; quote approval remains a separate decision",
+                ),
+                (
+                    "Project effect",
+                    "None; installation approval and work state remain separate",
+                ),
+            ],
+            "state": {
+                "revision_id": str(row.id),
+                "quote_id": str(row.quote_id),
+                "project_id": str(project.id),
+                "vendor_id": str(quote.vendor_id),
+                "revision_number": row.revision_number,
+                "from_status": row.status,
+                "to_status": target,
+                "reason": normalized_reason,
+                "submitted_at": row.submitted_at,
+                "length_meters": row.length_meters,
+                "route_geometry": (
+                    str(row.route_geom) if row.route_geom is not None else None
+                ),
+            },
+        }
+
+    @staticmethod
+    def transition_route_revision_review(
+        db: Session,
+        revision_id: str,
+        *,
+        action: str,
+        actor_id: str,
+        reason: str | None = None,
+    ) -> dict:
+        """Delegate the staff route decision to the record owner."""
+
+        from app.services.vendor_project_records import (
+            StageVendorRouteRevisionReview,
+            stage_route_revision_review,
+        )
+
+        return stage_route_revision_review(
+            db,
+            StageVendorRouteRevisionReview(
+                revision_id=revision_id,
+                action=action,
+                actor_id=actor_id,
+                reason=reason,
+            ),
+        )
 
     @staticmethod
     def transition_as_built_review(
