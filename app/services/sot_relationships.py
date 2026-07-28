@@ -9005,6 +9005,195 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_recovery_billing",
+                module="app.services.prepaid_recovery_billing",
+                owns=(
+                    "suspended prepaid replacement-cycle draft creation",
+                    "full settlement and restoration of a prepaid recovery invoice",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "events.dispatcher",
+                    "financial.access_resolution",
+                    "financial.account_credit_applications",
+                    "financial.invoices",
+                    "financial.prepaid_service_renewals",
+                ),
+                notes=(
+                    "This recovery-only coordinator creates a replacement full-cycle "
+                    "draft from the confirmed Bill Now instant. It never voids a prior "
+                    "invoice or spends generic balance. Settlement uses only confirmed "
+                    "unallocated payment evidence, derives exact paid-invoice coverage, "
+                    "and then asks the financial-access owner to resolve eligible locks."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="suspended prepaid replacement-cycle draft creation",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "locked prepaid subscription state",
+                                "active prepaid enforcement lock",
+                                "contracted prepaid renewal price",
+                                "open recovery-invoice evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="full settlement and restoration of a prepaid recovery invoice",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "locked recovery invoice and service scope",
+                                "active prepaid enforcement lock",
+                                "confirmed unallocated payment credit",
+                                "paid-invoice entitlement protocol",
+                                "financial access restoration protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="locked prepaid subscription state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Subscription billing mode, lifecycle state, offer, and next-billing anchor",
+                        ),
+                        AuthorityInput(
+                            name="active prepaid enforcement lock",
+                            owner="financial.access_resolution",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active EnforcementLock with prepaid reason for the exact subscription",
+                        ),
+                        AuthorityInput(
+                            name="contracted prepaid renewal price",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="prepaid monthly charge resolver using subscription contract and tax policy",
+                        ),
+                        AuthorityInput(
+                            name="open recovery-invoice evidence",
+                            owner="financial.prepaid_recovery_billing",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active invoice line metadata for the exact subscription and recovery-cycle intent",
+                        ),
+                        AuthorityInput(
+                            name="locked recovery invoice and service scope",
+                            owner="financial.prepaid_recovery_billing",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="locked Invoice and exact active recovery InvoiceLine subscription link",
+                        ),
+                        AuthorityInput(
+                            name="confirmed unallocated payment credit",
+                            owner="financial.account_credit_applications",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="succeeded native payment allocation capacity and matching account-credit ledger position",
+                        ),
+                        AuthorityInput(
+                            name="paid-invoice entitlement protocol",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="paid prepaid InvoiceLine period metadata to ServiceEntitlement and next-billing anchor protocol",
+                        ),
+                        AuthorityInput(
+                            name="financial access restoration protocol",
+                            owner="financial.access_resolution",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="locked financial restoration preview/confirmation and remaining-lock gate",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each confirmation enters execute_owner_command once on a "
+                            "transaction-free session; preview is read-only and all "
+                            "invoice, allocation, entitlement, anchor, and restoration "
+                            "effects flush and commit together."
+                        ),
+                        locking=(
+                            "Account is locked first, then the exact subscription and "
+                            "invoice. Active recovery-invoice lookup is repeated under "
+                            "those locks before every write."
+                        ),
+                        idempotency=(
+                            "Recovery draft fingerprint identifies one period and an open "
+                            "invoice prevents duplicate active recovery cycles; paid invoice "
+                            "replay returns its stable successful outcome."
+                        ),
+                        retries=(
+                            "A stale preview or changed payment capacity is rejected for a "
+                            "fresh preview; no partial payment allocation is attempted."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes(
+                                "financial.prepaid_recovery_billing"
+                            ),
+                            "financial.prepaid_recovery_billing.subscription_not_found",
+                            "financial.prepaid_recovery_billing.ineligible_billing_mode",
+                            "financial.prepaid_recovery_billing.ineligible_status",
+                            "financial.prepaid_recovery_billing.prepaid_lock_missing",
+                            "financial.prepaid_recovery_billing.open_recovery_invoice",
+                            "financial.prepaid_recovery_billing.unsupported_cycle",
+                            "financial.prepaid_recovery_billing.invalid_charge",
+                            "financial.prepaid_recovery_billing.stale_preview",
+                            "financial.prepaid_recovery_billing.invoice_not_found",
+                            "financial.prepaid_recovery_billing.not_recovery_invoice",
+                            "financial.prepaid_recovery_billing.invoice_scope_mismatch",
+                            "financial.prepaid_recovery_billing.invoice_not_draft",
+                            "financial.prepaid_recovery_billing.insufficient_confirmed_credit",
+                            "financial.prepaid_recovery_billing.settlement_incomplete",
+                        ),
+                        mapping_owner="admin catalog and billing invoice adapters",
+                        fail_closed_on=(
+                            "missing prepaid lock or suspended service state",
+                            "an existing active recovery invoice",
+                            "stale price, service, invoice, or funding evidence",
+                            "credit that cannot settle the exact invoice in full",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("invoice_created", "subscription_resumed"),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Existing invoice and subscription events carry the exact "
+                            "invoice and subscription identifiers; no new transport event "
+                            "is introduced by this coordinator."
+                        ),
+                        replay=(
+                            "Invoice line period metadata, payment allocations, and paid "
+                            "invoice entitlement evidence reconstruct completed recovery."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="financial.prepaid_recovery_billing",
+                        verification=(
+                            "Focused command, UI visibility, stale-preview, duplicate, "
+                            "insufficient-credit, paid-entitlement, and restoration tests."
+                        ),
+                        cutover_gate=(
+                            "Admin Bill Now and prepaid recovery Pay Now routes invoke "
+                            "only this coordinator."
+                        ),
+                        fallback_retirement=(
+                            "No adapter may manufacture a prepaid recovery invoice or "
+                            "restore a service from a displayed balance."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/designs/PREPAID_RECOVERY_BILLING.md",
+                        "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_billing_invoice_templates.py",
+                        "tests/architecture/test_prepaid_recovery_billing_sot.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.addon_purchases",
                 module="app.services.customer_portal_flow_addons",
                 owns=(
@@ -15340,6 +15529,218 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="workforce_operations",
         services=(
             SOTService(
+                name="operations.service_team_party_cutover",
+                module="app.services.service_team_party_cutover",
+                owns=(
+                    "service-team Party cutover readiness",
+                    "approved service-team Party cutover adoption",
+                ),
+                depends_on=(
+                    "operations.service_team_lifecycle",
+                    "party.registry",
+                    "auth.staff_provisioning",
+                    "control.settings_spec",
+                    "events.store",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "A pre-migration coordinator consumes an expiring, "
+                    "digest-bound review of the exact CRM Person, SystemUser, "
+                    "and membership snapshot. It preserves CRM Person UUIDs as "
+                    "Person Party IDs, delegates identity links to party.registry, "
+                    "adopts exact native memberships, and records only PII-free "
+                    "receipt evidence before migration 426."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="service-team Party cutover readiness",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "current native service-team cutover state",
+                                "canonical Person Party identity",
+                                "staff authentication principal state",
+                                "legacy workflow team settings",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="approved service-team Party cutover adoption",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "CRM service-team identity snapshot",
+                                "reviewed service-team identity decisions",
+                                "current native service-team cutover state",
+                                "canonical Person Party identity",
+                                "staff authentication principal state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="CRM service-team identity snapshot",
+                            owner="external:dotmac_crm",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "repeatable-read CRM service-team, membership, "
+                                "manager, and referenced Person rows captured in "
+                                "one SHA-256-bound private plan"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed service-team identity decisions",
+                            owner="operations.service_team_party_cutover",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "private explicit CRM Person to SystemUser or "
+                                "identity-only decisions, separate expiring "
+                                "approval, file digests, limits, actor, and reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current native service-team cutover state",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked ServiceTeam and ServiceTeamMember rows "
+                                "plus migration-426 readiness invariants"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Person Party identity",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Person Party, CRM external reference, and reviewed "
+                                "SystemUser principal binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="staff authentication principal state",
+                            owner="auth.staff_provisioning",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="SystemUser identity and active state",
+                        ),
+                        AuthorityInput(
+                            name="legacy workflow team settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed aggregate resolver over the active legacy "
+                                "workflow settings retired by migration 426"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "The public adoption enters execute_owner_command once "
+                            "on a transaction-free session and commits Party, "
+                            "principal-binding, membership, audit, and event state "
+                            "in one SERIALIZABLE transaction."
+                        ),
+                        locking=(
+                            "A plan-digest advisory transaction lock serializes "
+                            "execution; the coordinator then locks its receipt, "
+                            "teams, SystemUsers, Parties, external references, and "
+                            "memberships in stable identifier order."
+                        ),
+                        idempotency=(
+                            "The canonical plan digest and private file hashes "
+                            "identify one execution. Exact replay verifies the "
+                            "PII-free audit receipt and every applied identity and "
+                            "membership; changed evidence fails closed."
+                        ),
+                        retries=(
+                            "An adapter may retry the complete owner command with "
+                            "the same unexpired approval after full rollback. "
+                            "Validation, stale source, drift, and identity conflicts "
+                            "are not retryable without a new reviewed plan."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.service_team_party_cutover.invalid_plan",
+                            "operations.service_team_party_cutover.approval_invalid",
+                            "operations.service_team_party_cutover.stale_source",
+                            "operations.service_team_party_cutover.identity_conflict",
+                            (
+                                "operations.service_team_party_cutover."
+                                "membership_conflict"
+                            ),
+                            "operations.service_team_party_cutover.not_ready",
+                            *owner_command_boundary_error_codes(
+                                "operations.service_team_party_cutover"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "scripts.migration.execute_service_team_party_cutover"
+                        ),
+                        fail_closed_on=(
+                            "missing, malformed, stale, expired, or digest-mismatched approval",
+                            "incomplete CRM Person decisions",
+                            "inactive manager or active-member principals",
+                            "Party, external-reference, binding, membership, or receipt conflicts",
+                            "remaining migration-426 blockers",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("service_team.party_cutover_adopted",),
+                        schema_version=1,
+                        delivery_owner="events.store",
+                        compatibility=(
+                            "Version 1 carries only plan/source/file hashes, "
+                            "aggregate counts, and command/correlation identifiers."
+                        ),
+                        replay=(
+                            "The immutable audit receipt plus current Party, "
+                            "principal, external-reference, and membership state "
+                            "prove exact replay; the private plan remains the "
+                            "identity-level operator evidence."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "dotmac_crm service-team membership rows and CRM Person "
+                            "UUIDs copied into Sub without Party adoption"
+                        ),
+                        new_owner="operations.service_team_party_cutover",
+                        verification=(
+                            "Aggregate audit, plan/approval, owner-command, exact "
+                            "replay, rollback, forward staff-bootstrap, migration "
+                            "rehearsal, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "The protected reviewed plan is applied, readiness has "
+                            "zero blockers, migration 426 succeeds on a restored "
+                            "revision-423/424 database, and production evidence is "
+                            "attached before authorization."
+                        ),
+                        fallback_retirement=(
+                            "The one-time executor remains unavailable without an "
+                            "exact approval; CRM membership writes and the legacy "
+                            "workflow settings are retired only through the "
+                            "service-team lifecycle cutover gate."
+                        ),
+                    ),
+                    steward="operations administration and identity governance",
+                    design_refs=(
+                        "docs/designs/SERVICE_TEAM_LIFECYCLE_SOT.md",
+                        "docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md",
+                        "docs/runbooks/SERVICE_TEAM_PARTY_CUTOVER.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_service_team_party_cutover.py",
+                        "tests/test_staff_provisioning_owner.py",
+                        (
+                            "tests/architecture/"
+                            "test_service_team_party_cutover_boundary.py"
+                        ),
+                    ),
+                ),
+            ),
+            SOTService(
                 name="operations.service_team_lifecycle",
                 module="app.services.service_team_lifecycle",
                 owns=(
@@ -16540,23 +16941,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "ticket SLA target is operator-managed in the ticket settings UI."
                 ),
                 contract=ServiceContract(
-                    concerns=tuple(
-                        ConcernContract(
-                            name=name,
-                            role=OwnerRole.AUTHORITATIVE_RECORD,
-                            input_names=(
-                                "typed ticket configuration command",
-                                "ticket lifecycle vocabulary",
-                                "current ticket configuration",
-                            ),
-                            canonical_writer="support.ticket_configuration",
-                        )
-                        for name in (
-                            "ticket configuration mutations",
-                            "operator-visible ticket status subset",
-                            "ticket priority and type options",
-                            "ticket routing and priority/type SLA target policy",
-                        )
+                    concerns=(
+                        *tuple(
+                            ConcernContract(
+                                name=name,
+                                role=OwnerRole.AUTHORITATIVE_RECORD,
+                                input_names=(
+                                    "typed ticket configuration command",
+                                    "ticket lifecycle vocabulary",
+                                    "current ticket configuration",
+                                ),
+                                canonical_writer="support.ticket_configuration",
+                            )
+                            for name in (
+                                "ticket configuration mutations",
+                                "operator-visible ticket status subset",
+                                "ticket priority and type options",
+                                "ticket routing and priority/type SLA target policy",
+                            )
+                        ),
                     ),
                     authoritative_inputs=(
                         AuthorityInput(
@@ -22477,6 +22880,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "auth.rbac_catalog",
                     "auth.system_user_assignments",
                     "auth.permission_gate",
+                    "party.registry",
                     "communications.intents",
                     "communications.ephemeral_actions",
                     "events.dispatcher",
@@ -22485,6 +22889,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "ERP HR commands enter one verified coordinator transaction. "
                     "This owner writes staff identity and credential bootstrap, "
+                    "creates and binds one Person Party for every new principal, "
                     "delegates managed grants to auth.system_user_assignments, "
                     "stages audit and "
                     "versioned events atomically, and leaves invite delivery to a "
@@ -22503,6 +22908,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "active role catalog",
                                 "managed role grant state",
                                 "canonical staff identity and credential state",
+                                "canonical Person Party identity",
                             ),
                         ),
                         ConcernContract(
@@ -22511,6 +22917,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "ERP HR staff lifecycle request",
                                 "canonical staff identity and credential state",
+                                "canonical Person Party identity",
                             ),
                             canonical_writer="auth.staff_provisioning",
                         ),
@@ -22557,6 +22964,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "system_users and staff-bound local user_credentials"
                             ),
                         ),
+                        AuthorityInput(
+                            name="canonical Person Party identity",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "new staff Person Party and complete "
+                                "SystemUser.person_party_id binding evidence"
+                            ),
+                        ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.COORDINATOR_MANAGED,
@@ -22564,7 +22980,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "Each public staff write enters execute_owner_command "
                             "on a transaction-free adapter session; identity, "
                             "credentials, RBAC grants, session revocation, audit, "
-                            "and the outbox event commit together before return."
+                            "Person Party identity, and the outbox event commit "
+                            "together before return."
                         ),
                         locking=(
                             "A PostgreSQL advisory transaction lock serializes "
@@ -22602,6 +23019,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "missing authorization evidence",
                             "unknown or inactive roles",
                             "identity conflict",
+                            "new principal without a complete Person Party binding",
                             "active caller transaction",
                             "nested command or transaction completion",
                             "manifest mismatch",
