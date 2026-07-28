@@ -3378,34 +3378,35 @@ def approve_subscriber_name_correction(
     subscriber.first_name = payload.first_name or subscriber.first_name
     subscriber.last_name = payload.last_name or subscriber.last_name
     subscriber.display_name = payload.display_name
-    audit_service.audit_events.create(
-        db=db,
-        payload=AuditEventCreate(
-            actor_type=AuditActorType.user if actor_id else AuditActorType.service,
-            actor_id=actor_id or "customer.profile_commands",
-            action="subscriber_name_correction_applied",
-            entity_type="subscriber",
-            entity_id=str(subscriber.id),
-            status_code=200,
-            is_success=True,
-            metadata_={
-                "source": "customer.profile_commands",
-                "expected_current_fingerprint": expected_current_fingerprint,
-                "manifest_digest": manifest_digest,
-                "current_name": {
-                    "first_name": subscriber.first_name,
-                    "last_name": subscriber.last_name,
-                    "display_name": subscriber.display_name,
-                },
-                "replacement_name": {
-                    "first_name": replacement_first,
-                    "last_name": replacement_last,
-                    "display_name": replacement_display,
-                },
-                "reason": reason,
+    audit_payload = AuditEventCreate(
+        actor_type=AuditActorType.user if actor_id else AuditActorType.service,
+        actor_id=actor_id or "customer.profile_commands",
+        action="subscriber_name_correction_applied",
+        entity_type="subscriber",
+        entity_id=str(subscriber.id),
+        status_code=200,
+        is_success=True,
+        metadata_={
+            "source": "customer.profile_commands",
+            "expected_current_fingerprint": expected_current_fingerprint,
+            "manifest_digest": manifest_digest,
+            "current_name": {
+                "first_name": subscriber.first_name,
+                "last_name": subscriber.last_name,
+                "display_name": subscriber.display_name,
             },
-        ),
+            "replacement_name": {
+                "first_name": replacement_first,
+                "last_name": replacement_last,
+                "display_name": replacement_display,
+            },
+            "reason": reason,
+        },
     )
+    if commit:
+        audit_service.audit_events.create(db=db, payload=audit_payload)
+    else:
+        audit_service.audit_events.stage(db=db, payload=audit_payload)
     if commit:
         db.commit()
         db.refresh(subscriber)
