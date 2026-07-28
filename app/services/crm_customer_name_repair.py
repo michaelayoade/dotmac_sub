@@ -338,6 +338,7 @@ def apply_name_remediation_plan(
             "selected": len(plan.selected_rows),
         }
 
+    savepoint = db.begin_nested()
     try:
         for row in plan.selected_rows:
             subscriber = (
@@ -384,9 +385,11 @@ def apply_name_remediation_plan(
             metadata = dict(updated.metadata_ or {})
             metadata[REMEDIATION_MARKER] = plan.digest
             updated.metadata_ = metadata
+        db.flush()
+        savepoint.commit()
         db.commit()
     except Exception:
-        db.rollback()
+        savepoint.rollback()
         raise
 
     return {
