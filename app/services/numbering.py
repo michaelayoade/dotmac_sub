@@ -17,7 +17,8 @@ def _format_number(prefix: str | None, padding: int | None, value: int) -> str:
     return f"{prefix_value}{value}"
 
 
-def _next_sequence_value(db: Session, key: str, start_value: int) -> int:
+def lock_sequence(db: Session, key: str, start_value: int) -> DocumentSequence:
+    """Return the sequence row while holding the transaction-level row lock."""
     sequence = (
         db.query(DocumentSequence)
         .filter(DocumentSequence.key == key)
@@ -28,6 +29,20 @@ def _next_sequence_value(db: Session, key: str, start_value: int) -> int:
         sequence = DocumentSequence(key=key, next_value=start_value)
         db.add(sequence)
         db.flush()
+    return sequence
+
+
+def reconcile_next_value(db: Session, key: str, minimum_next_value: int) -> int:
+    """Advance, but never rewind, a sequence while holding its row lock."""
+    sequence = lock_sequence(db, key, minimum_next_value)
+    if sequence.next_value < minimum_next_value:
+        sequence.next_value = minimum_next_value
+        db.flush()
+    return sequence.next_value
+
+
+def _next_sequence_value(db: Session, key: str, start_value: int) -> int:
+    sequence = lock_sequence(db, key, start_value)
     value = sequence.next_value
     sequence.next_value = value + 1
     db.flush()

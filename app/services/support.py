@@ -44,7 +44,7 @@ from app.schemas.support import (
 from app.services import domain_settings as domain_settings_service
 from app.services import notification as notification_service
 from app.services import numbering as numbering_service
-from app.services import support_ticket_filters, ticket_validation
+from app.services import settings_spec, support_ticket_filters, ticket_validation
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.audit_helpers import log_audit_event
 from app.services.common import apply_ordering, apply_pagination
@@ -732,6 +732,7 @@ class Tickets:
 
     @staticmethod
     def _resolve_ticket_number(db: Session) -> str | None:
+        Tickets.reconcile_ticket_number_sequence(db)
         return numbering_service.generate_number(
             db=db,
             domain=SettingDomain.workflow,
@@ -741,6 +742,57 @@ class Tickets:
             padding_key="support_ticket_number_padding",
             start_key="support_ticket_number_start",
         )
+
+    @staticmethod
+    def reconcile_ticket_number_sequence(db: Session) -> int | None:
+        """Advance ticket numbering beyond imported numbers before allocation.
+
+        Imports preserve their source ticket numbers and therefore bypass the
+        local document sequence.  Locking that sequence before inspecting the
+        occupied number space keeps native creates serialised with imports and
+        prevents a stale counter from walking one collision at a time.
+        """
+        enabled = settings_spec.resolve_value(
+            db, SettingDomain.workflow, "support_ticket_numbering_enabled"
+        )
+        if enabled is False:
+            return None
+        prefix = settings_spec.resolve_value(
+            db, SettingDomain.workflow, "support_ticket_number_prefix"
+        )
+        start = settings_spec.resolve_value(
+            db, SettingDomain.workflow, "support_ticket_number_start"
+        )
+        try:
+            start_value = max(int(start) if start is not None else 1, 1)
+        except (TypeError, ValueError):
+            start_value = 1
+        prefix_text = prefix if isinstance(prefix, str) else ""
+
+        # Take the sequence lock first: imports use this same reconciliation
+        # path, so no allocator can consume a stale value between the scan and
+        # the sequence update.
+        sequence = numbering_service.lock_sequence(
+            db, "support_ticket", start_value
+        )
+        max_value: int | None = None
+        for number in db.query(Ticket.number).filter(Ticket.number.isnot(None)):
+            text = str(number[0])
+            if prefix_text:
+                if not text.startswith(prefix_text):
+                    continue
+                text = text[len(prefix_text) :]
+            if not text.isdecimal():
+                continue
+            value = int(text)
+            if max_value is None or value > max_value:
+                max_value = value
+
+        minimum_next = max(start_value, (max_value or 0) + 1)
+        if sequence.next_value < minimum_next:
+            sequence.next_value = minimum_next
+            db.flush()
+        return sequence.next_value
 
     @staticmethod
     def _assert_ticket_exists(db: Session, ticket_id: UUID) -> Ticket:
