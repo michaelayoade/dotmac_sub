@@ -1088,7 +1088,12 @@ class Tickets:
 
     @staticmethod
     def _emit_ticket_event(
-        db: Session, event_name: str, ticket: Ticket, actor_id: str | None = None
+        db: Session,
+        event_name: str,
+        ticket: Ticket,
+        actor_id: str | None = None,
+        *,
+        dispatch_after_commit: bool = True,
     ) -> None:
         payload = {
             "name": event_name,
@@ -1112,11 +1117,17 @@ class Tickets:
             actor=actor_id,
             subscriber_id=ticket.subscriber_id,
             account_id=ticket.customer_account_id or ticket.subscriber_id,
+            dispatch_after_commit=dispatch_after_commit,
         )
 
     @staticmethod
     def create(
-        db: Session, payload: TicketCreate, actor_id: str | None = None, request=None
+        db: Session,
+        payload: TicketCreate,
+        actor_id: str | None = None,
+        request=None,
+        *,
+        dispatch_event_after_commit: bool = True,
     ) -> Ticket:
         ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
@@ -1191,7 +1202,13 @@ class Tickets:
             actor_id=actor_id,
             metadata={"number": ticket.number},
         )
-        Tickets._emit_ticket_event(db, "ticket.created", ticket, actor_id)
+        Tickets._emit_ticket_event(
+            db,
+            "ticket.created",
+            ticket,
+            actor_id,
+            dispatch_after_commit=dispatch_event_after_commit,
+        )
 
         db.commit()
         db.refresh(ticket)

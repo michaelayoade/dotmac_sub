@@ -6,11 +6,14 @@ support.Tickets / TicketComments service so the portal works standalone.
 """
 
 import uuid
+from unittest.mock import patch
 
+from app.models.event_store import EventStatus, EventStore
 from app.models.support import Ticket, TicketCommentAuthorType
 from app.schemas.support import TicketCommentCreate
 from app.services import crm_portal
 from app.services import support as support_service
+from app.services.customer_portal_notifications import get_notifications_page
 
 
 def test_create_uses_local_ticket_module(db_session, subscriber):
@@ -28,6 +31,46 @@ def test_create_uses_local_ticket_module(db_session, subscriber):
     assert ticket["subscriber_id"] == str(subscriber.id)
     # persisted in the local support_tickets table
     assert db_session.get(Ticket, uuid.UUID(ticket["id"])) is not None
+
+    notifications = get_notifications_page(
+        db_session,
+        {"subscriber_id": str(subscriber.id)},
+        page=1,
+        per_page=10,
+    )["notifications"]
+    acknowledgement = next(
+        item for item in notifications if item.entity_type == "support_ticket"
+    )
+    assert acknowledgement.channel == "portal"
+    assert str(ticket["ticket_number"]) in acknowledgement.message
+
+
+def test_create_does_not_dispatch_integrations_in_customer_request(
+    db_session, subscriber
+):
+    """A slow broker must not turn a successful ticket write into a 504."""
+    with patch(
+        "app.services.events.dispatcher.EventDispatcher.dispatch_pending_event"
+    ) as dispatch:
+        result = crm_portal.handle_ticket_create(
+            db_session,
+            customer={},
+            subscriber_id=str(subscriber.id),
+            title="Portal should return promptly",
+            description="",
+            priority="normal",
+        )
+
+    assert result["success"] is True, result
+    dispatch.assert_not_called()
+    event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "custom")
+        .order_by(EventStore.created_at.desc())
+        .first()
+    )
+    assert event is not None
+    assert event.status == EventStatus.pending
 
 
 def test_list_and_detail_round_trip(db_session, subscriber):
