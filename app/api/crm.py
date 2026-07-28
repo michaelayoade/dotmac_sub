@@ -1,15 +1,33 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.schemas.crm_provisioning import CRMSubscriberProvisionRequest
 from app.services import crm_api
+from app.services.crm_subscriber_provisioning import (
+    CRM_PROVISIONING_SCOPE,
+    ProvisionCRMSubscriberCommand,
+    provision_crm_subscriber,
+)
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +52,14 @@ def require_crm_service_auth(
     request: Request,
     x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
     db: Session = Depends(get_db),
-) -> None:
+) -> dict[str, Any]:
     """Require a scoped, rotatable Sub API key from the CRM caller."""
     if isinstance(x_api_key, str) and x_api_key:
         from app.services.auth_dependencies import _api_key_principal, has_permission
 
         auth = _api_key_principal(db, x_api_key, request)
         if auth is not None and has_permission(auth, db, CRM_INTEGRATION_PERMISSION):
-            return
+            return auth
         _error(
             status.HTTP_401_UNAUTHORIZED,
             "Invalid or insufficiently scoped API key.",
@@ -225,6 +243,75 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
             )
         )
     return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
+
+
+@router.post(
+    "/subscribers",
+    status_code=status.HTTP_201_CREATED,
+)
+def provision_subscriber(
+    payload: CRMSubscriberProvisionRequest,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    crm_auth: dict[str, Any] = Depends(require_crm_service_auth),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Explicitly provision a canonical Sub customer for one CRM identity."""
+
+    command_id = uuid.uuid4()
+    command = ProvisionCRMSubscriberCommand(
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor=f"api_key:{crm_auth['principal_id']}",
+            scope=CRM_PROVISIONING_SCOPE,
+            reason="CRM sales customer provisioning",
+            idempotency_key=idempotency_key,
+        ),
+        payload=payload,
+    )
+    try:
+        result = provision_crm_subscriber(db, command)
+    except DomainError as exc:
+        conflict_codes = {
+            "customer.crm_subscriber_provisioning.ambiguous_identity",
+            "customer.crm_subscriber_provisioning.active_caller_transaction",
+            "customer.crm_subscriber_provisioning.idempotency_conflict",
+            "customer.crm_subscriber_provisioning.identity_conflict",
+        }
+        client_error_codes = {
+            "customer.crm_subscriber_provisioning.invalid_command",
+            "customer.crm_subscriber_provisioning.missing_idempotency_key",
+        }
+        if exc.code in conflict_codes:
+            error_status = status.HTTP_409_CONFLICT
+        elif exc.code in client_error_codes:
+            error_status = status.HTTP_400_BAD_REQUEST
+        else:
+            logger.error(
+                "crm_subscriber_provisioning_contract_failure",
+                extra={"error_code": exc.code},
+            )
+            error_status = status.HTTP_500_INTERNAL_SERVER_ERROR
+        _error(
+            error_status,
+            exc.message,
+            {str(exc.details.get("field") or "command"): [exc.code]},
+        )
+    if result.replayed or result.outcome == "reused":
+        response.status_code = status.HTTP_200_OK
+    return _envelope(
+        {
+            "id": str(result.subscriber_id),
+            "subscriber_id": result.subscriber_number or str(result.subscriber_id),
+            "subscriber_number": result.subscriber_number,
+            "account_number": result.account_number,
+            "outcome": result.outcome,
+            "replayed": result.replayed,
+            "command_id": str(result.command_id),
+            "correlation_id": str(result.correlation_id),
+        }
+    )
 
 
 @router.get("/subscribers/search", dependencies=[Depends(require_crm_service_auth)])

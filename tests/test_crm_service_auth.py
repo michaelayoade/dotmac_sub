@@ -35,8 +35,11 @@ def _call(db, *, x_api_key=None):
 
 
 def test_scoped_api_key_is_accepted(db_session):
-    _make_key(db_session, scopes=[CRM_INTEGRATION_PERMISSION])
-    _call(db_session, x_api_key="raw-crm-key")
+    key, _ = _make_key(db_session, scopes=[CRM_INTEGRATION_PERMISSION])
+    auth = _call(db_session, x_api_key="raw-crm-key")
+
+    assert auth["principal_id"] == str(key.id)
+    assert auth["principal_type"] == "api_key"
 
 
 def test_wildcard_scope_satisfies(db_session):
