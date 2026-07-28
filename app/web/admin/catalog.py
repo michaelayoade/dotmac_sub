@@ -763,7 +763,7 @@ def catalog_subscription_detail(
 )
 def catalog_subscription_bill_now_preview(
     request: Request, subscription_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
     try:
         preview_context = (
             web_catalog_subscription_workflows_service.prepaid_bill_now_preview_context(

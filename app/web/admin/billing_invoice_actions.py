@@ -95,7 +95,7 @@ def invoice_detail(
 )
 def invoice_prepaid_pay_now_preview(
     request: Request, invoice_id: UUID, db: Session = Depends(get_db)
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
     try:
         preview_context = (
             web_billing_invoices_service.prepaid_recovery_pay_now_preview_context(
