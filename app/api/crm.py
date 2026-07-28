@@ -52,14 +52,14 @@ def require_crm_service_auth(
     request: Request,
     x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
     db: Session = Depends(get_db),
-) -> dict[str, Any]:
+) -> None:
     """Require a scoped, rotatable Sub API key from the CRM caller."""
     if isinstance(x_api_key, str) and x_api_key:
         from app.services.auth_dependencies import _api_key_principal, has_permission
 
         auth = _api_key_principal(db, x_api_key, request)
         if auth is not None and has_permission(auth, db, CRM_INTEGRATION_PERMISSION):
-            return auth
+            return
         _error(
             status.HTTP_401_UNAUTHORIZED,
             "Invalid or insufficiently scoped API key.",
@@ -248,22 +248,35 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
 @router.post(
     "/subscribers",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def provision_subscriber(
+    request: Request,
     payload: CRMSubscriberProvisionRequest,
     response: Response,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    crm_auth: dict[str, Any] = Depends(require_crm_service_auth),
+    idempotency_key: str = Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=120,
+    ),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Explicitly provision a canonical Sub customer for one CRM identity."""
+
+    auth = getattr(request.state, "auth", {})
+    principal_id = str(auth.get("principal_id") or "").strip()
+    if not principal_id:
+        _error(
+            status.HTTP_401_UNAUTHORIZED,
+            "CRM API key principal is unavailable.",
+        )
 
     command_id = uuid.uuid4()
     command = ProvisionCRMSubscriberCommand(
         context=CommandContext(
             command_id=command_id,
             correlation_id=command_id,
-            actor=f"api_key:{crm_auth['principal_id']}",
+            actor=f"api_key:{principal_id}",
             scope=CRM_PROVISIONING_SCOPE,
             reason="CRM sales customer provisioning",
             idempotency_key=idempotency_key,

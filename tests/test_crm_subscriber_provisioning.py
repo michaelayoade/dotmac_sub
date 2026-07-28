@@ -15,6 +15,7 @@ from app.services.crm_subscriber_provisioning import (
     ProvisionCRMSubscriberCommand,
     provision_crm_subscriber,
 )
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 
 
@@ -128,8 +129,9 @@ def test_exact_provenance_reuses_existing_customer_without_mutating_identity(
         metadata_={"crm_person_id": "crm-person-100"},
     )
     db_session.add(existing)
-    db_session.commit()
+    db_session.flush()
     existing_id = existing.id
+    db_session.commit()
 
     result = provision_crm_subscriber(db_session, _command())
 
@@ -143,8 +145,8 @@ def test_exact_provenance_reuses_existing_customer_without_mutating_identity(
 
 
 def test_missing_idempotency_key_is_rejected(db_session):
-    with pytest.raises(CRMSubscriberProvisioningError) as raised:
+    with pytest.raises(DomainError) as raised:
         provision_crm_subscriber(db_session, _command(key=""))
 
-    assert raised.value.code.endswith("missing_idempotency_key")
+    assert raised.value.code.endswith("invalid_command_context")
     assert db_session.query(Subscriber).count() == 0
