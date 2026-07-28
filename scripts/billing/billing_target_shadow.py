@@ -10,6 +10,7 @@ Subcommands::
     poetry run python -m scripts.billing.billing_target_shadow position --account <id> --currency NGN
     poetry run python -m scripts.billing.billing_target_shadow open-obligations --account <id> --currency NGN
     poetry run python -m scripts.billing.billing_target_shadow rate --version <id> --line-key <key> --index 0
+    poetry run python -m scripts.billing.billing_target_shadow verify-rating-cohort --cutoff <ISO> --window-start <ISO> --window-end <ISO> --code-version <sha> --schema-version <revision> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow fire-due-timers [--limit 200]
     poetry run python -m scripts.billing.billing_target_shadow advance-collections --obligation <id>
     poetry run python -m scripts.billing.billing_target_shadow funding-status --order <id>
@@ -34,6 +35,10 @@ from app.services.billing.contracts import BillingContracts
 from app.services.billing.customer_subledger import resolve_position
 from app.services.billing.obligations import BillingObligations
 from app.services.billing.rating import rate_line_period
+from app.services.billing.shadow_verification import (
+    BillingShadowVerification,
+    RecordPhase2VerificationCommand,
+)
 from app.services.collections.lifecycle import CollectionsLifecycle
 from app.services.collections.postpaid_policy import plan_postpaid_consequence
 from app.services.collections.prepaid_policy import plan_prepaid_consequence
@@ -43,14 +48,14 @@ from app.services.runtime_durable_timers import fire_due_timers
 from app.services.sales_order_funding import SalesOrderFunding
 
 
-def _context(reason: str) -> CommandContext:
+def _context(reason: str, *, idempotency_key: str | None = None) -> CommandContext:
     from uuid import uuid4
 
     return CommandContext.system(
         actor="operator:billing_target_shadow",
         scope="billing-target-shadow",
         reason=reason,
-        idempotency_key=f"billing-target-shadow:{uuid4()}",
+        idempotency_key=idempotency_key or f"billing-target-shadow:{uuid4()}",
     )
 
 
@@ -136,6 +141,45 @@ def _cmd_rate(db, args) -> int:
             "rate_units": rated.rate_units,
             "proration": rated.proration,
             "tax_treatment_code": rated.tax_treatment_code,
+        }
+    )
+    return 0
+
+
+def _instant(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError("timestamp must include a timezone")
+    return parsed
+
+
+def _cmd_verify_rating_cohort(db, args) -> int:
+    result = BillingShadowVerification.record_phase2_run(
+        db,
+        RecordPhase2VerificationCommand(
+            cutoff_at=args.cutoff,
+            observation_started_at=args.window_start,
+            observation_ended_at=args.window_end,
+            code_version=args.code_version,
+            database_schema_version=args.schema_version,
+            cohort_name=args.cohort,
+        ),
+        context=_context(
+            "record ADR 0007 Phase 2 migration evidence",
+            idempotency_key=args.idempotency_key,
+        ),
+    )
+    _emit(
+        {
+            "run_id": result.run_id,
+            "phase": "phase_2",
+            "cohort_count": result.cohort_count,
+            "covered_count": result.covered_count,
+            "expected_difference_count": result.expected_difference_count,
+            "blocker_count": result.blocker_count,
+            "replayed": result.replayed,
+            "authority_moved": False,
+            "repair_requested": False,
         }
     )
     return 0
@@ -255,6 +299,19 @@ def main() -> int:
     p.add_argument("--line-key", required=True)
     p.add_argument("--index", type=int, default=0)
     p.set_defaults(func=_cmd_rate)
+
+    p = sub.add_parser(
+        "verify-rating-cohort",
+        help="record durable Phase 2 parity/topology evidence",
+    )
+    p.add_argument("--cutoff", required=True, type=_instant)
+    p.add_argument("--window-start", required=True, type=_instant)
+    p.add_argument("--window-end", required=True, type=_instant)
+    p.add_argument("--code-version", required=True)
+    p.add_argument("--schema-version", required=True)
+    p.add_argument("--idempotency-key", required=True)
+    p.add_argument("--cohort", default="active_subscriptions")
+    p.set_defaults(func=_cmd_verify_rating_cohort)
 
     p = sub.add_parser("fire-due-timers", help="emit due durable-timer triggers")
     p.add_argument("--limit", type=int, default=200)

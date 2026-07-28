@@ -190,6 +190,9 @@ def test_cutover_evidence_is_durable_and_cannot_move_authority() -> None:
         "cohort_classification",
         "currency_totals",
         "event_outcomes",
+        "expected_difference_count",
+        "gap_count",
+        "overlap_count",
         "operator_approved_at",
         "finance_approved_at",
     ):
@@ -197,6 +200,34 @@ def test_cutover_evidence_is_durable_and_cannot_move_authority() -> None:
     assert "verification_blockers_present" in owner
     assert "operator_approval_required" in owner
     assert "execute_owner_command" in owner
+    assert "record_phase2_run" in owner
+    assert '"repair_requested": False' in owner
     assert "BillingRecordAuthority.authoritative" not in owner
     assert "AuthorityMigrationState.CUT_OVER" in contracts
     assert "AuthorityMigrationState.CUT_OVER" in obligations
+
+
+def test_phase2_shadow_obligations_take_money_only_from_rating() -> None:
+    root = Path(__file__).resolve().parents[2]
+    contracts = (root / "app/services/billing/contracts.py").read_text(encoding="utf-8")
+    obligations = (root / "app/services/billing/obligations.py").read_text(
+        encoding="utf-8"
+    )
+    handler = (
+        root / "app/services/events/handlers/billing_lifecycle_projection.py"
+    ).read_text(encoding="utf-8")
+
+    assert "schema_version=2" in contracts
+    output_body = contracts.split(
+        '"output": "billing.contracts.shadow_recorded"', maxsplit=1
+    )[1]
+    assert '"net_amount"' not in output_body
+    assert '"tax_amount"' not in output_body
+    assert "rate_line_period(" in obligations
+    assert (
+        "net_amount:"
+        not in obligations.split("class ScheduleObligationCommand", maxsplit=1)[
+            1
+        ].split("class ObligationResult", maxsplit=1)[0]
+    )
+    assert "schema_versions=(1, 2)" in handler

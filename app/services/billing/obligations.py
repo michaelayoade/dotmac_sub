@@ -41,6 +41,7 @@ from app.models.billing_contract import (
 )
 from app.services.billing.cadence import Interval, service_period
 from app.services.billing.contracts import BillingContracts
+from app.services.billing.rating import rate_line_period
 from app.services.domain_errors import DomainError
 from app.services.events.owner_outputs import (
     OwnerOutputEnvelope,
@@ -142,10 +143,7 @@ class ScheduleObligationCommand:
     contract_version_id: UUID
     contract_line_key: UUID
     period_index: int
-    # Rated amounts. Phase 2's rating owner supplies these; Phase 1 backfill
-    # carries the contracted line amount directly.
-    net_amount: Decimal
-    tax_amount: Decimal = Decimal("0")
+    covered: Interval | None = None
     due_at: datetime | None = None
 
 
@@ -189,6 +187,7 @@ class BillingObligations:
         sales_order_id: UUID,
         commands: tuple[ScheduleObligationCommand, ...],
         event_id: UUID,
+        output_schema_version: int,
         context: CommandContext,
     ) -> tuple[ObligationResult, ...] | None:
         """Receipt recorded contract versions and schedule shadow obligations."""
@@ -237,6 +236,7 @@ class BillingObligations:
                 producer_owner="billing.contracts",
                 context=context,
                 operation=_effect,
+                schema_version=output_schema_version,
             )[0],
         )
 
@@ -252,12 +252,6 @@ class BillingObligations:
                 "missing_idempotency_key",
                 "Scheduling an obligation requires a business idempotency key.",
             )
-        if command.net_amount < 0 or command.tax_amount < 0:
-            raise _error(
-                "invalid_obligation_amount",
-                "Obligation net and tax amounts cannot be negative.",
-            )
-
         version = lock_for_update(
             db, BillingContractVersion, command.contract_version_id
         )
@@ -296,7 +290,14 @@ class BillingObligations:
                 version_ends_at=version_ends_at.isoformat(),
             )
 
-        gross = command.net_amount + command.tax_amount
+        rated = rate_line_period(
+            db,
+            contract_version_id=version.id,
+            contract_line_key=command.contract_line_key,
+            period=period,
+            covered=command.covered,
+        )
+        gross = rated.gross_amount
         authority = permitted_authority()
 
         existing = db.execute(
@@ -313,6 +314,18 @@ class BillingObligations:
             )
         ).scalar_one_or_none()
         if existing is not None:
+            if (
+                existing.net_amount != rated.net_amount
+                or existing.tax_amount != rated.tax_amount
+                or existing.gross_amount != rated.gross_amount
+            ):
+                raise _error(
+                    "existing_obligation_rating_mismatch",
+                    "The existing shadow obligation does not match current rating.",
+                    obligation_id=str(existing.id),
+                    recorded_gross=str(existing.gross_amount),
+                    rated_gross=str(rated.gross_amount),
+                )
             return ObligationResult(
                 obligation_id=existing.id,
                 state=existing.state,
@@ -336,8 +349,8 @@ class BillingObligations:
             period_start=period.starts_at,
             period_end=period.ends_at,
             currency=line.currency,
-            net_amount=command.net_amount,
-            tax_amount=command.tax_amount,
+            net_amount=rated.net_amount,
+            tax_amount=rated.tax_amount,
             gross_amount=gross,
             accounting_treatment=line.accounting_treatment,
             collection_timing=version.collection_timing,

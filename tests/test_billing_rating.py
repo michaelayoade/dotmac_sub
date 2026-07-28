@@ -201,7 +201,7 @@ def test_per_day_rate_aggregates_into_a_monthly_period(db_session, ids):
 def test_tax_is_added_from_the_named_active_rate(db_session, ids):
     account_id, subscription_id = ids
     db_session.add(
-        TaxRate(name="VAT", code="VAT-NG", rate=Decimal("0.0750"), is_active=True)
+        TaxRate(name="VAT", code="VAT-NG", rate=Decimal("7.5000"), is_active=True)
     )
     db_session.commit()
     version_id, line_key = _record(
@@ -225,7 +225,7 @@ def test_tax_is_added_from_the_named_active_rate(db_session, ids):
 def test_tax_inclusive_price_backs_the_net_out(db_session, ids):
     account_id, subscription_id = ids
     db_session.add(
-        TaxRate(name="VAT", code="VAT-NG", rate=Decimal("0.0750"), is_active=True)
+        TaxRate(name="VAT", code="VAT-NG", rate=Decimal("7.5000"), is_active=True)
     )
     db_session.commit()
     version_id, line_key = _record(

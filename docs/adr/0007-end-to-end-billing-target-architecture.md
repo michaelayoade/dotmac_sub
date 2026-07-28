@@ -714,6 +714,21 @@ coherent reviewable slice with its own forward-fix plan.
 - Shadow: compare obligations and rated totals against current postpaid
   invoice-generation and prepaid-renewal previews for the complete active
   cohort.
+- Current implementation state: shadow obligation creation consumes only
+  contract/version/line/period identity and resolves net, tax, gross, and
+  currency through `billing.rating`; producer-supplied money is not accepted.
+  Durable Phase 2 runs lock and classify the complete active cohort, record
+  current-owner and target totals per currency, and preserve expected new
+  cadence, unresolved, ambiguous, unlinked, duplicate, gap, overlap, and
+  variance evidence. The verifier cannot repair any owner or move authority.
+- Open cutover blocker: a shadow obligation persists the rated result and
+  service period, but not every input needed to reproduce that result after
+  policy changes. In particular, an optional covered/proration interval is not
+  stored and a tax-treatment code resolves the currently active tax-rate row.
+  Before authority can move, persist immutable or versioned rating provenance
+  (including coverage and tax inputs), make replay resolve the recorded
+  provenance, and add mutation/replay tests. A mismatch failure is useful
+  shadow evidence; it is not a substitute for reproducibility.
 - Gate:
   - exact period and amount parity for existing supported contracts;
   - approved expected differences for newly supported cadence;
@@ -934,6 +949,15 @@ evidence are append-only and are not removed by rollback.
   totals, owner-output outcomes, and exact code/schema identity. Operator and
   finance approvals are separate and fail closed while any blocker is non-zero;
   recording approvals still does not move authority.
+- Phase 2 rating/obligation verification is also durable migration evidence.
+  The contract output schema now carries identity only; `billing.obligations`
+  invokes `billing.rating` for every shadow amount. Version 1 contract outputs
+  remain consumable during shadow rollout, but their amount fields are ignored.
+  Complete-cohort runs use typed previews from the current postpaid and prepaid
+  owners, require exact parity for supported cadence, keep newly supported
+  cadence in an explicit expected-difference cohort, and block approval on any
+  unresolved, ambiguous, unlinked, duplicate, gap, overlap, or variance count.
+  No real cohort run or operator/finance approval is implied by this code.
 - Each subsequent phase is reviewed at its own cutover gate. A gate that
   requires cohort parity or finance approval cannot be satisfied by code review
   alone; it needs a durable run record meeting the cutover evidence standard

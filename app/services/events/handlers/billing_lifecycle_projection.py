@@ -128,6 +128,7 @@ class BillingLifecycleProjectionHandler:
         *,
         source_id: UUID,
         consumer: str,
+        schema_versions: tuple[int, ...] = (1,),
     ) -> None:
         envelope = event.payload.get("envelope")
         if not isinstance(envelope, Mapping):
@@ -138,8 +139,16 @@ class BillingLifecycleProjectionHandler:
                 field="envelope",
                 reason="expected_record",
             )
+        schema_version = envelope.get("schema_version")
+        if schema_version not in schema_versions:
+            raise invalid_output_payload(
+                consumer=consumer,
+                event_id=event.event_id,
+                event_type=str(event.payload.get("output") or event.event_type.value),
+                field="envelope.schema_version",
+                reason=f"expected_one_of:{schema_versions}",
+            )
         expected_fields: tuple[tuple[str, object], ...] = (
-            ("schema_version", 1),
             ("producer_owner", expected),
             ("source_kind", "sales_order"),
             ("source_id", str(source_id)),
@@ -312,7 +321,11 @@ class BillingLifecycleProjectionHandler:
             "billing.contracts",
             source_id=sales_order_id,
             consumer=consumer,
+            schema_versions=(1, 2),
         )
+        envelope = event.payload["envelope"]
+        assert isinstance(envelope, Mapping)
+        output_schema_version = int(envelope["schema_version"])
         records = require_output_records(
             event.payload,
             "obligations",
@@ -352,30 +365,6 @@ class BillingLifecycleProjectionHandler:
                     event=event,
                     consumer=consumer,
                 ),
-                net_amount=self._decimal(
-                    require_output_text(
-                        record,
-                        "net_amount",
-                        consumer=consumer,
-                        event_id=event.event_id,
-                        event_type=_CONTRACT_OUTPUT,
-                    ),
-                    field="obligations.net_amount",
-                    event=event,
-                    consumer=consumer,
-                ),
-                tax_amount=self._decimal(
-                    require_output_text(
-                        record,
-                        "tax_amount",
-                        consumer=consumer,
-                        event_id=event.event_id,
-                        event_type=_CONTRACT_OUTPUT,
-                    ),
-                    field="obligations.tax_amount",
-                    event=event,
-                    consumer=consumer,
-                ),
             )
             for record in records
         )
@@ -385,6 +374,7 @@ class BillingLifecycleProjectionHandler:
                 sales_order_id=sales_order_id,
                 commands=commands,
                 event_id=event.event_id,
+                output_schema_version=output_schema_version,
                 context=self._context(event, sales_order_text),
             )
 

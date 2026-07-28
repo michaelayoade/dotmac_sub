@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import enum
 import logging
 from calendar import monthrange
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -49,6 +51,7 @@ from app.services.billing_settings import (
 )
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.common import coerce_uuid, round_money
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_classification import (
@@ -61,6 +64,47 @@ from app.services.service_entitlements import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PostpaidChargePreviewError(DomainError):
+    """Fail-closed current-owner preview used by migration verification."""
+
+
+class PostpaidChargePreviewDisposition(enum.StrEnum):
+    """Why the current postpaid owner produced one candidate charge."""
+
+    comparable = "comparable"
+
+
+@dataclass(frozen=True, slots=True)
+class PostpaidChargePreview:
+    """Typed current-owner result for one subscription's next service charge."""
+
+    subscription_id: UUID
+    account_id: UUID
+    period_start: datetime
+    period_end: datetime
+    currency: str
+    net_amount: Decimal
+    tax_amount: Decimal
+    gross_amount: Decimal
+    billing_cycle: BillingCycle
+    tax_application: TaxApplication
+    tax_rate_percent: Decimal
+    disposition: PostpaidChargePreviewDisposition
+
+
+def _postpaid_preview_error(
+    suffix: str,
+    message: str,
+    *,
+    subscription_id: UUID,
+) -> PostpaidChargePreviewError:
+    return PostpaidChargePreviewError(
+        code=f"financial.billing_automation.{suffix}",
+        message=message,
+        details={"subscription_id": str(subscription_id)},
+    )
 
 
 def _billing_run_extra(
@@ -409,6 +453,135 @@ def _prorated_amount(
         Decimal(str(usage_seconds)) / Decimal(str(period_seconds)), Decimal("1.00")
     )
     return round_money(full_amount * ratio)
+
+
+def preview_postpaid_recurring_charge(
+    db: Session,
+    *,
+    subscription_id: UUID,
+    as_of: datetime,
+) -> PostpaidChargePreview:
+    """Resolve the current postpaid owner's next base-service charge.
+
+    This is the typed, read-only comparison surface for ADR 0007 Phase 2. It
+    deliberately reuses the exact period, negotiated-price, discount,
+    proration, and tax helpers used by ``run_invoice_cycle``. It neither checks
+    whether an invoice line already exists nor writes a BillingRun: the shadow
+    verifier needs one candidate period for every active cohort member, not
+    only the subset due in a particular batch.
+    """
+
+    if as_of.tzinfo is None:
+        raise PostpaidChargePreviewError(
+            code="financial.billing_automation.invalid_date",
+            message="Postpaid charge preview requires a timezone-aware instant.",
+            details={"field": "as_of"},
+        )
+    effective_at = _as_utc(as_of)
+    assert effective_at is not None
+    subscription = db.get(Subscription, subscription_id)
+    if subscription is None:
+        raise _postpaid_preview_error(
+            "subscription_not_found",
+            "Postpaid charge preview requires an existing subscription.",
+            subscription_id=subscription_id,
+        )
+    if subscription.billing_mode is BillingMode.prepaid:
+        raise _postpaid_preview_error(
+            "mode_not_postpaid",
+            "The current postpaid owner cannot preview a prepaid subscription.",
+            subscription_id=subscription_id,
+        )
+    if subscription.status is not SubscriptionStatus.active:
+        raise _postpaid_preview_error(
+            "subscription_not_billable",
+            "The current postpaid preview requires an active subscription.",
+            subscription_id=subscription_id,
+        )
+    account = db.get(Subscriber, subscription.subscriber_id)
+    if account is None or account.status not in BILLABLE_SUBSCRIBER_STATUSES:
+        raise _postpaid_preview_error(
+            "account_not_billable",
+            "The current postpaid owner excludes this account state.",
+            subscription_id=subscription_id,
+        )
+
+    catalog_amount, currency, cycle = _resolve_price(db, subscription)
+    if catalog_amount is None:
+        raise _postpaid_preview_error(
+            "missing_price",
+            "The current postpaid owner cannot resolve a recurring price.",
+            subscription_id=subscription_id,
+        )
+    amount = _effective_unit_price(subscription, catalog_amount, effective_at)
+    effective_cycle = cycle or BillingCycle.monthly
+    period_start = _as_utc(
+        subscription.next_billing_at or subscription.start_at or effective_at
+    )
+    assert period_start is not None
+    period_end = _period_end(period_start, effective_cycle)
+    while period_end <= effective_at:
+        period_start = period_end
+        period_end = _period_end(period_start, effective_cycle)
+
+    service_start = _as_utc(subscription.start_at) or period_start
+    service_end = _as_utc(subscription.end_at)
+    if service_end is not None and service_end <= period_start:
+        raise _postpaid_preview_error(
+            "service_ended",
+            "The current postpaid owner has no charge after service end.",
+            subscription_id=subscription_id,
+        )
+    covered_start = max(period_start, service_start)
+    covered_end = min(period_end, service_end) if service_end else period_end
+    net_or_gross = _prorated_amount(
+        amount,
+        period_start,
+        period_end,
+        covered_start,
+        covered_end,
+    )
+    if net_or_gross <= Decimal("0.00"):
+        raise _postpaid_preview_error(
+            "zero_amount",
+            "The current postpaid owner advances this period without a charge.",
+            subscription_id=subscription_id,
+        )
+
+    tax_rate_id = _resolve_tax_rate_id(db, subscription)
+    tax_rate = db.get(TaxRate, tax_rate_id) if tax_rate_id is not None else None
+    tax_application = (
+        _default_tax_application(db) if tax_rate is not None else TaxApplication.exempt
+    )
+    tax_rate_percent = (
+        Decimal(str(tax_rate.rate)) if tax_rate is not None else Decimal("0")
+    )
+    tax_amount = _calculate_tax_amount(
+        net_or_gross,
+        tax_rate_percent,
+        tax_application,
+    )
+    if tax_application is TaxApplication.inclusive:
+        gross_amount = round_money(net_or_gross)
+        net_amount = gross_amount - tax_amount
+    else:
+        net_amount = round_money(net_or_gross)
+        gross_amount = net_amount + tax_amount
+
+    return PostpaidChargePreview(
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        period_start=period_start,
+        period_end=period_end,
+        currency=str(currency or "NGN").upper(),
+        net_amount=net_amount,
+        tax_amount=tax_amount,
+        gross_amount=gross_amount,
+        billing_cycle=effective_cycle,
+        tax_application=tax_application,
+        tax_rate_percent=tax_rate_percent,
+        disposition=PostpaidChargePreviewDisposition.comparable,
+    )
 
 
 def _addon_recurring_price(db: Session, add_on_id) -> tuple[Decimal, str] | None:

@@ -354,8 +354,6 @@ class BillingContracts:
                             "contract_version_id": str(result.version_id),
                             "contract_line_key": str(line.contract_line_key),
                             "period_index": 0,
-                            "net_amount": str(line.quantity * line.unit_price),
-                            "tax_amount": "0",
                         }
                     )
             stage_owner_output(
@@ -365,6 +363,7 @@ class BillingContracts:
                     producer_owner=OWNER,
                     source_kind="sales_order",
                     source_id=sales_order_id,
+                    schema_version=2,
                 ),
                 {
                     "output": "billing.contracts.shadow_recorded",

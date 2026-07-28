@@ -121,9 +121,7 @@ def contract_version(db_session, subscriber, subscription):
     return result.version_id, line_key, account_id
 
 
-def _schedule(
-    db_session, contract_version, *, index=0, net=Decimal("25000.00"), key=None
-):
+def _schedule(db_session, contract_version, *, index=0, key=None):
     version_id, line_key, _ = contract_version
     return BillingObligations.schedule(
         db_session,
@@ -131,7 +129,6 @@ def _schedule(
             contract_version_id=version_id,
             contract_line_key=line_key,
             period_index=index,
-            net_amount=net,
         ),
         context=_context(key),
     )
@@ -320,7 +317,6 @@ def test_scheduling_requires_an_existing_contract_version(db_session, contract_v
                 contract_version_id=uuid4(),
                 contract_line_key=line_key,
                 period_index=0,
-                net_amount=Decimal("100.00"),
             ),
             context=_context(),
         )
@@ -329,7 +325,25 @@ def test_scheduling_requires_an_existing_contract_version(db_session, contract_v
 
 
 def test_tax_is_carried_separately_into_the_gross_amount(db_session, contract_version):
+    from app.models.billing import TaxRate
+
     version_id, line_key, _ = contract_version
+    db_session.add(
+        TaxRate(
+            name="VAT 7.5%",
+            code="VAT-NG",
+            rate=Decimal("7.5000"),
+            is_active=True,
+        )
+    )
+    line = db_session.execute(
+        select(BillingContractLine).where(
+            BillingContractLine.contract_version_id == version_id,
+            BillingContractLine.contract_line_key == line_key,
+        )
+    ).scalar_one()
+    line.tax_treatment_code = "VAT-NG"
+    db_session.commit()
 
     result = BillingObligations.schedule(
         db_session,
@@ -337,8 +351,6 @@ def test_tax_is_carried_separately_into_the_gross_amount(db_session, contract_ve
             contract_version_id=version_id,
             contract_line_key=line_key,
             period_index=0,
-            net_amount=Decimal("25000.00"),
-            tax_amount=Decimal("1875.00"),
         ),
         context=_context(),
     )

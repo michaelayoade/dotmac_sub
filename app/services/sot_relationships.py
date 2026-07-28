@@ -2107,11 +2107,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     events=EventContract(
                         event_types=("billing.contracts.shadow_recorded",),
-                        schema_version=1,
+                        schema_version=2,
                         delivery_owner="events.dispatcher",
                         compatibility=(
-                            "Version 1 is additive. Consumers validate identity and "
-                            "never re-decide the producer's contracted terms."
+                            "Version 2 carries only contract-version, line, and "
+                            "period identity; billing.obligations resolves money "
+                            "through billing.rating. The consumer accepts legacy "
+                            "Version 1 envelopes but never trusts their amount fields."
                         ),
                         replay=(
                             "The sales output receipt, contract rows, and staged "
@@ -2162,6 +2164,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=(
                     "billing.contracts",
+                    "billing.rating",
                     "events.dispatcher",
                     "events.owner_outputs",
                 ),
@@ -2173,7 +2176,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "invoice, a payment, or an entitlement, and its state is "
                     "never inferred from an invoice label or payment origin."
                     " Phase 1 consumes the contract owner's output through a "
-                    "receipt and emits a terminal shadow result atomically."
+                    "receipt and emits a terminal shadow result atomically. "
+                    "Phase 2 resolves every amount through billing.rating; producer "
+                    "payloads carry identity, never a parallel money formula."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -2183,6 +2188,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "recorded billing contract terms",
                                 "recorded billing obligations",
+                                "deterministic target rating",
                                 "receipted owner-output deliveries",
                             ),
                             canonical_writer="billing.obligations",
@@ -2211,6 +2217,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "the exact billing.contracts output and unique "
                                 "(billing.obligations, event_id) receipt"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="deterministic target rating",
+                            owner="billing.rating",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "typed net, tax, gross, and currency result for "
+                                "the exact contract line and service period"
                             ),
                         ),
                         AuthorityInput(
@@ -2251,6 +2266,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "billing.obligations.contract_line_not_found",
                             "billing.obligations.contract_version_not_found",
                             "billing.obligations.duplicate_obligation",
+                            "billing.obligations.existing_obligation_rating_mismatch",
                             "billing.obligations.invalid_command_context",
                             "billing.obligations.invalid_obligation_amount",
                             "billing.obligations.invalid_obligation_transition",
@@ -2264,6 +2280,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         mapping_owner="billing, invoicing, and collections adapters",
                         fail_closed_on=(
                             "a duplicate natural identity under concurrency",
+                            "an existing obligation disagreeing with current rating",
                             "an application exceeding the obligation gross amount",
                             "a period outside the contract version interval",
                         ),
@@ -2326,8 +2343,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "access.subscription_lifecycle",
                     "billing.contracts",
                     "billing.obligations",
+                    "billing.rating",
                     "events.dispatcher",
                     "events.owner_outputs",
+                    "financial.billing_automation",
+                    "financial.prepaid_service_renewals",
                 ),
                 notes=(
                     "ADR 0007 migration evidence only. The owner receipts the "
@@ -2335,9 +2355,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "content-addressed delivery evidence. Complete-cohort runs "
                     "store source/result fingerprints, exhaustive blocker "
                     "classifications, currency totals, delivery outcomes, and "
-                    "code/schema identity. It never repairs another owner or "
-                    "changes authority; operator and finance approvals are "
-                    "separate commands and are forbidden while blockers remain."
+                    "code/schema identity. Phase 2 adds current-owner preview and "
+                    "target rating totals plus explicit expected-difference, gap, "
+                    "and overlap categories. It never repairs another owner, asks "
+                    "a non-owner to repair, or changes authority; operator and "
+                    "finance approvals are separate commands and are forbidden "
+                    "while blockers remain."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -2357,6 +2380,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "complete active subscription cohort",
                                 "recorded billing contract terms",
+                                "recorded billing obligations",
+                                "deterministic target rating",
+                                "current postpaid billing preview",
+                                "current prepaid renewal preview",
                                 "receipted owner-output deliveries",
                                 "recorded shadow verification evidence",
                             ),
@@ -2392,6 +2419,42 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="recorded billing obligations",
+                            owner="billing.obligations",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "shadow BillingObligation natural identities, "
+                                "periods, rating values, and topology"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="deterministic target rating",
+                            owner="billing.rating",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "typed net, tax, gross, currency, rate-unit, and "
+                                "proration result for the exact target period"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current postpaid billing preview",
+                            owner="financial.billing_automation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "typed current-owner period and base recurring "
+                                "net/tax/gross preview for each postpaid cohort root"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="current prepaid renewal preview",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "typed current-owner monthly period and taxed "
+                                "renewal preview for each prepaid cohort root"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="receipted owner-output deliveries",
                             owner="events.owner_outputs",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -2419,16 +2482,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         locking=(
                             "Terminal delivery uniqueness is database-enforced; "
-                            "verification locks the complete selected Subscription "
-                            "and contract-version cohort; approvals lock one run."
+                            "verification locks the complete selected Subscription, "
+                            "contract-version, and obligation cohort; approvals lock "
+                            "one run."
                         ),
                         idempotency=(
                             "One terminal evidence row per event and one run per "
                             "business idempotency key. Replays return stored evidence."
                         ),
                         retries=(
-                            "Delivery and run commands are retryable. Approval "
-                            "fails closed until all stored blocker counts are zero."
+                            "Delivery and run commands are retryable. Expected new-"
+                            "cadence differences require explicit approval; approval "
+                            "fails closed until every blocker count is zero."
                         ),
                     ),
                     errors=ErrorContract(
@@ -2451,7 +2516,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         mapping_owner="billing migration operator adapters",
                         fail_closed_on=(
                             "an incomplete or non-timezone-aware observation window",
-                            "any non-zero blocker category",
+                            "any unresolved, ambiguous, unlinked, duplicate, gap, "
+                            "overlap, or variance category",
                             "finance approval without operator approval",
                         ),
                     ),
@@ -2478,13 +2544,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         old_owner="WARNING logs and ad-hoc billing comparison output",
                         new_owner="billing.shadow_verification",
                         verification=(
-                            "Terminal receipt replay, complete-cohort classification, "
-                            "fingerprint, blocker, and approval-gate tests."
+                            "Terminal receipt replay, Phase 1/2 complete-cohort "
+                            "classification, fingerprints, current/target currency "
+                            "totals, topology blockers, and approval-gate tests."
                         ),
                         cutover_gate=(
-                            "A durable run meets ADR 0007's evidence standard, all "
-                            "blockers are zero, and operator and finance approvals "
-                            "are recorded. This evidence does not itself move authority."
+                            "A phase-specific durable run meets ADR 0007's evidence "
+                            "standard, all blockers are zero, expected differences "
+                            "are explicitly reviewed, and operator and finance "
+                            "approvals are recorded. Evidence does not move authority."
                         ),
                         fallback_retirement=(
                             "Log-only shadow completion and undocumented cutover "
@@ -2498,6 +2566,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     test_refs=(
                         "tests/test_billing_shadow_pipeline.py",
+                        "tests/test_billing_phase2_shadow.py",
                         "tests/architecture/test_billing_target_architecture.py",
                     ),
                 ),
@@ -2566,7 +2635,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     errors=ErrorContract(
-                        domain_codes=(),
+                        domain_codes=(
+                            "billing.rating.contract_line_not_found",
+                            "billing.rating.contract_version_not_found",
+                            "billing.rating.unknown_tax_treatment",
+                            "billing.rating.usage_rating_requires_observation",
+                        ),
                         mapping_owner="billing and invoicing adapters",
                         fail_closed_on=(
                             "a contracted tax treatment code with no active rate",
@@ -9809,6 +9883,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="financial.billing_automation",
                 module="app.services.billing_automation",
                 owns=(
+                    "postpaid recurring charge preview",
                     "postpaid invoice batch execution",
                     "durable billing-run lifecycle and retry lineage",
                     "billing-run audit projection and repair",
@@ -9823,10 +9898,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Scheduled execution may compose the independently owned prepaid "
                     "renewal pass. Confirmed manual invoice batches disable it. "
                     "BillingRun is authoritative operational evidence for the "
-                    "resumable workflow; invoice period keys make retries convergent."
+                    "resumable workflow; invoice period keys make retries convergent. "
+                    "The typed per-subscription recurring-charge preview is read-only "
+                    "and reuses the exact current period, price, discount, proration, "
+                    "and tax helpers for Phase 2 migration evidence."
                 ),
                 contract=ServiceContract(
                     concerns=(
+                        ConcernContract(
+                            name="postpaid recurring charge preview",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("canonical billable subscription facts",),
+                        ),
                         ConcernContract(
                             name="postpaid invoice batch execution",
                             role=OwnerRole.COMMAND_WRITER,
@@ -9883,10 +9966,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "Billing automation persists a running launch before work, "
-                            "commits canonical invoice-owner results, and records the "
-                            "terminal run state. This is a durable resumable workflow, "
-                            "not one database transaction."
+                            "The recurring-charge preview is read-only in the caller's "
+                            "session. Batch execution persists a running launch before "
+                            "work, commits canonical invoice-owner results, and records "
+                            "the terminal run state. This is a durable resumable "
+                            "workflow, not one database transaction."
                         ),
                         locking=(
                             "Invoice and subscription period idempotency keys prevent "
@@ -9913,8 +9997,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "financial.billing_automation.invalid_cycle",
                             "financial.billing_automation.invalid_date",
                             "financial.billing_automation.execution_failed",
+                            "financial.billing_automation.account_not_billable",
                             "financial.billing_automation.retry_ineligible",
                             "financial.billing_automation.audit_projection_failed",
+                            "financial.billing_automation.missing_price",
+                            "financial.billing_automation.mode_not_postpaid",
+                            "financial.billing_automation.service_ended",
+                            "financial.billing_automation.subscription_not_billable",
+                            "financial.billing_automation.subscription_not_found",
+                            "financial.billing_automation.zero_amount",
                         ),
                         mapping_owner=(
                             "scheduled billing and administrative batch adapters"

@@ -111,7 +111,10 @@ def _effective_tax_rate(
             "Contracted tax treatment code has no active tax rate.",
             tax_treatment_code=code,
         )
-    return code, Decimal(rate.rate)
+    # TaxRate.rate is stored as a percentage throughout the existing invoice
+    # contract (7.5 means 7.5%, not a 7.5x multiplier). Keep the percentage at
+    # the persistence boundary and normalize it once for target arithmetic.
+    return code, Decimal(rate.rate) / Decimal("100")
 
 
 def _net_for_period(
