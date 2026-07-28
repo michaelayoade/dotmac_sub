@@ -46,6 +46,9 @@ MANAGED_TARGETS = {
     },
     Path("app/tasks/tr069.py"): {
         "wait_for_ont_bootstrap": "app.tasks.tr069.wait_for_ont_bootstrap",
+        "execute_network_operation_job": (
+            "app.tasks.tr069.execute_network_operation_job"
+        ),
     },
     Path("app/tasks/ont_firmware.py"): {
         "apply_huawei_ont_firmware": (

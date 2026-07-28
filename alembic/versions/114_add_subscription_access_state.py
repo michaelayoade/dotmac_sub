@@ -1,7 +1,7 @@
 """Add access_state column to subscriptions.
 
 Phase 2 of the RADIUS access-state refactor.
-See docs/radius_state_refactor/phase0_state_model.md.
+See docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
 
 The column is nullable so existing rows are unaffected. Backfill is
 deferred to phase 5. Nothing in app code reads it yet (phase 3 starts

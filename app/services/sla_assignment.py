@@ -21,6 +21,7 @@ from app.models.ticket_workflow import (
 )
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,22 @@ SLA_APPLICABLE_STATUSES = frozenset(
         TicketStatus.site_under_construction.value,
     }
 )
+
+
+class TicketSlaClockError(DomainError, ValueError):
+    """Stable rejection from the support ticket SLA clock owner."""
+
+
+def _error(
+    suffix: str,
+    message: str,
+    **details: object,
+) -> TicketSlaClockError:
+    return TicketSlaClockError(
+        code=f"support.ticket_sla_clock.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -163,6 +180,39 @@ def create_sla_clock_for_ticket(db: Session, ticket: Ticket) -> SlaClock | None:
         due_at=due_at,
     )
     db.add(clock)
+    db.flush()
+    # The breach deadline is a durable per-clock timer staged atomically
+    # with the clock (ADR 0007 §7); its fired trigger drives the receipted
+    # breach consumer. A paused, completed, or already-breached clock makes
+    # a stale firing a state-guarded no-op.
+    from app.services.owner_commands import CommandContext, owner_command_active
+    from app.services.runtime_durable_timers import (
+        ScheduleTimerCommand,
+        schedule_timer,
+    )
+
+    if not owner_command_active(db):
+        # Direct participant callers (tests, migrations) create the clock
+        # without the owning ticket command; the timer is staged only where
+        # the transition owner can commit it atomically.
+        return clock
+    schedule_timer(
+        db,
+        ScheduleTimerCommand(
+            owner="support.ticket_lifecycle",
+            entity_kind="sla_clock",
+            entity_id=clock.id,
+            purpose="sla_breach_due",
+            due_at=due_at,
+            output_event_type="support.ticket_sla_breach_due",
+        ),
+        context=CommandContext.system(
+            actor="support.ticket_sla_clock",
+            scope=str(clock.id),
+            reason="ticket SLA breach deadline",
+            idempotency_key=f"sla-breach:{clock.id}:{due_at.isoformat()}",
+        ),
+    )
     return clock
 
 
@@ -284,7 +334,14 @@ def update_sla_clocks_for_status_change(
 def check_sla_breaches(db: Session, ticket_id) -> list[SlaClock]:
     """Check for SLA breaches on a ticket's running clocks."""
     now = datetime.now(UTC)
-    ticket = db.get(Ticket, coerce_uuid(str(ticket_id)))
+    normalized_ticket_id = coerce_uuid(str(ticket_id))
+    if normalized_ticket_id is None:
+        raise _error(
+            "invalid_ticket_id",
+            "A valid ticket identifier is required for SLA breach evaluation.",
+            ticket_id=str(ticket_id),
+        )
+    ticket = db.get(Ticket, normalized_ticket_id)
     if not ticket or str(ticket.status or "") not in SLA_APPLICABLE_STATUSES:
         return []
     clocks = (

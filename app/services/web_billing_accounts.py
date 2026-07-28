@@ -3,25 +3,42 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, not_, or_
 
 from app.models.billing import Invoice, InvoiceStatus
+from app.models.catalog import BillingMode
 from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
     SubscriberStatus,
     UserType,
 )
+from app.schemas.status_presentation import StatusPresentation
 from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
 from app.services import display_format
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
-from app.services.status_presentation import invoice_status_presentation
+from app.services.billing_profile import resolve_billing_profile
+from app.services.customer_financial_position import (
+    get_customer_billing_summary,
+    prepaid_available_balance,
+)
+from app.services.domain_errors import DomainError
+from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
+from app.services.status_presentation import (
+    account_status_presentation,
+    invoice_status_presentation,
+)
+from app.services.ui_contracts import StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +47,21 @@ _OPEN_BALANCE_INVOICE_STATUSES = (
     InvoiceStatus.partially_paid,
     InvoiceStatus.overdue,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class BillingAccountOverview:
+    """First-viewport billing facts without collapsing unlike financial states."""
+
+    status: StatusPresentation
+    billing_mode: StateValue
+    billing_mode_reason: str
+    outstanding_receivables: StateValue
+    overdue_receivables: StateValue
+    prepaid_funding: StateValue
+    prepaid_funding_reason: str
+    outstanding_url: str
+    overdue_url: str
 
 
 def _default_currency(db) -> str:
@@ -247,7 +279,6 @@ def create_account_from_form(
     reseller_id: str | None,
     tax_rate_id: str | None,
     account_number: str | None,
-    status: str | None,
     notes: str | None,
 ):
     resolved_subscriber_id = subscriber_id
@@ -269,20 +300,12 @@ def create_account_from_form(
         notes=notes.strip() if notes else None,
     )
     account = subscriber_service.accounts.create(db, payload)
-    if tax_rate_id or status:
-        resolved_status: SubscriberStatus | None = None
-        if status:
-            try:
-                resolved_status = SubscriberStatus(status)
-            except ValueError as exc:
-                allowed = ", ".join(s.value for s in SubscriberStatus)
-                raise ValueError(f"Invalid status. Allowed: {allowed}") from exc
+    if tax_rate_id:
         subscriber_service.subscribers.update(
             db=db,
             subscriber_id=str(account.id),
             payload=SubscriberUpdate(
                 tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
-                status=resolved_status,
             ),
         )
     return account, resolved_subscriber_id
@@ -296,7 +319,6 @@ def create_account_from_form_with_metadata(
     reseller_id: str | None,
     tax_rate_id: str | None,
     account_number: str | None,
-    status: str | None,
     notes: str | None,
 ):
     account, resolved_subscriber_id = create_account_from_form(
@@ -306,7 +328,6 @@ def create_account_from_form_with_metadata(
         reseller_id=reseller_id,
         tax_rate_id=tax_rate_id,
         account_number=account_number,
-        status=status,
         notes=notes,
     )
     metadata = {
@@ -327,7 +348,6 @@ def create_account_from_form_web(
     reseller_id: str | None,
     tax_rate_id: str | None,
     account_number: str | None,
-    status: str | None,
     notes: str | None,
 ):
     account, selected_subscriber_id, metadata_payload = (
@@ -338,7 +358,6 @@ def create_account_from_form_web(
             reseller_id=reseller_id,
             tax_rate_id=tax_rate_id,
             account_number=account_number,
-            status=status,
             notes=notes,
         )
     )
@@ -361,17 +380,8 @@ def update_account_from_form(
     reseller_id: str | None,
     tax_rate_id: str | None,
     account_number: str | None,
-    status: str | None,
     notes: str | None,
 ):
-    resolved_status: SubscriberStatus | None = None
-    if status:
-        try:
-            resolved_status = SubscriberStatus(status)
-        except ValueError as exc:
-            allowed = ", ".join(s.value for s in SubscriberStatus)
-            raise ValueError(f"Invalid status. Allowed: {allowed}") from exc
-
     return subscriber_service.subscribers.update(
         db=db,
         subscriber_id=account_id,
@@ -379,7 +389,6 @@ def update_account_from_form(
             reseller_id=UUID(reseller_id) if reseller_id else None,
             tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
             account_number=account_number.strip() if account_number else None,
-            status=resolved_status,
             notes=notes.strip() if notes else None,
         ),
     )
@@ -392,7 +401,6 @@ def update_account_from_form_with_metadata(
     reseller_id: str | None,
     tax_rate_id: str | None,
     account_number: str | None,
-    status: str | None,
     notes: str | None,
 ):
     before = subscriber_service.accounts.get(db, account_id)
@@ -402,7 +410,6 @@ def update_account_from_form_with_metadata(
         reseller_id=reseller_id,
         tax_rate_id=tax_rate_id,
         account_number=account_number,
-        status=status,
         notes=notes,
     )
     after = subscriber_service.accounts.get(db, account_id)
@@ -419,7 +426,6 @@ def update_account_from_form_web(
     reseller_id: str | None,
     tax_rate_id: str | None,
     account_number: str | None,
-    status: str | None,
     notes: str | None,
 ):
     account, metadata_payload = update_account_from_form_with_metadata(
@@ -428,7 +434,6 @@ def update_account_from_form_web(
         reseller_id=reseller_id,
         tax_rate_id=tax_rate_id,
         account_number=account_number,
-        status=status,
         notes=notes,
     )
     log_audit_event(
@@ -452,12 +457,82 @@ def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:
         is_active=None,
         order_by="created_at",
         order_dir="desc",
-        limit=50,
+        limit=10,
         offset=0,
     )
     default_currency = _default_currency(db)
+    billing_summary = get_customer_billing_summary(
+        db,
+        account.id,
+        currency=default_currency,
+    )
+    profile = resolve_billing_profile(db, account)
+    if profile.effective_mode is None:
+        billing_mode = StateValue.unknown()
+    else:
+        billing_mode = StateValue.present(
+            profile.effective_mode.value.replace("_", " ").title()
+        )
+
+    funding_reason = "Not applicable to a postpaid account."
+    if profile.effective_mode == BillingMode.prepaid:
+        try:
+            funding_currency = resolve_prepaid_enforcement_currency(db)
+            funding = StateValue.present(
+                display_format.format_currency_amount(
+                    prepaid_available_balance(
+                        db,
+                        account.id,
+                        currency=funding_currency,
+                    ),
+                    funding_currency,
+                )
+            )
+            funding_reason = (
+                "Reviewed opening position plus canonical native events in the "
+                "enforcement currency."
+            )
+        except (DomainError, PrepaidFundingBaselineMissingError, ValueError) as exc:
+            logger.warning(
+                "Prepaid funding unavailable for billing account %s: %s",
+                account.id,
+                exc,
+            )
+            funding = StateValue.unavailable()
+            funding_reason = "Authoritative prepaid funding evidence is unavailable."
+    elif profile.effective_mode == BillingMode.postpaid:
+        funding = StateValue.not_applicable()
+    else:
+        funding = StateValue.unknown()
+        funding_reason = "Billing mode is unresolved; funding cannot be classified."
+
+    profile_reason = (
+        profile.invalid_reason.value.replace("_", " ").capitalize()
+        if profile.invalid_reason
+        else f"Resolved from {profile.source.value.replace('_', ' ')}."
+    )
+    overview = BillingAccountOverview(
+        status=account_status_presentation(account.status, is_active=account.is_active),
+        billing_mode=billing_mode,
+        billing_mode_reason=profile_reason,
+        outstanding_receivables=StateValue.present(
+            display_format.format_currency_amount(
+                billing_summary.outstanding, billing_summary.currency
+            )
+        ),
+        overdue_receivables=StateValue.present(
+            display_format.format_currency_amount(
+                billing_summary.overdue, billing_summary.currency
+            )
+        ),
+        prepaid_funding=funding,
+        prepaid_funding_reason=funding_reason,
+        outstanding_url=f"/admin/billing/invoices?account_id={account.id}",
+        overdue_url=f"/admin/billing/invoices?account_id={account.id}",
+    )
     return {
         "account": account,
+        "account_overview": overview,
         "invoices": invoices,
         "invoice_status_presentations": {
             str(invoice.id): invoice_status_presentation(invoice.status)
@@ -465,3 +540,9 @@ def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:
         },
         "default_currency": default_currency,
     }
+
+
+def get_account_detail_identity(db, *, account_id: str):
+    """Return the canonical account identity for related lazy projections."""
+
+    return subscriber_service.accounts.get(db, account_id)

@@ -36,6 +36,7 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.service_extension import (
     ServiceExtension,
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -257,6 +258,36 @@ def test_subscriber_list_embeds_services_billing_and_session_state(
     assert row["billing"]["total_paid"] == 10000.0
     assert row["session_state"] == "online"
     assert row["last_seen"].endswith("Z")
+
+
+def test_latest_session_projection_returns_one_ranked_row_per_subscription(db_session):
+    subscriber = _subscriber(db_session)
+    subscription = _subscription(db_session, subscriber, _offer(db_session))
+    now = datetime.now(UTC)
+    for index in range(40):
+        db_session.add(
+            RadiusAccountingSession(
+                subscription_id=subscription.id,
+                session_id=f"historical-{index}",
+                status_type=AccountingStatus.stop,
+                session_start=now - timedelta(days=index + 1),
+                last_update_at=now - timedelta(days=index + 1),
+            )
+        )
+    newest = RadiusAccountingSession(
+        subscription_id=subscription.id,
+        session_id="newest",
+        status_type=AccountingStatus.interim,
+        session_start=now - timedelta(minutes=2),
+        last_update_at=now - timedelta(minutes=1),
+    )
+    db_session.add(newest)
+    db_session.commit()
+
+    result = crm_api.latest_session_by_subscriber(db_session, [subscriber.id])
+
+    assert len(result) == 1
+    assert result[subscriber.id].id == newest.id
 
 
 def test_subscriber_list_batches_payload_metadata(db_session, crm_auth):
@@ -580,6 +611,9 @@ def test_billing_risk_source_batches_page_aggregates(db_session, crm_auth):
     assert row["last_payment_date"] == "2026-06-20T00:00:00Z"
     assert row["blocked_date"] == "2026-06-19T00:00:00Z"
     assert row["service_plan"] == "Fiber 50"
+    # Primary-service monthly price exposed in bulk so omni reads MRR here
+    # instead of an N+1 per-subscriber GET /subscribers/{id}/services.
+    assert row["service_mrr"] == 15000.0
     assert len(statements) <= 20
 
 
@@ -617,6 +651,9 @@ def test_service_extension_endpoints_expose_compensation_for_crm(db_session, crm
             subscriber_id=subscriber.id,
             subscription_id=subscription.id,
             previous_next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+            grant_starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+            grant_ends_at=datetime(2026, 7, 3, tzinfo=UTC),
+            anchor_basis=ServiceExtensionAnchorBasis.legacy_previous_anchor,
             new_next_billing_at=datetime(2026, 7, 3, tzinfo=UTC),
         )
     )
@@ -653,6 +690,12 @@ def test_service_extension_endpoints_expose_compensation_for_crm(db_session, crm
     assert (
         detail_row["affected_customers"][0]["new_next_billing_at"]
         == "2026-07-03T00:00:00Z"
+    )
+    assert (
+        detail_row["affected_customers"][0]["grant_starts_at"] == "2026-07-01T00:00:00Z"
+    )
+    assert (
+        detail_row["affected_customers"][0]["anchor_basis"] == "legacy_previous_anchor"
     )
     assert subscriber_rows.status_code == 200
     assert (

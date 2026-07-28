@@ -1,0 +1,114 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Service Availability - Admin{% endblock %}
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/customers" class="hover:text-primary-600">Customers</a>
+            <span>/</span>
+            <a href="/admin/customers/{{ availability_subscriber_id }}" class="hover:text-primary-600">Customer</a>
+            <span class="text-slate-900 dark:text-white">Availability</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Service Availability</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">What this customer's service actually delivered, from the infrastructure serving them.</p>
+    </div>
+
+    {% if availability_message %}
+    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">{{ availability_message }}</div>
+    {% else %}
+
+    <div class="flex flex-wrap items-center gap-2">
+        {% for key in availability_periods %}
+        <a href="?period={{ key }}" class="rounded-lg border px-3 py-1.5 text-sm font-medium {% if key == availability_period %}border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/30 dark:text-primary-200{% else %}border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700{% endif %}">Last {{ key }}</a>
+        {% endfor %}
+    </div>
+
+    {% if not availability.has_infrastructure_coverage %}
+    <div class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-200">
+        <p class="font-semibold">No infrastructure availability for this customer.</p>
+        <p class="mt-1">Sub could not resolve the service path{% if availability.path_gap %} ({{ availability.path_gap }}){% endif %}, so the percentages below are not evidence. The ticket history is still shown.</p>
+    </div>
+    {% endif %}
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Infrastructure</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ availability.infrastructure_uptime_percent }}%</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ availability_humanize(availability.infrastructure_downtime_seconds) }} downtime</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Individual faults</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ availability.tickets|length }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ availability_humanize(availability.ticket_downtime_seconds) }} downtime</p>
+        </div>
+        <div class="rounded-2xl border border-slate-300 bg-slate-50 p-5 dark:border-slate-600 dark:bg-slate-900/40">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Effective</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ availability.effective_uptime_percent }}%</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ availability_humanize(availability.effective_downtime_seconds) }} total</p>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 p-5 dark:border-slate-700">
+            <h2 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Serving infrastructure</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Shared elements this customer sits behind. Overlapping outages count once, not once per element.</p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40"><tr>
+                    <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Element</th>
+                    <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Role</th>
+                    <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Downtime</th>
+                    <th class="px-5 py-3"></th>
+                </tr></thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for element in availability.serving_elements %}
+                    <tr>
+                        <td class="px-5 py-3 font-medium text-slate-900 dark:text-white">{{ element.label }}</td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{{ element.role }}</td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{{ availability_humanize(element.downtime_seconds) }}</td>
+                        <td class="px-5 py-3 text-right"><a href="{{ element.trend_url }}" class="text-primary-600 hover:underline">Trend</a></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="px-5 py-4 text-slate-500 dark:text-slate-400">No serving infrastructure resolved.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 p-5 dark:border-slate-700">
+            <h2 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Individual provider faults</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Last-mile faults raised as tickets, which count against this customer's availability on top of shared infrastructure.</p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40"><tr>
+                    <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Ticket</th>
+                    <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Opened</th>
+                    <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Resolved</th>
+                    <th class="px-5 py-3 text-left font-semibold text-slate-600 dark:text-slate-300">Downtime</th>
+                </tr></thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for ticket in availability.tickets %}
+                    <tr>
+                        <td class="px-5 py-3"><a href="{{ ticket.url }}" class="font-medium text-primary-600 hover:underline">{{ ticket.number or 'Ticket' }}</a><span class="ml-2 text-slate-600 dark:text-slate-300">{{ ticket.title }}</span></td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{{ ticket.opened_at.strftime('%d %b %Y') }}</td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{% if ticket.resolved_at %}{{ ticket.resolved_at.strftime('%d %b %Y') }}{% else %}<span class="text-amber-600 dark:text-amber-400">still open</span>{% endif %}</td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{{ availability_humanize(ticket.downtime_seconds) }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="px-5 py-4 text-slate-500 dark:text-slate-400">No provider-fault tickets in this period.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <p class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-400">
+        <span class="font-medium">Method.</span> Availability is measured from the infrastructure serving this customer (daily availability snapshots), combined worst-per-day so a shared outage counts once. Individual provider-fault tickets are added on top. The customer's own router/ONT being offline &mdash; power, unplugged, CPE fault &mdash; is <span class="font-medium">not</span> counted, so session gaps are excluded.
+    </p>
+    {% endif %}
+</div>
+{% endblock %}

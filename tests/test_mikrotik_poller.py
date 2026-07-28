@@ -1,5 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import app.poller.mikrotik_poller as mikrotik_poller
@@ -228,3 +229,21 @@ def test_sanitize_exc_names_blank_exceptions_and_redacts_password():
         _sanitize_exc(RuntimeError("failure =password=secret "))
         == "failure =password=<redacted> "
     )
+
+
+def test_persistently_unreachable_router_uses_bounded_long_backoff():
+    conn = MikroTikConnection(
+        device_id=uuid4(),
+        host="192.0.2.10",
+        username="admin",
+        password="secret",
+    )
+    conn._consecutive_failures = 20
+    conn._last_attempt = datetime.now(UTC) - timedelta(seconds=60)
+
+    assert conn.should_retry is False
+
+    conn._last_attempt = datetime.now(UTC) - timedelta(
+        seconds=mikrotik_poller.FAILURE_BACKOFF_MAX_SECONDS + 1
+    )
+    assert conn.should_retry is True

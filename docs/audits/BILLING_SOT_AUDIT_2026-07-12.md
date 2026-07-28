@@ -1,5 +1,9 @@
 # Billing domain — source-of-truth audit
 
+> Historical evidence only. Runtime enablement, readiness, coverage, funding,
+> enforcement, and operator instructions are superseded by
+> `docs/FINANCIAL_ACCESS_ENFORCEMENT.md` and ADR 0003.
+
 **Date:** 2026-07-12
 **Scope:** `financial_access` domain of `docs/SOT_RELATIONSHIP_MAP.md`, plus the billing
 projections into `dotmac_crm` and `dotmac_erp`.
@@ -506,6 +510,11 @@ This is the *same failure mode* as the `prepaid_monthly_invoicing_enabled` bug f
 
 `access.control_resolution` is likewise not a decision owner — it has four read-side callers
 and **zero** billing/dunning/prepaid/admin/payment callers.
+
+> Refactor closure (2026-07-20): the duplicate `access.control_resolution`
+> registry alias is removed. `financial.access_resolution` now owns the typed
+> billing, prepaid-funding, and RADIUS decision implementation; the historical
+> finding above is retained as cutover evidence.
 
 Meanwhile **four writers** actually reach the external RADIUS DB: `radius_population.populate()`
 (the resolver-based one, self-declared sole writer), `radius.py::_external_sync_users:1165`

@@ -154,24 +154,13 @@ class Tr069JobBase(BaseModel):
     error: str | None = None
 
 
-class Tr069JobCreate(Tr069JobBase):
-    pass
-
-
-class Tr069JobUpdate(BaseModel):
-    device_id: UUID | None = None
-    name: str | None = Field(default=None, min_length=1, max_length=160)
-    command: str | None = Field(default=None, min_length=1, max_length=160)
-    payload: dict | None = None
-    status: Tr069JobStatus | None = None
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    error: str | None = None
-
-
 class Tr069JobRead(Tr069JobBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    network_operation_id: UUID | None = None
+    external_task_ids: list[str] | None = None
+    submitted_at: datetime | None = None
+    last_observed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

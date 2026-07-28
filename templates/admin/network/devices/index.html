@@ -4,9 +4,7 @@
 {% block title %}Network Devices - Admin{% endblock %}
 
 {% block content %}
-{{ ambient_background("cyan", "blue") }}
-
-<div class="relative space-y-8">
+<div class="space-y-8">
     {# Page Header #}
     <div>
         <a href="/admin/network" class="inline-flex items-center gap-1 text-sm font-medium text-cyan-600 transition-colors hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300">
@@ -22,8 +20,7 @@
         title="Network Devices",
         subtitle="Manage core, OLT, ONT, and CPE devices across the network",
         icon=icon_server(),
-        color="cyan",
-        color2="blue",
+        color="accent",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Network Devices"}]
     ) %}
         {{ action_button("Add Device", "/admin/network/devices/create", icon_plus(), "primary", "cyan", "blue") }}
@@ -44,23 +41,20 @@
                     hx-get="{{ dt.kpi.cohort_url }}"
                     hx-target="#devices-content"
                     hx-select="#devices-content"
-                    :class="activeType === '{{ dt.value }}' ? 'bg-gradient-to-r from-{{ dt.color }}-500 to-{{ dt.color }}-600 text-white shadow-lg shadow-{{ dt.color }}-500/25' : 'text-slate-600 hover:bg-{{ dt.color }}-50 dark:text-slate-300 dark:hover:bg-{{ dt.color }}-900/20'"
-                    class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all">
+                    :class="activeType === '{{ dt.value }}' ? 'bg-accent-600 text-white' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
+                    class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors">
                 {{ dt.icon|safe }}
                 {{ dt.label }}
-                <span :class="activeType === '{{ dt.value }}' ? 'bg-white/20 text-white' : 'bg-{{ dt.color }}-100 text-{{ dt.color }}-700 dark:bg-{{ dt.color }}-900/30 dark:text-{{ dt.color }}-400'" class="rounded-lg px-2 py-0.5 text-xs font-semibold transition-colors">{{ dt.kpi.value.value if dt.kpi.value.is_present else dt.kpi.value.placeholder }}</span>
+                <span :class="activeType === '{{ dt.value }}' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'" class="rounded-lg px-2 py-0.5 text-xs font-semibold transition-colors">{{ dt.kpi.value.value if dt.kpi.value.is_present else dt.kpi.value.placeholder }}</span>
             </button>
             {% endfor %}
         </div>
     </div>
 
     {# Status Summary #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 animate-fade-in-up" style="animation-delay: 100ms;">
-        {{ stats_card("Up", device_kpis.up.value.value if device_kpis.up.value.is_present else device_kpis.up.value.placeholder, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-current"></span></span>', tone=device_kpis.up.tone, href=device_kpis.up.cohort_url) }}
-        {{ stats_card("Down", device_kpis.down.value.value if device_kpis.down.value.is_present else device_kpis.down.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', tone=device_kpis.down.tone, href=device_kpis.down.cohort_url) }}
-        {{ stats_card("Degraded", device_kpis.degraded.value.value if device_kpis.degraded.value.is_present else device_kpis.degraded.value.placeholder, icon=icon_warning(), tone=device_kpis.degraded.tone, href=device_kpis.degraded.cohort_url) }}
-        {{ stats_card("Maintenance", device_kpis.maintenance.value.value if device_kpis.maintenance.value.is_present else device_kpis.maintenance.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8 8-4-4"/></svg>', tone=device_kpis.maintenance.tone, href=device_kpis.maintenance.cohort_url) }}
-        {{ stats_card("Unknown", device_kpis.unknown.value.value if device_kpis.unknown.value.is_present else device_kpis.unknown.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8h.01M11 12h1v4h1m8-4a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', tone=device_kpis.unknown.tone, href=device_kpis.unknown.cohort_url) }}
+    <div class="grid gap-4 sm:grid-cols-2 animate-fade-in-up" style="animation-delay: 100ms;">
+        {{ stats_card("Working", device_kpis.working.value.value if device_kpis.working.value.is_present else device_kpis.working.value.placeholder, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-current"></span></span>', tone=device_kpis.working.tone, href=device_kpis.working.cohort_url) }}
+        {{ stats_card("Not working", device_kpis.not_working.value.value if device_kpis.not_working.value.is_present else device_kpis.not_working.value.placeholder, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', tone=device_kpis.not_working.tone, href=device_kpis.not_working.cohort_url) }}
     </div>
 
     <div id="discovery-status"></div>
@@ -76,11 +70,8 @@
         <div class="w-full lg:w-44">
             {{ filter_select("status", [
                 {"value": "", "label": "All Status"},
-                {"value": "up", "label": "Up"},
-                {"value": "down", "label": "Down"},
-                {"value": "degraded", "label": "Degraded"},
-                {"value": "maintenance", "label": "Maintenance"},
-                {"value": "unknown", "label": "Unknown"}
+                {"value": "working", "label": "Working"},
+                {"value": "not_working", "label": "Not working"}
             ], status or '', "Status", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
         </div>
         <div class="w-full lg:w-44">
@@ -89,7 +80,8 @@
                 {"value": "huawei", "label": "Huawei"},
                 {"value": "zte", "label": "ZTE"},
                 {"value": "nokia", "label": "Nokia"},
-                {"value": "calix", "label": "Calix"}
+                {"value": "calix", "label": "Calix"},
+                {"value": "mikrotik", "label": "MikroTik"}
             ], vendor or '', "Vendor", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
         </div>
         {% if search or status or vendor %}
@@ -98,18 +90,12 @@
     </form>
     {% endcall %}
 
-    {% if devices_refreshed_at %}
-    <p class="mb-3 text-xs text-slate-400 dark:text-slate-500">
-        Operational status as of {{ devices_refreshed_at | app_datetime }} (last inventory refresh) — open a device for live status.
-    </p>
-    {% endif %}
-
     {# Devices Table #}
     <div id="devices-content" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">
         <div class="overflow-x-auto">
             <table class="min-w-full">
                 <thead>
-                    <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
+                    <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/40">
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Device</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Type</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
@@ -126,7 +112,7 @@
         </div>
 
         {% if pagination %}
-        <div class="border-t border-slate-200/60 bg-gradient-to-r from-slate-50/50 to-white px-4 py-3 dark:border-slate-700/60 dark:from-slate-800/50 dark:to-slate-800 sm:px-6">
+        <div class="border-t border-slate-200 px-4 py-3 dark:border-slate-800 sm:px-6">
             {% include "components/data/table_pagination.html" %}
         </div>
         {% endif %}

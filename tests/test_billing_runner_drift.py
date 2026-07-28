@@ -12,6 +12,7 @@ from app.services.billing_health import BillingHealthSnapshot, RunnerHeartbeat
 ENF = "app.tasks.collections.run_billing_enforcement"
 CYCLE = "app.tasks.billing.run_invoice_cycle"
 OVERDUE = "app.tasks.billing.mark_invoices_overdue"
+PAYSTACK_RECONCILIATION = "app.tasks.payment_reconciliation.reconcile_topups"
 
 
 def _task(db, task_name, *, enabled=True, interval=3600):
@@ -73,6 +74,38 @@ def test_enabled_never_succeeded_is_stale(db_session, monkeypatch):
     assert by[ENF].enabled is True and by[ENF].stale is True
 
 
+def test_payment_reconciliation_is_a_critical_money_runner(db_session, monkeypatch):
+    _task(
+        db_session,
+        PAYSTACK_RECONCILIATION,
+        enabled=True,
+        interval=1800,
+    )
+    monkeypatch.setattr(billing_health, "get_last_success", lambda _name: None)
+
+    by = {r.task_name: r for r in billing_health.runner_heartbeats(db_session)}
+
+    assert PAYSTACK_RECONCILIATION in job_heartbeat.MONEY_JOB_TASKS
+    assert by[PAYSTACK_RECONCILIATION].stale is True
+
+
+def test_payment_reconciliation_partial_result_is_not_rendered_as_ok():
+    runner = billing_health.RunnerHeartbeat(
+        task_name=PAYSTACK_RECONCILIATION,
+        enabled=True,
+        interval_seconds=1800,
+        last_success=None,
+        age_seconds=None,
+        stale=False,
+        last_result={
+            "status": "partial",
+            "detail": {"checked": 8, "errors": 3},
+        },
+    )
+
+    assert runner.last_result_summary == "partial — checked=8, errors=3"
+
+
 # ---- anomalies wiring (pure) ---------------------------------------------
 
 
@@ -99,6 +132,18 @@ def test_anomalies_for_new_signals():
     assert "runner_heartbeat_stale" in _snap(runners=(stale_rh,)).anomalies
     assert _snap(runners=(stale_rh,)).stale_runners == [ENF]
     assert "enforcement_covered_but_locked" in _snap(covered_but_locked=2).anomalies
+    assert (
+        "prepaid_coverage_unresolved"
+        in _snap(prepaid_coverage_unresolved_count=2).anomalies
+    )
+    assert (
+        "prepaid_coverage_repair_required"
+        in _snap(prepaid_coverage_repairable_count=1).anomalies
+    )
+    assert (
+        "prepaid_coverage_quarantined"
+        in _snap(prepaid_coverage_quarantined_count=1).anomalies
+    )
     assert _snap().anomalies == []  # healthy default
 
 

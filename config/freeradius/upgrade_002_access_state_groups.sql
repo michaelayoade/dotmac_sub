@@ -1,5 +1,5 @@
 -- Phase 1 of the RADIUS access-state refactor.
--- See docs/radius_state_refactor/phase0_state_model.md
+-- See docs/FINANCIAL_ACCESS_ENFORCEMENT.md
 --
 -- Provisions the three RADIUS groups the new state model maps to:
 --   dotmac-active     — normal customers (informational reply attrs)

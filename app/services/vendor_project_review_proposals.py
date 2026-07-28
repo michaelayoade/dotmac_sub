@@ -16,12 +16,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jose import JWTError
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.idempotency import IdempotencyKey
 from app.services import context_signing
-from app.services.vendor_portal_errors import VendorPortalOperationError
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.vendor_portal_operations import vendor_portal_operations
 
 _TOKEN_TYPE = "vendor_project_review_confirmation"
@@ -32,6 +36,28 @@ _SCOPES = {
     "verify": "vendor_project_verify",
     "rework": "vendor_project_rework",
 }
+
+_CONFIRM_COMMAND = OwnerCommandDefinition(
+    owner="operations.vendor_project_review_confirmation",
+    concern="staff project-review idempotency and replay result",
+    name="confirm_vendor_project_review",
+)
+
+
+class VendorProjectReviewConfirmationError(DomainError):
+    """Stable rejection from the staff project-review coordinator."""
+
+
+def _error(
+    suffix: str,
+    message: str,
+    **details: object,
+) -> VendorProjectReviewConfirmationError:
+    return VendorProjectReviewConfirmationError(
+        code=f"operations.vendor_project_review_confirmation.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 @dataclass(frozen=True)
@@ -54,6 +80,15 @@ class VendorProjectReviewResult:
     replayed: bool
 
 
+@dataclass(frozen=True)
+class ConfirmVendorProjectReviewCommand:
+    context: CommandContext
+    confirmation_token: str
+    project_id: str
+    action: str
+    actor_id: str
+
+
 def _fingerprint(state: dict[str, Any]) -> str:
     encoded = json.dumps(
         state, sort_keys=True, separators=(",", ":"), default=str
@@ -71,9 +106,7 @@ def issue_review(
 ) -> VendorProjectReviewProposal:
     normalized_actor = str(actor_id or "").strip()
     if not normalized_actor:
-        raise VendorPortalOperationError(
-            "actor_required", "Review actor is required", kind="invalid"
-        )
+        raise _error("actor_required", "Review actor is required.")
     preview = vendor_portal_operations.preview_staff_project_lifecycle(
         db, project_id, action=action, reason=reason
     )
@@ -109,15 +142,13 @@ def issue_review(
 def _decode(db: Session, token: str) -> dict[str, Any]:
     normalized = str(token or "").strip()
     if not normalized or len(normalized) > 131_072:
-        raise VendorPortalOperationError(
-            "invalid_confirmation", "Confirmation proposal is invalid", kind="invalid"
-        )
+        raise _error("invalid_proposal", "Confirmation proposal is invalid.")
     try:
         claims = context_signing.verify_context_token(db, normalized)
     except JWTError as exc:
-        raise VendorPortalOperationError(
-            "expired_confirmation",
-            "Confirmation proposal is invalid or expired; preview again",
+        raise _error(
+            "expired_proposal",
+            "Confirmation proposal is invalid or expired; preview again.",
         ) from exc
     if (
         claims.get("typ") != _TOKEN_TYPE
@@ -125,13 +156,11 @@ def _decode(db: Session, token: str) -> dict[str, Any]:
         or claims.get("ver") != _TOKEN_VERSION
         or claims.get("action") not in _SCOPES
     ):
-        raise VendorPortalOperationError(
-            "invalid_confirmation", "Confirmation proposal is invalid", kind="invalid"
-        )
+        raise _error("invalid_proposal", "Confirmation proposal is invalid.")
     return claims
 
 
-def _reserve(db: Session, *, scope: str, key: str) -> IdempotencyKey:
+def _locked_replay(db: Session, *, scope: str, key: str) -> IdempotencyKey | None:
     existing = (
         db.query(IdempotencyKey)
         .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
@@ -141,93 +170,96 @@ def _reserve(db: Session, *, scope: str, key: str) -> IdempotencyKey:
     if existing is not None:
         if existing.ref_id:
             return existing
-        raise VendorPortalOperationError(
-            "confirmation_in_progress", "This confirmation is already running"
+        raise _error(
+            "confirmation_in_progress",
+            "This confirmation is already running.",
         )
-    reservation = IdempotencyKey(scope=scope, key=key)
-    db.add(reservation)
-    try:
-        db.flush()
-    except IntegrityError:
-        db.rollback()
-        replay = (
-            db.query(IdempotencyKey)
-            .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
-            .one_or_none()
-        )
-        if replay is not None and replay.ref_id:
-            return replay
-        raise VendorPortalOperationError(
-            "confirmation_in_progress", "This confirmation is already running"
-        ) from None
-    return reservation
+    return None
 
 
 def confirm_review(
     db: Session,
-    *,
-    confirmation_token: str,
-    project_id: str,
-    action: str,
-    actor_id: str,
+    command: ConfirmVendorProjectReviewCommand,
 ) -> VendorProjectReviewResult:
-    claims = _decode(db, confirmation_token)
-    if (
-        str(claims.get("project_id") or "") != str(project_id)
-        or str(claims.get("action") or "") != str(action)
-        or str(claims.get("actor_id") or "") != str(actor_id)
-    ):
-        raise VendorPortalOperationError(
-            "confirmation_context_mismatch",
-            "Confirmation proposal belongs to another review context",
-            kind="forbidden",
+    """Confirm one staff project decision on a typed root transaction."""
+
+    def operation() -> VendorProjectReviewResult:
+        claims = _decode(db, command.confirmation_token)
+        if (
+            str(claims.get("project_id") or "") != str(command.project_id)
+            or str(claims.get("action") or "") != str(command.action)
+            or str(claims.get("actor_id") or "") != str(command.actor_id)
+        ):
+            raise _error(
+                "proposal_context_mismatch",
+                "Confirmation proposal belongs to another review context.",
+            )
+        key = str(claims.get("jti") or "").strip()
+        if not key:
+            raise _error("invalid_proposal", "Confirmation proposal is invalid.")
+        scope = _SCOPES[command.action]
+        prior = (
+            db.query(IdempotencyKey)
+            .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
+            .one_or_none()
         )
-    key = str(claims.get("jti") or "").strip()
-    if not key:
-        raise VendorPortalOperationError(
-            "invalid_confirmation", "Confirmation proposal is invalid", kind="invalid"
-        )
-    scope = _SCOPES[action]
-    reservation = _reserve(db, scope=scope, key=key)
-    if reservation.ref_id:
-        return VendorProjectReviewResult(
-            project_id=str(project_id),
-            action=action,
-            lifecycle_event_id=reservation.ref_id,
-            replayed=True,
-        )
-    try:
+        if prior is not None and prior.ref_id:
+            return VendorProjectReviewResult(
+                project_id=str(command.project_id),
+                action=command.action,
+                lifecycle_event_id=prior.ref_id,
+                replayed=True,
+            )
         preview = vendor_portal_operations.preview_staff_project_lifecycle(
             db,
-            project_id,
-            action=action,
+            command.project_id,
+            action=command.action,
             reason=claims.get("reason"),
             for_update=True,
         )
+        replay = _locked_replay(db, scope=scope, key=key)
+        if replay is not None:
+            return VendorProjectReviewResult(
+                project_id=str(command.project_id),
+                action=command.action,
+                lifecycle_event_id=str(replay.ref_id),
+                replayed=True,
+            )
         if not hmac.compare_digest(
             str(claims.get("state_fingerprint") or ""),
             _fingerprint(preview["state"]),
         ):
-            raise VendorPortalOperationError(
-                "stale_confirmation",
-                "Project data changed after preview; review it again",
+            raise _error(
+                "stale_proposal",
+                "Project data changed after preview; review it again.",
             )
+        reservation = IdempotencyKey(scope=scope, key=key)
+        db.add(reservation)
+        db.flush()
         result = vendor_portal_operations.transition_staff_project(
             db,
-            project_id,
-            action=action,
-            actor_id=actor_id,
+            command.project_id,
+            action=command.action,
+            actor_id=command.actor_id,
             reason=claims.get("reason"),
-            commit=False,
         )
-        reservation.ref_id = str(result["lifecycle_event_id"])
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    return VendorProjectReviewResult(
-        project_id=str(project_id),
-        action=action,
-        lifecycle_event_id=reservation.ref_id,
-        replayed=False,
+        result_id = str(result.get("lifecycle_event_id") or "")
+        if not result_id:
+            raise _error(
+                "missing_result_evidence",
+                "Project review completed without stable result evidence.",
+            )
+        reservation.ref_id = result_id
+        return VendorProjectReviewResult(
+            project_id=str(command.project_id),
+            action=command.action,
+            lifecycle_event_id=result_id,
+            replayed=False,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_CONFIRM_COMMAND,
+        context=command.context,
+        operation=operation,
     )

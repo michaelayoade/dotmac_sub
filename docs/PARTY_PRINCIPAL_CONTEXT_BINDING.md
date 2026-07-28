@@ -6,9 +6,11 @@ runtime authentication/authorization cutover.
 ## Decision
 
 `party.registry` owns the link from a security or compatibility record to its
-canonical identity and organization context. `auth.rbac` and
-`auth.permission_gate` continue to own permissions. Credential, session, MFA,
-token, and login services continue to own authentication state.
+canonical identity and organization context. `auth.rbac_catalog` owns role,
+permission, and role-policy catalogs; `auth.subscriber_assignments` owns
+subscriber grants; and `auth.permission_gate` owns request authorization.
+Credential, session, MFA, token, and login services continue to own
+authentication state.
 
 The layers are deliberately separate:
 
@@ -55,6 +57,13 @@ It is idempotent only for the exact target, preserves original evidence, and
 refuses duplicate principals and repoints. It does not activate the user,
 create credentials, or assign a staff/agent Party role, RBAC role, or direct
 permission.
+
+The explicit local-admin bootstrap is the one seeding path that also creates a
+Person Party: `scripts.seed.seed_admin` creates a fresh Person Party for an
+unbound seeded administrator and delegates the reviewed binding to
+`bind_system_user_principal` with operator-bootstrap provenance. It never
+matches an existing Party by name or email. Existing, conflicting bindings
+remain fail-closed.
 
 ### ResellerUser
 

@@ -12,10 +12,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app.api.crm_webhooks import receive_crm_chat_event, receive_crm_work_order_event
+from app.api.crm_webhooks import receive_crm_chat_event
 from app.models.integration_platform import IntegrationInbox
 from app.models.subscriber import Subscriber
-from app.models.work_order import WorkOrder
 from app.services.integrations.inbox import InboxError
 from tests.integration_platform_helpers import enable_crm_inbound
 
@@ -111,55 +110,6 @@ def test_chat_redelivery_returns_stored_consequence_without_double_push(db_sessi
     assert first == replay == {"status": "ok", "event": "message.outbound"}
     assert send_push.call_count == 1
     assert db_session.query(IntegrationInbox).count() == 1
-
-
-def test_work_order_redelivery_applies_once(db_session):
-    from app.services import control_registry
-
-    control_registry.update_canonical_feature_controls(
-        db_session, payload={"crm.work_order_pull": True}
-    )
-    subscriber = _linked_subscriber(db_session)
-    body = {
-        "subscriber_id": str(subscriber.id),
-        "work_order_id": "wo-inbox-1",
-        "status": "scheduled",
-    }
-    request_id = str(uuid.uuid4())
-
-    first = _run(
-        receive_crm_work_order_event(
-            _request(body, "work_order.created", delivery_id=request_id), db_session
-        )
-    )
-    replay = _run(
-        receive_crm_work_order_event(
-            _request(body, "work_order.created", delivery_id=request_id), db_session
-        )
-    )
-
-    assert first == replay
-    assert (
-        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-inbox-1").count()
-        == 1
-    )
-    assert db_session.query(IntegrationInbox).count() == 1
-
-
-def test_distinct_provider_events_are_distinct_receipts(db_session):
-    first = _request(
-        {"subscriber_id": str(uuid.uuid4()), "work_order_id": "missing-1"},
-        "work_order.created",
-        delivery_id=str(uuid.uuid4()),
-    )
-    second = _request(
-        {"subscriber_id": str(uuid.uuid4()), "work_order_id": "missing-2"},
-        "work_order.created",
-        delivery_id=str(uuid.uuid4()),
-    )
-    _run(receive_crm_work_order_event(first, db_session))
-    _run(receive_crm_work_order_event(second, db_session))
-    assert db_session.query(IntegrationInbox).count() == 2
 
 
 def test_provider_identity_collision_quarantines_installation(

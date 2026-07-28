@@ -57,15 +57,10 @@
         {% endif %}
     </div>
 
-    {% if preview.prepaid_service_effect %}
+    {% if preview.status.value == 'succeeded' %}
     <div class="rounded-xl border border-violet-200 bg-violet-50 p-6 dark:border-violet-900/50 dark:bg-violet-900/20">
-        <h2 class="font-semibold text-violet-900 dark:text-violet-100">Prepaid service consequence</h2>
-        <p class="mt-2 text-sm text-violet-800 dark:text-violet-200">{{ preview.prepaid_service_effect.consequence | replace('_', ' ') | title }}: {{ preview.prepaid_service_effect.period_start.date() }} to {{ preview.prepaid_service_effect.period_end.date() }}.</p>
-        {% if preview.prepaid_service_effect.charge_amount > 0 %}
-        <p class="mt-2 text-sm text-violet-800 dark:text-violet-200">Exact ledger result: debit / invoice / {{ preview.currency }} {{ '{:,.2f}'.format(preview.prepaid_service_effect.charge_amount) }}</p>
-        {% else %}
-        <p class="mt-2 text-sm text-violet-800 dark:text-violet-200">No new debit; existing paid coverage advances the billing date.</p>
-        {% endif %}
+        <h2 class="font-semibold text-violet-900 dark:text-violet-100">Prepaid service review</h2>
+        <p class="mt-2 text-sm text-violet-800 dark:text-violet-200">After settlement, the prepaid-renewal owner will evaluate any due service from the confirmed account funding. Payment settlement does not create service debit or entitlement evidence directly.</p>
     </div>
     {% endif %}
 

@@ -29,6 +29,7 @@ from app.models.location_capture_prompt import LocationCapturePromptState
 from app.models.subscriber import Subscriber
 from app.services import control_registry
 from app.services import geocode_reconciler as reconciler
+from app.services import service_address as service_address_service
 from app.services import subscriber_data_completeness as completeness
 from app.services.common import coerce_uuid
 
@@ -271,8 +272,10 @@ def prompt_context(
             }
             for s in states
         ],
-        "claimed_state": subscriber.region or "",
-        "claimed_lga": subscriber.lga or "",
-        "claimed_postcode": subscriber.postal_code or "",
+        "claimed_state": service_address_service.address_parts(subscriber).region or "",
+        "claimed_lga": service_address_service.address_parts(subscriber).lga or "",
+        "claimed_postcode": (
+            service_address_service.address_parts(subscriber).postal_code or ""
+        ),
         "snooze_allowed": not ignore_snooze,
     }

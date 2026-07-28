@@ -1,10 +1,10 @@
 """Billing liveness / anomaly signals for monitoring (metrics + alerts).
 
 These are MONITORING checks — surfaced as Prometheus gauges and operator
-alerts. They are deliberately NOT enforcement gates: they never block a
-suspension (that is ``billing_enforcement_guards``). They answer "is the billing
-system producing correct, complete output?", not "is it safe to cut this
-customer now?".
+alerts. They are deliberately NOT fleet-wide enforcement gates. They answer
+"is the billing system producing correct, complete output?", not "should this
+specific customer be cut?". Canonical account facts, shields, and the financial
+access owner decide that consequence.
 
 Signals:
 * paid-with-balance — invoices marked ``paid`` that still carry a non-zero
@@ -19,6 +19,7 @@ Signals:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -38,9 +39,10 @@ from app.models.catalog import (
     Subscription,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.scheduler import ScheduledTask
 from app.models.subscriber import Subscriber
-from app.services import control_registry, settings_spec
+from app.services import settings_spec
 from app.services.access_resolution import (
     postpaid_billing_filters,
     prepaid_enforcement_filters,
@@ -51,7 +53,18 @@ from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUSES,
 )
 from app.services.customer_financial_position import prepaid_available_balances
-from app.services.job_heartbeat import get_last_result, get_last_success
+from app.services.job_heartbeat import (
+    PAYMENT_RECONCILIATION_TASK,
+    get_last_result,
+    get_last_success,
+)
+from app.services.prepaid_enforcement_planner import (
+    candidate_prepaid_funding_account_ids,
+)
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+    prepaid_funding_quarantined_account_ids,
+)
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
@@ -68,7 +81,10 @@ _CRITICAL_RUNNERS = (
     "app.tasks.collections.run_billing_enforcement",
     "app.tasks.billing.mark_invoices_overdue",
     "app.tasks.billing.check_billing_switch",
+    PAYMENT_RECONCILIATION_TASK,
 )
+
+logger = logging.getLogger(__name__)
 
 BILLING_HEALTH_OBSERVABILITY_DOMAIN = "billing_health"
 BILLING_HEALTH_SNAPSHOT_TASK = "app.tasks.billing.refresh_billing_health_snapshot"
@@ -129,6 +145,11 @@ class RunnerHeartbeat:
         if status == "error":
             msg = detail.get("error")
             return f"errored: {msg}" if msg else "errored"
+        if status == "partial":
+            if not detail:
+                return "partial"
+            counts = ", ".join(f"{k}={v}" for k, v in detail.items())
+            return f"partial — {counts}" if counts else "partial"
         if not detail:
             return "ok"
         counts = ", ".join(f"{k}={v}" for k, v in detail.items())
@@ -153,13 +174,20 @@ class BillingHealthSnapshot:
     # §6.1 billing-path coverage.
     unbilled_no_path: int = 0
     active_subs_on_terminal_account: int = 0
-    negative_prepaid_balance_count: int = 0
-    negative_prepaid_balance_total: Decimal = Decimal("0.00")
-    prepaid_balance_sweep_enabled: bool = False
-    negative_prepaid_with_sweep_disabled_count: int = 0
+    # None means "could not be measured" (a prepaid funding baseline is
+    # missing), which is deliberately distinct from a measured zero.
+    negative_prepaid_balance_count: int | None = 0
+    negative_prepaid_balance_total: Decimal | None = Decimal("0.00")
+    # Accounts the sweep excludes from funding enforcement, and which the two
+    # counts above therefore deliberately exclude too. A real measured number,
+    # never None: it is the reason exposure is measured over a smaller cohort.
+    negative_prepaid_funding_quarantined_count: int = 0
     billing_profile_mismatch_count: int = 0
     billing_profile_mixed_count: int = 0
     account_credit_invariant_count: int = 0
+    prepaid_coverage_unresolved_count: int = 0
+    prepaid_coverage_repairable_count: int = 0
+    prepaid_coverage_quarantined_count: int = 0
     scan_min_ratio: float = SCAN_MIN_RATIO
     payment_volume_min_ratio: float = PAYMENT_VOLUME_MIN_RATIO
     payment_baseline_min_daily: float = PAYMENT_BASELINE_MIN_DAILY
@@ -183,16 +211,24 @@ class BillingHealthSnapshot:
             out.append("enforcement_covered_but_locked")
         if self.unbilled_no_path > 0:
             out.append("active_subs_without_billing_path")
-        if self.negative_prepaid_balance_count > 0:
+        if self.negative_prepaid_balance_count is None:
+            out.append("negative_prepaid_exposure_unmeasurable")
+        elif self.negative_prepaid_balance_count > 0:
             out.append("negative_prepaid_balances")
-        if self.negative_prepaid_with_sweep_disabled_count > 0:
-            out.append("negative_prepaid_sweep_disabled")
+        if self.negative_prepaid_funding_quarantined_count > 0:
+            out.append("prepaid_funding_quarantined")
         if self.billing_profile_mismatch_count > 0:
             out.append("billing_profile_mismatch")
         if self.billing_profile_mixed_count > 0:
             out.append("billing_profile_mixed_modes")
         if self.account_credit_invariant_count > 0:
             out.append("account_credit_invariant_violations")
+        if self.prepaid_coverage_unresolved_count > 0:
+            out.append("prepaid_coverage_unresolved")
+        if self.prepaid_coverage_repairable_count > 0:
+            out.append("prepaid_coverage_repair_required")
+        if self.prepaid_coverage_quarantined_count > 0:
+            out.append("prepaid_coverage_quarantined")
         return out
 
 
@@ -221,24 +257,24 @@ def billing_health_observations(snapshot: BillingHealthSnapshot):  # noqa: ANN20
             snapshot.covered_but_locked,
         ),
         (
-            "negative_prepaid_balance_accounts",
+            "prepaid_coverage_unresolved",
             "all",
-            snapshot.negative_prepaid_balance_count,
+            snapshot.prepaid_coverage_unresolved_count,
         ),
         (
-            "negative_prepaid_balance_total",
+            "prepaid_coverage_repair_required",
             "all",
-            snapshot.negative_prepaid_balance_total,
+            snapshot.prepaid_coverage_repairable_count,
         ),
         (
-            "negative_prepaid_sweep_disabled_accounts",
+            "prepaid_coverage_quarantined",
             "all",
-            snapshot.negative_prepaid_with_sweep_disabled_count,
+            snapshot.prepaid_coverage_quarantined_count,
         ),
         (
-            "prepaid_balance_sweep_enabled",
+            "prepaid_funding_quarantined",
             "all",
-            1.0 if snapshot.prepaid_balance_sweep_enabled else 0.0,
+            snapshot.negative_prepaid_funding_quarantined_count,
         ),
         (
             "billing_profile_mismatch_accounts",
@@ -266,6 +302,24 @@ def billing_health_observations(snapshot: BillingHealthSnapshot):  # noqa: ANN20
             snapshot.active_subs_on_terminal_account,
         ),
     ]
+    # Omitted rather than zeroed when the funding baseline is missing: a false
+    # "0 accounts negative" would read as healthy.
+    if snapshot.negative_prepaid_balance_count is not None:
+        values.append(
+            (
+                "negative_prepaid_balance_accounts",
+                "all",
+                snapshot.negative_prepaid_balance_count,
+            )
+        )
+    if snapshot.negative_prepaid_balance_total is not None:
+        values.append(
+            (
+                "negative_prepaid_balance_total",
+                "all",
+                snapshot.negative_prepaid_balance_total,
+            )
+        )
     if snapshot.scan_ratio is not None:
         values.append(("invoice_scan_ratio", "all", snapshot.scan_ratio))
     if snapshot.payment_volume_ratio is not None:
@@ -483,54 +537,77 @@ def _default_currency(db: Session) -> str:
 
 
 def covered_but_locked(db: Session) -> int:
-    """§6.6 drift: accounts still under a billing lock (overdue/prepaid) whose
-    local ledger available balance is >= 0 — i.e. covered yet suspended
-    (wrongful-suspension drift). Mirrors get_available_balance for the default
-    currency: unallocated credit - unallocated debit - open invoice balance.
-    """
-    sql = text(
-        """
-        WITH locked AS (
-            SELECT DISTINCT s.subscriber_id AS acct
-            FROM enforcement_locks el
-            JOIN subscriptions s ON s.id = el.subscription_id
-            WHERE el.is_active AND el.reason IN ('overdue', 'prepaid')
-        )
-        SELECT count(*) FROM locked WHERE (
-            COALESCE((SELECT sum(le.amount) FROM ledger_entries le
-                WHERE le.account_id = acct AND le.invoice_id IS NULL
-                  AND le.entry_type = 'credit' AND le.is_active
-                  AND le.currency = :currency), 0)
-          - COALESCE((SELECT sum(le.amount) FROM ledger_entries le
-                WHERE le.account_id = acct AND le.invoice_id IS NULL
-                  AND le.entry_type = 'debit' AND le.is_active
-                  AND le.currency = :currency), 0)
-          - COALESCE((SELECT sum(i.balance_due) FROM invoices i
-                WHERE i.account_id = acct AND i.balance_due > 0
-                  AND i.status IN ('issued', 'partially_paid', 'overdue')
-                  AND i.currency = :currency), 0)
-        ) >= 0
-        """
+    """Accounts with an active prepaid lock on exactly covered service."""
+    from app.services.prepaid_service_coverage import (
+        PrepaidCoverageStatus,
+        resolve_prepaid_service_coverage,
     )
-    return int(db.execute(sql, {"currency": _default_currency(db)}).scalar() or 0)
+
+    subscriptions = list(
+        db.scalars(
+            select(Subscription)
+            .join(
+                EnforcementLock,
+                EnforcementLock.subscription_id == Subscription.id,
+            )
+            .where(
+                EnforcementLock.is_active.is_(True),
+                EnforcementLock.reason == EnforcementReason.prepaid,
+            )
+            .distinct()
+        ).all()
+    )
+    decisions = resolve_prepaid_service_coverage(db, subscriptions)
+    return len(
+        {
+            subscription.subscriber_id
+            for subscription in subscriptions
+            if decisions[subscription.id].status == PrepaidCoverageStatus.covered
+        }
+    )
 
 
-def _prepaid_monthly_enabled(db: Session) -> bool:
-    """Same resolution as billing_automation's invoice cycle."""
-    return control_registry.is_enabled(db, "billing.prepaid_monthly_invoicing")
+def prepaid_coverage_unresolved(db: Session) -> int:
+    """Count collectible services with a future anchor but no coverage evidence."""
+    from app.services.prepaid_service_coverage import (
+        PrepaidCoverageStatus,
+        resolve_prepaid_service_coverage,
+    )
+
+    subscriptions = list(
+        db.scalars(
+            select(Subscription).where(
+                Subscription.billing_mode == BillingMode.prepaid,
+                Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            )
+        ).all()
+    )
+    decisions = resolve_prepaid_service_coverage(db, subscriptions)
+    return sum(
+        1
+        for decision in decisions.values()
+        if decision.status == PrepaidCoverageStatus.unresolved_projection
+    )
+
+
+def prepaid_coverage_reconciliation_counts(db: Session) -> tuple[int, int]:
+    """Count exact backfills and evidence gaps blocking adverse enforcement."""
+    from app.services.prepaid_coverage_reconciliation import (
+        preview_prepaid_coverage_reconciliation,
+    )
+
+    preview = preview_prepaid_coverage_reconciliation(db)
+    return preview.repairable_count, preview.quarantined_count
 
 
 def billing_path_coverage(db: Session) -> tuple[int, int]:
     """§6.1: (unbilled_no_path, active_subs_on_terminal_account).
 
     Mirrors run_invoice_cycle's invoice-row selection. A billable-account active
-    sub is covered iff it is postpaid, or (prepaid_monthly enabled AND its offer
-    is a monthly cycle). Prepaid coverage means draft-until-funded accounting
-    rows, not AR/dunning. ``unbilled_no_path`` is the scalable billing-visibility
-    gap — a prepaid cohort that no enabled path records (flag off, or a
-    non-monthly prepaid offer). ``active_subs_on_terminal_account`` is an active
-    sub whose account is non-billable, so the cycle never touches it (lifecycle
-    drift, low volume).
+    Every active prepaid subscription has the canonical renewal owner; postpaid
+    subscriptions use invoice generation. ``active_subs_on_terminal_account``
+    is an active sub whose account is non-billable, so the cycle never touches
+    it (lifecycle drift, low volume).
     """
     # Static SQL — the status set is a fixed constant from billing_statuses,
     # never user input, so this is not an injection surface.
@@ -549,46 +626,26 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
         or 0
     )
 
-    if _prepaid_monthly_enabled(db):
-        no_path_sql = """
-            SELECT count(*) FROM subscriptions sub
-            JOIN subscribers s ON s.id = sub.subscriber_id
-            JOIN catalog_offers o ON o.id = sub.offer_id
-            WHERE sub.status = 'active'
-              AND s.status IN :billable_statuses
-              AND sub.billing_mode = 'prepaid' AND o.billing_cycle <> 'monthly'
-        """
-    else:
-        no_path_sql = """
-            SELECT count(*) FROM subscriptions sub
-            JOIN subscribers s ON s.id = sub.subscriber_id
-            WHERE sub.status = 'active'
-              AND s.status IN :billable_statuses
-              AND sub.billing_mode = 'prepaid'
-        """
-    no_path = (
-        db.execute(
-            text(no_path_sql).bindparams(
-                bindparam("billable_statuses", expanding=True)
-            ),
-            {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
-        ).scalar()
-        or 0
-    )
-    return int(no_path), int(terminal)
+    return 0, int(terminal)
 
 
-def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, int]:
-    """Negative prepaid wallet exposure using the same balance as enforcement.
+def negative_prepaid_balance_exposure(
+    db: Session,
+) -> tuple[int | None, Decimal | None, int]:
+    """Negative prepaid wallet exposure over the cohort enforcement acts on.
 
-    Returns ``(negative_count, negative_total_abs, sweep_enabled,
-    negative_count_if_sweep_disabled)``. This is a monitoring signal only; the
-    prepaid sweep owns any warning/suspension action after an operator enables
-    it.
+    Returns ``(negative count, absolute total, funding-quarantined count)``.
+
+    This is a monitoring signal only; the permanent prepaid sweep owns warning,
+    suspension, and restoration consequences. It must therefore measure the
+    same cohort the sweep acts on: the sweep excludes funding-quarantined
+    accounts BEFORE resolving any balance, so measuring them here would report
+    exposure for accounts that can never be enforced -- and would hit the
+    fail-closed resolver on accounts the sweep deliberately never asks about.
+    Quarantined accounts are reported as their own count instead of being
+    silently folded into (or silently dropped from) the exposure figure.
     """
-    from app.services import control_registry
-
-    account_ids = (
+    account_ids = set(
         db.execute(
             select(Subscriber.id)
             .join(Subscription, Subscription.subscriber_id == Subscriber.id)
@@ -598,18 +655,43 @@ def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, 
         .scalars()
         .all()
     )
+    # Same two owning helpers, same order, as collections.prepaid_balance_sweep:
+    # one cohort definition, not two.
+    quarantined_ids = prepaid_funding_quarantined_account_ids(
+        db, account_ids & candidate_prepaid_funding_account_ids(db)
+    )
+    measurable_ids = account_ids - quarantined_ids
     count = 0
     total = Decimal("0.00")
-    balances = prepaid_available_balances(db, account_ids)
-    for account_id in account_ids:
+    try:
+        balances = prepaid_available_balances(db, measurable_ids)
+    except PrepaidFundingBaselineMissingError:
+        # The balance resolver is fail-closed on purpose: enforcement must never
+        # act on a balance it cannot verify. But this function is monitoring
+        # only, and it shares that resolver -- so a single un-baselined account
+        # used to abort the whole billing-health snapshot, publishing nothing
+        # and taking EVERY billing gauge off the dashboard, including the ones
+        # that would reveal an invoicing or payment-intake failure.
+        #
+        # Degrade this one signal instead. Returning None marks it unavailable
+        # so the gauge is omitted rather than reported as a false zero, and the
+        # rest of the snapshot still publishes.
+        # Retained as a backstop. Quarantine filtering above removes the known
+        # un-baselined cohort, so reaching here means an account outside that
+        # cohort cannot be resolved -- unexpected, and worth an anomaly, but
+        # still never a reason to take the whole snapshot down.
+        logger.exception(
+            "billing_negative_prepaid_exposure_unavailable: prepaid funding "
+            "baseline missing outside the quarantined cohort; reporting this "
+            "signal as unavailable and publishing the rest of the snapshot"
+        )
+        return None, None, len(quarantined_ids)
+    for account_id in measurable_ids:
         balance = balances[account_id]
         if balance < Decimal("0.00"):
             count += 1
             total += abs(balance)
-    sweep_enabled = control_registry.is_enabled(
-        db, "collections.prepaid_balance_enforcement"
-    )
-    return count, total, sweep_enabled, count if not sweep_enabled else 0
+    return count, total, len(quarantined_ids)
 
 
 def billing_profile_integrity(db: Session) -> tuple[int, int]:
@@ -659,14 +741,16 @@ def billing_health_snapshot(
     (
         negative_prepaid_count,
         negative_prepaid_total,
-        prepaid_sweep_enabled,
-        negative_prepaid_sweep_disabled,
+        negative_prepaid_quarantined,
     ) = negative_prepaid_balance_exposure(db)
     profile_mismatch_count, profile_mixed_count = billing_profile_integrity(db)
     from app.services.billing.account_credit import AccountCreditApplications
 
-    account_credit_invariant_count = len(
-        AccountCreditApplications.inspect_invariants(db)
+    account_credit_invariant_count = AccountCreditApplications.summarize_invariants(
+        db
+    ).total
+    coverage_repairable_count, coverage_quarantined_count = (
+        prepaid_coverage_reconciliation_counts(db)
     )
     return BillingHealthSnapshot(
         paid_with_balance_count=pwb_count,
@@ -680,12 +764,14 @@ def billing_health_snapshot(
         payment_volume_collapsed=collapsed,
         runners=tuple(runner_heartbeats(db, now=now)),
         covered_but_locked=covered_but_locked(db),
+        prepaid_coverage_unresolved_count=prepaid_coverage_unresolved(db),
+        prepaid_coverage_repairable_count=coverage_repairable_count,
+        prepaid_coverage_quarantined_count=coverage_quarantined_count,
         unbilled_no_path=no_path,
         active_subs_on_terminal_account=terminal,
         negative_prepaid_balance_count=negative_prepaid_count,
         negative_prepaid_balance_total=negative_prepaid_total,
-        prepaid_balance_sweep_enabled=prepaid_sweep_enabled,
-        negative_prepaid_with_sweep_disabled_count=negative_prepaid_sweep_disabled,
+        negative_prepaid_funding_quarantined_count=negative_prepaid_quarantined,
         billing_profile_mismatch_count=profile_mismatch_count,
         billing_profile_mixed_count=profile_mixed_count,
         account_credit_invariant_count=account_credit_invariant_count,

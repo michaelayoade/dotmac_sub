@@ -26,8 +26,8 @@ from app.services.billing._common import (
     _validate_payment_linkages,
     _validate_payment_provider,
 )
-from app.services.billing.adjustments import AccountAdjustments
 from app.services.billing.billing_accounts import BillingAccounts
+from app.services.billing.collection_accounts import CollectionAccounts
 from app.services.billing.consolidated_payments import (
     ConsolidatedCreditAllocations,
     ConsolidatedPaymentRefunds,
@@ -44,7 +44,6 @@ from app.services.billing.invoices import InvoiceLines, Invoices
 from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import (
     BankAccounts,
-    CollectionAccounts,
     PaymentAllocationReconciliationExceptions,
     PaymentAllocations,
     PaymentChannelAccounts,
@@ -54,10 +53,11 @@ from app.services.billing.payments import (
     Payments,
     Refunds,
 )
-from app.services.billing.providers import PaymentProviderEvents, PaymentProviders
+from app.services.billing.providers import PaymentProviders
 from app.services.billing.reporting import BillingReporting, billing_reporting
 from app.services.billing.runs import BillingRuns
 from app.services.billing.tax import TaxRates
+from app.services.payment_provider_events import PaymentProviderEvents
 
 # Singleton instances for service access
 invoices = Invoices()
@@ -88,7 +88,6 @@ consolidated_credit_allocations = ConsolidatedCreditAllocations()
 consolidated_payment_refunds = ConsolidatedPaymentRefunds()
 consolidated_payment_reversals = ConsolidatedPaymentReversals()
 consolidated_payment_return_reconciliations = ConsolidatedPaymentReturnReconciliations()
-account_adjustments = AccountAdjustments()
 
 __all__ = [
     # Classes
@@ -98,7 +97,6 @@ __all__ = [
     "ConsolidatedPaymentRefunds",
     "ConsolidatedPaymentReturnReconciliations",
     "ConsolidatedPaymentReversals",
-    "AccountAdjustments",
     "Invoices",
     "InvoiceLines",
     "CreditNotes",
@@ -147,7 +145,6 @@ __all__ = [
     "consolidated_payment_refunds",
     "consolidated_payment_return_reconciliations",
     "consolidated_payment_reversals",
-    "account_adjustments",
     "billing_reporting",
     # Helper functions (for billing_automation compatibility)
     "_validate_account",

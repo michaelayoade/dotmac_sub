@@ -25,9 +25,14 @@ Projection order is account override, active service (including collections stat
 - Campaigns own audience, sequence, content, and a canonical sender-key request.
   Email delivery owns sender-key resolution and SMTP configuration; campaigns
   never store relay credentials or override transport configuration.
-- Periodic campaign release is a separate cutover gate. The
-  `comms.campaign_processing_enabled` control defaults off so merging the
-  implementation cannot release dormant imported or scheduled campaigns.
+- `comms.campaign_processing_enabled` is an admission decision owned by
+  campaigns. When it is closed, callers cannot create a scheduled campaign or
+  move an existing campaign into `scheduled`. It never freezes a campaign or
+  sequence that was already admitted.
+- Periodic campaign and sequence tasks are permanent drainage. At migration
+  cutover, a missing or false admission decision moves existing `scheduled`
+  campaigns to explicit `paused` state with evidence; work already `sending`
+  continues toward a terminal outcome.
 
 The processing order is:
 
@@ -40,6 +45,19 @@ The processing order is:
 7. Deliver asynchronously and project provider outcomes.
 
 Disabled and canceled subscribers never receive customer communication. Their active reseller can still receive a transactional event concerning the subscriber. Marketing requires subscriber opt-in and is never sent to an unlinked contact without proven identity/consent.
+
+## Migration 411
+
+- Retires scheduler enablement controls for provisioning-compensation retry,
+  device-login projection, active-session reconciliation, FUP expiry cleanup,
+  and campaign drainage.
+- Makes those scheduled tasks permanent so durable work and derived security
+  state cannot freeze behind an operational toggle.
+- Converts the campaign processing setting to owner-level admission only.
+- Removes scheduler database settings for broker and result-backend URLs;
+  those remain explicit deployment transport configuration.
+- Treats an absent campaign-admission row as closed and pauses existing
+  scheduled campaigns before permanent drainage is enabled.
 
 ## Migration 277
 

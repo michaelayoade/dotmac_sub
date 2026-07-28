@@ -6,6 +6,7 @@ services, and surface a foreign account (service returns None) as 404.
 """
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -102,6 +103,79 @@ def test_account_detail_404_for_foreign_account(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         reseller_api.my_reseller_account(
             account_id=str(uuid.uuid4()), db=None, principal=_subscriber_principal()
+        )
+    assert exc.value.status_code == 404
+
+
+def test_service_change_quote_reuses_owner_after_managed_account_scope(monkeypatch):
+    principal = _subscriber_principal()
+    account_id = str(uuid.uuid4())
+    subscription_id = str(uuid.uuid4())
+    target_address_id = str(uuid.uuid4())
+    captured = {}
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "reseller_id_for_subscriber",
+        lambda db, sid: "reseller-1",
+    )
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "owned_account",
+        lambda db, reseller_id, requested_id: SimpleNamespace(id=account_id),
+    )
+
+    def fake_quote(db, customer, sub_id, offer_id, **kwargs):
+        captured.update(
+            customer=customer,
+            subscription_id=sub_id,
+            offer_id=offer_id,
+            target_service_address_id=kwargs.get("target_service_address_id"),
+        )
+        return {"delivery_mode": "field_migration"}
+
+    monkeypatch.setattr(
+        reseller_api.customer_changes, "get_plan_change_quote", fake_quote
+    )
+
+    result = reseller_api.reseller_service_change_quote(
+        account_id,
+        subscription_id,
+        offer_id="offer-1",
+        target_service_address_id=target_address_id,
+        db=None,
+        principal=principal,
+    )
+
+    assert result == {"delivery_mode": "field_migration"}
+    assert captured == {
+        "customer": {
+            "account_id": account_id,
+            "subscriber_id": principal["subscriber_id"],
+        },
+        "subscription_id": subscription_id,
+        "offer_id": "offer-1",
+        "target_service_address_id": target_address_id,
+    }
+
+
+def test_service_change_quote_rejects_foreign_managed_account(monkeypatch):
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "reseller_id_for_subscriber",
+        lambda db, sid: "reseller-1",
+    )
+    monkeypatch.setattr(
+        reseller_api.reseller_portal,
+        "owned_account",
+        lambda db, reseller_id, account_id: None,
+    )
+    with pytest.raises(HTTPException) as exc:
+        reseller_api.reseller_service_change_quote(
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            offer_id="offer-1",
+            db=None,
+            principal=_subscriber_principal(),
         )
     assert exc.value.status_code == 404
 

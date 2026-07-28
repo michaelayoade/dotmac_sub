@@ -112,6 +112,8 @@ class RolePermissionRead(RolePermissionBase):
 class SubscriberRoleBase(BaseModel):
     subscriber_id: UUID
     role_id: UUID
+    scope_type: str = Field(default="", max_length=20)
+    scope_id: str = Field(default="", max_length=64)
 
 
 class SubscriberRoleCreate(SubscriberRoleBase):
@@ -121,6 +123,8 @@ class SubscriberRoleCreate(SubscriberRoleBase):
 class SubscriberRoleUpdate(BaseModel):
     subscriber_id: UUID | None = None
     role_id: UUID | None = None
+    scope_type: str | None = Field(default=None, max_length=20)
+    scope_id: str | None = Field(default=None, max_length=64)
 
 
 class SubscriberRoleRead(SubscriberRoleBase):

@@ -6,16 +6,15 @@ from pathlib import Path
 
 FIELD_ROOTS = (Path("app/api/field"), Path("app/services/field"))
 # Work-order EXECUTION code that the original FIELD_ROOTS scan was blind to — the
-# workqueue, dispatch, and the work-order mirror service are where CRM write-back
-# would actually re-enter, so the writeback / CRM-authority / sales-entry checks
-# must cover them too (2026-07-14 audit finding).
+# workqueue, dispatch, and native customer self-care are where a second writer
+# could re-enter, so the authority checks cover them too.
 WORK_EXECUTION_PATHS = (
     Path("app/services/workqueue"),
     Path("app/services/dispatch.py"),
-    Path("app/services/work_orders_mirror.py"),
+    Path("app/services/customer_work_order_selfcare.py"),
 )
 FIELD_AUTHORITY_PATHS = FIELD_ROOTS + (
-    Path("app/models/work_order_mirror.py"),
+    Path("app/models/work_order.py"),
     Path("app/schemas/field.py"),
     Path("app/services/work_order_views.py"),
 )

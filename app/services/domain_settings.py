@@ -273,6 +273,65 @@ class DomainSettings(ListResponseMixin):
         # create() already invalidates cache
         return self.create(db, create_payload)
 
+    def stage_upsert_by_key(
+        self, db: Session, key: str, payload: DomainSettingUpdate
+    ) -> DomainSetting:
+        """Upsert one setting without completing the caller-owned transaction."""
+        if not self.domain:
+            raise HTTPException(status_code=400, detail="Setting domain is required")
+        setting = (
+            db.query(DomainSetting)
+            .filter(DomainSetting.domain == self.domain)
+            .filter(DomainSetting.key == key)
+            .first()
+        )
+        payload = self._prepare_update_payload(
+            db,
+            key,
+            payload,
+            existing_is_secret=bool(setting and setting.is_secret),
+        )
+        if setting is not None:
+            data = payload.model_dump(exclude_unset=True)
+            data.pop("domain", None)
+            data.pop("key", None)
+            pending_value = data.get(
+                "value_json",
+                data.get("value_text", setting.value_json or setting.value_text),
+            )
+            self._validate_relationship_change(db, self.domain, key, pending_value)
+            for field, value in data.items():
+                setattr(setting, field, value)
+        else:
+            create_payload = self._prepare_create_payload(
+                db,
+                key,
+                DomainSettingCreate(
+                    domain=self.domain,
+                    key=key,
+                    value_type=payload.value_type or SettingValueType.string,
+                    value_text=payload.value_text,
+                    value_json=payload.value_json,
+                    is_secret=payload.is_secret or False,
+                    is_active=True if payload.is_active is None else payload.is_active,
+                ),
+            )
+            data = create_payload.model_dump()
+            data["domain"] = self._resolve_domain(create_payload.domain)
+            self._validate_relationship_change(
+                db,
+                data["domain"],
+                key,
+                create_payload.value_json
+                if create_payload.value_json is not None
+                else create_payload.value_text,
+            )
+            setting = DomainSetting(**data)
+            db.add(setting)
+        db.flush()
+        SettingsCache.invalidate(self.domain.value, key)
+        return setting
+
     def ensure_by_key(
         self,
         db: Session,

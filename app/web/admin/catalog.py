@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any, cast
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -27,6 +28,11 @@ from app.services.auth_dependencies import (
     has_permission,
     require_any_permission,
     require_permission,
+)
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
 )
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
@@ -58,6 +64,38 @@ def _get_actor_id(request: Request) -> str | None:
     return web_admin_service.get_actor_id(request)
 
 
+def _fup_command_context(
+    request: Request,
+    *,
+    scope: str,
+    reason: str,
+) -> CommandContext:
+    actor = _get_actor_id(request)
+    if not actor:
+        raise HTTPException(status_code=401, detail="Authenticated actor required")
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=actor,
+        scope=scope,
+        reason=reason,
+    )
+
+
+def _fup_http_error(exc: DomainError) -> HTTPException:
+    suffix = exc.code.rsplit(".", 1)[-1]
+    if suffix.endswith("not_found"):
+        status_code = 404
+    elif suffix in {"invalid_rule", "invalid_rule_chain"}:
+        status_code = 400
+    elif suffix == "active_caller_transaction":
+        status_code = 409
+    else:
+        status_code = 500
+    return HTTPException(status_code=status_code, detail=exc.message)
+
+
 def _assert_lifecycle_command_permission(
     request: Request,
     db: Session,
@@ -74,6 +112,18 @@ def _assert_lifecycle_command_permission(
     if action_permission and auth and has_permission(auth, db, action_permission):
         return
     raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _assert_lifecycle_preview_permission(
+    request: Request,
+    db: Session,
+    kind: SubscriptionCommandKind,
+) -> None:
+    """Allow catalog readers or the operator authorized for this exact action."""
+    auth = getattr(request.state, "auth", None) or {}
+    if auth and has_permission(auth, db, "catalog:read"):
+        return
+    _assert_lifecycle_command_permission(request, db, kind)
 
 
 @router.get(
@@ -323,7 +373,13 @@ def offer_fup_settings_update(
 ) -> RedirectResponse:
     """Update FUP policy accounting settings."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_policy_update(db, offer_id, form)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_policy_update"
+    )
+    try:
+        web_fup_service.handle_policy_update(db, offer_id, form, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -340,7 +396,13 @@ def offer_fup_add_rule(
 ) -> RedirectResponse:
     """Add a new FUP rule."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_add_rule(db, offer_id, form)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_creation"
+    )
+    try:
+        web_fup_service.handle_add_rule(db, offer_id, form, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -357,7 +419,13 @@ def offer_fup_update_rule(
 ) -> RedirectResponse:
     """Update an existing FUP rule."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_update_rule(db, rule_id, form)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_update"
+    )
+    try:
+        web_fup_service.handle_update_rule(db, rule_id, form, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -374,7 +442,13 @@ def offer_fup_delete_rule(
 ) -> RedirectResponse:
     """Delete an FUP rule."""
     form = parse_form_data_sync(request)
-    web_fup_service.handle_delete_rule(db, rule_id)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_deletion"
+    )
+    try:
+        web_fup_service.handle_delete_rule(db, rule_id, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -392,7 +466,13 @@ def offer_fup_clone_rules(
     """Clone FUP rules from another offer."""
     form = parse_form_data_sync(request)
     source_offer_id = str(form.get("source_offer_id", ""))
-    web_fup_service.handle_clone_rules(db, source_offer_id, offer_id)
+    context = _fup_command_context(
+        request, scope=offer_id, reason="admin_fup_rule_clone"
+    )
+    try:
+        web_fup_service.handle_clone_rules(db, source_offer_id, offer_id, context)
+    except DomainError as exc:
+        raise _fup_http_error(exc) from exc
     return RedirectResponse(
         url=web_fup_service.redirect_to_fup_context(form, offer_id),
         status_code=303,
@@ -811,7 +891,16 @@ def catalog_subscription_update(
 
 @router.post(
     "/subscriptions/{subscription_id}/lifecycle/preview",
-    dependencies=[Depends(require_permission("catalog:read"))],
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "catalog:read",
+                "catalog:write",
+                "subscription:activate",
+                "subscription:suspend",
+            )
+        )
+    ],
 )
 def catalog_subscription_preview_lifecycle_command(
     request: Request,
@@ -826,6 +915,7 @@ def catalog_subscription_preview_lifecycle_command(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Preview one lifecycle command without mutating subscription state."""
+    _assert_lifecycle_preview_permission(request, db, kind)
     payload, status_code = (
         web_catalog_subscription_workflows_service.preview_lifecycle_command_response(
             db,
@@ -1146,13 +1236,24 @@ def subscription_change_plan_quote(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Proration preview for the change-plan modal (no side effects)."""
-    return JSONResponse(
-        web_catalog_subscription_workflows_service.change_plan_quote_response(
+    try:
+        payload = web_catalog_subscription_workflows_service.change_plan_quote_response(
             db,
             subscription_id=subscription_id,
             target_offer_id=target_offer_id,
         )
-    )
+    except PrepaidFundingBaselineMissingError:
+        return JSONResponse(
+            {
+                "status": "unavailable",
+                "message": (
+                    web_catalog_subscription_workflows_service.SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE
+                ),
+                "error_code": "financial_position_unavailable",
+            },
+            status_code=409,
+        )
+    return JSONResponse(payload)
 
 
 @router.post(

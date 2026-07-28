@@ -33,6 +33,9 @@ from app.services import (
 )
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import (
+    web_customer_availability as web_customer_availability_service,
+)
+from app.services import (
     web_customer_bulk_actions as web_customer_bulk_actions_service,
 )
 from app.services import web_customer_details as web_customer_details_service
@@ -173,13 +176,21 @@ def _load_tax_rates(db: Session):
 def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
     values = web_customer_actions_service.billing_form_defaults(customer)
     if customer is not None:
+        from app.services import customer_tax_policies
         from app.services.collections.grace_policy import (
             resolve_effective_grace_policy,
         )
 
         grace = resolve_effective_grace_policy(db, customer)
+        wht_policy = customer_tax_policies.get_customer_withholding_tax_policy(
+            db,
+            account_id=customer.id,
+        )
         values["effective_grace_days"] = str(grace.days)
         values["effective_grace_source"] = grace.source.replace("_", " ")
+        values["withholding_tax_enabled"] = (
+            "true" if wht_policy.withholding_tax_enabled else "false"
+        )
     return values
 
 
@@ -688,10 +699,17 @@ def person_detail(
 ):
     """View customer details (unified — person and org members)."""
     usage_period = _normalize_usage_period(usage_period)
+    request_auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    # Same gate the inbox workspace uses, decided here and honoured by the
+    # snapshot builder so unpermitted conversation data is never assembled.
+    show_conversations = bool(request_auth) and has_permission(
+        request_auth, db, "support:ticket:read"
+    )
     try:
         detail_data = web_customer_details_service.build_customer_detail_snapshot(
             db=db,
             customer_id=customer_id,
+            include_conversations=show_conversations,
         )
     except HTTPException:
         return templates.TemplateResponse(
@@ -754,6 +772,7 @@ def person_detail(
             "detail_config": detail_config,
             "bulk_notification_channels": notification_channels,
             "bulk_notification_templates": notification_templates,
+            **_subscription_action_permission_context(request, db),
             "current_user": current_user,
             "location_capture_enabled": location_capture_enabled,
             "sidebar_stats": sidebar_stats,
@@ -1362,8 +1381,6 @@ def person_update(
     region: str | None = Form(None),
     postal_code: str | None = Form(None),
     country_code: str | None = Form(None),
-    status: str | None = Form(None),
-    is_active: str | None = Form(None),
     marketing_opt_in: str | None = Form(None),
     notes: str | None = Form(None),
     account_start_date: str | None = Form(None),
@@ -1374,6 +1391,7 @@ def person_update(
     min_balance: str | None = Form(None),
     captive_redirect_enabled: str | None = Form(None),
     tax_rate_id: str | None = Form(None),
+    withholding_tax_enabled: str | None = Form(None),
     payment_method: str | None = Form(None),
     metadata: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -1402,8 +1420,6 @@ def person_update(
             region=region,
             postal_code=postal_code,
             country_code=country_code,
-            status=status,
-            is_active=is_active,
             marketing_opt_in=marketing_opt_in,
             notes=notes,
             account_start_date=account_start_date,
@@ -1414,12 +1430,14 @@ def person_update(
             min_balance=min_balance,
             captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
+            withholding_tax_enabled=withholding_tax_enabled,
             payment_method=payment_method,
             metadata_json=web_customer_actions_service.parse_json_object(
                 metadata, "metadata"
             )
             if metadata is not None
             else None,
+            actor_id=_get_actor_id(request),
         )
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
@@ -1493,6 +1511,7 @@ def business_update(
     min_balance: str | None = Form(None),
     captive_redirect_enabled: str | None = Form(None),
     tax_rate_id: str | None = Form(None),
+    withholding_tax_enabled: str | None = Form(None),
     payment_method: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -1515,7 +1534,9 @@ def business_update(
             min_balance=min_balance,
             captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
+            withholding_tax_enabled=withholding_tax_enabled,
             payment_method=payment_method,
+            actor_id=_get_actor_id(request),
         )
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
@@ -1654,6 +1675,7 @@ def person_deactivate(
     before, after = web_customer_actions_service.deactivate_person_customer(
         db=db,
         customer_id=customer_id,
+        actor_id=_get_actor_id(request),
     )
     metadata_payload = build_changes_metadata(before, after)
     from app.web.admin import get_current_user
@@ -1689,6 +1711,7 @@ def business_deactivate(
     web_customer_actions_service.deactivate_business_customer(
         db=db,
         customer_id=customer_id,
+        actor_id=_get_actor_id(request),
     )
     from app.web.admin import get_current_user
 
@@ -2335,7 +2358,9 @@ def bulk_update_customers(
     """Bulk update supported customer fields."""
     try:
         return web_customer_actions_service.bulk_update_customers_from_payload(
-            db=db, payload=data
+            db=db,
+            payload=data,
+            actor_id=_get_actor_id(request),
         )
     except HTTPException:
         raise
@@ -2435,3 +2460,37 @@ def export_customers(
             "Content-Disposition": f"attachment; filename={filename}",
         },
     )
+
+
+@router.get(
+    "/{subscriber_id}/availability",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def customer_availability_report(
+    request: Request,
+    subscriber_id: str,
+    period: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Agent-facing service availability for one customer over a period.
+
+    Infrastructure-based: what the shared path serving them actually delivered,
+    plus individual provider-fault tickets. The customer's own CPE/session
+    downtime is deliberately excluded — see topology.customer_availability.
+    """
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    context = web_customer_availability_service.customer_availability_context(
+        db, subscriber_id, period=period
+    )
+    context.update(
+        {
+            "request": request,
+            "active_page": "customers",
+            "active_menu": "customers",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        }
+    )
+    return templates.TemplateResponse("admin/customers/availability.html", context)

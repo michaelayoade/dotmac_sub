@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import cast
 from uuid import UUID
 
@@ -120,6 +121,53 @@ class FinancialAccessConsequenceResult:
     preview: FinancialAccessConsequencePreview
     subscriptions_changed: int
     idempotent_replay: bool = False
+
+
+class DunningStaffAction(StrEnum):
+    """Staff case actions that require an exact impact preview."""
+
+    pause = "pause"
+    resume = "resume"
+    close = "close"
+
+
+@dataclass(frozen=True, slots=True)
+class DunningStaffCaseImpact:
+    case_id: UUID
+    exists: bool
+    account_id: UUID | None
+    current_status: DunningCaseStatus | None
+    resulting_status: DunningCaseStatus | None
+    eligible: bool
+    reason: str | None
+    unpaid_invoice_count: int
+    unpaid_receivables: tuple[tuple[str, Decimal], ...]
+    current_step: int | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class DunningStaffActionPreview:
+    action: DunningStaffAction
+    requested_case_ids: tuple[UUID, ...]
+    impacts: tuple[DunningStaffCaseImpact, ...]
+    fingerprint: str
+
+    @property
+    def eligible_case_ids(self) -> tuple[UUID, ...]:
+        return tuple(impact.case_id for impact in self.impacts if impact.eligible)
+
+    @property
+    def selected_count(self) -> int:
+        return len(self.requested_case_ids)
+
+    @property
+    def eligible_count(self) -> int:
+        return len(self.eligible_case_ids)
+
+    @property
+    def skipped_count(self) -> int:
+        return self.selected_count - self.eligible_count
 
 
 def _financial_access_fingerprint(payload: dict) -> str:
@@ -389,6 +437,7 @@ def preview_financial_access_consequence(
     outcome = f"{action.value}_ready"
     receivables: list[dict] = []
     prepaid_funding: dict | None = None
+    prepaid_target_ids: set[UUID] | None = None
     grace_decision: dict | None = None
     access_decision: dict | None = None
     shield_reason: str | None = None
@@ -459,14 +508,36 @@ def preview_financial_access_consequence(
                     "available_balance": f"{funding.available_balance:.2f}",
                     "required_balance": f"{funding.required_balance:.2f}",
                     "funded": funding.funded,
+                    "covered_subscription_ids": [
+                        str(value) for value in funding.covered_subscription_ids
+                    ],
+                    "actionable_uncovered_subscription_ids": [
+                        str(value)
+                        for value in funding.actionable_uncovered_subscription_ids
+                    ],
+                    "unresolved_projection_subscription_ids": [
+                        str(value)
+                        for value in funding.unresolved_projection_subscription_ids
+                    ],
+                    "unresolved_renewal_subscription_ids": [
+                        str(value)
+                        for value in funding.unresolved_renewal_subscription_ids
+                    ],
                 }
+                prepaid_target_ids = set(funding.actionable_uncovered_subscription_ids)
                 grace_decision = resolve_grace_decision(
                     db,
                     account,
                     starts_at=account.prepaid_low_balance_at,
                 ).as_dict()
                 grace_decision.pop("as_of", None)
-                if funding.funded:
+                if funding.unresolved_projection_subscription_ids:
+                    eligible = False
+                    outcome = "prepaid_coverage_unresolved"
+                elif funding.unresolved_renewal_subscription_ids:
+                    eligible = False
+                    outcome = "prepaid_renewal_terms_unresolved"
+                elif funding.funded:
                     eligible = False
                     outcome = "prepaid_balance_available"
 
@@ -495,16 +566,11 @@ def preview_financial_access_consequence(
         ):
             eligible = False
             outcome = "outside_enforcement_window"
-        if eligible:
-            from app.services.billing_enforcement_guards import (
-                billing_enforcement_health,
-            )
+        from app.services.billing_enforcement_guards import billing_enforcement_health
 
-            health = billing_enforcement_health(db)
-            health_reasons = list(health.reasons)
-            if not health.ok:
-                eligible = False
-                outcome = "enforcement_health_blocked"
+        # Health is operator-visible evidence, not a global customer-lifecycle
+        # switch. Current account facts decide the consequence.
+        health_reasons = list(billing_enforcement_health(db).reasons)
 
         if eligible and action == FinancialAccessAction.throttle:
             throttle_profile_id = settings_spec.resolve_value(
@@ -564,6 +630,11 @@ def preview_financial_access_consequence(
                 subscription.id
                 for subscription in subscriptions
                 if subscription.id not in active_reason_locks
+                and (
+                    reason != EnforcementReason.prepaid
+                    or prepaid_target_ids is None
+                    or subscription.id in prepaid_target_ids
+                )
             )
             if not target_subscriptions:
                 eligible = False
@@ -605,7 +676,6 @@ def preview_financial_access_consequence(
         "billing_health_reasons": health_reasons,
         "dedicated_bundle": dedicated_bundle,
         "inside_enforcement_window": window_decision.inside_window,
-        "enforcement_window_mode": window_decision.mode,
         "enforcement_window_block_reason": window_decision.block_reason,
         "overdue_days": overdue_days,
         "target_subscription_ids": [str(value) for value in target_subscriptions],
@@ -1060,22 +1130,58 @@ def preview_financial_access_restoration(
                         )
                     )
 
-        if profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
+        if not profile.has_collectible_subscriptions:
+            target_locks.extend(
+                lock
+                for lock in active_locks
+                if lock.reason == EnforcementReason.prepaid
+            )
+            clear_prepaid_timers = True
+        elif profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
             funding = resolve_prepaid_funding(db, account)
             prepaid_funding = {
                 "currency": funding.currency,
                 "available_balance": f"{funding.available_balance:.2f}",
                 "required_balance": f"{funding.required_balance:.2f}",
                 "funded": funding.funded,
+                "covered_subscription_ids": [
+                    str(value) for value in funding.covered_subscription_ids
+                ],
+                "actionable_uncovered_subscription_ids": [
+                    str(value)
+                    for value in funding.actionable_uncovered_subscription_ids
+                ],
+                "unresolved_projection_subscription_ids": [
+                    str(value)
+                    for value in funding.unresolved_projection_subscription_ids
+                ],
+                "unresolved_renewal_subscription_ids": [
+                    str(value) for value in funding.unresolved_renewal_subscription_ids
+                ],
             }
-            if funding.funded:
-                target_locks.extend(
-                    lock
+            restorable_prepaid_ids = (
+                {
+                    lock.subscription_id
                     for lock in active_locks
                     if lock.reason == EnforcementReason.prepaid
-                )
+                }
+                if funding.funded
+                else set(funding.covered_subscription_ids)
+            )
+            target_locks.extend(
+                lock
+                for lock in active_locks
+                if lock.reason == EnforcementReason.prepaid
+                and lock.subscription_id in restorable_prepaid_ids
+            )
+            if funding.funded:
                 clear_prepaid_timers = True
-        elif profile.is_valid and profile.effective_mode != BillingMode.prepaid:
+        elif profile.automation_safe and profile.effective_mode != BillingMode.prepaid:
+            target_locks.extend(
+                lock
+                for lock in active_locks
+                if lock.reason == EnforcementReason.prepaid
+            )
             clear_prepaid_timers = True
 
         if not (
@@ -1194,7 +1300,11 @@ def confirm_financial_access_restoration(
             detail="Financial access state changed after preview; preview again",
         )
 
-    from app.services.account_lifecycle import restore_subscription
+    from app.services.account_lifecycle import (
+        SUSPENDED_EQUIVALENT,
+        resolve_stale_lock_without_restoration,
+        restore_subscription,
+    )
 
     resolved_lock_ids: list[UUID] = []
     restored_subscriptions = 0
@@ -1208,13 +1318,35 @@ def confirm_financial_access_restoration(
         trigger = (
             "top_up" if lock.reason == EnforcementReason.prepaid else overdue_trigger
         )
-        restored = restore_subscription(
-            db,
-            str(lock.subscription_id),
-            trigger=trigger,
-            resolved_by=resolved_by or f"financial_access:{account.id}",
-            reason=lock.reason,
-        )
+        subscription = db.get(Subscription, lock.subscription_id)
+        if subscription is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Financial enforcement subscription no longer exists",
+            )
+        if subscription.status in SUSPENDED_EQUIVALENT:
+            restored = restore_subscription(
+                db,
+                str(lock.subscription_id),
+                trigger=trigger,
+                resolved_by=resolved_by or f"financial_access:{account.id}",
+                reason=lock.reason,
+            )
+        else:
+            resolved = resolve_stale_lock_without_restoration(
+                db,
+                str(lock.subscription_id),
+                trigger=trigger,
+                resolved_by=resolved_by or f"financial_access:{account.id}",
+                reason=lock.reason,
+                notes="Stale financial lock reconciled without service activation",
+            )
+            restored = False
+            if resolved == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Financial enforcement lock was not resolved by its owner",
+                )
         db.flush()
         if lock.is_active:
             raise HTTPException(
@@ -1834,14 +1966,12 @@ def _execute_dunning_action_with_evidence(
     )
     if not preview.decision_inputs.get("inside_enforcement_window", True):
         logger.info(
-            "enforcement_window_audit",
+            "enforcement_window_deferred",
             extra={
-                "event": "enforcement_window_audit",
+                "event": "enforcement_window_deferred",
                 "path": "dunning",
                 "action": action.value,
                 "account_id": account_id,
-                "would_gate": True,
-                "mode": preview.decision_inputs.get("enforcement_window_mode"),
                 "deferred": preview.outcome == "outside_enforcement_window",
                 "block_reason": preview.decision_inputs.get(
                     "enforcement_window_block_reason"
@@ -1891,6 +2021,231 @@ def _execute_dunning_action(
         invoice_id=invoice_id,
     )
     return outcome
+
+
+def _dunning_staff_case_impact(
+    db: Session,
+    *,
+    case_id: UUID,
+    case: DunningCase | None,
+    action: DunningStaffAction,
+) -> DunningStaffCaseImpact:
+    if case is None:
+        return DunningStaffCaseImpact(
+            case_id=case_id,
+            exists=False,
+            account_id=None,
+            current_status=None,
+            resulting_status=None,
+            eligible=False,
+            reason="Dunning case was not found.",
+            unpaid_invoice_count=0,
+            unpaid_receivables=(),
+            current_step=None,
+            updated_at=None,
+        )
+
+    eligible = False
+    reason: str | None = None
+    resulting_status: DunningCaseStatus | None = None
+    receivables: list[dict] = []
+    if action is DunningStaffAction.pause:
+        eligible = case.status is DunningCaseStatus.open
+        resulting_status = DunningCaseStatus.paused if eligible else None
+        if not eligible:
+            reason = (
+                f"Only an open case can be paused; this case is {case.status.value}."
+            )
+    elif action is DunningStaffAction.resume:
+        eligible = case.status is DunningCaseStatus.paused
+        resulting_status = DunningCaseStatus.open if eligible else None
+        if not eligible:
+            reason = (
+                f"Only a paused case can be resumed; this case is {case.status.value}."
+            )
+    else:
+        if case.status not in {DunningCaseStatus.open, DunningCaseStatus.paused}:
+            reason = (
+                "Only an open or paused case can be closed; "
+                f"this case is {case.status.value}."
+            )
+        else:
+            receivables = _overdue_receivable_snapshot(db, case.account_id)
+            if receivables:
+                reason = (
+                    "The account still has collectible overdue receivables. "
+                    "Settle or explicitly resolve them before closing the case."
+                )
+            else:
+                eligible = True
+                resulting_status = DunningCaseStatus.closed
+
+    grouped: dict[str, Decimal] = {}
+    for receivable in receivables:
+        currency = str(receivable["currency"] or "NGN").upper()
+        grouped[currency] = grouped.get(currency, Decimal("0.00")) + Decimal(
+            str(receivable["receivable"])
+        )
+    return DunningStaffCaseImpact(
+        case_id=case.id,
+        exists=True,
+        account_id=case.account_id,
+        current_status=case.status,
+        resulting_status=resulting_status,
+        eligible=eligible,
+        reason=reason,
+        unpaid_invoice_count=len(receivables),
+        unpaid_receivables=tuple(sorted(grouped.items())),
+        current_step=case.current_step,
+        updated_at=case.updated_at,
+    )
+
+
+def _dunning_staff_preview_fingerprint(
+    *,
+    action: DunningStaffAction,
+    impacts: tuple[DunningStaffCaseImpact, ...],
+) -> str:
+    payload = {
+        "action": action.value,
+        "impacts": [
+            {
+                "case_id": str(impact.case_id),
+                "exists": impact.exists,
+                "account_id": str(impact.account_id) if impact.account_id else None,
+                "current_status": (
+                    impact.current_status.value if impact.current_status else None
+                ),
+                "resulting_status": (
+                    impact.resulting_status.value if impact.resulting_status else None
+                ),
+                "eligible": impact.eligible,
+                "reason": impact.reason,
+                "unpaid_invoice_count": impact.unpaid_invoice_count,
+                "unpaid_receivables": [
+                    [currency, str(amount)]
+                    for currency, amount in impact.unpaid_receivables
+                ],
+                "current_step": impact.current_step,
+                "updated_at": (
+                    impact.updated_at.isoformat() if impact.updated_at else None
+                ),
+            }
+            for impact in impacts
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def preview_dunning_staff_action(
+    db: Session,
+    *,
+    case_ids: tuple[UUID, ...],
+    action: DunningStaffAction,
+    lock: bool = False,
+) -> DunningStaffActionPreview:
+    """Resolve exact per-case eligibility and impact for one staff action."""
+
+    normalized_ids = tuple(sorted(set(case_ids), key=str))
+    if not normalized_ids:
+        return DunningStaffActionPreview(
+            action=action,
+            requested_case_ids=(),
+            impacts=(),
+            fingerprint=_dunning_staff_preview_fingerprint(
+                action=action,
+                impacts=(),
+            ),
+        )
+    statement = (
+        select(DunningCase)
+        .where(DunningCase.id.in_(normalized_ids))
+        .order_by(DunningCase.id.asc())
+    )
+    if lock:
+        statement = statement.with_for_update()
+    cases = {case.id: case for case in db.scalars(statement).all()}
+    if lock:
+        account_ids = sorted(
+            {case.account_id for case in cases.values()},
+            key=str,
+        )
+        if account_ids:
+            db.scalars(
+                select(Subscriber)
+                .where(Subscriber.id.in_(account_ids))
+                .order_by(Subscriber.id.asc())
+                .with_for_update()
+            ).all()
+    impacts = tuple(
+        _dunning_staff_case_impact(
+            db,
+            case_id=case_id,
+            case=cases.get(case_id),
+            action=action,
+        )
+        for case_id in normalized_ids
+    )
+    return DunningStaffActionPreview(
+        action=action,
+        requested_case_ids=normalized_ids,
+        impacts=impacts,
+        fingerprint=_dunning_staff_preview_fingerprint(
+            action=action,
+            impacts=impacts,
+        ),
+    )
+
+
+def stage_dunning_staff_case_action(
+    db: Session,
+    *,
+    case_id: UUID,
+    action: DunningStaffAction,
+    actor: str,
+) -> tuple[DunningCase, DunningActionLog]:
+    """Stage one previously locked and confirmed case transition."""
+
+    case = cast(DunningCase | None, db.get(DunningCase, case_id))
+    if case is None:
+        raise RuntimeError("Confirmed dunning case disappeared while locked")
+    if action is DunningStaffAction.pause:
+        case.status = DunningCaseStatus.paused
+        outcome = "paused"
+        note = "Case paused by staff"
+        emit_event(
+            db,
+            EventType.dunning_paused,
+            {
+                "case_id": str(case.id),
+                "account_id": str(case.account_id),
+                "reason": note,
+            },
+            actor=actor,
+            account_id=case.account_id,
+        )
+    elif action is DunningStaffAction.resume:
+        case.status = DunningCaseStatus.open
+        outcome = "resumed"
+        note = "Case resumed by staff"
+    else:
+        case.status = DunningCaseStatus.closed
+        case.resolved_at = datetime.now(UTC)
+        outcome = "closed"
+        note = "Case closed manually by staff"
+    action_log = _create_action_log(
+        db,
+        case,
+        DunningAction.notify,
+        case.current_step,
+        None,
+        outcome=outcome,
+        notes=note,
+    )
+    db.flush()
+    _refresh_account_status(db, case.account_id)
+    return case, action_log
 
 
 class DunningCases(ListResponseMixin):
@@ -1966,156 +2321,6 @@ class DunningCases(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Dunning case not found")
         db.delete(case)
         db.commit()
-
-    @staticmethod
-    def pause(db: Session, case_id: str, notes: str | None = None) -> DunningCase:
-        """Pause a dunning case."""
-        case = cast(DunningCase | None, db.get(DunningCase, case_id))
-        if not case:
-            raise HTTPException(status_code=404, detail="Dunning case not found")
-        if case.status not in (DunningCaseStatus.open,):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot pause case with status {case.status.value}",
-            )
-        case.status = DunningCaseStatus.paused
-        if notes:
-            case.notes = (case.notes + "\n" + notes) if case.notes else notes
-        _create_action_log(
-            db,
-            case,
-            DunningAction.notify,
-            case.current_step,
-            None,
-            outcome="paused",
-            notes=notes or "Case paused",
-        )
-        # Emit dunning.paused event
-        emit_event(
-            db,
-            EventType.dunning_paused,
-            {
-                "case_id": str(case.id),
-                "account_id": str(case.account_id),
-                "reason": notes or "Case paused",
-            },
-            account_id=case.account_id,
-        )
-        db.flush()
-        _refresh_account_status(db, case.account_id)
-        db.commit()
-        db.refresh(case)
-        return case
-
-    @staticmethod
-    def resume(db: Session, case_id: str, notes: str | None = None) -> DunningCase:
-        """Resume a paused dunning case."""
-        case = cast(DunningCase | None, db.get(DunningCase, case_id))
-        if not case:
-            raise HTTPException(status_code=404, detail="Dunning case not found")
-        if case.status != DunningCaseStatus.paused:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot resume case with status {case.status.value}",
-            )
-        case.status = DunningCaseStatus.open
-        if notes:
-            case.notes = (case.notes + "\n" + notes) if case.notes else notes
-        _create_action_log(
-            db,
-            case,
-            DunningAction.notify,
-            case.current_step,
-            None,
-            outcome="resumed",
-            notes=notes or "Case resumed",
-        )
-        db.flush()
-        _refresh_account_status(db, case.account_id)
-        db.commit()
-        db.refresh(case)
-        return case
-
-    @staticmethod
-    def close(
-        db: Session,
-        case_id: str,
-        notes: str | None = None,
-        skip_payment_check: bool = False,
-    ) -> DunningCase:
-        """Close a dunning case manually.
-
-        Args:
-            db: Database session
-            case_id: The dunning case ID
-            notes: Optional notes for the closure
-            skip_payment_check: If True, skip verification that invoices are paid.
-                               Use with caution - only for administrative overrides.
-
-        Returns:
-            The closed dunning case
-
-        Raises:
-            HTTPException: If case not found, already closed, or has unpaid invoices
-        """
-        case = cast(DunningCase | None, db.get(DunningCase, case_id))
-        if not case:
-            raise HTTPException(status_code=404, detail="Dunning case not found")
-        if case.status in (DunningCaseStatus.closed, DunningCaseStatus.resolved):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Case is already {case.status.value}",
-            )
-
-        # Verify no overdue invoices unless explicitly skipped
-        if not skip_payment_check:
-            overdue_invoices = (
-                db.query(Invoice)
-                .filter(Invoice.account_id == case.account_id)
-                .filter(Invoice.balance_due > 0)
-                .filter(Invoice.is_active.is_(True))
-                .filter(
-                    Invoice.status.in_(
-                        [
-                            InvoiceStatus.issued,
-                            InvoiceStatus.partially_paid,
-                            InvoiceStatus.overdue,
-                        ]
-                    )
-                )
-                .count()
-            )
-            if overdue_invoices > 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Cannot close case: account has {overdue_invoices} unpaid invoice(s). "
-                    "Pay invoices first or use skip_payment_check=True for admin override.",
-                )
-
-        now = datetime.now(UTC)
-        case.status = DunningCaseStatus.closed
-        case.resolved_at = now
-        if notes:
-            case.notes = (case.notes + "\n" + notes) if case.notes else notes
-        _create_action_log(
-            db,
-            case,
-            DunningAction.notify,
-            case.current_step,
-            None,
-            outcome="closed",
-            notes=notes or "Case closed manually",
-        )
-
-        # Closing a collections case is not permission to restore access.
-        # Payment/billing reconciliation will separately ask the consequence
-        # owner to release only the exact financial holds whose gates pass.
-        db.flush()
-        _refresh_account_status(db, case.account_id)
-
-        db.commit()
-        db.refresh(case)
-        return case
 
     @staticmethod
     def add_note(db: Session, case_id: str, note: str) -> DunningCase:
@@ -2582,23 +2787,6 @@ class BillingEnforcementReconciler:
         db: Session, run_at: datetime
     ) -> dict[str, int | str]:
         """Apply payment-backed credit to due invoices before escalation."""
-        enabled = settings_spec.resolve_value(
-            db,
-            SettingDomain.collections,
-            "billing_enforcement_settle_credit_before_dunning_enabled",
-        )
-        if not (
-            enabled is True
-            or str(enabled).strip().lower() in {"1", "true", "yes", "on"}
-        ):
-            return {
-                "credit_accounts_scanned": 0,
-                "credit_accounts_settled": 0,
-                "credit_invoices_touched": 0,
-                "credit_settlement_errors": 0,
-                "credit_applied": "0.00",
-            }
-
         from app.services.billing.reconcile_unposted import (
             settle_open_invoices_from_credit,
         )
@@ -2756,11 +2944,11 @@ def _restore_prepaid_if_funded(
     *,
     resolved_by: str,
 ) -> int:
-    """Resolve only prepaid locks after the canonical funding decision passes."""
-    if not funding.funded:
+    """Resolve prepaid locks backed by funding or exact current coverage."""
+    if not funding.funded and not funding.covered_subscription_ids:
         logger.info(
-            "Prepaid restore skipped for account %s: available balance %s < "
-            "required balance %s",
+            "Prepaid restore skipped for account %s: no funded or covered service "
+            "(available %s, required %s)",
             account.id,
             funding.available_balance,
             funding.required_balance,

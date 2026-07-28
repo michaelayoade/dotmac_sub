@@ -248,13 +248,20 @@ def send_sms(
         )
         return queued.status == NotificationStatus.queued
 
-    # Check if SMS is disabled
-    sms_enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
-    if sms_enabled.lower() in ("false", "0", "no", "disabled"):
+    # Fail closed. This defaulted to "true", so a deployment that had never
+    # configured SMS still presented the channel as live and queued sends into
+    # a provider that did not exist — production accumulated 4,053
+    # expired_in_queue and 716 send_failed rows that way, with nothing
+    # surfacing that the channel was dead. An unconfigured customer channel
+    # must be off, not silently broken.
+    sms_enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "false") or "false"
+    if sms_enabled.lower() not in ("true", "1", "yes", "on", "enabled"):
         logger.debug("SMS sending is disabled")
         return False
 
-    provider = _get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook")
+    # No default provider either: "webhook" with no webhook URL is a guaranteed
+    # failure dressed up as a configured channel.
+    provider = _get_setting(db, "sms_provider", "SMS_PROVIDER", "")
     api_key = _get_setting(db, "sms_api_key", "SMS_API_KEY")
     api_secret = _get_setting(db, "sms_api_secret", "SMS_API_SECRET")
     from_number = _get_setting(db, "sms_from_number", "SMS_FROM_NUMBER")
@@ -342,6 +349,13 @@ def send_sms(
                 body,
                 timeout=timeout,
             )
+
+    elif not provider:
+        error_message = (
+            "No SMS provider configured (set sms_provider to twilio, "
+            "africastalking or webhook)"
+        )
+        logger.error(error_message)
 
     else:
         error_message = f"Unknown SMS provider: {provider}"

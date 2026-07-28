@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class VendorQuoteCreate(BaseModel):
     project_id: UUID
-    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     vat_rate_percent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
 
 
@@ -35,8 +36,43 @@ class VendorQuoteLineUpdate(BaseModel):
 
 
 class VendorRouteRevisionCreate(BaseModel):
-    geojson: dict
-    length_meters: float | None = Field(default=None, ge=0)
+    geojson: dict[str, object]
+    length_meters: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+    @field_validator("geojson")
+    @classmethod
+    def validate_linestring(cls, value: dict[str, object]) -> dict[str, object]:
+        if value.get("type") != "LineString":
+            raise ValueError("Route geometry must be a GeoJSON LineString")
+        coordinates = value.get("coordinates")
+        if not isinstance(coordinates, list) or len(coordinates) < 2:
+            raise ValueError("Route geometry requires at least two coordinates")
+
+        normalized: list[list[float]] = []
+        for coordinate in coordinates:
+            if (
+                not isinstance(coordinate, (list, tuple))
+                or len(coordinate) != 2
+                or isinstance(coordinate[0], bool)
+                or isinstance(coordinate[1], bool)
+            ):
+                raise ValueError(
+                    "Each route coordinate must contain longitude and latitude"
+                )
+            try:
+                longitude = float(coordinate[0])
+                latitude = float(coordinate[1])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Route coordinates must contain numeric values"
+                ) from exc
+            if not math.isfinite(longitude) or not math.isfinite(latitude):
+                raise ValueError("Route coordinates must be finite")
+            if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
+                raise ValueError("Route coordinates are outside valid bounds")
+            normalized.append([longitude, latitude])
+
+        return {"type": "LineString", "coordinates": normalized}
 
 
 class VendorAsBuiltLineCreate(VendorQuoteLineCreate):
@@ -54,5 +90,35 @@ class VendorAsBuiltCreate(BaseModel):
     line_items: list[VendorAsBuiltLineCreate] = Field(default_factory=list)
 
 
+class VendorSubmissionConfirm(BaseModel):
+    confirmation_token: str = Field(min_length=1, max_length=131_072)
+
+
 class VendorReview(BaseModel):
     review_notes: str | None = Field(default=None, max_length=2000)
+
+
+class VendorMaterialReleaseItemCreate(BaseModel):
+    """One material line a vendor is asking Dotmac to release.
+
+    ``item_code`` is provider-neutral: Sub does not hold the stock catalogue,
+    so the code is correlation evidence for whoever issues the material.
+    """
+
+    description: str = Field(min_length=1, max_length=255)
+    quantity: int = Field(gt=0)
+    unit: str | None = Field(default=None, max_length=40)
+    item_code: str | None = Field(default=None, max_length=80)
+    notes: str | None = None
+
+
+class VendorMaterialReleaseCreate(BaseModel):
+    project_id: UUID
+    items: list[VendorMaterialReleaseItemCreate] = Field(min_length=1)
+    notes: str | None = None
+
+
+class VendorAdvanceCreate(BaseModel):
+    project_id: UUID
+    amount: Decimal = Field(gt=0)
+    reason: str | None = None

@@ -10,6 +10,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+from tests.fup_helpers import execute_owner_command_for_test
+
 
 def _run(prior_action_status):
     sub = MagicMock(id=uuid4(), offer_id=uuid4(), subscriber_id=uuid4())
@@ -18,7 +20,8 @@ def _run(prior_action_status):
     session = MagicMock()
     query = session.query.return_value
     joined = query.join.return_value.outerjoin.return_value
-    joined.filter.return_value.filter.return_value.all.return_value = [sub]
+    joined.filter.return_value = joined
+    joined.all.return_value = [sub]
 
     state = None
     if prior_action_status is not None:
@@ -27,7 +30,7 @@ def _run(prior_action_status):
         state.cap_resets_at = None  # no period reset
         state.last_evaluated_at = None
     fup_state_mock = MagicMock()
-    fup_state_mock.get.return_value = state
+    fup_state_mock.get_for_update.return_value = state
 
     bucket = MagicMock(used_gb=50, period_end=None)
     rule_result = {
@@ -41,27 +44,42 @@ def _run(prior_action_status):
     emitted = []
 
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
-        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
+        patch(
+            "app.tasks.usage.SessionLocal",
+            side_effect=[lock_session, session],
+        ),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
-            "app.services.usage._resolve_or_create_quota_bucket",
+            "app.services.fup_enforcement._current_quota_bucket",
             return_value=bucket,
         ),
+        patch(
+            "app.services.fup_enforcement._subscription_for_evaluation",
+            return_value=sub,
+        ),
         patch("app.services.fup.evaluate_rules", return_value=[rule_result]),
-        patch("app.services.events.emit_event", lambda *a, **k: emitted.append(a)),
+        patch(
+            "app.services.fup_enforcement.emit_event",
+            lambda *a, **k: emitted.append(a),
+        ),
         # A throttle profile must be configured for reduce_speed to actually
         # enforce; otherwise enforcement is (correctly) skipped. This test
         # exercises transition/cooldown logic, so configure one.
         patch(
-            "app.services.settings_spec.resolve_value",
-            side_effect=lambda session, domain, key: (
-                "throttle-profile" if key == "fup_throttle_radius_profile_id" else None
-            ),
+            "app.services.fup_enforcement._sweep_policy",
+            return_value=(False, 0.8, True),
+        ),
+        patch(
+            "app.services.fup_enforcement._execute",
+            side_effect=execute_owner_command_for_test,
         ),
         patch(
             "app.services.fup_enforcement._maybe_queue_repeat_upsell",
             lambda *a, **k: None,
+        ),
+        patch(
+            "app.services.fup_enforcement._emit_fup_notifications",
+            return_value=0,
         ),
     ):
         from app.tasks.usage import evaluate_fup_rules

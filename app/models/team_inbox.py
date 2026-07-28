@@ -29,6 +29,9 @@ class InboxChannelType(enum.Enum):
     instagram_dm = "instagram_dm"
     chat_widget = "chat_widget"
     note = "note"
+    # A customer talking to the technician on their way, in the portal. It has
+    # no external transport: delivery is the shared conversation websocket.
+    field_job = "field_job"
 
 
 class InboxConversationStatus(enum.Enum):
@@ -63,6 +66,17 @@ class InboxTeamSource(enum.Enum):
     routing_rule = "routing_rule"
     escalation = "escalation"
     manual = "manual"
+
+
+class InboxObservationKind(enum.Enum):
+    message = "message"
+    delivery_receipt = "delivery_receipt"
+
+
+class InboxObservationStatus(enum.Enum):
+    recorded = "recorded"
+    processed = "processed"
+    rejected = "rejected"
 
 
 class TeamInboxEmailRoute(Base):
@@ -433,6 +447,162 @@ class InboxContactLink(Base):
     party_contact_point = relationship("PartyContactPoint")
 
 
+class InboxParticipantRelationship(enum.Enum):
+    """Who an endpoint turns out to be. Distinct from how it was admitted.
+
+    A customer may be copied and a third party may be the sender, so admission
+    source cannot stand in for relationship. ``unknown`` is the honest default:
+    Inbox observes that an endpoint took part, and only Party can later say
+    whose it is.
+    """
+
+    customer = "customer"
+    contact = "contact"
+    third_party = "third_party"
+    unknown = "unknown"
+
+
+class InboxParticipantAdmissionSource(enum.Enum):
+    """How this endpoint came to be on the conversation.
+
+    Evidence, not classification. Reclassifying a participant must never
+    rewrite how it was admitted.
+    """
+
+    inbound_from = "inbound_from"
+    inbound_to = "inbound_to"
+    inbound_cc = "inbound_cc"
+    outbound_to = "outbound_to"
+    outbound_cc = "outbound_cc"
+    operator_added = "operator_added"
+
+
+class InboxConversationParticipant(Base):
+    """One endpoint observed taking part in one conversation.
+
+    Endpoint-first, deliberately. A conversation carries a single
+    ``contact_address``, so the internal side of a thread is a set
+    (``InboxConversationTeam``, ``InboxConversationAssignment``) while the
+    customer side was a scalar — leaving "is this sender part of this thread?"
+    and "who may receive this transcript?" unanswerable.
+
+    ``party_contact_point_id`` is nullable and follows ``InboxContactLink``:
+    Inbox owns the fact that an endpoint participated, Party owns who that
+    endpoint belongs to. Requiring the binding would make an unknown colleague,
+    a new vendor or an unreviewed address unrepresentable — the exact problem
+    this table exists to remove.
+
+    Shadow projection: nothing reads it for a threading or export decision yet.
+    """
+
+    __tablename__ = "inbox_conversation_participants"
+    __table_args__ = (
+        CheckConstraint(
+            "(party_contact_point_id IS NULL AND "
+            "party_contact_point_bound_at IS NULL AND "
+            "party_contact_point_binding_source IS NULL AND "
+            "party_contact_point_binding_reason IS NULL) OR "
+            "(party_contact_point_id IS NOT NULL AND "
+            "party_contact_point_bound_at IS NOT NULL AND "
+            "party_contact_point_binding_source IS NOT NULL AND "
+            "party_contact_point_binding_reason IS NOT NULL AND "
+            "length(trim(party_contact_point_binding_source)) > 0 AND "
+            "length(trim(party_contact_point_binding_reason)) > 0)",
+            name="ck_inbox_participants_party_contact_point_evidence",
+        ),
+        CheckConstraint(
+            "(is_active IS TRUE AND removed_at IS NULL)"
+            " OR (is_active IS FALSE AND removed_at IS NOT NULL)",
+            name="ck_inbox_participants_removal_evidence",
+        ),
+        Index("ix_inbox_participants_conversation", "conversation_id", "is_active"),
+        # The lookup a participant-aware threading rule will make: this exact
+        # endpoint, on this channel, still active.
+        Index(
+            "ix_inbox_participants_endpoint",
+            "channel_type",
+            "normalized_endpoint",
+            "is_active",
+        ),
+        Index(
+            "ix_inbox_participants_party_contact_point",
+            "party_contact_point_id",
+            "is_active",
+        ),
+        Index(
+            "uq_inbox_participants_active_endpoint",
+            "conversation_id",
+            "channel_type",
+            "normalized_endpoint",
+            "provider_account_scope",
+            unique=True,
+            sqlite_where=text("is_active IS TRUE"),
+            postgresql_where=text("is_active IS TRUE"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inbox_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    channel_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    normalized_endpoint: Mapped[str] = mapped_column(String(320), nullable=False)
+    # Two Messenger threads on different Pages can carry the same opaque sender
+    # id, so an endpoint is not unique outside its provider account.
+    provider_account_scope: Mapped[str] = mapped_column(
+        String(200), default="default", nullable=False
+    )
+
+    party_contact_point_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("party_contact_points.id", ondelete="RESTRICT"),
+    )
+    party_contact_point_bound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    party_contact_point_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_contact_point_binding_reason: Mapped[str | None] = mapped_column(Text)
+
+    relationship_type: Mapped[str] = mapped_column(
+        String(24),
+        default=InboxParticipantRelationship.unknown.value,
+        nullable=False,
+    )
+    admission_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    admission_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_messages.id", ondelete="SET NULL")
+    )
+    admitted_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    admitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_reason: Mapped[str | None] = mapped_column(Text)
+
+    display_name: Mapped[str | None] = mapped_column(String(200))
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    conversation = relationship("InboxConversation")
+    party_contact_point = relationship("PartyContactPoint")
+
+
 class InboxConversationTeam(Base):
     __tablename__ = "inbox_conversation_teams"
     __table_args__ = (
@@ -536,6 +706,112 @@ class InboxMessage(Base):
 
     conversation = relationship("InboxConversation", back_populates="messages")
     notification = relationship("Notification")
+
+
+class InboxProviderObservation(Base):
+    """Durable normalized provider fact admitted before Inbox consequences."""
+
+    __tablename__ = "inbox_provider_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_account_scope",
+            "provider_event_id",
+            name="uq_inbox_provider_observations_identity",
+        ),
+        Index(
+            "ix_inbox_provider_observations_status",
+            "processing_status",
+            "recorded_at",
+        ),
+        Index(
+            "ix_inbox_provider_observations_message",
+            "external_message_id",
+            "observation_kind",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    provider_account_scope: Mapped[str] = mapped_column(String(160), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    observation_kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    channel_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    external_message_id: Mapped[str | None] = mapped_column(String(255))
+    external_thread_id: Mapped[str | None] = mapped_column(String(255))
+    payload_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processing_status: Mapped[str] = mapped_column(
+        String(40), default=InboxObservationStatus.recorded.value, nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_conversations.id", ondelete="SET NULL")
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_messages.id", ondelete="SET NULL")
+    )
+    error_code: Mapped[str | None] = mapped_column(String(120))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class InboxConversationReadState(Base):
+    """Canonical per-operator read cursor for one Inbox conversation."""
+
+    __tablename__ = "inbox_conversation_read_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "person_id",
+            name="uq_inbox_conversation_read_states_person",
+        ),
+        Index("ix_inbox_conversation_read_states_person", "person_id", "last_read_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inbox_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    last_read_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_messages.id", ondelete="SET NULL")
+    )
+    last_read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    conversation = relationship("InboxConversation")
+    last_read_message = relationship("InboxMessage")
 
 
 class InboxMediaAsset(Base):

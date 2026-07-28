@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.audit import AuditEvent
+from app.models.project import Project, ProjectTask
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
@@ -12,6 +13,8 @@ from app.models.work_order import WorkOrder
 from app.schemas.dispatch import WorkOrderHeaderCreate, WorkOrderHeaderUpdate
 from app.schemas.support import TicketWorkOrderIssueRequest
 from app.services import ticket_work_order_handoff
+from app.services.owner_commands import CommandContext
+from tests.staff_identity_fixtures import add_bound_staff_user
 
 
 def _subscriber(db_session, label: str = "Handoff") -> Subscriber:
@@ -27,7 +30,8 @@ def _subscriber(db_session, label: str = "Handoff") -> Subscriber:
 
 def _ticket_with_team(db_session):
     subscriber = _subscriber(db_session)
-    actor_id = uuid4()
+    actor, person = add_bound_staff_user(db_session)
+    actor_id = actor.id
     team = ServiceTeam(
         name="Field Response",
         team_type=ServiceTeamType.field_service.value,
@@ -38,7 +42,7 @@ def _ticket_with_team(db_session):
     db_session.add(
         ServiceTeamMember(
             team_id=team.id,
-            person_id=actor_id,
+            person_id=person.id,
             is_active=True,
         )
     )
@@ -65,39 +69,56 @@ def _payload() -> TicketWorkOrderIssueRequest:
     )
 
 
+def _issue(
+    db_session,
+    *,
+    ticket_id,
+    actor_id,
+    idempotency_key: str,
+    payload: TicketWorkOrderIssueRequest | None = None,
+):
+    # Owner commands require a transaction-free adapter session. Test setup
+    # commits above, so all identifiers are captured before entering it.
+    command = ticket_work_order_handoff.TicketWorkOrderIssueCommand(
+        ticket_id=ticket_id,
+        request=payload or _payload(),
+        actor_id=actor_id,
+        actor_type=ticket_work_order_handoff.HandoffActorType.SYSTEM_USER,
+        permissions=frozenset({"support:ticket:update", "operations:dispatch:write"}),
+        context=CommandContext.system(
+            actor=str(actor_id),
+            scope=ticket_work_order_handoff.WORK_ORDER_ISSUE_SCOPE,
+            reason="test ticket-to-work-order issuance",
+            idempotency_key=idempotency_key,
+        ),
+    )
+    return ticket_work_order_handoff.issue_work_order(db_session, command)
+
+
 def test_assigned_team_member_issues_many_idempotent_work_orders(db_session):
     subscriber, team, actor_id, ticket = _ticket_with_team(db_session)
-    auth = {
-        "principal_type": "system_user",
-        "principal_id": str(actor_id),
-    }
-
-    first = ticket_work_order_handoff.issue_work_order(
+    ticket_id = ticket.id
+    first = _issue(
         db_session,
-        ticket.id,
-        _payload(),
+        ticket_id=ticket_id,
         actor_id=actor_id,
-        auth=auth,
         idempotency_key="scope-one",
     )
-    replay = ticket_work_order_handoff.issue_work_order(
+    replay = _issue(
         db_session,
-        ticket.id,
-        _payload(),
+        ticket_id=ticket_id,
         actor_id=actor_id,
-        auth=auth,
         idempotency_key="scope-one",
     )
-    second = ticket_work_order_handoff.issue_work_order(
+    second = _issue(
         db_session,
-        ticket.id,
-        TicketWorkOrderIssueRequest(
+        ticket_id=ticket_id,
+        actor_id=actor_id,
+        payload=TicketWorkOrderIssueRequest(
             reason="A second feeder trace is required",
             title="Trace secondary feeder",
             work_type="survey",
         ),
-        actor_id=actor_id,
-        auth=auth,
         idempotency_key="scope-two",
     )
 
@@ -134,12 +155,10 @@ def test_handoff_rejects_non_member_and_terminal_ticket(db_session):
     with pytest.raises(
         ticket_work_order_handoff.TicketWorkOrderHandoffError
     ) as forbidden:
-        ticket_work_order_handoff.issue_work_order(
+        _issue(
             db_session,
-            ticket.id,
-            _payload(),
+            ticket_id=ticket.id,
             actor_id=uuid4(),
-            auth=None,
             idempotency_key="outsider",
         )
     assert forbidden.value.code == "assigned_team_membership_required"
@@ -150,15 +169,73 @@ def test_handoff_rejects_non_member_and_terminal_ticket(db_session):
     with pytest.raises(
         ticket_work_order_handoff.TicketWorkOrderHandoffError
     ) as terminal:
-        ticket_work_order_handoff.issue_work_order(
+        _issue(
             db_session,
-            ticket.id,
-            _payload(),
+            ticket_id=ticket.id,
             actor_id=actor_id,
-            auth=None,
             idempotency_key="terminal",
         )
     assert terminal.value.code == "ticket_terminal"
+
+
+def test_handoff_scopes_field_visit_to_ticket_linked_project_task(db_session):
+    subscriber, _team, actor_id, ticket = _ticket_with_team(db_session)
+    project = Project(name="Repair project", subscriber_id=subscriber.id)
+    db_session.add(project)
+    db_session.flush()
+    task = ProjectTask(
+        project_id=project.id,
+        ticket_id=ticket.id,
+        title="Trace feeder",
+        status="todo",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    result = _issue(
+        db_session,
+        ticket_id=ticket.id,
+        actor_id=actor_id,
+        payload=TicketWorkOrderIssueRequest(
+            reason="Field trace required",
+            project_task_id=task.id,
+        ),
+        idempotency_key="project-task-scope",
+    )
+
+    assert result.work_order.project_id == project.id
+    assert result.work_order.project_task_id == task.id
+    assert result.work_order.origin_ticket_id == ticket.id
+
+
+def test_handoff_rejects_project_task_linked_to_another_ticket(db_session):
+    subscriber, _team, actor_id, ticket = _ticket_with_team(db_session)
+    other_ticket = Ticket(title="Other incident", subscriber_id=subscriber.id)
+    project = Project(name="Repair project", subscriber_id=subscriber.id)
+    db_session.add_all([project, other_ticket])
+    db_session.flush()
+    task = ProjectTask(
+        project_id=project.id,
+        ticket_id=other_ticket.id,
+        title="Other scope",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    with pytest.raises(
+        ticket_work_order_handoff.TicketWorkOrderHandoffError
+    ) as mismatch:
+        _issue(
+            db_session,
+            ticket_id=ticket.id,
+            actor_id=actor_id,
+            payload=TicketWorkOrderIssueRequest(
+                reason="Wrong task",
+                project_task_id=task.id,
+            ),
+            idempotency_key="wrong-task",
+        )
+    assert mismatch.value.code == "project_task_ticket_mismatch"
 
 
 def test_generic_work_order_writes_cannot_accept_origin_ticket_id():

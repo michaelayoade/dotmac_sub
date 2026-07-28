@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.services.crm_client import CRMClientError
 from app.services.integrations import installations
 from app.services.integrations.connectors.dotmac_crm import (
+    CRM_CHAT_SESSION_CAPABILITY,
     CRM_EVENT_RECEIVE_CAPABILITY,
     CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
     CRM_PORTAL_SESSION_CAPABILITY,
@@ -25,6 +26,7 @@ from app.services.integrations.runtime_execution import (
 from app.services.secrets import resolve_secret
 
 CONNECTOR_KEY = "dotmac.crm"
+_OPERATION_OBSERVATION_KEY = "integration.crm.capability.crm.operational_observation.v1"
 
 
 class CrmCapabilityClient:
@@ -159,45 +161,33 @@ class CrmCapabilityClient:
     def _operational(
         self, action: str, params: dict[str, Any], correlation: str
     ) -> dict[str, Any]:
-        return self._execute(
-            CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
-            action,
-            params,
-            trigger=OperationTrigger.reconcile,
-            correlation_id=correlation,
-        )
+        from app.services import job_heartbeat
 
-    def list_work_orders(
-        self, subscriber_id: str | None = None
-    ) -> list[dict[str, Any]]:
-        return list(
-            self._operational(
-                "list_work_orders",
-                {"subscriber_id": subscriber_id},
-                f"crm-work-orders:{subscriber_id or 'all'}",
-            ).get("items")
-            or []
+        try:
+            result = self._execute(
+                CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
+                action,
+                params,
+                trigger=OperationTrigger.reconcile,
+                correlation_id=correlation,
+            )
+        except Exception as exc:
+            job_heartbeat.record_result(
+                _OPERATION_OBSERVATION_KEY,
+                status="failed",
+                detail={
+                    "action": action,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+        job_heartbeat.record_success(_OPERATION_OBSERVATION_KEY)
+        job_heartbeat.record_result(
+            _OPERATION_OBSERVATION_KEY,
+            status="success",
+            detail={"action": action},
         )
-
-    def get_work_order(self, work_order_id: str) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_work_order",
-                {"work_order_id": work_order_id},
-                f"crm-work-order:{work_order_id}",
-            ).get("item")
-            or {}
-        )
-
-    def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
-        return list(
-            self._operational(
-                "list_work_order_notes",
-                {"work_order_id": work_order_id},
-                f"crm-work-order-notes:{work_order_id}",
-            ).get("items")
-            or []
-        )
+        return result
 
     def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]:
         return dict(
@@ -205,42 +195,6 @@ class CrmCapabilityClient:
                 "get_portal_referrals",
                 {"crm_subscriber_id": crm_subscriber_id},
                 f"crm-portal-referrals:{crm_subscriber_id}",
-            ).get("item")
-            or {}
-        )
-
-    def get_portal_projects(self, crm_subscriber_id: str) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_portal_projects",
-                {"crm_subscriber_id": crm_subscriber_id},
-                f"crm-portal-projects:{crm_subscriber_id}",
-            ).get("item")
-            or {}
-        )
-
-    def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_portal_work_orders",
-                {"crm_subscriber_id": crm_subscriber_id},
-                f"crm-portal-work-orders:{crm_subscriber_id}",
-            ).get("item")
-            or {}
-        )
-
-    def get_portal_technician_location(
-        self, crm_subscriber_id: str, work_order_id: str, *, actor: str = "subscriber"
-    ) -> dict[str, Any]:
-        return dict(
-            self._operational(
-                "get_portal_technician_location",
-                {
-                    "crm_subscriber_id": crm_subscriber_id,
-                    "work_order_id": work_order_id,
-                    "actor": actor,
-                },
-                f"crm-portal-location:{work_order_id}",
             ).get("item")
             or {}
         )
@@ -273,6 +227,35 @@ class CrmCapabilityClient:
                 },
                 trigger=OperationTrigger.interactive,
                 correlation_id=f"crm-portal-session:{actor}:{crm_subscriber_id}",
+            ).get("item")
+            or {}
+        )
+
+    def create_widget_session(
+        self,
+        *,
+        config_id: str,
+        email: str,
+        name: str | None,
+        crm_subscriber_id: str | None,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return dict(
+            self._execute(
+                CRM_CHAT_SESSION_CAPABILITY,
+                "create_widget_session",
+                {
+                    "config_id": config_id,
+                    "email": email,
+                    "name": name,
+                    "crm_subscriber_id": crm_subscriber_id,
+                    "metadata": metadata,
+                },
+                trigger=OperationTrigger.interactive,
+                correlation_id=(
+                    f"crm-chat-session:{metadata.get('surface', 'portal')}:"
+                    f"{metadata.get('subscriber_id') or metadata.get('reseller_id') or 'principal'}"
+                ),
             ).get("item")
             or {}
         )

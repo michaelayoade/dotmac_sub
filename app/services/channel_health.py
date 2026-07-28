@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.services import channel_health_contracts
 from app.services.observability import StateObservation, publish_state_snapshot
-from app.services.team_inbox_smtp_inbound import SMTP_PROBE_VERIFIED_KEY
+from app.services.team_inbox_health import SMTP_PROBE_VERIFIED_KEY
 
 logger = logging.getLogger(__name__)
 

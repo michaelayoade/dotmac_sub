@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.types import EncryptedJSON
 
 
 class Tr069Event(enum.Enum):
@@ -38,6 +39,7 @@ class Tr069JobStatus(enum.Enum):
     pending = "pending"
     succeeded = "succeeded"
     failed = "failed"
+    unverified = "unverified"
     canceled = "canceled"
 
 
@@ -181,6 +183,12 @@ class Tr069Parameter(Base):
 
 class Tr069Job(Base):
     __tablename__ = "tr069_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "network_operation_id",
+            name="uq_tr069_jobs_network_operation_id",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -191,14 +199,21 @@ class Tr069Job(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     command: Mapped[str] = mapped_column(String(160), nullable=False)
     payload: Mapped[dict | None] = mapped_column(JSON)
+    secure_payload: Mapped[dict | None] = mapped_column(EncryptedJSON)
+    network_operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("network_operations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    external_task_ids: Mapped[list[str] | None] = mapped_column(JSON)
     status: Mapped[Tr069JobStatus] = mapped_column(
         Enum(Tr069JobStatus), default=Tr069JobStatus.queued
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
-    retry_count: Mapped[int] = mapped_column(Integer, default=0)
-    max_retries: Mapped[int] = mapped_column(Integer, default=3)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -210,3 +225,4 @@ class Tr069Job(Base):
     )
 
     device = relationship("Tr069CpeDevice", back_populates="jobs")
+    network_operation = relationship("NetworkOperation")

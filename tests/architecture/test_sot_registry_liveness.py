@@ -8,37 +8,16 @@ owner.
 
 from __future__ import annotations
 
-import ast
+from functools import cache
 from pathlib import Path
 
 from app.services import sot_relationships
+from scripts.architecture import sot_debt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = PROJECT_ROOT / "app"
 SCRIPT_DIR = PROJECT_ROOT / "scripts"
-SERVICE_DIR = APP_DIR / "services"
 UNDECLARED_WRITER_BASELINE = Path(__file__).with_name("sot_writer_baseline.txt")
-
-_PERSISTENCE_MUTATORS = {
-    "add",
-    "add_all",
-    "bulk_insert_mappings",
-    "bulk_save_objects",
-    "bulk_update_mappings",
-    "commit",
-    "delete",
-    "flush",
-}
-_PERSISTENCE_RECEIVER_TOKENS = {
-    "cache",
-    "conn",
-    "connection",
-    "db",
-    "query",
-    "redis",
-    "session",
-    "uow",
-}
 
 # Temporary debt only. Entries may be removed when an owner is wired or struck
 # from the registry; adding an entry requires an explicit ownership decision.
@@ -46,6 +25,8 @@ KNOWN_DEAD_OWNERS: set[str] = set()
 
 
 def _imported_modules(path: Path) -> set[str]:
+    import ast
+
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except SyntaxError:  # pragma: no cover - syntax checks fail elsewhere
@@ -61,65 +42,22 @@ def _imported_modules(path: Path) -> set[str]:
     return found
 
 
-def _module_name(path: Path) -> str:
-    rel = path.relative_to(PROJECT_ROOT).with_suffix("")
-    parts = rel.parts[:-1] if rel.name == "__init__" else rel.parts
-    return ".".join(parts)
-
-
-def _receiver_tokens(node: ast.AST) -> set[str]:
-    if isinstance(node, ast.Name):
-        return set(node.id.lower().split("_"))
-    if isinstance(node, ast.Attribute):
-        return _receiver_tokens(node.value) | set(node.attr.lower().split("_"))
-    if isinstance(node, ast.Call):
-        return _receiver_tokens(node.func)
-    if isinstance(node, ast.Subscript):
-        return _receiver_tokens(node.value)
-    return set()
-
-
-def _has_persistence_mutation(path: Path) -> bool:
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except SyntaxError:  # pragma: no cover - syntax checks fail elsewhere
-        return False
-    return any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in _PERSISTENCE_MUTATORS
-        and bool(_receiver_tokens(node.func.value) & _PERSISTENCE_RECEIVER_TOKENS)
-        for node in ast.walk(tree)
-    )
-
-
+@cache
 def _writer_modules() -> set[str]:
-    return {
-        _module_name(path)
-        for path in SERVICE_DIR.rglob("*.py")
-        if path.is_file()
-        and path.name != "sot_relationships.py"
-        and "__pycache__" not in path.parts
-        and _has_persistence_mutation(path)
-    }
+    return sot_debt.persistence_writer_modules()
 
 
+@cache
 def _declared_owner_modules() -> set[str]:
-    return {
-        service.module
-        for domain in sot_relationships.DOMAIN_SOT_RELATIONSHIPS
-        for service in domain.services
-    }
+    return sot_debt.declared_owner_modules(sot_relationships.DOMAIN_SOT_RELATIONSHIPS)
 
 
+@cache
 def _undeclared_writer_baseline() -> set[str]:
-    return {
-        line.strip()
-        for line in UNDECLARED_WRITER_BASELINE.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    }
+    return sot_debt.read_name_baseline(UNDECLARED_WRITER_BASELINE)
 
 
+@cache
 def _import_graph() -> dict[str, set[str]]:
     graph: dict[str, set[str]] = {}
     for root in (APP_DIR, SCRIPT_DIR):
@@ -198,7 +136,6 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
 
     duplicates = {module: names for module, names in seen.items() if len(names) > 1}
     known = {
-        "app.services.access_resolution",
         "app.services.catalog.subscriptions",
         "app.services.domain_settings",
         "app.services.enforcement",

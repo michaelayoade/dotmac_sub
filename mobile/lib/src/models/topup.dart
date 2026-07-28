@@ -73,6 +73,9 @@ class TopupPage {
     this.presetAmounts = const [],
     this.customerEmail,
     this.providers = const [],
+    this.depositAllowed = true,
+    this.eligibleUnpaidTotal = 0,
+    this.eligibleUnpaidInvoices = const [],
     BankTransferConfig? bankTransfer,
   }) : bankTransfer = bankTransfer ?? BankTransferConfig();
 
@@ -87,6 +90,11 @@ class TopupPage {
 
   /// Online gateway options (Paystack/Flutterwave), default provider first.
   final List<PaymentProviderOption> providers;
+
+  /// Customer deposits remain allowed even when eligible invoices exist.
+  final bool depositAllowed;
+  final double eligibleUnpaidTotal;
+  final List<Map<String, dynamic>> eligibleUnpaidInvoices;
 
   /// Direct bank-transfer option (admin bank account + receipt upload).
   final BankTransferConfig bankTransfer;
@@ -106,8 +114,98 @@ class TopupPage {
             .cast<Map<String, dynamic>>()
             .map(PaymentProviderOption.fromJson)
             .toList(),
+        depositAllowed: json['deposit_allowed'] as bool? ?? true,
+        eligibleUnpaidTotal: asDoubleOrNull(json['eligible_unpaid_total']) ?? 0,
+        eligibleUnpaidInvoices:
+            (json['eligible_unpaid_invoices'] as List? ?? const [])
+                .cast<Map>()
+                .map((e) => e.cast<String, dynamic>())
+                .toList(),
         bankTransfer: BankTransferConfig.fromJson(
             json['direct_bank_transfer'] as Map<String, dynamic>?),
+      );
+}
+
+class TopupPreviewInvoiceApplication {
+  TopupPreviewInvoiceApplication({
+    required this.invoiceId,
+    required this.invoiceNumber,
+    required this.currency,
+    required this.amountApplied,
+    required this.outstandingAfterApplication,
+  });
+
+  final String invoiceId;
+  final String? invoiceNumber;
+  final String currency;
+  final double amountApplied;
+  final double outstandingAfterApplication;
+
+  factory TopupPreviewInvoiceApplication.fromJson(Map<String, dynamic> json) =>
+      TopupPreviewInvoiceApplication(
+        invoiceId: json['invoice_id'].toString(),
+        invoiceNumber: json['invoice_number'] as String?,
+        currency: json['currency'] as String? ?? 'NGN',
+        amountApplied: asDouble(json['amount_applied']),
+        outstandingAfterApplication:
+            asDouble(json['outstanding_after_application']),
+      );
+}
+
+class TopupPreview {
+  TopupPreview({
+    required this.accountId,
+    required this.currency,
+    required this.currentAccountCredit,
+    required this.requestedDeposit,
+    required this.eligibleInvoiceCount,
+    required this.invoiceApplications,
+    required this.totalAppliedToInvoices,
+    required this.totalOutstandingAfterApplication,
+    required this.remainingAccountCredit,
+    required this.projectedAvailableCredit,
+    required this.allocationPolicy,
+    required this.creditApplicationPolicy,
+    required this.policyVersion,
+    required this.previewFingerprint,
+  });
+
+  final String accountId;
+  final String currency;
+  final double currentAccountCredit;
+  final double requestedDeposit;
+  final int eligibleInvoiceCount;
+  final List<TopupPreviewInvoiceApplication> invoiceApplications;
+  final double totalAppliedToInvoices;
+  final double totalOutstandingAfterApplication;
+  final double remainingAccountCredit;
+  final double projectedAvailableCredit;
+  final String allocationPolicy;
+  final String creditApplicationPolicy;
+  final int policyVersion;
+  final String previewFingerprint;
+
+  factory TopupPreview.fromJson(Map<String, dynamic> json) => TopupPreview(
+        accountId: json['account_id'].toString(),
+        currency: json['currency'] as String? ?? 'NGN',
+        currentAccountCredit: asDouble(json['current_account_credit']),
+        requestedDeposit: asDouble(json['requested_deposit']),
+        eligibleInvoiceCount:
+            (json['eligible_invoice_count'] as num?)?.toInt() ?? 0,
+        invoiceApplications: (json['invoice_applications'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(TopupPreviewInvoiceApplication.fromJson)
+            .toList(),
+        totalAppliedToInvoices: asDouble(json['total_applied_to_invoices']),
+        totalOutstandingAfterApplication:
+            asDouble(json['total_outstanding_after_application']),
+        remainingAccountCredit: asDouble(json['remaining_account_credit']),
+        projectedAvailableCredit: asDouble(json['projected_available_credit']),
+        allocationPolicy: json['allocation_policy'] as String? ?? 'credit_only',
+        creditApplicationPolicy: json['credit_application_policy'] as String? ??
+            'pay_eligible_invoices',
+        policyVersion: (json['policy_version'] as num?)?.toInt() ?? 1,
+        previewFingerprint: json['preview_fingerprint'] as String? ?? '',
       );
 }
 

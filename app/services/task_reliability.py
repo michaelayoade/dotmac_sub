@@ -164,9 +164,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         IDEMP,
         HEALTH,
-        "Publishes per-channel silence/freshness gauges from team-inbox facts; "
-        "every run recomputes the full snapshot, so a missed or repeated run "
-        "only affects staleness.",
+        "Permanent verification input: publishes per-channel silence gauges "
+        "from team-inbox facts and recomputes the full snapshot on every run.",
     ),
     "app.tasks.campaigns.process_due_campaigns": _c(
         "campaigns",
@@ -174,7 +173,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         PER_ITEM,
         STATUS,
         "Builds recipients and sends due campaigns through native inbox channels; "
-        "recipient rows gate repeat sends.",
+        "recipient rows gate repeat sends. The runner is permanent after scheduling "
+        "admission so accepted campaigns cannot be stranded.",
     ),
     "app.tasks.campaigns.process_due_campaign_steps": _c(
         "campaigns",
@@ -182,7 +182,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         PER_ITEM,
         STATUS,
         "Materializes and sends the next due step of a nurture sequence; a step "
-        "that already has recipient rows is never materialized twice.",
+        "that already has recipient rows is never materialized twice. Accepted "
+        "sequence intent drains independently of the scheduling admission gate.",
     ),
     "app.tasks.campaigns.send_campaign_batch": _c(
         "campaigns",
@@ -218,8 +219,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         IDEMP,
         HEALTH,
-        "Idempotent projection rebuild; the next reconcile repairs a stale or "
-        "partial device_projections table and prunes orphans.",
+        "Permanent idempotent projection rebuild; the next reconcile repairs a "
+        "stale or partial device_projections table and prunes orphans.",
     ),
     "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": _c(
         "integration",
@@ -237,7 +238,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         IDEMP,
         STATUS,
         "Read-only ERP status poll for in-flight expense claims; re-run safe, "
-        "refreshes erp_claim_status on the source row.",
+        "refreshes expense_claim_status on the source row.",
     ),
     "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses": _c(
         "integration",
@@ -245,7 +246,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         IDEMP,
         STATUS,
         "Read-only ERP status poll for in-flight material requests; re-run safe, "
-        "refreshes erp_material_status on the source row.",
+        "refreshes support_status on the source row.",
     ),
     "app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync": _c(
         "integration", SWEEP, IDEMP, STATUS
@@ -268,15 +269,17 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),
-    "app.tasks.enforcement.detect_stale_overdue_locks": _c(
-        "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
-    ),
-    "app.tasks.enforcement.reconcile_account_status_drift": _c(
+    "app.tasks.enforcement.reconcile_billing_approval_drift": _c(
         "enforcement",
         SWEEP,
-        GUARDED,
-        STATUS,
-        "Beat-rerun self-heals; all-active cohort filter is the guard.",
+        PER_ITEM,
+        LOG,
+        "Permanent drift sweep; each account is locked and recomputed by the "
+        "billing-approval owner, failures are isolated, and the next beat pass "
+        "reselects any remaining active/unapproved account.",
+    ),
+    "app.tasks.enforcement.detect_stale_overdue_locks": _c(
+        "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
     ),
     "app.tasks.events.cleanup_old_events": _c("events", SWEEP, IDEMP, LOG),
     "app.tasks.events.dispatch_pending_events": _c(
@@ -336,13 +339,21 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "monitoring", SWEEP, IDEMP, LOG
     ),
     "app.tasks.monitoring_cleanup.sync_inventory_to_monitoring": _c(
-        "monitoring", SWEEP, IDEMP, STATUS
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Permanent inventory projection repair for device verification.",
     ),
     "app.tasks.monitoring_cleanup.sync_nas_to_monitoring": _c(
         "monitoring", SWEEP, IDEMP, STATUS
     ),
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": _c(
-        "monitoring", SWEEP, IDEMP, HEALTH
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Permanent verification-path observation; recomputes reachable CIDRs.",
     ),
     "app.tasks.mrr.snapshot_mrr": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.nas.check_nas_health": _c("network", SWEEP, IDEMP, HEALTH),
@@ -379,6 +390,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": _c(
         "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.olt_mac_harvest.run_single_olt_mac_harvest": _c(
+        "network",
+        AUTORETRY,
+        PER_ITEM,
+        HEALTH,
+        "Each OLT has an independent advisory lock, timeout, and retry budget.",
     ),
     "app.tasks.olt_firmware.rollback": _c(
         "network",
@@ -452,6 +470,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.payment_reconciliation.reconcile_topups": _c(
         "billing", STATE, GUARDED, HEALTH
     ),
+    "app.tasks.durable_timers.fire_due_durable_timers": _c(
+        "operations",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Emits due durable-timer triggers through the timer owner's fire "
+        "command; each firing is generation-stamped, so consumers reject "
+        "stale deliveries and re-runs are exact no-ops.",
+    ),
     "app.tasks.operational_escalations.dispatch_operational_escalation_deliveries": _c(
         "operations",
         SWEEP,
@@ -463,19 +490,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.profile_sync.execute_due_profile_sync_tasks": _c(
         "network", STATE, STATEFUL, STATUS
     ),
-    "app.tasks.projects.reconcile_project_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
-    "app.tasks.projects.refresh_project_mirror_for_subscriber": _c(
-        "crm",
-        NONE,
-        IDEMP,
-        LOG,
-        "Best-effort on-view refresh; periodic reconcile backs it.",
-    ),
     "app.tasks.provisioning.reap_stale_provisioning_runs": _c(
         "provisioning", SWEEP, IDEMP, STATUS
     ),
     "app.tasks.provisioning.retry_pending_compensation_failures": _c(
-        "provisioning", STATE, STATEFUL, REDRIVE
+        "provisioning",
+        STATE,
+        STATEFUL,
+        REDRIVE,
+        "Permanent bounded redrive for durable failed compensations; feature and "
+        "module controls cannot strand rollback obligations.",
     ),
     "app.tasks.provisioning.run_bulk_activation_job": _c(
         "provisioning", ITEMS, PER_ITEM, STATUS
@@ -495,13 +519,33 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.radius.audit_suspension_enforcement": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reap_radacct_ghosts": _c("radius", SWEEP, IDEMP, HEALTH),
-    "app.tasks.radius.reconcile_active_sessions": _c("radius", SWEEP, IDEMP, HEALTH),
-    "app.tasks.radius.run_enforcement_reconciler": _c("radius", STATE, GUARDED, STATUS),
+    "app.tasks.radius.reconcile_active_sessions": _c(
+        "radius",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Permanent rebuild of the live-session projection from external accounting.",
+    ),
+    "app.tasks.radius.run_enforcement_reconciler": _c(
+        "radius",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Mandatory owner-driven recovery loop; isolates account errors, caps "
+        "disconnects, requests one idempotent projection refresh, and records "
+        "a degraded outcome until desired and observed access converge.",
+    ),
     "app.tasks.radius.run_radius_sync_job": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.radius_population.refresh_radius_from_subs": _c(
         "radius", SWEEP, IDEMP, STATUS
     ),
-    "app.tasks.radius_population.sync_device_login": _c("radius", SWEEP, IDEMP, STATUS),
+    "app.tasks.radius_population.sync_device_login": _c(
+        "radius",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Permanent security projection repair from active staff device-login state.",
+    ),
     "app.tasks.referrals.reconcile_referral_mirror": _c(
         "referrals", NONE, IDEMP, LOG, "Retired CRM mirror task tombstone."
     ),
@@ -528,6 +572,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Retries failed native inbox outbound messages up to a retry cap; "
         "already-sent and over-cap rows are skipped on re-run.",
     ),
+    "app.tasks.team_inbox.release_scheduled_replies": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Sends inbox replies whose scheduled time has passed; each released "
+        "row is stamped sent_at so a re-run never sends it twice, and one "
+        "failed recipient does not hold up the rest of the batch.",
+    ),
     "app.tasks.team_inbox.promote_message_media_assets": _c(
         "support",
         SWEEP,
@@ -544,6 +597,24 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Resolves stale conversations only when the latest customer-visible "
         "message does not require an inbound response.",
     ),
+    "app.tasks.team_inbox.backfill_conversation_participants": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Projects conversation participants from stored message headers; only "
+        "missing endpoints are admitted, so a re-run over an already-projected "
+        "conversation changes nothing.",
+    ),
+    "app.tasks.team_inbox.wake_due_snoozed_conversations": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Clears snoozed_until once the chosen wake time has passed and returns "
+        "the conversation to open; recomputed from the wake time alone, so a "
+        "re-run changes nothing and a missed run is caught by the next.",
+    ),
     "app.tasks.topology_lldp.run_lldp_topology_poll": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
@@ -557,6 +628,18 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications": _c(
+        "network",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "Customer-facing send, so it must never be blindly retried: the "
+        "persisted dispatch audit is also the debounce source, and a failed "
+        "pass rolls back so no boundary is muted by a send that never "
+        "happened. The next beat run re-attempts; a single-flight advisory "
+        "lock stops two passes double-notifying. Outcomes surface as dispatch "
+        "rows and outage_auto_notify_* log events.",
     ),
     "app.tasks.topology_outage.reconcile_detected_outages": _c(
         "network",
@@ -640,17 +723,40 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.tr069.check_device_health": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.cleanup_stale_genieacs_tasks": _c("tr069", SWEEP, IDEMP, LOG),
     "app.tasks.tr069.cleanup_tr069_records": _c("tr069", SWEEP, IDEMP, LOG),
-    "app.tasks.tr069.execute_bulk_action": _c("tr069", ITEMS, PER_ITEM, STATUS),
-    "app.tasks.tr069.execute_pending_jobs": _c("tr069", STATE, STATEFUL, STATUS),
+    "app.tasks.tr069.reconcile_command_outcomes": _c("tr069", STATE, STATEFUL, STATUS),
+    "app.tasks.tr069.execute_network_operation_job": _c(
+        "tr069",
+        NONE,
+        GUARDED,
+        STATUS,
+        "A durable dispatch and queued-to-running claim gate one ACS submission. "
+        "Ambiguous or interrupted delivery becomes unverified; it is never "
+        "automatically replayed.",
+    ),
     "app.tasks.tr069.refresh_ont_runtime_data": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.refresh_single_ont_runtime": _c("tr069", MANUAL, IDEMP, STATUS),
     "app.tasks.tr069.scrape_genieacs_metrics": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.setup_genieacs": _c("tr069", MANUAL, GUARDED, STATUS),
-    "app.tasks.tr069.sync_all_acs_devices": _c("tr069", SWEEP, IDEMP, HEALTH),
+    "app.tasks.tr069.sync_all_acs_devices": _c(
+        "tr069",
+        AUTORETRY,
+        IDEMP,
+        HEALTH,
+        "A complete pass records duration, server counts, and freshness. "
+        "Timeouts, unexpected failures, and partial server passes retry after "
+        "1m/5m/15m; the periodic schedule remains the recovery backstop.",
+    ),
     "app.tasks.tr069.wait_for_ont_bootstrap": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.usage.evaluate_fup_rules": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.usage.import_radius_accounting": _c("usage", SWEEP, PER_ITEM, HEALTH),
-    "app.tasks.usage.lift_expired_fup_enforcement": _c("usage", SWEEP, GUARDED, HEALTH),
+    "app.tasks.usage.lift_expired_fup_enforcement": _c(
+        "usage",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Permanent reset drainage; disabling new usage/FUP decisions cannot leave "
+        "expired throttles or blocks applied.",
+    ),
     "app.tasks.usage.meter_usage_into_quota": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.usage.notify_expiring_data_bundles": _c("usage", STATE, GUARDED, STATUS),
     "app.tasks.usage.reap_stale_radius_sessions": _c("usage", SWEEP, IDEMP, HEALTH),
@@ -664,16 +770,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.wireguard.cleanup_expired_tokens": _c("network", SWEEP, IDEMP, LOG),
     "app.tasks.wireguard.generate_connection_log_report": _c(
         "network", MANUAL, IDEMP, STATUS
-    ),
-    "app.tasks.work_orders.reconcile_work_order_mirror": _c(
-        "crm", SWEEP, IDEMP, HEALTH
-    ),
-    "app.tasks.work_orders.refresh_work_order_mirror_for_subscriber": _c(
-        "crm",
-        NONE,
-        IDEMP,
-        LOG,
-        "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
     "router_sync.capture_scheduled_snapshots": _c("router", SWEEP, IDEMP, HEALTH),

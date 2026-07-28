@@ -60,7 +60,7 @@ class SubscriberStatus(enum.Enum):
       new      → new (signed up, not yet activated)
       active   → active (paying, service running)
       blocked  → blocked (temporarily blocked — non-payment or violation)
-      disabled → disabled (permanently deactivated by admin)
+      disabled → disabled (administratively paused; explicit re-enable required)
       deleted  → canceled (soft-deleted, record preserved for audit)
 
     DotMac-only statuses:
@@ -72,7 +72,7 @@ class SubscriberStatus(enum.Enum):
     active = "active"  # Active, paying subscriber
     blocked = "blocked"  # Temporarily blocked
     suspended = "suspended"  # Generic suspension (DotMac-native)
-    disabled = "disabled"  # Permanently deactivated by admin
+    disabled = "disabled"  # Administratively paused; explicit re-enable required
     canceled = "canceled"  # Terminated / soft-deleted
     delinquent = "delinquent"  # Past due, pre-suspension
 
@@ -101,6 +101,12 @@ class UserType(enum.Enum):
     system_user = "system_user"
     customer = "customer"
     reseller = "reseller"
+    # External contractor principals. They authenticate through the same
+    # ``system_users`` table as staff, so without this marker a vendor login is
+    # indistinguishable from an employee login — and staff screens, grants, and
+    # audits cannot tell them apart. Vendor capability is resolved by
+    # ``app.services.field.vendor_capabilities``, never by staff RBAC.
+    vendor = "vendor"
 
 
 class SubscriberCategory(enum.Enum):

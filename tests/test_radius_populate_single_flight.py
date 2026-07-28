@@ -27,7 +27,10 @@ def test_refresh_runs_populate_under_pinned_lock():
         patch("app.tasks.radius_population.postgres_session_advisory_lock", mock_lock),
         patch(
             "app.services.radius_population.populate",
-            return_value={"radcheck_upserts": 3},
+            return_value={
+                "radcheck_upserts": 3,
+                "projection_complete": True,
+            },
         ) as mock_pop,
     ):
         from app.tasks.radius_population import (
@@ -39,7 +42,7 @@ def test_refresh_runs_populate_under_pinned_lock():
 
     mock_lock.assert_called_once_with(_POPULATE_LOCK_KEY)
     mock_pop.assert_called_once_with(dry_run=False)
-    assert result == {"radcheck_upserts": 3}
+    assert result == {"radcheck_upserts": 3, "projection_complete": True}
 
 
 def test_refresh_skips_when_lock_not_acquired():

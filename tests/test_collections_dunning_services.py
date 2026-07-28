@@ -963,7 +963,6 @@ def test_prepaid_invoice_rows_do_not_create_dunning_case(
         BillingMode,
         SubscriptionStatus,
     )
-    from app.models.domain_settings import DomainSetting, SettingDomain
     from app.schemas.collections import DunningRunRequest
 
     subscriber.billing_mode = BillingMode.prepaid
@@ -975,15 +974,6 @@ def test_prepaid_invoice_rows_do_not_create_dunning_case(
     subscription.status = SubscriptionStatus.active
     catalog_offer.billing_cycle = BillingCycle.monthly
 
-    db_session.add(
-        DomainSetting(
-            domain=SettingDomain.modules,
-            key="billing_prepaid_monthly_invoicing",
-            value_text="true",
-            value_json=True,
-            is_active=True,
-        )
-    )
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="INV-PREPAID-DUN-RUN-1",
@@ -1093,13 +1083,6 @@ def test_prepaid_monthly_dunning_does_not_suspend_service(
     catalog_offer.billing_cycle = BillingCycle.monthly
     db_session.add_all(
         [
-            DomainSetting(
-                domain=SettingDomain.modules,
-                key="billing_prepaid_monthly_invoicing",
-                value_text="true",
-                value_json=True,
-                is_active=True,
-            ),
             DomainSetting(
                 domain=SettingDomain.collections,
                 key="billing_enforcement_min_enforcing_day_offset",
@@ -1379,31 +1362,10 @@ def test_billing_enforcement_restore_failure_does_not_rollback_settlement(
     assert subscription.status == SubscriptionStatus.active
 
 
-def test_billing_enforcement_health_keeps_notification_gate_optional(
-    db_session, monkeypatch
-):
-    """Notification health can be observed without blocking enforcement."""
-    from app.models.domain_settings import SettingDomain
+def test_billing_enforcement_health_observes_all_channels(db_session, monkeypatch):
+    """Health is complete operational evidence, never a lifecycle gate."""
     from app.services import billing_enforcement_guards as guards
 
-    def _resolve_value(_db, domain, key):
-        settings = {
-            (
-                SettingDomain.collections,
-                "billing_enforcement_health_gates_enabled",
-            ): True,
-            (
-                SettingDomain.collections,
-                "billing_enforcement_require_notification_health",
-            ): False,
-            (
-                SettingDomain.collections,
-                "billing_enforcement_require_payment_health",
-            ): True,
-        }
-        return settings.get((domain, key))
-
-    monkeypatch.setattr(guards.settings_spec, "resolve_value", _resolve_value)
     monkeypatch.setattr(
         guards,
         "notification_delivery_health",
@@ -1426,34 +1388,19 @@ def test_billing_enforcement_health_keeps_notification_gate_optional(
     health = guards.billing_enforcement_health(db_session)
 
     assert health.ok is False
-    assert health.reasons == ["payment_inbox_failures"]
-    assert "notification_recent_failed" not in health.details
+    assert health.reasons == [
+        "critical_notifications_failed",
+        "payment_inbox_failures",
+    ]
+    assert health.details["notification_recent_failed"] == 10
     assert health.details["payment_dead_letters"] == 1
 
 
-def test_billing_enforcement_health_can_require_notifications(db_session, monkeypatch):
-    """Turning the notification gate on makes notification failures blocking."""
-    from app.models.domain_settings import SettingDomain
+def test_billing_enforcement_health_reports_notification_failure(
+    db_session, monkeypatch
+):
     from app.services import billing_enforcement_guards as guards
 
-    def _resolve_value(_db, domain, key):
-        settings = {
-            (
-                SettingDomain.collections,
-                "billing_enforcement_health_gates_enabled",
-            ): True,
-            (
-                SettingDomain.collections,
-                "billing_enforcement_require_notification_health",
-            ): True,
-            (
-                SettingDomain.collections,
-                "billing_enforcement_require_payment_health",
-            ): False,
-        }
-        return settings.get((domain, key))
-
-    monkeypatch.setattr(guards.settings_spec, "resolve_value", _resolve_value)
     monkeypatch.setattr(
         guards,
         "notification_delivery_health",
@@ -1462,6 +1409,11 @@ def test_billing_enforcement_health_can_require_notifications(db_session, monkey
             reasons=["critical_notifications_not_draining"],
             details={"old_queued": 1},
         ),
+    )
+    monkeypatch.setattr(
+        guards,
+        "payment_channel_health",
+        lambda _db: guards.EnforcementHealth(ok=True),
     )
 
     health = guards.billing_enforcement_health(db_session)

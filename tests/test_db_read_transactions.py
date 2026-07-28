@@ -50,7 +50,9 @@ def test_finish_read_transaction_commits_open_postgres_read_transaction() -> Non
     assert db.expire_on_commit is True
 
 
-def test_finish_read_transaction_ignores_non_postgres_or_nested_transactions() -> None:
+def test_finish_read_transaction_releases_any_dialect_but_ignores_nested_or_inactive() -> (
+    None
+):
     sqlite_db = _FakeSession(dialect_name="sqlite")
     nested_db = _FakeSession(in_nested_transaction=True)
     inactive_db = _FakeSession(in_transaction=False)
@@ -59,7 +61,7 @@ def test_finish_read_transaction_ignores_non_postgres_or_nested_transactions() -
     finish_read_transaction(nested_db)
     finish_read_transaction(inactive_db)
 
-    assert sqlite_db.commit_count == 0
+    assert sqlite_db.commit_count == 1
     assert nested_db.commit_count == 0
     assert inactive_db.commit_count == 0
     assert sqlite_db.rollback_count == 0

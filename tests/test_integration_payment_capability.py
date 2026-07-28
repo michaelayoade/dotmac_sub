@@ -4,7 +4,9 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
+import pytest
 
+from app.services.integrations import payment_capability
 from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_INTENT_CAPABILITY,
     PAYMENT_RECONCILE_CAPABILITY,
@@ -16,6 +18,7 @@ from app.services.integrations.runtime import (
     OperationStatus,
     OperationTrigger,
 )
+from tests.integration_platform_helpers import enable_payment_provider
 
 
 class _Client:
@@ -170,3 +173,22 @@ def test_payment_manifests_use_builtin_runtime_and_no_settings_credentials():
             "gateway_credentials",
             "public_key",
         }
+        assert manifest.config_schema["properties"]["base_url"]["default"].startswith(
+            "https://api."
+        )
+        assert manifest.config_schema["properties"]["timeout_seconds"]["default"] == 30
+
+
+def test_pinned_checkout_source_must_be_payment_intent_binding(db_session):
+    bindings = enable_payment_provider(db_session, "paystack")
+
+    with pytest.raises(
+        payment_capability.PaymentCapabilityError,
+        match="not a payment intent binding",
+    ):
+        payment_capability._binding(
+            db_session,
+            "paystack",
+            PAYMENT_RECONCILE_CAPABILITY,
+            checkout_binding_id=bindings["payments.webhook.v1"].id,
+        )

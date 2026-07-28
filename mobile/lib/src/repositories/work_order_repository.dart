@@ -5,7 +5,7 @@ import '../models/technician_location.dart';
 import '../models/work_order.dart';
 
 /// Wraps the self-scoped field-service endpoint (app/api/me.py,
-/// /me/work-orders). Reads come from the sub's local work-order mirror.
+/// /me/work-orders). Reads come from Sub's native lifecycle projection.
 class WorkOrderRepository {
   WorkOrderRepository(this.dio);
 

@@ -33,6 +33,7 @@ from app.models.enforcement_lock import (
     EnforcementLock,
     EnforcementReason,
 )
+from app.services.access_resolution import PrepaidFundingDecision
 from app.services.account_lifecycle import suspend_subscription
 from app.services.collections._core import (
     _create_action_log,
@@ -64,6 +65,77 @@ def _prepare_postpaid(db, account, subscription) -> Invoice:
     db.add(invoice)
     db.commit()
     return invoice
+
+
+def _prepare_prepaid(db, account, subscription) -> None:
+    account.billing_mode = BillingMode.prepaid
+    account.status = "active"
+    account.is_active = True
+    account.billing_enabled = True
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    db.commit()
+
+
+def test_prepaid_future_anchor_without_evidence_blocks_consequence(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    _prepare_prepaid(db_session, subscriber_account, subscription)
+    monkeypatch.setattr(
+        "app.services.collections._core.resolve_prepaid_funding",
+        lambda db, account: PrepaidFundingDecision(
+            account_id=str(account.id),
+            available_balance=Decimal("0.00"),
+            required_balance=Decimal("0.00"),
+            currency="NGN",
+            unresolved_projection_subscription_ids=(subscription.id,),
+        ),
+    )
+
+    preview = preview_financial_access_consequence(
+        db_session,
+        str(subscriber_account.id),
+        action=FinancialAccessAction.suspend,
+        reason=EnforcementReason.prepaid,
+        origin=FinancialAccessOrigin.prepaid_enforcement,
+    )
+
+    assert preview.eligible is False
+    assert preview.outcome == "prepaid_coverage_unresolved"
+    assert preview.target_subscription_ids == ()
+
+
+def test_prepaid_restore_targets_exact_covered_lock_below_reserve(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    _prepare_prepaid(db_session, subscriber_account, subscription)
+    suspend_subscription(
+        db_session,
+        str(subscription.id),
+        reason=EnforcementReason.prepaid,
+        source="prepaid_balance_sweep",
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.collections._core.resolve_prepaid_funding",
+        lambda db, account: PrepaidFundingDecision(
+            account_id=str(account.id),
+            available_balance=Decimal("0.00"),
+            required_balance=Decimal("0.00"),
+            currency="NGN",
+            configured_reserve_target=Decimal("100.00"),
+            covered_subscription_ids=(subscription.id,),
+        ),
+    )
+
+    preview = preview_financial_access_restoration(
+        db_session,
+        str(subscriber_account.id),
+        origin=FinancialAccessOrigin.prepaid_enforcement,
+    )
+
+    assert preview.target_subscription_ids == (subscription.id,)
+    assert preview.decision_inputs["clear_prepaid_timers"] is True
 
 
 def test_suspend_confirmation_links_exact_lock_and_dunning_action(
@@ -196,7 +268,6 @@ def test_postpaid_enforcement_is_evidenced_and_deferred_outside_window(
         "app.services.collections._core.enforcement_window."
         "resolve_enforcement_window_decision",
         lambda db: EnforcementWindowDecision(
-            mode="enforce",
             inside_window=False,
             block_reason="outside_window",
         ),
@@ -213,7 +284,6 @@ def test_postpaid_enforcement_is_evidenced_and_deferred_outside_window(
 
     assert preview.eligible is False
     assert preview.outcome == "outside_enforcement_window"
-    assert preview.decision_inputs["enforcement_window_mode"] == "enforce"
     assert preview.decision_inputs["enforcement_window_block_reason"] == (
         "outside_window"
     )
@@ -233,34 +303,6 @@ def test_postpaid_enforcement_is_evidenced_and_deferred_outside_window(
     assert result.consequence.eligible is False
     assert result.consequence.outcome == "outside_enforcement_window"
     assert db_session.query(EnforcementLock).count() == 0
-
-
-def test_postpaid_enforcement_audit_mode_does_not_defer(
-    db_session, subscriber_account, subscription, monkeypatch
-):
-    _prepare_postpaid(db_session, subscriber_account, subscription)
-    monkeypatch.setattr(
-        "app.services.collections._core.enforcement_window."
-        "resolve_enforcement_window_decision",
-        lambda db: EnforcementWindowDecision(
-            mode="audit",
-            inside_window=False,
-            block_reason="outside_window",
-        ),
-    )
-
-    preview = preview_financial_access_consequence(
-        db_session,
-        str(subscriber_account.id),
-        action=FinancialAccessAction.suspend,
-        reason=EnforcementReason.overdue,
-        origin=FinancialAccessOrigin.dunning,
-        overdue_days=7,
-    )
-
-    assert preview.eligible is True
-    assert preview.outcome == "suspend_ready"
-    assert preview.decision_inputs["enforcement_window_mode"] == "audit"
 
 
 def test_restore_confirmation_links_lock_case_and_exact_profile(

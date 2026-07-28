@@ -2,6 +2,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
+from app.models.project import Project, ProjectTask
 from app.models.provisioning import (
     InstallAppointment,
     ProvisioningTask,
@@ -23,6 +24,8 @@ def validate_service_order_links(
     subscriber_id: str,
     subscription_id: str | None,
     requested_by_contact_id: str | None,
+    project_id: str | None = None,
+    activation_project_task_id: str | None = None,
 ):
     _validate_subscriber(db, subscriber_id)
 
@@ -39,6 +42,31 @@ def validate_service_order_links(
         contact = db.get(Subscriber, requested_by_contact_id)
         if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
+
+    project = None
+    if project_id:
+        project = db.get(Project, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if project.subscriber_id and str(project.subscriber_id) != subscriber_id:
+            raise HTTPException(
+                status_code=400, detail="Project does not belong to subscriber"
+            )
+
+    if activation_project_task_id:
+        task = db.get(ProjectTask, activation_project_task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Project task not found")
+        if project is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Activation project task requires a project binding",
+            )
+        if task.project_id != project.id:
+            raise HTTPException(
+                status_code=400,
+                detail="Activation project task does not belong to project",
+            )
 
 
 def validate_service_order_exists(db: Session, service_order_id: str) -> ServiceOrder:

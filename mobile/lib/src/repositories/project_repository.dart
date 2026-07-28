@@ -4,7 +4,7 @@ import '../core/http.dart';
 import '../models/project.dart';
 
 /// Wraps the self-scoped installation-tracker endpoint (app/api/me.py,
-/// /me/projects). Reads come from the sub's local project mirror.
+/// /me/projects). Reads come from Sub's native lifecycle projection.
 class ProjectRepository {
   ProjectRepository(this.dio);
 

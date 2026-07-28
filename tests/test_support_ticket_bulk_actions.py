@@ -5,11 +5,11 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.audit import AuditEvent
 from app.models.support import Ticket, TicketChannel
 from app.services import web_support_ticket_bulk, web_support_ticket_bulk_actions
+from app.services.domain_errors import DomainError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -123,7 +123,7 @@ def test_support_ticket_bulk_confirmation_binds_changes_and_eligibility(db_sessi
         "expected_scope_token": preview.scope_token,
     }
 
-    with pytest.raises(HTTPException) as changed_update:
+    with pytest.raises(DomainError) as changed_update:
         web_support_ticket_bulk.require_support_ticket_bulk_confirmation(
             db_session,
             {
@@ -131,16 +131,16 @@ def test_support_ticket_bulk_confirmation_binds_changes_and_eligibility(db_sessi
                 "updates": {"priority": "urgent"},
             },
         )
-    assert changed_update.value.status_code == 409
+    assert changed_update.value.code == "support_ticket_bulk_scope_drift"
 
     ticket.priority = "high"
     db_session.commit()
-    with pytest.raises(HTTPException) as changed_eligibility:
+    with pytest.raises(DomainError) as changed_eligibility:
         web_support_ticket_bulk.require_support_ticket_bulk_confirmation(
             db_session,
             {"selection": confirmed_selection, "updates": payload["updates"]},
         )
-    assert changed_eligibility.value.status_code == 409
+    assert changed_eligibility.value.code == "support_ticket_bulk_scope_drift"
 
 
 def test_support_ticket_bulk_execute_uses_canonical_update_and_structured_outcome(
@@ -188,17 +188,17 @@ def test_support_ticket_bulk_execute_uses_canonical_update_and_structured_outcom
 
 
 def test_support_ticket_bulk_rejects_implicit_scope_and_invalid_updates(db_session):
-    with pytest.raises(ValueError, match="Select at least one record"):
+    with pytest.raises(DomainError, match="Select at least one record"):
         web_support_ticket_bulk.preview_support_ticket_bulk_update(
             db_session,
             {"selection": {"mode": "selected", "ids": []}, "updates": {}},
         )
-    with pytest.raises(ValueError, match="Filtered bulk selection is not supported"):
+    with pytest.raises(DomainError, match="Filtered bulk selection is not supported"):
         web_support_ticket_bulk.preview_support_ticket_bulk_update(
             db_session,
             {"selection": {"mode": "filtered", "filters": {}}, "updates": {}},
         )
-    with pytest.raises(ValueError, match="configured ticket priority"):
+    with pytest.raises(DomainError, match="configured ticket priority"):
         web_support_ticket_bulk.preview_support_ticket_bulk_update(
             db_session,
             {
@@ -206,7 +206,7 @@ def test_support_ticket_bulk_rejects_implicit_scope_and_invalid_updates(db_sessi
                 "updates": {"priority": "invented"},
             },
         )
-    with pytest.raises(ValueError, match="merge workflow"):
+    with pytest.raises(DomainError, match="merge workflow"):
         web_support_ticket_bulk.preview_support_ticket_bulk_update(
             db_session,
             {

@@ -180,7 +180,9 @@ class BulkTariffChange:
 
             for subscription_id in changed_ids:
                 try:
-                    reconcile_subscription_connectivity(db, subscription_id)
+                    reconcile_subscription_connectivity(
+                        db, subscription_id
+                    ).require_projected()
                     update_subscription_sessions(
                         db, subscription_id, reason="profile_change"
                     )

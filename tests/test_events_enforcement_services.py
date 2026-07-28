@@ -19,8 +19,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import BillingMode, NasDevice, NasVendor, SubscriptionStatus
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
+from app.models.catalog import (
+    BillingMode,
+    NasDevice,
+    NasVendor,
+    RadiusProfile,
+    SubscriptionStatus,
+)
 from app.models.enforcement_lock import EnforcementLock
 from app.models.notification import (
     Notification,
@@ -29,6 +35,7 @@ from app.models.notification import (
 )
 from app.models.provisioning import ProvisioningVendor
 from app.models.subscriber import SubscriberStatus as AccountStatus
+from app.services.enforcement_event_policy import AccessEventPolicyError
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.handlers.lifecycle import LifecycleHandler
@@ -51,6 +58,10 @@ from app.services.provisioning_adapters import (
     get_provisioner,
     register_provisioner,
 )
+from app.services.radius import (
+    ConnectivityProjectionDisposition,
+    SubscriptionConnectivityOutcome,
+)
 
 # ---------------------------------------------------------------------------
 # EventType enum tests
@@ -71,6 +82,7 @@ class TestEventType:
         assert EventType.subscription_suspended.value == "subscription.suspended"
         assert EventType.subscription_resumed.value == "subscription.resumed"
         assert EventType.subscription_canceled.value == "subscription.canceled"
+        assert EventType.subscription_disabled.value == "subscription.disabled"
         assert EventType.subscription_upgraded.value == "subscription.upgraded"
         assert EventType.subscription_downgraded.value == "subscription.downgraded"
         assert EventType.subscription_expiring.value == "subscription.expiring"
@@ -82,6 +94,7 @@ class TestEventType:
         assert EventType.payment_received.value == "payment.received"
         assert EventType.payment_failed.value == "payment.failed"
         assert EventType.payment_reversed.value == "payment.reversed"
+        assert EventType.prepaid_service_renewed.value == "prepaid_service.renewed"
 
     def test_usage_events_exist(self):
         assert EventType.usage_recorded.value == "usage.recorded"
@@ -113,6 +126,7 @@ class TestEventType:
             EventType.subscription_activated,
             EventType.subscription_suspended,
             EventType.subscription_resumed,
+            EventType.subscription_disabled,
             EventType.subscription_canceled,
             EventType.subscription_upgraded,
             EventType.subscription_downgraded,
@@ -126,6 +140,7 @@ class TestEventType:
         )
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_suspended] == "suspend"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_resumed] == "resume"
+        assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_disabled] == "other"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_canceled] == "cancel"
 
 
@@ -383,7 +398,13 @@ class TestEnforcementHandler:
     def _successful_radius_projection(self, monkeypatch):
         monkeypatch.setattr(
             "app.services.events.handlers.enforcement.radius_service.reconcile_subscription_connectivity",
-            lambda _db, _subscription_id: {"ok": True},
+            lambda _db, subscription_id: SubscriptionConnectivityOutcome(
+                subscription_id=str(subscription_id),
+                disposition=ConnectivityProjectionDisposition.projected,
+                requested_logins=1,
+                projected_logins=1,
+                projection_targets=1,
+            ),
         )
 
     def _make_event(self, event_type, payload=None, **kwargs):
@@ -674,6 +695,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "block"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -707,6 +730,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "block"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -736,6 +761,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "throttle"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -782,6 +809,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "suspend"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -812,9 +841,21 @@ class TestEnforcementHandler:
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_throttle_action(
-        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+        self,
+        mock_settings,
+        mock_apply_profile,
+        mock_disconnect,
+        db_session,
+        subscription,
     ):
-        throttle_profile_id = uuid.uuid4()
+        throttle_profile = RadiusProfile(
+            name=f"FUP throttle {uuid.uuid4()}", is_active=True
+        )
+        db_session.add(throttle_profile)
+        db_session.commit()
+        throttle_profile_id = throttle_profile.id
+        subscription_id = subscription.id
+        account_id = subscription.subscriber_id
 
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -829,29 +870,39 @@ class TestEnforcementHandler:
         mock_apply_profile.return_value = 1
 
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
-        acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
-            subscription_id=sub_id,
-            account_id=acc_id,
+            subscription_id=subscription_id,
+            account_id=account_id,
         )
         handler.handle(db_session, event)
 
         mock_apply_profile.assert_called_once_with(
-            db_session, str(acc_id), str(throttle_profile_id)
+            db_session, str(account_id), str(throttle_profile_id)
         )
         mock_disconnect.assert_called_once_with(
-            db_session, str(acc_id), reason="fup_throttle"
+            db_session, str(account_id), reason="fup_throttle"
         )
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_payload_reduce_speed_overrides_global_block(
-        self, mock_settings, mock_apply_profile, mock_disconnect, db_session
+        self,
+        mock_settings,
+        mock_apply_profile,
+        mock_disconnect,
+        db_session,
+        subscription,
     ):
-        throttle_profile_id = uuid.uuid4()
+        throttle_profile = RadiusProfile(
+            name=f"FUP throttle {uuid.uuid4()}", is_active=True
+        )
+        db_session.add(throttle_profile)
+        db_session.commit()
+        throttle_profile_id = throttle_profile.id
+        subscription_id = subscription.id
+        account_id = subscription.subscriber_id
 
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -866,26 +917,24 @@ class TestEnforcementHandler:
         mock_apply_profile.return_value = 1
 
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
-        acc_id = uuid.uuid4()
         event = self._make_event(
             EventType.usage_exhausted,
             payload={"action": "reduce_speed"},
-            subscription_id=sub_id,
-            account_id=acc_id,
+            subscription_id=subscription_id,
+            account_id=account_id,
         )
         handler.handle(db_session, event)
 
         mock_apply_profile.assert_called_once_with(
-            db_session, str(acc_id), str(throttle_profile_id)
+            db_session, str(account_id), str(throttle_profile_id)
         )
         mock_disconnect.assert_called_once_with(
-            db_session, str(acc_id), reason="fup_throttle"
+            db_session, str(account_id), reason="fup_throttle"
         )
 
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
-    def test_usage_exhausted_throttle_without_profile_is_noop(
+    def test_usage_exhausted_throttle_without_profile_fails_visibly(
         self, mock_settings, mock_apply_profile, db_session
     ):
         def settings_side_effect(db, domain, key):
@@ -905,7 +954,10 @@ class TestEnforcementHandler:
             subscription_id=sub_id,
             account_id=acc_id,
         )
-        handler.handle(db_session, event)
+        with pytest.raises(AccessEventPolicyError) as captured:
+            handler.handle(db_session, event)
+
+        assert captured.value.code == "access.event_policy.throttle_profile_required"
         mock_apply_profile.assert_not_called()
 
     def test_enforcement_handler_ignores_unrelated_events(self, db_session):
@@ -1004,6 +1056,53 @@ class TestLifecycleHandler:
 
 
 class TestNotificationHandler:
+    @pytest.fixture(autouse=True)
+    def _route_spec_events_multichannel(self, db_session):
+        """Event specs no longer declare channels — communications.channel_policy
+        owns selection. These tests exercise the handler's multi-channel fan-out
+        (template selection, recipient resolution, suppression), so route the
+        spec categories to email+sms via the policy to supply that premise. The
+        handler still only creates a row where an active template exists, so a
+        test with one template still gets one row.
+        """
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+        from app.services.settings_cache import SettingsCache
+
+        db_session.add_all(
+            [
+                DomainSetting(
+                    domain=SettingDomain.notification,
+                    key="notification_channel_policy",
+                    value_type=SettingValueType.json,
+                    value_json={
+                        "categories": {
+                            "service": ["email", "sms"],
+                            "billing": ["email", "sms"],
+                        }
+                    },
+                    is_active=True,
+                ),
+                # SMS is retired and therefore disabled by default, and the
+                # handler skips a disabled channel regardless of routing. Enable
+                # it here so the fan-out under test actually reaches two
+                # channels — which also demonstrates the retirement is a
+                # reversible config state, not a deletion.
+                DomainSetting(
+                    domain=SettingDomain.notification,
+                    key="sms_enabled",
+                    value_type=SettingValueType.boolean,
+                    value_text="true",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+        SettingsCache.invalidate(
+            SettingDomain.notification.value, "notification_channel_policy"
+        )
+        SettingsCache.invalidate(SettingDomain.notification.value, "sms_enabled")
+
     def _set_customer_balance_notifications(self, db_session, enabled: bool) -> None:
         from app.models.domain_settings import DomainSetting, SettingDomain
         from app.models.subscription_engine import SettingValueType
@@ -1043,6 +1142,88 @@ class TestNotificationHandler:
         )
         # Should not raise
         handler.handle(db_session, event)
+
+    def test_payment_event_queues_receipt_aware_email(self, db_session, subscriber):
+        payment = Payment(
+            account_id=subscriber.id,
+            amount=18712.50,
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime.now(UTC),
+            is_active=True,
+        )
+        db_session.add_all(
+            [
+                payment,
+                NotificationTemplate(
+                    code="payment_received",
+                    name="Payment Received",
+                    channel=NotificationChannel.email,
+                    subject="Payment receipt {receipt_number}",
+                    body=("Receipt {receipt_number}. View or download: {receipt_url}"),
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        NotificationHandler().handle(
+            db_session,
+            Event(
+                event_type=EventType.payment_received,
+                payload={"payment_id": str(payment.id), "amount": "18712.50"},
+                account_id=subscriber.id,
+            ),
+        )
+        db_session.commit()
+
+        notification = db_session.query(Notification).one()
+        receipt_reference = f"#RCP-{payment.id.hex[:8].upper()}"
+        assert notification.channel == NotificationChannel.email
+        assert notification.subject == f"Payment receipt {receipt_reference}"
+        assert receipt_reference in (notification.body or "")
+        assert (
+            f"https://selfcare.dotmac.io/portal/billing/payments/{payment.id}/receipt"
+        ) in (notification.body or "")
+
+    def test_prepaid_renewal_event_uses_owner_renewed_through_date(
+        self, db_session, subscriber, subscription
+    ):
+        template = (
+            db_session.query(NotificationTemplate)
+            .filter_by(
+                code="prepaid_service_renewed",
+                channel=NotificationChannel.email,
+            )
+            .one()
+        )
+        assert template.is_active is True
+
+        NotificationHandler().handle(
+            db_session,
+            Event(
+                event_type=EventType.prepaid_service_renewed,
+                payload={
+                    "amount": "18812.50",
+                    "currency": "NGN",
+                    "renewed_through": "2026-08-20T00:00:00+00:00",
+                },
+                account_id=subscriber.id,
+                subscription_id=subscription.id,
+            ),
+        )
+        db_session.commit()
+
+        notification = (
+            db_session.query(Notification)
+            .filter_by(event_type="prepaid_service_renewed")
+            .one()
+        )
+        assert notification.subject == (
+            f"Your {subscription.offer.name} service is renewed"
+        )
+        assert "₦18,812.50" in (notification.body or "")
+        assert "August 20, 2026" in (notification.body or "")
 
     def test_notification_handler_uses_fallback_copy_when_no_template(
         self, db_session, subscriber
@@ -1147,7 +1328,11 @@ class TestNotificationHandler:
         handler = NotificationHandler()
         event = Event(
             event_type=EventType.invoice_overdue,
-            payload={"invoice_number": "INV-100", "amount": "5000"},
+            payload={
+                "invoice_number": "INV-100",
+                "amount": "5000",
+                "due_date": "2026-07-21",
+            },
             account_id=subscriber.id,
         )
 
@@ -1164,24 +1349,32 @@ class TestNotificationHandler:
         assert all(row.subscriber_id == subscriber.id for row in notifications)
         assert all(row.category == "billing" for row in notifications)
 
-    def test_balance_notification_switch_suppresses_debt_events(
+    def test_retired_balance_notification_row_does_not_suppress_debt_events(
         self, db_session, subscriber
     ):
+        subscriber.phone = "+2348000000100"
+        db_session.commit()
         self._set_customer_balance_notifications(db_session, False)
 
         handler = NotificationHandler()
         event = Event(
             event_type=EventType.invoice_overdue,
-            payload={"invoice_number": "INV-100", "amount": "5000"},
+            payload={
+                "invoice_number": "INV-100",
+                "amount": "5000",
+                "due_date": "2026-07-21",
+            },
             account_id=subscriber.id,
         )
 
         handler.handle(db_session, event)
         db_session.commit()
 
-        assert db_session.query(Notification).count() == 0
+        assert db_session.query(Notification).count() == 2
 
-    def test_balance_notification_switch_keeps_receipts(self, db_session, subscriber):
+    def test_retired_balance_notification_row_keeps_receipts(
+        self, db_session, subscriber
+    ):
         self._set_customer_balance_notifications(db_session, False)
 
         handler = NotificationHandler()
@@ -1198,7 +1391,7 @@ class TestNotificationHandler:
         assert len(notifications) == 1
         assert notifications[0].event_type == "invoice_paid"
 
-    def test_balance_notification_switch_suppresses_billing_suspension(
+    def test_retired_balance_notification_row_keeps_billing_suspension(
         self, db_session, subscriber
     ):
         subscriber.phone = "+2348000000100"
@@ -1219,9 +1412,9 @@ class TestNotificationHandler:
         handler.handle(db_session, event)
         db_session.commit()
 
-        assert db_session.query(Notification).count() == 0
+        assert db_session.query(Notification).count() == 2
 
-    def test_balance_notification_switch_keeps_admin_suspension(
+    def test_retired_balance_notification_row_keeps_admin_suspension(
         self, db_session, subscriber
     ):
         subscriber.phone = "+2348000000101"
@@ -1541,6 +1734,18 @@ class TestPaymentReceivedRestoreGuard:
         )
         db_session.refresh(subscriber)
         assert subscriber.status == AccountStatus.active
+
+    @patch("app.services.collections.restore_account_services")
+    def test_restore_failure_propagates_so_payment_event_remains_retryable(
+        self, mock_restore, db_session, subscriber
+    ):
+        mock_restore.side_effect = RuntimeError("financial access projection failed")
+
+        with pytest.raises(RuntimeError, match="financial access projection failed"):
+            EnforcementHandler().handle(
+                db_session,
+                self._payment_event(subscriber.id),
+            )
 
     @patch("app.services.collections.restore_account_services")
     def test_payment_event_without_account_is_ignored(self, mock_restore, db_session):
@@ -1909,9 +2114,11 @@ class TestProvisioningHandler:
             **kwargs,
         )
 
+    @patch.object(ProvisioningHandler, "_push_nas_provisioning")
+    @patch.object(ProvisioningHandler, "_sync_radius_on_activation")
     @patch("app.services.events.handlers.provisioning.provisioning_service")
     def test_subscription_activated_triggers_ip_allocation(
-        self, mock_prov_svc, db_session
+        self, mock_prov_svc, _mock_radius, _mock_nas, db_session
     ):
         handler = ProvisioningHandler()
         sub_id = uuid.uuid4()
@@ -1924,9 +2131,11 @@ class TestProvisioningHandler:
             db_session, str(sub_id)
         )
 
+    @patch.object(ProvisioningHandler, "_push_nas_provisioning")
+    @patch.object(ProvisioningHandler, "_sync_radius_on_activation")
     @patch("app.services.events.handlers.provisioning.provisioning_service")
     def test_subscription_activated_uses_payload_fallback(
-        self, mock_prov_svc, db_session
+        self, mock_prov_svc, _mock_radius, _mock_nas, db_session
     ):
         handler = ProvisioningHandler()
         sub_id = uuid.uuid4()
@@ -1959,8 +2168,10 @@ class TestProvisioningHandler:
             EventType.subscription_activated,
             subscription_id=sub_id,
         )
-        # Should not raise
-        handler.handle(db_session, event)
+        # Projection failures propagate so the event stays retryable and the
+        # service order is never confirmed on a failed projection.
+        with pytest.raises(RuntimeError, match="IP pool exhausted"):
+            handler.handle(db_session, event)
 
     def test_provisioning_handler_ignores_unrelated_events(self, db_session):
         handler = ProvisioningHandler()

@@ -1,111 +1,82 @@
-"""Local access-state ownership; external groups belong to radius_population."""
+"""Subscription access state is derived by the lifecycle owner."""
 
 from __future__ import annotations
 
-from app.models.catalog import (
-    AccessCredential,
-    AccessState,
-    Subscription,
-    SubscriptionStatus,
+from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.enforcement_lock import (
+    AccessRestrictionMode,
+    EnforcementLock,
+    EnforcementReason,
 )
-from app.services.radius_access_state import set_subscription_access_state
+from app.models.subscriber import SubscriberStatus
+from app.services.account_lifecycle import compute_account_status
 
 
-def _seed_subscription(
-    db,
-    subscriber,
-    catalog_offer,
-    *,
-    username: str,
-    status: SubscriptionStatus = SubscriptionStatus.active,
-):
+def _subscription(db, subscriber, offer, *, status: SubscriptionStatus):
     subscription = Subscription(
         subscriber_id=subscriber.id,
-        offer_id=catalog_offer.id,
+        offer_id=offer.id,
         status=status,
     )
     db.add(subscription)
     db.flush()
-    db.add(
-        AccessCredential(
-            subscriber_id=subscriber.id,
-            username=username,
-            is_active=True,
-        )
-    )
-    db.commit()
     return subscription
 
 
-def test_updates_local_state_without_external_write(
-    db_session, subscriber, catalog_offer
-):
-    subscription = _seed_subscription(
-        db_session, subscriber, catalog_offer, username="local-state"
-    )
-
-    result = set_subscription_access_state(
-        db_session, str(subscription.id), AccessState.active
-    )
-
-    db_session.refresh(subscription)
-    assert subscription.access_state == "active"
-    assert result == {
-        "credentials": 1,
-        "external_rows_written": 0,
-        "external_rows_deleted": 0,
-        "aggregate_state": "active",
-    }
-
-
-def test_subscriber_aggregate_remains_most_permissive(
-    db_session, subscriber, catalog_offer
-):
-    active = _seed_subscription(
-        db_session, subscriber, catalog_offer, username="aggregate-state"
-    )
-    terminated = Subscription(
-        subscriber_id=subscriber.id,
-        offer_id=catalog_offer.id,
-        status=SubscriptionStatus.canceled,
-    )
-    db_session.add(terminated)
-    db_session.commit()
-
-    set_subscription_access_state(db_session, str(active.id), AccessState.active)
-    result = set_subscription_access_state(
-        db_session, str(terminated.id), AccessState.terminated
-    )
-
-    assert result["aggregate_state"] == "active"
-
-
-def test_no_credentials_is_a_local_only_noop(db_session, subscriber, catalog_offer):
-    subscription = Subscription(
-        subscriber_id=subscriber.id,
-        offer_id=catalog_offer.id,
+def test_lifecycle_projects_active_child_access(db_session, subscriber, catalog_offer):
+    subscriber.status = SubscriberStatus.blocked
+    subscription = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
         status=SubscriptionStatus.active,
     )
-    db_session.add(subscription)
-    db_session.commit()
 
-    result = set_subscription_access_state(
-        db_session, str(subscription.id), AccessState.active
-    )
+    status = compute_account_status(db_session, str(subscriber.id))
 
-    assert result["credentials"] == 0
-    assert result["aggregate_state"] == "active"
+    assert status is SubscriberStatus.active
+    assert subscription.access_state == "active"
 
 
-def test_missing_subscription_returns_skip(db_session):
-    result = set_subscription_access_state(
+def test_lifecycle_projects_active_lock_as_restricted(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = _subscription(
         db_session,
-        "00000000-0000-0000-0000-000000000000",
-        AccessState.active,
+        subscriber,
+        catalog_offer,
+        status=SubscriptionStatus.active,
     )
-    assert result == {
-        "credentials": 0,
-        "external_rows_written": 0,
-        "external_rows_deleted": 0,
-        "aggregate_state": None,
-    }
+    db_session.add(
+        EnforcementLock(
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            reason=EnforcementReason.admin,
+            access_mode=AccessRestrictionMode.hard_reject,
+            source="test:access-owner",
+            is_active=True,
+        )
+    )
+
+    compute_account_status(db_session, str(subscriber.id))
+
+    assert subscription.access_state == "suspended"
+
+
+def test_lifecycle_projects_terminal_child_access(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        status=SubscriptionStatus.canceled,
+    )
+
+    compute_account_status(db_session, str(subscriber.id))
+
+    assert subscription.access_state == "terminated"

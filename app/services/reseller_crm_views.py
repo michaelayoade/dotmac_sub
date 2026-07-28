@@ -1,16 +1,12 @@
-"""Reseller-facing aggregations of the CRM mirrors (Sales/Quotes B3).
+"""Reseller-facing aggregations of native Sub work and quote projections.
 
 A reseller manages many customer accounts (``Subscriber.reseller_id``). These
 helpers aggregate the per-subscriber quotes / projects / work orders across the
 reseller's whole customer set, tagging each row with its account so the
 reseller can see "which customer".
 
-During native ownership cutover, quote and project reads run behind the per-vertical
-``{quotes,projects}_native_read_enabled`` read-flip flags — OFF (default)
-serves the local CRM mirrors (the reconcile task keeps them fresh, so a
-reseller dashboard never fans out N CRM calls and works during a CRM outage),
-ON serves sub's native tables. Response shells and item shapes are identical
-contract. Work orders stay mirror-only until native work-order authority is enabled.
+Projects and work orders are native Sub reads. Quotes retain their independent
+sales cutover contract.
 """
 
 from __future__ import annotations
@@ -18,16 +14,11 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
-from app.models.project import Project
-from app.models.project_mirror import ProjectMirror
 from app.models.quote_mirror import QuoteMirror
-from app.models.work_order import WorkOrder
-from app.services import projects as projects_service
-from app.services import quotes_mirror, reseller_portal
+from app.services import customer_experience_lifecycle, quotes_mirror, reseller_portal
 from app.services.sales import selfserve as selfserve_service
-from app.services.work_order_views import row_to_item
 
 logger = logging.getLogger(__name__)
 
@@ -113,59 +104,23 @@ def projects_for_reseller(db: Session, reseller_id: str) -> dict:
     if not names:
         return {"projects": [], "total": 0, "active": 0}
 
-    if projects_service.native_read_enabled(db):
-        native_rows = (
-            db.query(Project)
-            .options(selectinload(Project.tasks))
-            .filter(Project.subscriber_id.in_(list(names)))
-            .filter(Project.is_active.is_(True))
-            .order_by(Project.created_at.desc())
-            .all()
+    items = []
+    for subscriber_id, account_name in names.items():
+        response = customer_experience_lifecycle.projects_for_subscriber(
+            db, str(subscriber_id)
         )
-        native_items = []
-        for p in native_rows:
-            payload = projects_service.build_portal_project_payload(p)
-            native_items.append(
+        for project in response.projects:
+            payload = project.model_dump(mode="json")
+            items.append(
                 {
-                    "account_id": str(p.subscriber_id),
-                    "account_name": names.get(p.subscriber_id),
+                    "account_id": str(subscriber_id),
+                    "account_name": account_name,
                     **{key: payload[key] for key in _RESELLER_PROJECT_KEYS},
                 }
             )
-        active = sum(
-            1
-            for i in native_items
-            if i["status"] not in ("completed", "canceled", "closed")
-        )
-        return {
-            "projects": native_items,
-            "total": len(native_items),
-            "active": active,
-        }
-
-    rows = db.scalars(
-        select(ProjectMirror)
-        .where(ProjectMirror.subscriber_id.in_(list(names)))
-        .order_by(ProjectMirror.created_at.desc())
-    ).all()
-    items = [
-        {
-            "account_id": str(r.subscriber_id),
-            "account_name": names.get(r.subscriber_id),
-            "id": r.crm_project_id,
-            "name": r.name,
-            "status": r.status,
-            "project_type": r.project_type,
-            "progress_pct": r.progress_pct,
-            "current_stage": r.current_stage,
-            "region": r.region,
-            "customer_address": r.customer_address,
-            "due_at": _dt(r.due_at),
-            "created_at": _dt(r.project_created_at),
-        }
-        for r in rows
-    ]
-    active = sum(1 for r in rows if r.status not in ("completed", "canceled", "closed"))
+    active = sum(
+        1 for item in items if item["status"] not in ("completed", "canceled", "closed")
+    )
     return {"projects": items, "total": len(items), "active": active}
 
 
@@ -173,18 +128,19 @@ def work_orders_for_reseller(db: Session, reseller_id: str) -> dict:
     names = _customer_names(db, reseller_id)
     if not names:
         return {"work_orders": [], "total": 0, "upcoming": 0}
-    rows = db.scalars(
-        select(WorkOrder)
-        .where(WorkOrder.subscriber_id.in_(list(names)))
-        .order_by(WorkOrder.created_at.desc())
-    ).all()
     items = []
-    for r in rows:
-        item = row_to_item(r, include_internal=False)
-        item["account_id"] = str(r.subscriber_id)
-        item["account_name"] = names.get(r.subscriber_id)
-        items.append(item)
-    upcoming = sum(
-        1 for r in rows if r.status not in ("completed", "canceled", "draft")
-    )
+    upcoming = 0
+    for subscriber_id, account_name in names.items():
+        response = customer_experience_lifecycle.work_orders_for_subscriber(
+            db, str(subscriber_id)
+        )
+        upcoming += response.upcoming
+        for work_order in response.work_orders:
+            items.append(
+                {
+                    "account_id": str(subscriber_id),
+                    "account_name": account_name,
+                    **work_order.model_dump(mode="json"),
+                }
+            )
     return {"work_orders": items, "total": len(items), "upcoming": upcoming}

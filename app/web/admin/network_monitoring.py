@@ -1,5 +1,7 @@
 """Admin network monitoring and alarms web routes."""
 
+import uuid
+
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -9,6 +11,8 @@ from app.db import get_db
 from app.services import web_network_alarm_rules as web_network_alarm_rules_service
 from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services import web_network_monitoring as web_network_monitoring_service
+from app.services import web_network_noc as web_network_noc_service
+from app.services import web_network_noc_inspector as web_network_noc_inspector_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -492,50 +496,18 @@ def _actor_id(request: Request):
 
 
 def _incident_boundary_and_subscription_ids(db: Session, incident_id: str | None):
-    """Resolve a notifiable classifier incident + affected subscription ids."""
-    import uuid as _uuid
+    """Resolve a notifiable classifier incident + affected subscription ids.
 
-    from app.models.network import FdhCabinet
-    from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
-    from app.services.topology.affected import affected_customers
-    from app.services.topology.outage import (
-        CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
-        CLASSIFIER_SOURCE,
+    Thin pass-through: the resolution lives in
+    ``app.services.topology.outage_targets`` so the automated dispatcher
+    (ADR 0004) and this preview cannot drift into notifying different people
+    from the same incident.
+    """
+    from app.services.topology.outage_targets import (
+        incident_boundary_and_subscription_ids,
     )
 
-    try:
-        incident = (
-            db.get(OutageIncident, _uuid.UUID(incident_id)) if incident_id else None
-        )
-    except (ValueError, TypeError):
-        incident = None
-    if (
-        incident is None
-        or incident.detection_source != CLASSIFIER_SOURCE
-        or incident.status not in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
-    ):
-        return None, None, []
-    node = (
-        db.get(NetworkDevice, incident.root_node_id)
-        if incident.root_node_id is not None
-        else None
-    )
-    basestation = (
-        db.get(PopSite, incident.basestation_id)
-        if incident.basestation_id is not None
-        else None
-    )
-    fdh = (
-        db.get(FdhCabinet, incident.fdh_cabinet_id)
-        if incident.fdh_cabinet_id is not None
-        else None
-    )
-    if node is None and basestation is None and fdh is None:
-        return incident, None, []
-    impact = affected_customers(db, node=node, basestation=basestation, fdh=fdh)
-    sub_ids = [s.id for s in impact["subscriptions"]]
-    boundary = node or basestation or fdh
-    return incident, boundary, sub_ids
+    return incident_boundary_and_subscription_ids(db, incident_id)
 
 
 @router.get(
@@ -804,3 +776,29 @@ def monitoring_device_bulk_action(
     return HTMLResponse(
         web_network_monitoring_service.render_bulk_result(stats, action)
     )
+
+
+@router.get(
+    "/noc",
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def noc_queue_page(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Unified NOC triage queue, projected from the monitoring owners."""
+    context = _base_context(request, db, active_page="noc")
+    context.update(web_network_noc_service.noc_queue_data(db))
+    return templates.TemplateResponse("admin/network/noc/index.html", context)
+
+
+@router.get(
+    "/noc/inspect/{node_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def noc_inspect(request: Request, node_id: uuid.UUID, db: Session = Depends(get_db)):
+    context = {"request": request}
+    data = web_network_noc_inspector_service.noc_inspector_data(db, node_id)
+    context.update(data)
+    return templates.TemplateResponse("admin/network/noc/_inspector.html", context)

@@ -18,6 +18,12 @@ from app.schemas.subscriber import (
     ResellerRead,
     ResellerSyncRead,
     ResellerUpdate,
+    SubscriberAccountStatusConfirmRequest,
+    SubscriberAccountStatusOutcomeRead,
+    SubscriberAccountStatusPreviewRead,
+    SubscriberAccountStatusPreviewRequest,
+    SubscriberBillingApprovalRead,
+    SubscriberBillingApprovalUpdate,
     SubscriberCreate,
     SubscriberCustomFieldCreate,
     SubscriberCustomFieldRead,
@@ -26,13 +32,17 @@ from app.schemas.subscriber import (
     SubscriberSyncRead,
     SubscriberUpdate,
 )
+from app.services import account_billing_approval, account_status_commands
 from app.services import subscriber as subscriber_service
 from app.services.auth_dependencies import require_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.nin_matching import normalize_nin, validate_nin
 from app.services.nin_verifications import (
     begin_subscriber_nin_verification_committed,
     latest_nin_verification,
 )
+from app.services.owner_commands import CommandContext
 from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
 
 router = APIRouter()
@@ -249,6 +259,162 @@ def update_subscriber(
     subscriber_id: str, payload: SubscriberUpdate, db: Session = Depends(get_db)
 ):
     return subscriber_service.subscribers.update(db, subscriber_id, payload)
+
+
+def _account_status_action(value: str) -> account_status_commands.AccountStatusAction:
+    try:
+        return account_status_commands.AccountStatusAction(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "customer.account_status_actions.invalid_action",
+                "message": "Account-status action is invalid.",
+            },
+        ) from exc
+
+
+def _account_id(value: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Subscriber not found") from exc
+
+
+def _account_status_actor(request: Request) -> str:
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = str(auth.get("principal_id") or "").strip()
+    if not principal_id:
+        raise HTTPException(status_code=403, detail="Authorized actor is missing")
+    actor_type = "api_key" if auth.get("principal_type") == "api_key" else "user"
+    return f"{actor_type}:{principal_id}"
+
+
+def _raise_account_status_error(exc: DomainError) -> None:
+    status_code = 404 if exc.code.endswith("account_not_found") else 409
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "code": exc.code,
+            "message": exc.message,
+            "details": exc.details,
+        },
+    ) from exc
+
+
+@router.post(
+    "/subscribers/{subscriber_id}/account-status/preview",
+    response_model=SubscriberAccountStatusPreviewRead,
+    tags=["subscribers"],
+    dependencies=[Depends(require_permission("customer:update"))],
+)
+def preview_subscriber_account_status(
+    subscriber_id: str,
+    payload: SubscriberAccountStatusPreviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    _account_status_actor(request)
+    try:
+        return account_status_commands.preview_account_status_change(
+            db,
+            account_status_commands.PreviewAccountStatusRequest(
+                account_id=_account_id(subscriber_id),
+                action=_account_status_action(payload.action),
+            ),
+        )
+    except DomainError as exc:
+        _raise_account_status_error(exc)
+
+
+@router.post(
+    "/subscribers/{subscriber_id}/account-status/confirm",
+    response_model=SubscriberAccountStatusOutcomeRead,
+    tags=["subscribers"],
+    dependencies=[Depends(require_permission("customer:update"))],
+)
+def confirm_subscriber_account_status(
+    subscriber_id: str,
+    payload: SubscriberAccountStatusConfirmRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    actor = _account_status_actor(request)
+    account_id = _account_id(subscriber_id)
+    command_id = uuid.uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return account_status_commands.confirm_account_status_change(
+            db,
+            account_status_commands.ConfirmAccountStatusCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=actor,
+                    scope=account_status_commands.ACCOUNT_STATUS_WRITE_SCOPE,
+                    reason=payload.reason,
+                    idempotency_key=payload.idempotency_key,
+                ),
+                account_id=account_id,
+                action=_account_status_action(payload.action),
+                expected_preview_fingerprint=payload.preview_fingerprint,
+            ),
+        )
+    except DomainError as exc:
+        _raise_account_status_error(exc)
+
+
+@router.post(
+    "/subscribers/{subscriber_id}/billing-approval",
+    response_model=SubscriberBillingApprovalRead,
+    tags=["subscribers"],
+    dependencies=[Depends(require_permission("customer:update"))],
+)
+def change_subscriber_billing_approval(
+    subscriber_id: str,
+    payload: SubscriberBillingApprovalUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = str(auth.get("principal_id") or "").strip()
+    if not principal_id:
+        raise HTTPException(status_code=403, detail="Authorized actor is missing")
+    actor_type = "api_key" if auth.get("principal_type") == "api_key" else "user"
+    try:
+        account_id = uuid.UUID(subscriber_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Subscriber not found") from exc
+    db_session_adapter.release_read_transaction(db)
+    command_id = uuid.uuid4()
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=f"{actor_type}:{principal_id}",
+        scope=account_billing_approval.BILLING_APPROVAL_WRITE_SCOPE,
+        reason=payload.reason,
+        idempotency_key=payload.idempotency_key
+        or f"subscriber-billing-approval:{account_id}:{payload.approved}:{command_id}",
+    )
+    try:
+        return account_billing_approval.change_account_billing_approval(
+            db,
+            account_billing_approval.ChangeAccountBillingApprovalCommand(
+                context=context,
+                account_id=account_id,
+                approved=payload.approved,
+            ),
+        )
+    except DomainError as exc:
+        status_code = 404 if exc.code.endswith("account_not_found") else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+            },
+        ) from exc
 
 
 @router.delete(

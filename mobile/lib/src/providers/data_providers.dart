@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/addon.dart';
+import '../models/account_health.dart';
 import '../models/connection_status.dart';
 import '../models/contact.dart';
 import '../models/invoice.dart';
-import '../models/service_status.dart';
 import '../models/ledger.dart';
 import '../models/notification.dart';
 import '../models/payment_method.dart';
@@ -249,24 +249,25 @@ final autopayStatusProvider = FutureProvider.autoDispose<AutopayStatus>((
   return ref.watch(billingRepositoryProvider).autopayStatus();
 });
 
-/// Truthful account/service health (GET /me/service-status): balance, grace,
-/// deactivation, dunning. Drives the renew/top-up banner with the real cut date
-/// instead of guessing from a billing date.
-final serviceStatusProvider = FutureProvider.autoDispose<ServiceStatus>((
+/// Canonical cross-client account/service health (GET /me/account-health).
+final accountHealthProvider = FutureProvider.autoDispose<AccountHealth>((
   ref,
 ) async {
   cacheFor(ref);
-  return ref.watch(catalogRepositoryProvider).serviceStatus();
+  return ref.watch(catalogRepositoryProvider).accountHealth();
 });
 
-/// Per-customer connection verdict (GET /me/connection-status, outage
-/// classifier P4): "what's wrong with my connection?" with area-outage blame
-/// suppression. Drives the Connection status screen + the slim Home banner.
-final connectionStatusProvider = FutureProvider.autoDispose<ConnectionStatus>((
-  ref,
-) async {
-  cacheFor(ref);
-  return ref.watch(catalogRepositoryProvider).connectionStatus();
+/// The selected service's diagnosis is a projection of Account Health; it does
+/// not issue a second request or keep a parallel outage/session verdict.
+final connectionStatusProvider =
+    Provider.autoDispose<AsyncValue<ConnectionStatus?>>((ref) {
+  final selectedId = ref.watch(selectedServiceIdProvider);
+  return ref.watch(accountHealthProvider).whenData((health) {
+    final service = selectedId == null
+        ? (health.services.isEmpty ? null : health.services.first)
+        : health.forSubscription(selectedId);
+    return service?.connection.value;
+  });
 });
 
 final subscriptionsProvider = FutureProvider.autoDispose<Page<Subscription>>((

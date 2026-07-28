@@ -35,6 +35,7 @@ from app.services.billing.reconcile_unposted import (
     reconcile_subscriber,
     settle_open_invoices_from_credit,
 )
+from tests.payment_provider_event_helpers import stage_verified_provider_event
 
 CUTOVER = datetime(2026, 6, 13, tzinfo=UTC)
 
@@ -536,7 +537,7 @@ def test_ingest_carries_billing_account_id_for_consolidated_payment(db_session):
     db_session.add(provider)
     db_session.commit()
 
-    event = billing_service.payment_provider_events.ingest(
+    event = stage_verified_provider_event(
         db_session,
         PaymentProviderEventIngest(
             provider_id=provider.id,

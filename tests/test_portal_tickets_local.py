@@ -9,11 +9,11 @@ import uuid
 from unittest.mock import patch
 
 from app.models.event_store import EventStatus, EventStore
-from app.models.support import Ticket, TicketCommentAuthorType
+from app.models.sequence import DocumentSequence
+from app.models.support import Ticket, TicketChannel, TicketCommentAuthorType
 from app.schemas.support import TicketCommentCreate
 from app.services import crm_portal
 from app.services import support as support_service
-from app.services.customer_portal_notifications import get_notifications_page
 
 
 def test_create_uses_local_ticket_module(db_session, subscriber):
@@ -32,17 +32,33 @@ def test_create_uses_local_ticket_module(db_session, subscriber):
     # persisted in the local support_tickets table
     assert db_session.get(Ticket, uuid.UUID(ticket["id"])) is not None
 
-    notifications = get_notifications_page(
-        db_session,
-        {"subscriber_id": str(subscriber.id)},
-        page=1,
-        per_page=10,
-    )["notifications"]
-    acknowledgement = next(
-        item for item in notifications if item.entity_type == "support_ticket"
+
+def test_create_advances_past_an_existing_imported_ticket_number(
+    db_session, subscriber
+):
+    db_session.add(
+        Ticket(
+            subscriber_id=subscriber.id,
+            number="1",
+            title="Imported ticket",
+            description="Existing external identity",
+            channel=TicketChannel.api,
+        )
     )
-    assert acknowledgement.channel == "portal"
-    assert str(ticket["ticket_number"]) in acknowledgement.message
+    db_session.add(DocumentSequence(key="support_ticket", next_value=1))
+    db_session.commit()
+
+    result = crm_portal.handle_ticket_create(
+        db_session,
+        {},
+        str(subscriber.id),
+        "New request",
+        "Please investigate",
+        "normal",
+    )
+
+    assert result["success"] is True, result
+    assert result["ticket"]["ticket_number"] == "2"
 
 
 def test_create_does_not_dispatch_integrations_in_customer_request(

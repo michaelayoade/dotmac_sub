@@ -267,7 +267,17 @@ def _validate_tax_rate(db: Session, tax_rate_id: str | None):
     return rate
 
 
-def _apply_validated_lga(data: dict, *, current_region=None, current_lga=None) -> dict:
+class SubscriberAccountPreparationError(ValueError):
+    """A transaction-neutral account initializer rejected canonical input."""
+
+
+def _apply_validated_lga(
+    data: dict,
+    *,
+    current_region=None,
+    current_lga=None,
+    transport_errors: bool = True,
+) -> dict:
     """Validate and canonicalise a captured LGA against its state.
 
     LGA is an NCC administrative unit that the quarterly complaints return
@@ -298,19 +308,19 @@ def _apply_validated_lga(data: dict, *, current_region=None, current_lga=None) -
 
     region = data.get("region", current_region)
     if not (str(region or "").strip()):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "An LGA cannot be validated without a state: set region alongside lga."
-            ),
+        message = (
+            "An LGA cannot be validated without a state: set region alongside lga."
         )
+        if transport_errors:
+            raise HTTPException(status_code=422, detail=message)
+        raise SubscriberAccountPreparationError(message)
 
     canonical = ncc_location.canonical_lga(region, lga)
     if not canonical:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{lga!r} is not a Local Government Area of {region!r}.",
-        )
+        message = f"{lga!r} is not a Local Government Area of {region!r}."
+        if transport_errors:
+            raise HTTPException(status_code=422, detail=message)
+        raise SubscriberAccountPreparationError(message)
     data["lga"] = canonical
     return data
 
@@ -328,9 +338,17 @@ def _normalize_subscriber_identity_fields(data: dict) -> dict:
 
 class Resellers(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: ResellerCreate):
+    def prepare_new(db: Session, payload: ResellerCreate) -> Reseller:
+        """Stage one canonical reseller record without completing a transaction."""
+
         reseller = Reseller(**payload.model_dump())
         db.add(reseller)
+        db.flush()
+        return reseller
+
+    @staticmethod
+    def create(db: Session, payload: ResellerCreate):
+        reseller = Resellers.prepare_new(db, payload)
         db.commit()
         db.refresh(reseller)
         return reseller
@@ -483,10 +501,16 @@ class Subscribers(ListResponseMixin):
         )
 
         if getattr(payload, "person_id", None):
-            raise ValueError("prepare_new_account cannot target an existing Subscriber")
+            raise SubscriberAccountPreparationError(
+                "prepare_new_account cannot target an existing Subscriber"
+            )
         data = _normalize_subscriber_identity_fields(payload.model_dump())
-        data = _apply_validated_lga(data)
+        data = _apply_validated_lga(data, transport_errors=False)
         requested_status = data.pop("status", SubscriberStatus.active)
+        if not bool(data.get("billing_enabled", True)):
+            # Approval is an admission fact. An unapproved account may be
+            # prepared, but it cannot begin in an active lifecycle state.
+            requested_status = SubscriberStatus.new
         data.pop("is_active", None)
         category = data.pop("category", None)
         data.pop("organization_id", None)
@@ -524,29 +548,45 @@ class Subscribers(ListResponseMixin):
         db.flush()
         from app.services.account_lifecycle import apply_requested_account_status
 
-        apply_requested_account_status(
-            db,
-            str(subscriber.id),
-            requested_status,
-            reason="Initial subscriber account state",
-            source="subscriber_service:create",
-        )
+        try:
+            apply_requested_account_status(
+                db,
+                str(subscriber.id),
+                requested_status,
+                reason="Initial subscriber account state",
+                source="subscriber_service:create",
+            )
+        except ValueError as exc:
+            raise SubscriberAccountPreparationError(str(exc)) from exc
         rebuild_identity_index_for_subscriber(db, subscriber.id)
         return subscriber
 
     @staticmethod
-    def commit_prepared_account(db: Session, subscriber: Subscriber) -> Subscriber:
-        """Stage ``subscriber.created`` and commit a prepared account atomically."""
+    def stage_prepared_account_created_event(
+        db: Session,
+        subscriber: Subscriber,
+        *,
+        actor: str | None = None,
+    ) -> None:
+        """Stage canonical account-created evidence without completing a transaction."""
 
         emit_event(
             db,
             EventType.subscriber_created,
             {
+                "schema_version": 1,
                 "subscriber_id": str(subscriber.id),
                 "subscriber_number": subscriber.subscriber_number,
             },
+            actor=actor,
             subscriber_id=subscriber.id,
         )
+
+    @staticmethod
+    def commit_prepared_account(db: Session, subscriber: Subscriber) -> Subscriber:
+        """Stage ``subscriber.created`` and commit a prepared account atomically."""
+
+        Subscribers.stage_prepared_account_created_event(db, subscriber)
         db.commit()
         db.refresh(subscriber)
         return subscriber
@@ -572,6 +612,17 @@ class Subscribers(ListResponseMixin):
             )
             requested_status = data.pop("status", None)
             requested_is_active = data.pop("is_active", None)
+            requested_billing_approval = data.pop("billing_enabled", None)
+            if requested_billing_approval is not None and bool(
+                requested_billing_approval
+            ) != bool(subscriber.billing_enabled):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Billing approval is a lifecycle command; use the "
+                        "billing-approval endpoint."
+                    ),
+                )
             category = data.pop("category", None)
             data.pop("organization_id", None)
             for key, value in data.items():
@@ -623,7 +674,10 @@ class Subscribers(ListResponseMixin):
             db.refresh(subscriber)
             return subscriber
 
-        subscriber = Subscribers.prepare_new_account(db, payload)
+        try:
+            subscriber = Subscribers.prepare_new_account(db, payload)
+        except SubscriberAccountPreparationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return Subscribers.commit_prepared_account(db, subscriber)
 
     @staticmethod
@@ -704,6 +758,13 @@ class Subscribers(ListResponseMixin):
                     Subscriber.account_number.ilike(like),
                     Subscriber.address_line1.ilike(like),
                     Subscriber.city.ilike(like),
+                    Subscriber.addresses.any(
+                        or_(
+                            Address.address_line1.ilike(like),
+                            Address.city.ilike(like),
+                            Address.region.ilike(like),
+                        )
+                    ),
                     Subscriber.notes.ilike(like),
                 )
                 active_subscription = Subscription.status == SubscriptionStatus.active
@@ -959,8 +1020,26 @@ class Subscribers(ListResponseMixin):
             data, current_region=subscriber.region, current_lga=subscriber.lga
         )
         updated_fields = list(data.keys())
-        requested_status = data.pop("status", None)
-        requested_is_active = data.pop("is_active", None)
+        lifecycle_fields = {"status", "is_active"} & data.keys()
+        if lifecycle_fields:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Account lifecycle state is read-only in generic updates; use "
+                    "the account-status preview and confirmation endpoints."
+                ),
+            )
+        requested_billing_approval = data.pop("billing_enabled", None)
+        if requested_billing_approval is not None and bool(
+            requested_billing_approval
+        ) != bool(subscriber.billing_enabled):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Billing approval is a lifecycle command; use the "
+                    "billing-approval endpoint."
+                ),
+            )
         category = data.pop("category", None)
         data.pop("organization_id", None)
         requested_billing_mode = data.get("billing_mode")
@@ -990,23 +1069,6 @@ class Subscribers(ListResponseMixin):
         if category is not None:
             subscriber.category = (
                 category if isinstance(category, SubscriberCategory) else str(category)
-            )
-        if requested_status is not None or requested_is_active is not None:
-            from app.services.account_lifecycle import apply_requested_account_status
-
-            target_status = requested_status
-            if target_status is None:
-                target_status = (
-                    SubscriberStatus.active
-                    if requested_is_active
-                    else SubscriberStatus.suspended
-                )
-            apply_requested_account_status(
-                db,
-                str(subscriber.id),
-                target_status,
-                reason="Subscriber account updated",
-                source="subscriber_service:update",
             )
         _update_restricted_status_metadata(
             subscriber,
@@ -1182,6 +1244,13 @@ class Subscribers(ListResponseMixin):
                         Subscriber.account_number.ilike(like),
                         Subscriber.address_line1.ilike(like),
                         Subscriber.city.ilike(like),
+                        Subscriber.addresses.any(
+                            or_(
+                                Address.address_line1.ilike(like),
+                                Address.city.ilike(like),
+                                Address.region.ilike(like),
+                            )
+                        ),
                         Subscriber.notes.ilike(like),
                         subscription_match,
                         Subscriber.id.in_(

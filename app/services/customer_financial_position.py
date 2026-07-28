@@ -159,6 +159,53 @@ def get_customer_billing_summary(
     )
 
 
+def get_customer_receivable_summaries(
+    db: Session,
+    account_id: object,
+    *,
+    default_currency: str | None = None,
+    now: datetime | None = None,
+) -> tuple[CustomerBillingSummary, ...]:
+    """Return open receivables as distinct currency lanes.
+
+    A zero position still returns the configured default-currency lane. Unlike
+    ``get_customer_financial_position``, this first-viewport query never nets
+    nominal amounts from different currencies into one displayed number.
+    """
+    from app.services import display_format
+
+    account_uuid = coerce_uuid(account_id)
+    currency_rows = db.scalars(
+        select(func.upper(Invoice.currency))
+        .where(
+            *open_invoice_filters(account_uuid),
+            Invoice.is_proforma.is_not(True),
+            Invoice.currency.is_not(None),
+            Invoice.currency != "",
+        )
+        .distinct()
+        .order_by(func.upper(Invoice.currency))
+    ).all()
+    currencies = tuple(
+        display_format.currency_code(currency) for currency in currency_rows if currency
+    )
+    if not currencies:
+        currencies = (
+            display_format.currency_code(
+                default_currency or display_format.default_currency(db)
+            ),
+        )
+    return tuple(
+        get_customer_billing_summary(
+            db,
+            account_uuid,
+            currency=currency,
+            now=now,
+        )
+        for currency in currencies
+    )
+
+
 def get_customer_financial_position(
     db: Session,
     account_id,
@@ -255,11 +302,16 @@ def prepaid_available_balance(
     profile = resolve_billing_profile(db, account)
     if profile.effective_mode != BillingMode.prepaid:
         return Decimal("0.00")
-    if currency is None:
-        from app.services.access_resolution import resolve_prepaid_enforcement_currency
+    from app.services.prepaid_currency import (
+        normalize_prepaid_currency,
+        resolve_prepaid_enforcement_currency,
+    )
 
-        currency = resolve_prepaid_enforcement_currency(db)
-    unit = str(currency).strip().upper()
+    unit = (
+        resolve_prepaid_enforcement_currency(db)
+        if currency is None
+        else normalize_prepaid_currency(currency)
+    )
     return verified_prepaid_funding_balance(db, account_id, currency=unit)
 
 
@@ -270,15 +322,19 @@ def prepaid_available_balances(
     currency: str | None = None,
 ) -> dict[UUID, Decimal]:
     """Resolve reviewed opening balances plus native events for a cohort."""
+    from app.services.prepaid_currency import (
+        normalize_prepaid_currency,
+        resolve_prepaid_enforcement_currency,
+    )
     from app.services.prepaid_funding_reconstruction import (
         verified_prepaid_funding_balances,
     )
 
-    if currency is None:
-        from app.services.access_resolution import resolve_prepaid_enforcement_currency
-
-        currency = resolve_prepaid_enforcement_currency(db)
-    unit = str(currency).strip().upper()
+    unit = (
+        resolve_prepaid_enforcement_currency(db)
+        if currency is None
+        else normalize_prepaid_currency(currency)
+    )
     account_uuids = sorted(
         {coerce_uuid(account_id) for account_id in account_ids}, key=str
     )

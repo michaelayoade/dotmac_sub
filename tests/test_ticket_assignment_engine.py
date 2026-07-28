@@ -4,9 +4,11 @@ from uuid import uuid4
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.support import Ticket, TicketAssignee, TicketStatus
+from app.models.system_user import SystemUser
 from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.services.ticket_assignment.engine import auto_assign_ticket
 from app.services.ticket_assignment.selectors import list_team_candidate_person_ids
+from tests.staff_identity_fixtures import add_bound_staff_user
 
 
 def _team(db_session, name: str = "Dispatch") -> ServiceTeam:
@@ -17,12 +19,12 @@ def _team(db_session, name: str = "Dispatch") -> ServiceTeam:
 
 
 def _member(db_session, team: ServiceTeam):
-    person_id = uuid4()
+    user, person = add_bound_staff_user(db_session)
     db_session.add(
-        ServiceTeamMember(team_id=team.id, person_id=person_id, is_active=True)
+        ServiceTeamMember(team_id=team.id, person_id=person.id, is_active=True)
     )
     db_session.flush()
-    return person_id
+    return user.id
 
 
 def _ticket(
@@ -115,7 +117,7 @@ def test_ticket_auto_assign_respects_match_config_and_fallback_team(db_session):
     assert south_result.reason == "no_matching_rule"
 
 
-def test_ticket_auto_assign_direct_technician_adds_assignee_row(db_session):
+def test_ticket_auto_assign_direct_technician_is_a_proposal_only(db_session):
     technician_id = uuid4()
     rule = TicketAssignmentRule(
         name="Direct technician",
@@ -132,7 +134,8 @@ def test_ticket_auto_assign_direct_technician_adds_assignee_row(db_session):
     db_session.refresh(ticket)
 
     assert result.assigned is True
-    assert ticket.assigned_to_person_id == technician_id
+    assert result.assignee_person_id == str(technician_id)
+    assert ticket.assigned_to_person_id is None
     assert (
         db_session.query(TicketAssignee)
         .filter(
@@ -140,7 +143,7 @@ def test_ticket_auto_assign_direct_technician_adds_assignee_row(db_session):
             TicketAssignee.person_id == technician_id,
         )
         .count()
-        == 1
+        == 0
     )
 
 
@@ -157,8 +160,9 @@ def test_ticket_assignment_candidates_ignore_inactive_members(db_session):
     team = _team(db_session, "Partial support")
     inactive_person_id = _member(db_session, team)
     active_person_id = _member(db_session, team)
+    inactive_party_id = db_session.get(SystemUser, inactive_person_id).person_party_id
     for member in team.members:
-        if member.person_id == inactive_person_id:
+        if member.person_id == inactive_party_id:
             member.is_active = False
     db_session.commit()
 

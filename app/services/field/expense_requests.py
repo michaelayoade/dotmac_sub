@@ -39,9 +39,10 @@ def serialize_expense_request(request: FieldExpenseRequest) -> dict:
         "currency": request.currency,
         "notes": request.notes,
         "rejection_reason": request.rejection_reason,
-        "erp_expense_claim_id": request.erp_expense_claim_id,
-        "erp_claim_number": request.erp_claim_number,
-        "erp_claim_status": request.erp_claim_status,
+        "expense_system": request.expense_system,
+        "expense_claim_reference": request.expense_claim_reference,
+        "expense_claim_number": request.expense_claim_number,
+        "expense_claim_status": request.expense_claim_status,
         "client_ref": request.client_ref,
         "total_amount": request.total_amount,
         "submitted_at": request.submitted_at,
@@ -173,7 +174,7 @@ class FieldExpenseRequests:
         request.status = "submitted"
         request.submitted_at = datetime.now(UTC)
         _mark_sub_authoritative(request.work_order_mirror)
-        _maybe_enqueue_erp_sync(db, request)
+        _maybe_enqueue_backoffice(db, request)
         db.commit()
         db.refresh(request)
         return serialize_expense_request(request)
@@ -346,25 +347,35 @@ def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "expense_requests")
 
 
-def _maybe_enqueue_erp_sync(db: Session, request: FieldExpenseRequest) -> None:
-    """Add the ERP intent atomically when Sub owns the expense flow."""
-    from app.models.field_erp_sync import FieldErpSyncFlow, flow_owned_by_sub
-    from app.services.integrations.connectors.dotmac_erp import ERP_OUTBOX_CAPABILITY
-    from app.services.integrations.erp_capability import capability_enabled
+def _maybe_enqueue_backoffice(db: Session, request: FieldExpenseRequest) -> None:
+    """Stage a replaceable back-office claim without blocking Sub submission."""
+    from app.services.backoffice import enqueue_expense_claim
 
-    if not flow_owned_by_sub(db, FieldErpSyncFlow.expense_claim):
-        return
-    if not capability_enabled(db, ERP_OUTBOX_CAPABILITY):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "ERP expense transport is not enabled; submission cannot be "
-                "recorded without its outbox intent"
-            ),
+    try:
+        with db.begin_nested():
+            result = enqueue_expense_claim(db, request)
+        if result.requires_attention:
+            _note_backoffice_delivery_pending(request)
+    except Exception:
+        _note_backoffice_delivery_pending(request)
+        logger.warning(
+            "field expense %s: back-office enqueue failed; submission retained",
+            request.id,
+            exc_info=True,
         )
-    from app.services.dotmac_erp.expense_sync import enqueue_expense_claim
 
-    enqueue_expense_claim(db, request)
+
+def _note_backoffice_delivery_pending(request: FieldExpenseRequest) -> None:
+    metadata = dict(request.metadata_ or {})
+    events = list(metadata.get("backoffice_events") or [])
+    events.append(
+        {
+            "event": "backoffice_delivery_pending",
+            "at": datetime.now(UTC).isoformat(),
+        }
+    )
+    metadata["backoffice_events"] = events[-100:]
+    request.metadata_ = metadata
 
 
 field_expense_requests = FieldExpenseRequests()

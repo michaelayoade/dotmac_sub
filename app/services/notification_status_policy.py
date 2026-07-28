@@ -15,8 +15,7 @@ reputation:
 This is a HARD gate: it overrides preferences (a "subscribed" preference cannot
 re-enable mail to a canceled account). It only applies to subscriber-scoped
 notifications — operator/admin alerts with no subscriber are never gated. The
-``NotificationHandler`` consults :func:`status_allows_notification`, behind the
-``notification.status_gate_enabled`` kill-switch (default on).
+``NotificationHandler`` always consults :func:`status_allows_notification`.
 """
 
 from __future__ import annotations

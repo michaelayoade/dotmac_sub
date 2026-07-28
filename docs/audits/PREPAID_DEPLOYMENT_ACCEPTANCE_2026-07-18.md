@@ -1,5 +1,9 @@
 # Prepaid renewal deployment acceptance
 
+> Superseded historical acceptance evidence. Its temporary enable/disable and
+> readiness controls were retired by the permanent lifecycle cutover. Current
+> operations follow `docs/FINANCIAL_ACCESS_ENFORCEMENT.md` and ADR 0003.
+
 **Date:** 2026-07-18
 **Target:** explicitly approved `seabone` host
 **Scope:** deployment verification and source evidence only

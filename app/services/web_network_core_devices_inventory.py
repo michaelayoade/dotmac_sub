@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode
 
@@ -12,17 +11,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
-from app.models.network_monitoring import DeviceInterface, NetworkDevice
+from app.models.network_monitoring import DeviceInterface, NetworkDevice, PopSite
 from app.schemas.status_presentation import StatusTone
 from app.services import device_projection_views
 from app.services import network as network_service
 from app.services.device_operational_status import (
-    DEGRADED,
-    DOWN,
-    UP,
+    NOT_WORKING,
+    WORKING,
     annotate_operational_status,
+    derive_nas_operational_status,
     derive_olt_operational_status,
     derive_ont_operational_status,
+    derive_router_operational_status,
     warmer_is_stale,
 )
 from app.services.list_query import (
@@ -30,8 +30,10 @@ from app.services.list_query import (
     ListFieldDefinition,
     ListQuery,
 )
+from app.services.nas import NasDevices
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
+from app.services.router_management.inventory import RouterInventory
 from app.services.status_presentation import device_operational_status_presentation
 from app.services.ui_contracts import Action, Kpi, StateValue
 
@@ -39,8 +41,8 @@ from app.services.ui_contracts import Action, Kpi, StateValue
 # owner: it declares the searchable/filterable/sortable fields, default order and
 # page sizes. The list reads the materialised device_projections table (via
 # device_projection_views) — the SQL-paginated read model — instead of loading
-# every device and filtering in memory. Projected operational_status is
-# last-known state as of the projection's refreshed_at.
+# every device and filtering in memory. Projection age drives repair; it never
+# changes the owner-resolved binary operational outcome shown by readers.
 NETWORK_DEVICE_LIST_DEFINITION = ListDefinition(
     key="network_devices",
     fields=(
@@ -192,11 +194,11 @@ def _monitoring_retired_probe_status() -> dict[str, str | None]:
     # columns / operational status instead.
     reason = "Legacy probe source is not configured"
     return {
-        "ping_label": "Refresh pending",
-        "ping_state": "unknown",
+        "ping_label": "Not working",
+        "ping_state": "fail",
         "ping_reason": reason,
-        "snmp_label": "Refresh pending",
-        "snmp_state": "unknown",
+        "snmp_label": "Not working",
+        "snmp_state": "fail",
         "snmp_reason": reason,
     }
 
@@ -207,7 +209,7 @@ def _build_legacy_probe_statuses(
     """Degraded ICMP/SNMP probe states for Network Devices core rows.
 
     The Zabbix probe source was retired with the native monitoring cutover, so
-    every row degrades to a fixed refresh-pending placeholder until native
+    every row reports that the retired probe is not working until native
     reachability data is available.
     """
     return {
@@ -255,6 +257,11 @@ def collect_devices(db: Session) -> list[dict]:
     by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
     by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
     by_name = {d.name: d for d in monitoring_devices if d.name}
+    by_device_id = {str(d.id): d for d in monitoring_devices}
+    site_name_by_id = {
+        str(site_id): site_name
+        for site_id, site_name in db.execute(select(PopSite.id, PopSite.name)).all()
+    }
     warm_stale = warmer_is_stale()
 
     def _linked_monitoring(device: object) -> NetworkDevice | None:
@@ -275,6 +282,15 @@ def collect_devices(db: Session) -> list[dict]:
     def _seen(kind: str, value: object | None) -> bool:
         text = str(value or "").strip().lower()
         return bool(text and (kind, text) in seen_keys)
+
+    def _enum(value: object) -> object:
+        return getattr(value, "value", value)
+
+    def _dedup_linked(linked: NetworkDevice | None) -> None:
+        if linked is not None:
+            _add_seen("mgmt_ip", getattr(linked, "mgmt_ip", None))
+            _add_seen("hostname", getattr(linked, "hostname", None))
+            _add_seen("name", getattr(linked, "name", None))
 
     olts = network_service.olt_devices.list(
         db=db, is_active=True, order_by="name", order_dir="asc", limit=500, offset=0
@@ -302,12 +318,92 @@ def collect_devices(db: Session) -> list[dict]:
                 "status_presentation": operational.presentation,
                 "last_seen": getattr(olt, "last_seen", None),
                 "subscriber": None,
+                "class_facts": {
+                    "software_version": getattr(olt, "software_version", None),
+                    "firmware_version": getattr(olt, "firmware_version", None),
+                    "pon_types": getattr(olt, "supported_pon_types", None),
+                },
             }
         )
         _add_seen("id", olt.id)
         _add_seen("mgmt_ip", getattr(olt, "mgmt_ip", None))
         _add_seen("hostname", getattr(olt, "hostname", None))
         _add_seen("name", getattr(olt, "name", None))
+
+    nas_devices = NasDevices.list(db, is_active=True, limit=1000)
+    for nas in nas_devices:
+        if _seen("mgmt_ip", getattr(nas, "management_ip", None)) or _seen(
+            "name", getattr(nas, "name", None)
+        ):
+            continue
+        nas_link_id = getattr(nas, "network_device_id", None)
+        linked = by_device_id.get(str(nas_link_id)) if nas_link_id else None
+        operational = derive_nas_operational_status(
+            nas, linked_device=linked, warm_stale=warm_stale
+        )
+        devices.append(
+            {
+                "id": str(nas.id),
+                "name": nas.name,
+                "type": "nas",
+                "serial_number": getattr(nas, "serial_number", None),
+                "ip_address": getattr(nas, "management_ip", None),
+                "vendor": _enum(getattr(nas, "vendor", None)),
+                "model": getattr(nas, "model", None),
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
+                "last_seen": getattr(nas, "last_seen_at", None),
+                "subscriber": None,
+                "class_facts": {
+                    "health_status": _enum(getattr(nas, "health_status", None)),
+                    "site_name": site_name_by_id.get(
+                        str(getattr(nas, "pop_site_id", None))
+                    ),
+                },
+            }
+        )
+        _add_seen("id", nas.id)
+        _add_seen("mgmt_ip", getattr(nas, "management_ip", None))
+        _add_seen("name", nas.name)
+        _dedup_linked(linked)
+
+    routers = RouterInventory.list(db, limit=1000)
+    for router in routers:
+        if (
+            _seen("mgmt_ip", getattr(router, "management_ip", None))
+            or _seen("hostname", getattr(router, "hostname", None))
+            or _seen("name", getattr(router, "name", None))
+            or _seen("id", getattr(router, "nas_device_id", None))
+        ):
+            continue
+        operational = derive_router_operational_status(router)
+        devices.append(
+            {
+                "id": str(router.id),
+                "name": router.name,
+                "type": "router",
+                "serial_number": getattr(router, "serial_number", None),
+                "ip_address": getattr(router, "management_ip", None),
+                "vendor": "mikrotik",
+                "model": getattr(router, "board_name", None),
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
+                "last_seen": getattr(router, "last_seen_at", None),
+                "subscriber": None,
+                "class_facts": {
+                    "routeros_version": getattr(router, "routeros_version", None),
+                    "location": getattr(router, "location", None),
+                },
+            }
+        )
+        _add_seen("id", router.id)
+        _add_seen("mgmt_ip", getattr(router, "management_ip", None))
+        _add_seen("hostname", getattr(router, "hostname", None))
+        _add_seen("name", router.name)
+        router_link_id = getattr(router, "network_device_id", None)
+        _dedup_linked(by_device_id.get(str(router_link_id)) if router_link_id else None)
 
     core_devices = [device for device in monitoring_devices if device.is_active]
     annotate_operational_status(core_devices)
@@ -335,6 +431,12 @@ def collect_devices(db: Session) -> list[dict]:
                 "status_presentation": operational.presentation,
                 "last_seen": device.last_ping_at or device.last_snmp_at,
                 "subscriber": None,
+                "class_facts": {
+                    "role": _enum(getattr(device, "role", None)),
+                    "site_name": site_name_by_id.get(
+                        str(getattr(device, "pop_site_id", None))
+                    ),
+                },
             }
         )
         _add_seen("id", device.id)
@@ -352,6 +454,7 @@ def collect_devices(db: Session) -> list[dict]:
     )
     for ont in onts:
         operational = derive_ont_operational_status(ont)
+        ont_signal_at = getattr(ont, "signal_updated_at", None)
         devices.append(
             {
                 "id": str(ont.id),
@@ -366,6 +469,14 @@ def collect_devices(db: Session) -> list[dict]:
                 "status_presentation": operational.presentation,
                 "last_seen": getattr(ont, "last_seen", None),
                 "subscriber": None,
+                "class_facts": {
+                    "onu_rx_dbm": getattr(ont, "onu_rx_signal_dbm", None),
+                    "olt_rx_dbm": getattr(ont, "olt_rx_signal_dbm", None),
+                    "onu_tx_dbm": getattr(ont, "onu_tx_signal_dbm", None),
+                    "signal_updated_at": ont_signal_at.isoformat()
+                    if ont_signal_at
+                    else None,
+                },
             }
         )
 
@@ -395,13 +506,17 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": getattr(cpe, "ip_address", None),
                 "vendor": getattr(cpe, "vendor", None),
                 "model": getattr(cpe, "model", None),
-                "status": "unknown",
-                "operational_reason": "operational_state_not_available",
+                "status": NOT_WORKING,
+                "operational_reason": "verification_not_configured",
                 "status_presentation": device_operational_status_presentation(
-                    "unknown"
+                    NOT_WORKING
                 ),
                 "last_seen": getattr(cpe, "last_seen", None),
                 "subscriber": None,
+                "class_facts": {
+                    "firmware_version": getattr(cpe, "firmware_version", None),
+                    "mac_address": getattr(cpe, "mac_address", None),
+                },
             }
         )
 
@@ -460,11 +575,8 @@ def compute_device_stats(devices: list[dict]) -> dict[str, int]:
         "olt": sum(1 for d in devices if d["type"] == "olt"),
         "ont": sum(1 for d in devices if d["type"] == "ont"),
         "cpe": sum(1 for d in devices if d["type"] == "cpe"),
-        "up": sum(1 for d in devices if d["status"] == UP),
-        "down": sum(1 for d in devices if d["status"] == DOWN),
-        "degraded": sum(1 for d in devices if d["status"] == DEGRADED),
-        "maintenance": sum(1 for d in devices if d["status"] == "maintenance"),
-        "unknown": sum(1 for d in devices if d["status"] == "unknown"),
+        "working": sum(1 for d in devices if d["status"] == WORKING),
+        "not_working": sum(1 for d in devices if d["status"] == NOT_WORKING),
     }
 
 
@@ -483,18 +595,12 @@ _TYPE_KPI_LABELS = {
     "cpe": "CPE",
 }
 _STATUS_KPI_LABELS = {
-    "up": "Up",
-    "down": "Down",
-    "degraded": "Degraded",
-    "maintenance": "Maintenance",
-    "unknown": "Unknown",
+    "working": "Working",
+    "not_working": "Not working",
 }
 _STATUS_KPI_TONES = {
-    "up": StatusTone.positive,
-    "down": StatusTone.negative,
-    "degraded": StatusTone.warning,
-    "maintenance": StatusTone.neutral,
-    "unknown": StatusTone.neutral,
+    "working": StatusTone.positive,
+    "not_working": StatusTone.negative,
 }
 # Device types that expose an operator-driven reboot; CPE/unknown rows do not.
 _REBOOTABLE_DEVICE_TYPES = {"core", "olt", "ont"}
@@ -527,20 +633,10 @@ def _device_cohort_url(
 def _device_stat_kpis(
     stats: dict[str, int],
     list_query: ListQuery,
-    *,
-    refreshed_at: datetime | None,
 ) -> dict[str, Kpi]:
-    """Wrap the projection's summary counts as KPI contracts.
-
-    When the projection has never reconciled (``refreshed_at is None``) the
-    counts are genuinely unknown rather than zero, so they project as an unknown
-    StateValue the template renders as a placeholder — never a 0 standing in for
-    "not yet measured".
-    """
+    """Wrap the canonical binary projection counts as KPI contracts."""
 
     def _count(key: str) -> StateValue:
-        if refreshed_at is None:
-            return StateValue.unknown()
         return StateValue.present(int(stats.get(key, 0)))
 
     kpis: dict[str, Kpi] = {
@@ -647,8 +743,8 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
 
     Reads the materialised device_projections table (SQL search/filter/sort/
     paginate) via device_projection_views — the canonical read model — instead of
-    aggregating and filtering every device in memory. Projected status is
-    last-known as of ``devices_refreshed_at``.
+    aggregating and filtering every device in memory. Projection repair age is
+    internal and never becomes a third operational state.
     """
     devices, total = _query_page(db, list_query)
     for device in devices:
@@ -675,13 +771,10 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
     per_page = list_query.per_page
     total_pages = (total + per_page - 1) // per_page if total else 1
     device_type = list_query.filter_value("type")
-    refreshed_at = device_projection_views.latest_refreshed_at(db)
     return {
         "devices": devices,
         "stats": stats,
-        "device_kpis": _device_stat_kpis(
-            overview_stats, list_query, refreshed_at=refreshed_at
-        ),
+        "device_kpis": _device_stat_kpis(overview_stats, list_query),
         "device_type": device_type,
         "type": device_type,
         "search": list_query.search or "",
@@ -697,8 +790,6 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
         "per_page": per_page,
         "htmx_url": "/admin/network/devices/filter",
         "htmx_target": "devices-table-body",
-        # Freshness: projected operational status is last-known as of this stamp.
-        "devices_refreshed_at": refreshed_at,
     }
 
 
@@ -842,18 +933,18 @@ def olts_list_page_data(
             linked_live_status=linked_live_status,
             warm_stale=warm_stale,
         )
-        if operational.alarming:
+        if operational.alarming or operational.impaired:
             health_state = "attention"
             health_label = "Attention"
             health_reason = operational.reason.replace("_", " ").capitalize()
-        elif operational.retry_pending:
-            health_state = "retry_pending"
-            health_label = "Refresh pending"
-            health_reason = "Reachability evidence is stale or missing; refresh queued"
+        elif operational.status == NOT_WORKING:
+            health_state = NOT_WORKING
+            health_label = "Not working"
+            health_reason = operational.reason.replace("_", " ").capitalize()
         else:
-            health_state = "healthy"
-            health_label = "Healthy"
-            health_reason = "Current reachability evidence is positive"
+            health_state = WORKING
+            health_label = "Working"
+            health_reason = "Verification confirms operation"
 
         # The legacy runtime-health overlay (Zabbix telemetry) was retired
         # with the native monitoring cutover: rows keep their local monitoring
@@ -877,7 +968,6 @@ def olts_list_page_data(
                 "operational_status": operational.status,
                 "runtime_operational_reason": operational.reason,
                 "status_presentation": operational.presentation,
-                "runtime_retry_pending": operational.retry_pending,
                 "runtime_ping_label": ping_label,
                 "runtime_ping_state": ping_state,
                 "runtime_snmp_label": snmp_label,
@@ -922,21 +1012,15 @@ def olts_list_page_data(
             for item in filtered_olts
             if item.get("runtime_health_state") == "attention"
         ]
-    elif normalized_status in {"up", "online", "healthy"}:
+    elif normalized_status in {"up", "online", "healthy", WORKING}:
         filtered_olts = [
-            item for item in filtered_olts if item.get("operational_status") == UP
+            item for item in filtered_olts if item.get("operational_status") == WORKING
         ]
-    elif normalized_status == "degraded":
+    elif normalized_status in {"down", "offline", NOT_WORKING}:
         filtered_olts = [
-            item for item in filtered_olts if item.get("operational_status") == DEGRADED
-        ]
-    elif normalized_status in {"down", "offline"}:
-        filtered_olts = [
-            item for item in filtered_olts if item.get("operational_status") == DOWN
-        ]
-    elif normalized_status == "retry_pending":
-        filtered_olts = [
-            item for item in filtered_olts if item.get("runtime_retry_pending")
+            item
+            for item in filtered_olts
+            if item.get("operational_status") == NOT_WORKING
         ]
 
     filtered_total = len(filtered_olts)
@@ -948,12 +1032,10 @@ def olts_list_page_data(
     attention_items = [
         item for item in olts if item.get("runtime_health_state") == "attention"
     ]
-    up_count = sum(1 for item in olts if item.get("operational_status") == UP)
-    degraded_count = sum(
-        1 for item in olts if item.get("operational_status") == DEGRADED
+    working_count = sum(1 for item in olts if item.get("operational_status") == WORKING)
+    not_working_count = sum(
+        1 for item in olts if item.get("operational_status") == NOT_WORKING
     )
-    down_count = sum(1 for item in olts if item.get("operational_status") == DOWN)
-    retry_pending_count = sum(1 for item in olts if item.get("runtime_retry_pending"))
     total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)  # type: ignore[call-overload]
 
     stats = {
@@ -961,10 +1043,8 @@ def olts_list_page_data(
         "fleet_total": len(olts),
         "active": sum(1 for o in filtered_olts if o["is_active"]),
         "attention": len(attention_items),
-        "up": up_count,
-        "degraded": degraded_count,
-        "down": down_count,
-        "retry_pending": retry_pending_count,
+        "working": working_count,
+        "not_working": not_working_count,
         "total_pon_ports": total_pon_ports,
     }
 

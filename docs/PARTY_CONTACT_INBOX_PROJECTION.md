@@ -4,7 +4,8 @@
 **Decision owner:** Michael  
 **Decision date:** 2026-07-17  
 **Systems of record:** `party.registry` for identity/contact facts;
-`communications.team_inbox` for Inbox routing
+`communications.team_inbox_contact_resolution` for reviewed Inbox contact links;
+`communications.team_inbox_routing` for route lifecycle
 
 ## Outcome
 
@@ -28,8 +29,8 @@ verification, and consent remain unchanged.
 | Contact's descriptive relationship to subscriber Party | `party.registry` | Reviewed projection; never grants permission |
 | Canonical contact-point value, provider scope, verification, and consent | `party.registry` | Existing Party fact; no legacy flag is copied into it |
 | Legacy contact field to canonical contact-point evidence | `party.registry` | Nullable projection rows; one row per reviewed source field |
-| Inbox channel/normalized-contact target and active-route lifecycle | `communications.team_inbox` | Existing runtime authority remains unchanged |
-| Inbox route to canonical contact point | `communications.team_inbox` | Nullable shadow projection written by `team_inbox_contact_links` |
+| Inbox channel/normalized-contact target and active-route lifecycle | `communications.team_inbox_routing` | Existing runtime authority remains unchanged |
+| Inbox route to canonical contact point | `communications.team_inbox_contact_resolution` | Nullable shadow projection written by `team_inbox_contact_links` |
 | `SubscriberContact.is_authorized` and login/access decisions | Existing customer/auth owners | A relationship or contact point never grants access |
 
 Party code cannot write an Inbox row. Team Inbox validates canonical Party

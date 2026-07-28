@@ -12,6 +12,13 @@ from app.services.dotmac_erp.client import (
     DotMacERPRateLimitError,
     DotMacERPTransientError,
 )
+from app.services.integrations.backoffice_contracts import (
+    ERP_INVENTORY_CAPABILITY,
+    ERP_OPERATIONAL_SYNC_CAPABILITY,
+    ERP_OUTBOX_CAPABILITY,
+    ERP_REGULATORY_CAPABILITY,
+    ERP_STATUS_CAPABILITY,
+)
 from app.services.integrations.manifest import ConnectorManifest
 from app.services.integrations.runtime import (
     HealthResult,
@@ -20,12 +27,6 @@ from app.services.integrations.runtime import (
     OperationStatus,
     ValidationResult,
 )
-
-ERP_OUTBOX_CAPABILITY = "erp.outbox.deliver.v1"
-ERP_STATUS_CAPABILITY = "erp.status.read.v1"
-ERP_INVENTORY_CAPABILITY = "erp.inventory.read.v1"
-ERP_OPERATIONAL_SYNC_CAPABILITY = "erp.operational_context.sync.v1"
-ERP_REGULATORY_CAPABILITY = "erp.regulatory.read.v1"
 
 _FLOW_ENDPOINTS = {
     "expense_claim": "/api/v1/sync/sub/expense-claims",

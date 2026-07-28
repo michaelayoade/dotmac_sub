@@ -11,7 +11,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services import vendor_admin
+from app.models.field_vendor import VENDOR_USER_ROLES
+from app.models.vendor_routes import InstallationProjectStatus
+from app.services import vendor_admin, vendor_user_provisioning
+from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
+from app.services.field import vendor_capabilities
+from app.services.project_vendor_delivery import ProjectVendorDeliveryVisibility
+from app.services.vendor_delivery_portfolio import (
+    VendorPortfolioQuery,
+    get_vendor_delivery_portfolio,
+)
 
 
 def _as_bool(value: str | None) -> bool:
@@ -135,9 +145,101 @@ def build_vendor_form_error_context(
     }
 
 
-def build_vendor_detail_context(db: Session, *, vendor_id: str) -> dict[str, Any]:
+_CAPABILITY_LABELS = {
+    vendor_capabilities.PROJECT_READ: "view projects",
+    vendor_capabilities.PROJECT_EXECUTE: "start/complete work",
+    vendor_capabilities.QUOTE_WRITE: "quote",
+    vendor_capabilities.AS_BUILT_WRITE: "submit as-built",
+    vendor_capabilities.INVOICE_WRITE: "invoice",
+    vendor_capabilities.MATERIAL_REQUEST: "request materials",
+    vendor_capabilities.ADVANCE_REQUEST: "request advances",
+}
+
+
+def _capability_summary(role: str | None) -> str:
+    """Plain-language rendering of what a role may do.
+
+    Staff choosing a role should not have to know the capability keys, and the
+    summary is derived from the declaring owner so it cannot drift from what
+    the routes actually enforce.
+    """
+    granted = vendor_capabilities.capabilities_for_role(role)
+    return ", ".join(
+        label
+        for capability, label in _CAPABILITY_LABELS.items()
+        if capability in granted
+    )
+
+
+def vendor_user_role_options() -> list[dict[str, str]]:
+    return [
+        {
+            "value": role,
+            "label": role.replace("_", " ").title(),
+            "summary": _capability_summary(role),
+        }
+        for role in VENDOR_USER_ROLES
+    ]
+
+
+def _vendor_user_row(membership: Any) -> dict[str, Any]:
+    principal = getattr(membership, "system_user", None)
+    role = vendor_capabilities.normalize_role(membership.role)
+    return {
+        "id": membership.id,
+        "role": role,
+        "capability_summary": _capability_summary(role),
+        "is_active": membership.is_active,
+        "display_name": getattr(principal, "display_name", None),
+        "email": getattr(principal, "email", None),
+    }
+
+
+def build_vendor_detail_context(
+    db: Session,
+    *,
+    vendor_id: str,
+    project_search: str | None = None,
+    project_status: InstallationProjectStatus | None = None,
+    project_page: int = 1,
+    project_per_page: int = 25,
+    can_read_operations: bool = False,
+    can_read_routes: bool = False,
+    can_read_financials: bool = False,
+) -> dict[str, Any]:
     vendor = vendor_admin.get(db, vendor_id)
     field_vendor = vendor_admin.get_field_vendor(db, vendor)
+    normalized_page = max(1, int(project_page))
+    normalized_per_page = max(10, min(int(project_per_page), 100))
+
+    def portfolio_query(page: int) -> VendorPortfolioQuery:
+        return VendorPortfolioQuery(
+            vendor_id=vendor.id,
+            visibility=ProjectVendorDeliveryVisibility(
+                can_read_operations=can_read_operations,
+                can_read_routes=can_read_routes,
+                can_read_financials=can_read_financials,
+            ),
+            search=project_search,
+            status=project_status,
+            limit=normalized_per_page,
+            offset=(page - 1) * normalized_per_page,
+        )
+
+    portfolio = get_vendor_delivery_portfolio(
+        db,
+        portfolio_query(normalized_page),
+    )
+    project_pages = max(
+        1,
+        (portfolio.total + normalized_per_page - 1) // normalized_per_page,
+    )
+    if normalized_page > project_pages:
+        normalized_page = project_pages
+        portfolio = get_vendor_delivery_portfolio(
+            db,
+            portfolio_query(normalized_page),
+        )
     return {
         "vendor": vendor,
         # Surfaced so staff can see at a glance whether this vendor can
@@ -145,8 +247,53 @@ def build_vendor_detail_context(db: Session, *, vendor_id: str) -> dict[str, Any
         # twin, not the native row.
         "field_vendor": field_vendor,
         "portal_login_enabled": bool(field_vendor and field_vendor.is_active),
-        "vendor_users": list(field_vendor.users) if field_vendor else [],
+        "vendor_users": [
+            _vendor_user_row(membership)
+            for membership in (list(field_vendor.users) if field_vendor else [])
+        ],
+        "vendor_user_roles": vendor_user_role_options(),
+        "portfolio": portfolio,
+        "project_search": project_search or "",
+        "project_status": project_status.value if project_status else "",
+        "project_page": normalized_page,
+        "project_per_page": normalized_per_page,
+        "project_pages": project_pages,
     }
+
+
+def add_vendor_user_from_form(
+    db: Session,
+    *,
+    vendor_id: str,
+    first_name: str | None,
+    last_name: str | None,
+    email: str | None,
+    role: str | None,
+) -> None:
+    """Create one portal login for the vendor behind this admin page."""
+    vendor = vendor_admin.get(db, vendor_id)
+    field_vendor = vendor_admin.get_field_vendor(db, vendor)
+    if field_vendor is None:
+        raise ValueError(
+            "This vendor has no portal identity, so a login cannot be added."
+        )
+    db_session_adapter.release_read_transaction(db)
+    vendor_user_provisioning.provision_committed(
+        db,
+        vendor_user_provisioning.ProvisionVendorUser(
+            field_vendor_id=field_vendor.id,
+            first_name=first_name or "",
+            last_name=last_name or "",
+            email=email or "",
+            role=role,
+        ),
+    )
+
+
+def revoke_vendor_user(db: Session, *, membership_id: str) -> None:
+    db_session_adapter.release_read_transaction(db)
+    # The route hands this in as a path string; the owner command takes a UUID.
+    vendor_user_provisioning.revoke_committed(db, coerce_uuid(membership_id))
 
 
 def create_vendor_from_form(

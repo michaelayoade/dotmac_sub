@@ -20,10 +20,10 @@ _SEVERITY_TONE = {
     "info": "info",
 }
 
-# Only show offline ONTs when the count is operationally significant.
+# Only show not-working ONTs when the count is operationally significant.
 # Tunable via the dashboard_attention_ont_offline_threshold setting; this is
 # the registered default (settings_spec owns the live value).
-DEFAULT_ONT_OFFLINE_ATTENTION_THRESHOLD = 5
+DEFAULT_ONT_NOT_WORKING_ATTENTION_THRESHOLD = 5
 
 
 def _item(label: str, href: str, severity: str, domain: str) -> dict:
@@ -51,7 +51,7 @@ def build_attention_items(
     pending_location_requests: int,
     pon_outage_count: int,
     infrastructure_alerts: dict | None = None,
-    ont_offline_threshold: int = DEFAULT_ONT_OFFLINE_ATTENTION_THRESHOLD,
+    ont_not_working_threshold: int = DEFAULT_ONT_NOT_WORKING_ATTENTION_THRESHOLD,
 ) -> tuple[list[dict], list[dict]]:
     """Decide the overview's attention items from owner-computed facts.
 
@@ -164,12 +164,12 @@ def build_attention_items(
             ),
             network=True,
         )
-    ont_offline = int(ont_summary.get("offline") or 0)
-    if ont_offline > ont_offline_threshold:
+    ont_not_working = int(ont_summary.get("not_working") or 0)
+    if ont_not_working > ont_not_working_threshold:
         _add(
             _item(
-                f"{ont_offline} {_plural(ont_offline, 'ONT')} offline",
-                "/admin/network/onts?view=list&olt_status=offline",
+                f"{ont_not_working} {_plural(ont_not_working, 'ONT')} not working",
+                "/admin/network/onts?view=list&operational_status=not_working",
                 "warning",
                 "network",
             ),

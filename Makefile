@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
+.PHONY: help test test-v test-cov test-ci test-fast test-integration test-architecture test-architecture-serial test-e2e lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -56,17 +56,33 @@ bump-version: ## Bump app version (usage: make bump-version BUMP=patch or VERSIO
 
 # ─── Testing ──────────────────────────────────────────────
 
-test: ## Run test suite
-	poetry run pytest tests/ -q
+UNIT_TEST_PATHS := tests/ --ignore=tests/integration --ignore=tests/e2e
+UNIT_TEST_WORKERS ?= auto
+UNIT_TEST_ARGS = $(UNIT_TEST_PATHS) -n $(UNIT_TEST_WORKERS) --durations=25
 
-test-v: ## Run test suite (verbose)
-	poetry run pytest tests/ -v
+test: ## Run the parallel non-integration suite (override UNIT_TEST_WORKERS as needed)
+	poetry run pytest $(UNIT_TEST_ARGS) -q
 
-test-cov: ## Run tests with coverage report
-	poetry run pytest tests/ --cov=app --cov-report=term-missing
+test-v: ## Run the parallel non-integration suite (verbose)
+	poetry run pytest $(UNIT_TEST_ARGS) -v
 
-test-fast: ## Run tests, stop on first failure
-	poetry run pytest tests/ -x --tb=short
+test-cov: ## Run the parallel non-integration suite with terminal coverage
+	poetry run pytest $(UNIT_TEST_ARGS) --cov=app --cov-report=term-missing -q
+
+test-ci: ## Run the canonical CI unit suite with XML coverage
+	poetry run pytest $(UNIT_TEST_ARGS) --cov=app --cov-report=xml -q
+
+test-fast: ## Run the parallel non-integration suite, stopping on first failure
+	poetry run pytest $(UNIT_TEST_ARGS) -x --tb=short -q
+
+test-integration: ## Run the PostgreSQL integration gate
+	poetry run pytest tests/integration/ -v --tb=short -o "addopts="
+
+test-architecture: ## Run architecture guards with the measured four-worker default
+	poetry run pytest tests/architecture -q -n 4
+
+test-architecture-serial: ## Run architecture guards serially for isolation/debugging
+	poetry run pytest tests/architecture -q
 
 test-e2e: ## Run end-to-end browser tests
 	poetry run pytest tests/e2e/ -v --headed
@@ -155,7 +171,7 @@ prod-logs: ## Tail production Docker logs
 	$(PROD_COMPOSE) logs -f --tail=100
 
 prod-restart: ## Recreate prod app + worker services from the current image (APP_IMAGE)
-	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-ingestion celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
+	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-ingestion celery-worker-monitoring celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
 prod-smtp-inbound-up: ## Start/recreate the opt-in, single-instance SMTP intake
 	$(PROD_COMPOSE) --profile smtp-inbound up -d --no-scale team-inbox-smtp
@@ -163,9 +179,9 @@ prod-smtp-inbound-up: ## Start/recreate the opt-in, single-instance SMTP intake
 prod-smtp-inbound-probe: ## Prove SMTP intake creates a marked team-inbox message
 	$(PROD_COMPOSE) --profile smtp-inbound exec -T team-inbox-smtp python -m app.team_inbox_smtp e2e-probe
 
-prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retries on lock_timeout)
+prod-migrate: ## Apply migrations, retry lock timeouts, then verify schema contracts
 	@n=0; until [ $$n -ge 4 ]; do \
-	  out=$$($(PROD_COMPOSE) run --rm app alembic upgrade heads 2>&1); rc=$$?; \
+	  out=$$($(PROD_COMPOSE) run --rm --no-deps app alembic upgrade heads 2>&1); rc=$$?; \
 	  echo "$$out"; \
 	  [ $$rc -eq 0 ] && break; \
 	  if echo "$$out" | grep -qiE "lock timeout|canceling statement due to lock"; then \
@@ -174,7 +190,8 @@ prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retrie
 	    echo ">> prod-migrate failed (not a lock_timeout) — aborting; app is untouched (migrate runs before recreate)"; exit $$rc; \
 	  fi; \
 	done; \
-	[ $$n -lt 4 ] || { echo ">> prod-migrate still lock-blocked after retries — quiesce the app (stop app+workers), run migrate, then recreate. See seabone-staging-deploy-quirks."; exit 1; }
+	[ $$n -lt 4 ] || { echo ">> prod-migrate still lock-blocked after retries — quiesce the app (stop app+workers), run migrate, then recreate. See seabone-staging-deploy-quirks."; exit 1; }; \
+	$(PROD_COMPOSE) run --rm --no-deps app python -m scripts.migration.verify_schema_contracts
 
 # ─── GHCR deploy (RECOMMENDED) ─────────────────────────────────────────────
 # Pull the exact CI-built, CI-tested image instead of building on the host —
@@ -183,7 +200,7 @@ prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retrie
 #
 # `make deploy TAG=sha-<shortsha>` runs the hardened scripts/deploy.sh:
 #   verify image on GHCR -> DB backup -> pin APP_IMAGE -> pull ->
-#   alembic upgrade heads -> recreate app+workers -> health gate -> auto-rollback.
+#   migrate + verify -> warm candidate -> recreate app+workers -> health gate.
 # CI (.github/workflows/ghcr.yml) pushes ghcr.io/<owner>/dotmac_sub per main push;
 # the host must `docker login ghcr.io` (PAT with read:packages) once.
 deploy: ## Hardened GHCR deploy. Usage: make deploy TAG=sha-abc1234

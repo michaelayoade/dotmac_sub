@@ -535,6 +535,40 @@ class SubscriptionUpdate(BaseModel):
         return self
 
 
+class SubscriptionTechnicalUpdate(BaseModel):
+    """Generic PATCH fields that cannot change subscription lifecycle state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subscriber_id: UUID | None = Field(
+        default=None,
+        validation_alias=AliasChoices("account_id", "subscriber_id"),
+        serialization_alias="account_id",
+    )
+    offer_id: UUID | None = None
+    offer_version_id: UUID | None = None
+    service_address_id: UUID | None = None
+    billing_mode: BillingMode | None = None
+    contract_term: ContractTerm | None = None
+    billing_cycle: BillingCycle | None = None
+    splynx_service_id: int | None = None
+    router_id: int | None = None
+    service_description: str | None = None
+    quantity: int | None = None
+    unit: str | None = Field(default=None, max_length=40)
+    unit_price: Decimal | None = None
+    discount: bool | None = None
+    discount_value: Decimal | None = None
+    discount_type: DiscountType | None = None
+    service_status_raw: str | None = Field(default=None, max_length=40)
+    login: str | None = Field(default=None, max_length=120)
+    ipv4_address: str | None = Field(default=None, max_length=64)
+    ipv6_address: str | None = Field(default=None, max_length=128)
+    mac_address: str | None = Field(default=None, max_length=64)
+    provisioning_nas_device_id: UUID | None = None
+    radius_profile_id: UUID | None = None
+
+
 # Statuses where the service has genuinely ended (vs. merely needing a payment,
 # which is blocked/suspended). The one authoritative definition for is_expired.
 _ENDED_SUBSCRIPTION_STATUSES = frozenset(
@@ -1161,6 +1195,13 @@ class PlanOfferSummary(BaseModel):
     period_label: str = "/cycle"
 
 
+class ServiceAddressOption(BaseModel):
+    id: UUID
+    label: str
+    has_coordinates: bool = False
+    is_current: bool = False
+
+
 class PlanChangePageResponse(BaseModel):
     current_offer: PlanOfferSummary | None = None
     available_offers: list[PlanOfferSummary] = Field(default_factory=list)
@@ -1169,13 +1210,18 @@ class PlanChangePageResponse(BaseModel):
     collection_blocking_balance: Decimal = Decimal("0.00")
     next_billing_date: datetime | None = None
     billing_message: str | None = None
+    service_addresses: list[ServiceAddressOption] = Field(default_factory=list)
+    current_service_address_id: UUID | None = None
 
 
 class PlanChangeSubmitRequest(BaseModel):
     offer_id: UUID
-    # Cross-family submissions create a non-financial migration ticket. These
-    # become mandatory at the owner boundary for same-family immediate changes.
+    target_service_address_id: UUID | None = None
+    # The owner preview binds money and delivery evidence to this confirmation.
     preview_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    field_quote_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     preview_effective_at: datetime | None = None
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=120)
     notes: str | None = None
@@ -1183,8 +1229,7 @@ class PlanChangeSubmitRequest(BaseModel):
 
 class PlanChangeSubmitResponse(BaseModel):
     success: bool = True
-    # "applied" when the change took effect instantly, "migration_requested"
-    # when a cross-family change was queued as a support ticket.
+    # applied, pending_remote_reprovision, or pending_field_migration.
     status: str = "applied"
     message: str | None = None
     change_request_id: UUID | None = None

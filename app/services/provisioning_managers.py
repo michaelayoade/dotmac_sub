@@ -70,13 +70,23 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
     not_found_detail = "Service order not found"
 
     @staticmethod
-    def create(db: Session, payload: ServiceOrderCreate):
+    def create(
+        db: Session,
+        payload: ServiceOrderCreate,
+        *,
+        actor_id: str = "operations.provisioning_workflow",
+        commit: bool = True,
+    ):
         requested_by_contact_id = payload.requested_by_contact_id
         provisioning_validators.validate_service_order_links(
             db,
             str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
             str(requested_by_contact_id) if requested_by_contact_id else None,
+            str(payload.project_id) if payload.project_id else None,
+            str(payload.activation_project_task_id)
+            if payload.activation_project_task_id
+            else None,
         )
         # The ServiceOrder model does not include requested_by_contact_id or project_type.
         data = payload.model_dump(exclude={"requested_by_contact_id", "project_type"})
@@ -89,22 +99,19 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
                 data["status"] = validate_enum(
                     default_status, ServiceOrderStatus, "status"
                 )
+        idempotency_key = str(data.get("idempotency_key") or "").strip() or None
+        if idempotency_key:
+            existing = (
+                db.query(ServiceOrder)
+                .filter(ServiceOrder.idempotency_key == idempotency_key)
+                .one_or_none()
+            )
+            if existing is not None:
+                return existing
+            data["idempotency_key"] = idempotency_key
         order = ServiceOrder(**data)
         db.add(order)
-        db.commit()
-        db.refresh(order)
-
-        try:
-            from app.services.uisp_control_plane import stage_from_service_order
-
-            stage_from_service_order(db, order)
-        except Exception:
-            db.rollback()
-            logger.exception(
-                "uisp_service_order_staging_failed service_order_id=%s", order.id
-            )
-
-        # Emit service_order.created event
+        db.flush()
         emit_event(
             db,
             EventType.service_order_created,
@@ -118,7 +125,21 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             service_order_id=order.id,
             subscriber_id=order.subscriber_id,
             subscription_id=order.subscription_id,
+            actor=actor_id,
         )
+        if commit:
+            db.commit()
+            db.refresh(order)
+
+            try:
+                from app.services.uisp_control_plane import stage_from_service_order
+
+                stage_from_service_order(db, order)
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "uisp_service_order_staging_failed service_order_id=%s", order.id
+                )
 
         return order
 
@@ -283,8 +304,13 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             raise HTTPException(status_code=404, detail="Service order not found")
         previous_status = order.status
         data = payload.model_dump(exclude_unset=True)
+        target_status = data.pop("status", None)
         subscriber_id = str(data.get("subscriber_id", order.subscriber_id))
         subscription_id = data.get("subscription_id", order.subscription_id)
+        project_id = data.get("project_id", order.project_id)
+        activation_task_id = data.get(
+            "activation_project_task_id", order.activation_project_task_id
+        )
         # The ServiceOrder model does not include requested_by_contact_id.
         requested_by_contact_id = data.pop("requested_by_contact_id", None)
         # The ServiceOrder model does not include project_type.
@@ -294,79 +320,61 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             subscriber_id,
             str(subscription_id) if subscription_id else None,
             str(requested_by_contact_id) if requested_by_contact_id else None,
+            str(project_id) if project_id else None,
+            str(activation_task_id) if activation_task_id else None,
         )
-        # Terminal guard: a canceled/active (completed) order is done — block a
-        # raw status edit (e.g. an uncancel via the restore tool) from silently
-        # reviving it. Same-status writes and non-status edits are unaffected.
-        if "status" in data:
-            target_status = data["status"]
-            if not isinstance(target_status, ServiceOrderStatus):
-                try:
-                    target_status = ServiceOrderStatus(target_status)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=400, detail="Invalid service order status"
-                    ) from exc
+        if target_status is not None:
+            try:
+                normalized_target = (
+                    target_status
+                    if isinstance(target_status, ServiceOrderStatus)
+                    else ServiceOrderStatus(target_status)
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid service order status"
+                ) from exc
+            if normalized_target in {
+                ServiceOrderStatus.active,
+                ServiceOrderStatus.failed,
+            }:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Active and failed states require a provisioning-readiness "
+                        "decision"
+                    ),
+                )
             if (
                 previous_status
-                in (ServiceOrderStatus.canceled, ServiceOrderStatus.active)
-                and target_status != previous_status
+                in {
+                    ServiceOrderStatus.canceled,
+                    ServiceOrderStatus.active,
+                    ServiceOrderStatus.failed,
+                }
+                and normalized_target != previous_status
             ):
                 raise HTTPException(
                     status_code=409,
                     detail=(
                         f"Cannot change a {previous_status.value} service order "
-                        f"to {target_status.value}"
+                        f"to {normalized_target.value}"
                     ),
                 )
         for key, value in data.items():
             setattr(order, key, value)
-        if (
-            order.status == ServiceOrderStatus.active
-            and order.subscription_id is not None
-        ):
-            from app.models.catalog import Subscription, SubscriptionStatus
-            from app.services.account_lifecycle import activate_subscription
+        if target_status is not None:
+            from app.services import service_order_lifecycle
 
-            subscription = db.get(Subscription, order.subscription_id)
-            if (
-                subscription is not None
-                and subscription.status == SubscriptionStatus.pending
-            ):
-                activate_subscription(db, str(subscription.id))
+            order = service_order_lifecycle.transition_service_order(
+                db,
+                service_order_id=order.id,
+                target_status=target_status,
+                actor_id="operations.provisioning_workflow",
+                commit=False,
+            )
         db.commit()
         db.refresh(order)
-
-        # Emit events based on status transitions
-        new_status = order.status
-        if previous_status != new_status:
-            event_payload = {
-                "service_order_id": str(order.id),
-                "from_status": previous_status.value if previous_status else None,
-                "to_status": new_status.value if new_status else None,
-                "subscription_id": str(order.subscription_id)
-                if order.subscription_id
-                else None,
-            }
-            if new_status == ServiceOrderStatus.active:
-                emit_event(
-                    db,
-                    EventType.service_order_completed,
-                    event_payload,
-                    service_order_id=order.id,
-                    account_id=order.subscriber_id,
-                    subscription_id=order.subscription_id,
-                )
-            elif new_status == ServiceOrderStatus.provisioning:
-                emit_event(
-                    db,
-                    EventType.service_order_assigned,
-                    event_payload,
-                    service_order_id=order.id,
-                    account_id=order.subscriber_id,
-                    subscription_id=order.subscription_id,
-                )
-
         return order
 
 
@@ -829,8 +837,7 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             input_payload=payload.input_payload,
         )
         db.add(run)
-        db.commit()
-        db.refresh(run)
+        db.flush()
 
         context = dict(payload.input_payload or {})
         _extend_provisioning_context(
@@ -856,6 +863,8 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             service_order_id=run.service_order_id,
             subscription_id=run.subscription_id,
         )
+        db.commit()
+        db.refresh(run)
         try:
             context.update(
                 _ensure_ip_assignments(
@@ -870,8 +879,6 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             run.output_payload = {"results": []}
             run.error_message = error_message
             run.completed_at = datetime.now(UTC)
-            db.commit()
-            db.refresh(run)
             emit_event(
                 db,
                 EventType.provisioning_failed,
@@ -890,6 +897,8 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                 service_order_id=run.service_order_id,
                 subscription_id=run.subscription_id,
             )
+            db.commit()
+            db.refresh(run)
             return run
 
         steps = (
@@ -988,8 +997,6 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
         run.output_payload = {"results": results}
         run.error_message = step_error_message
         run.completed_at = datetime.now(UTC)
-        db.commit()
-        db.refresh(run)
 
         # Emit provisioning events based on run result
         event_payload = {
@@ -1020,6 +1027,9 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                 service_order_id=run.service_order_id,
                 subscription_id=run.subscription_id,
             )
+
+        db.commit()
+        db.refresh(run)
 
         return run
 
@@ -1054,7 +1064,6 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                 "reaped as stale (worker likely died mid-run)."
             )
         if stale:
-            db.commit()
             for run in stale:
                 emit_event(
                     db,
@@ -1075,6 +1084,7 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                     service_order_id=run.service_order_id,
                     subscription_id=run.subscription_id,
                 )
+            db.commit()
             logger.warning("Reaped %d stale provisioning run(s)", len(stale))
         return len(stale)
 

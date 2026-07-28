@@ -10,6 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember
+from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxAgentPresence,
     InboxAgentPresenceStatus,
@@ -20,19 +21,33 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 DEFAULT_MAX_CONCURRENT_CONVERSATIONS = 3
 T = TypeVar("T")
+OWNER = "communications.team_inbox_routing"
+_ROUTING_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="routing assignment and escalation transitions",
+    name="execute_team_inbox_routing_command",
+)
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
+    return execute_owner_command(
+        db,
+        definition=_ROUTING_COMMAND,
+        context=CommandContext.system(
+            actor="system:team-inbox-routing-adapter",
+            scope="team-inbox:routing-command",
+            reason="execute Team Inbox routing transition",
+        ),
+        operation=action,
+    )
 
 
 @dataclass(frozen=True)
@@ -83,16 +98,21 @@ def list_available_team_agents(
     if team is None or not team.is_active:
         return []
 
-    members = (
-        db.query(ServiceTeamMember)
+    member_users = (
+        db.query(ServiceTeamMember, SystemUser)
+        .join(
+            SystemUser,
+            SystemUser.person_party_id == ServiceTeamMember.person_id,
+        )
         .filter(ServiceTeamMember.team_id == team_uuid)
         .filter(ServiceTeamMember.is_active.is_(True))
+        .filter(SystemUser.is_active.is_(True))
         .all()
     )
-    if not members:
+    if not member_users:
         return []
 
-    person_ids = [member.person_id for member in members]
+    person_ids = [user.id for _member, user in member_users]
     presences = {
         row.person_id: row
         for row in db.query(InboxAgentPresence)
@@ -115,8 +135,8 @@ def list_available_team_agents(
     }
 
     candidates: list[InboxAgentCandidate] = []
-    for member in members:
-        presence = presences.get(member.person_id)
+    for _member, user in member_users:
+        presence = presences.get(user.id)
         if presence is None:
             continue
         if (
@@ -124,7 +144,7 @@ def list_available_team_agents(
             != InboxAgentPresenceStatus.online.value
         ):
             continue
-        active_count = active_counts.get(member.person_id, 0)
+        active_count = active_counts.get(user.id, 0)
         max_concurrent = (
             presence.max_concurrent_conversations
             or default_max_concurrent
@@ -134,7 +154,7 @@ def list_available_team_agents(
             continue
         candidates.append(
             InboxAgentCandidate(
-                person_id=str(member.person_id),
+                person_id=str(user.id),
                 active_conversation_count=active_count,
                 max_concurrent_conversations=max_concurrent,
             )
@@ -240,9 +260,14 @@ def assign_conversation_to_agent(
 
     member = (
         db.query(ServiceTeamMember)
+        .join(
+            SystemUser,
+            SystemUser.person_party_id == ServiceTeamMember.person_id,
+        )
         .filter(ServiceTeamMember.team_id == team_uuid)
-        .filter(ServiceTeamMember.person_id == person_uuid)
         .filter(ServiceTeamMember.is_active.is_(True))
+        .filter(SystemUser.id == person_uuid)
+        .filter(SystemUser.is_active.is_(True))
         .one_or_none()
     )
     if member is None:

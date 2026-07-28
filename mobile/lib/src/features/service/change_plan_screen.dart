@@ -25,6 +25,7 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
   Object? _error;
   bool _loading = true;
   bool _busy = false;
+  String? _targetServiceAddressId;
 
   String get _subId => widget.service.id;
 
@@ -42,7 +43,12 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
     try {
       final opts =
           await ref.read(catalogRepositoryProvider).planChangeOptions(_subId);
-      if (mounted) setState(() => _options = opts);
+      if (mounted) {
+        setState(() {
+          _options = opts;
+          _targetServiceAddressId = opts.currentServiceAddressId;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _error = e);
     } finally {
@@ -55,9 +61,11 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
     PlanChangeQuote? quote;
     bool quoteFailed = false;
     try {
-      quote = await ref
-          .read(catalogRepositoryProvider)
-          .planChangeQuote(_subId, offer.id);
+      quote = await ref.read(catalogRepositoryProvider).planChangeQuote(
+            _subId,
+            offer.id,
+            targetServiceAddressId: _targetServiceAddressId,
+          );
     } catch (_) {
       // Confirmation is disabled without the owner fingerprint; a transport
       // failure must never look like a confident zero-cost preview.
@@ -75,7 +83,12 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
         billingMessage: _options?.billingMessage,
       ),
     );
-    if (ok != true || quote == null || quote.previewFingerprint.isEmpty) return;
+    if (ok != true ||
+        quote == null ||
+        quote.previewFingerprint.isEmpty ||
+        quote.previewEffectiveAt == null) {
+      return;
+    }
     await _submit(offer, quote);
   }
 
@@ -84,17 +97,28 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
     final navigator = Navigator.of(context);
     setState(() => _busy = true);
     try {
-      await ref.read(catalogRepositoryProvider).submitPlanChange(
+      final result = await ref.read(catalogRepositoryProvider).submitPlanChange(
             _subId,
             offerId: offer.id,
             previewFingerprint: quote.previewFingerprint,
+            previewEffectiveAt: quote.previewEffectiveAt!,
+            targetServiceAddressId: _targetServiceAddressId,
+            fieldQuoteFingerprint: quote.fieldDeliveryQuote?.previewFingerprint,
           );
       // A prepaid change posts an exact debit — refresh funding and ledger too.
       ref.invalidate(subscriptionsProvider);
       ref.invalidate(balanceProvider);
       ref.invalidate(ledgerProvider);
+      ref.invalidate(accountHealthProvider);
       messenger.showSnackBar(
-        SnackBar(content: Text('Plan change to ${offer.name} requested')),
+        SnackBar(
+          content: Text(
+            result.message ??
+                (result.applied
+                    ? 'Plan changed to ${offer.name}'
+                    : 'Service change to ${offer.name} is awaiting delivery'),
+          ),
+        ),
       );
       navigator.pop();
     } on ApiException catch (e) {
@@ -148,6 +172,33 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                 ),
               ),
             const SizedBox(height: 8),
+            if (opts.serviceAddresses.isNotEmpty) ...[
+              DropdownButtonFormField<String>(
+                initialValue: _targetServiceAddressId,
+                decoration: const InputDecoration(
+                  labelText: 'Service address',
+                  helperText:
+                      'A new address requires field delivery; wireless/radio relocation carries a one-time charge.',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  for (final address in opts.serviceAddresses)
+                    DropdownMenuItem(
+                      value: address.id,
+                      enabled: address.hasCoordinates || address.isCurrent,
+                      child: Text(
+                        '${address.label}${address.isCurrent ? ' — current' : ''}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: _busy
+                    ? null
+                    : (value) =>
+                        setState(() => _targetServiceAddressId = value),
+              ),
+              const SizedBox(height: 16),
+            ],
             Text('Available plans', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
             if (opts.availableOffers.isEmpty)
@@ -157,7 +208,11 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                   child: Text('No other plans are available right now.'),
                 ),
               ),
-            for (final o in opts.availableOffers)
+            for (final o in opts.availableOffers.where(
+              (offer) =>
+                  offer.id != opts.currentOffer?.id ||
+                  _targetServiceAddressId != opts.currentServiceAddressId,
+            ))
               Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
@@ -237,6 +292,38 @@ class _ConfirmSheet extends StatelessWidget {
             Text('${Fmt.money(offer.amount, cur)} ${offer.periodLabel}',
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.outline)),
+            if (q != null) ...[
+              const SizedBox(height: 12),
+              _row(context, 'Delivery', q.deliveryLabel, bold: true),
+              if (q.deliveryMode == 'remote_reprovision')
+                Text(
+                  'We will verify the remote network change before switching your subscription. No ticket or site visit is required.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              if (q.requiresSiteVisit)
+                Text(
+                  'This access change needs field fulfillment. A work order is used only for the physical visit.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              if (q.fieldDeliveryQuote case final fieldQuote?) ...[
+                const SizedBox(height: 8),
+                _row(context, 'Target address', fieldQuote.targetAddressLabel),
+                _row(context, 'Serviceability', fieldQuote.qualificationStatus),
+                if (fieldQuote.feeAmount > 0)
+                  _row(
+                    context,
+                    'One-time field charge',
+                    Fmt.money(fieldQuote.feeAmount, fieldQuote.currency),
+                    bold: true,
+                  ),
+                if (!fieldQuote.eligible)
+                  Text(
+                    fieldQuote.blockingReason ??
+                        'This address is not eligible for relocation.',
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+              ],
+            ],
             if (q != null && q.hasProration) ...[
               const Divider(height: 24),
               _row(context, 'Prorated charge (${q.daysRemaining} days left)',
@@ -335,10 +422,12 @@ class _ConfirmSheet extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton(
-                    onPressed: quoteFailed
-                        ? () => Navigator.pop(context, false)
+                    onPressed: quoteFailed ||
+                            (q?.fieldDeliveryQuote != null &&
+                                !q!.fieldDeliveryQuote!.eligible)
+                        ? null
                         : () => Navigator.pop(context, true),
-                    child: Text(quoteFailed ? 'Close' : 'Confirm'),
+                    child: const Text('Confirm'),
                   ),
                 ),
               ],

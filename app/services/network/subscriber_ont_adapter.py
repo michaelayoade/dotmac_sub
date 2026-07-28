@@ -888,29 +888,10 @@ class DefaultSubscriberOntLinker:
         db: Session,
         subscriber_id: str,
     ) -> str | None:
-        """Resolve primary service address for a subscriber."""
-        from app.models.subscriber import Address
+        """Resolve the subscriber's canonical service address id, or None."""
+        from app.services import service_address as service_address_service
 
-        # Try to find primary address
-        address = db.scalars(
-            select(Address).where(
-                Address.subscriber_id == subscriber_id,
-                Address.is_primary.is_(True),
-            )
-        ).first()
-
-        if address:
-            return str(address.id)
-
-        # Fall back to any address
-        address = db.scalars(
-            select(Address)
-            .where(
-                Address.subscriber_id == subscriber_id,
-            )
-            .limit(1)
-        ).first()
-
+        address = service_address_service.service_address(db, subscriber_id)
         return str(address.id) if address else None
 
     def _resolve_pon_port(

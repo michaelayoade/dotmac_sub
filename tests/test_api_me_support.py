@@ -91,6 +91,9 @@ def test_my_create_ticket_forces_caller_scope(monkeypatch):
         return payload
 
     monkeypatch.setattr(me_api.support_service.tickets, "create", fake_create)
+    monkeypatch.setattr(
+        me_api.db_session_adapter, "release_read_transaction", lambda db: None
+    )
 
     # The endpoint now accepts multipart/form-data (form fields + a repeatable
     # ``attachments`` file field), not a JSON body.
@@ -142,6 +145,9 @@ def test_my_add_ticket_comment_forces_public(monkeypatch):
 
     monkeypatch.setattr(
         me_api.support_service.tickets, "create_comment", fake_create_comment
+    )
+    monkeypatch.setattr(
+        me_api.db_session_adapter, "release_read_transaction", lambda db: None
     )
 
     me_api.my_add_ticket_comment(

@@ -5,6 +5,7 @@ import sys
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import text
 
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
@@ -18,7 +19,7 @@ from app.models.network import (
 from app.models.router_management import JumpHost, Router
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.models.tr069 import Tr069AcsServer
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice, Tr069Job
 from app.services.credential_crypto import (
     _coerce_encryption_key,
     decrypt_credential_with_key,
@@ -323,6 +324,58 @@ def test_rotate_credential_encryption_material_dry_run_leaves_db_unchanged(db_se
 
     assert result.updated_records == 1
     assert db_session.get(NasDevice, nas_id).shared_secret == original_value
+
+
+def test_rotation_includes_active_tr069_command_payload(db_session):
+    old_key = Fernet.generate_key().decode("ascii")
+    new_key = Fernet.generate_key().decode("ascii")
+    server = Tr069AcsServer(
+        name="TR-069 rotation ACS",
+        base_url="https://acs.example.com",
+        is_active=True,
+    )
+    db_session.add(server)
+    db_session.flush()
+    device = Tr069CpeDevice(
+        acs_server_id=server.id,
+        serial_number="ROTATE-TR069-JOB",
+        genieacs_device_id="rotate-tr069-job",
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+    job = Tr069Job(
+        device_id=device.id,
+        name="Pending WiFi change",
+        command="setParameterValues",
+    )
+    db_session.add(job)
+    db_session.flush()
+    job_id = job.id
+    old_ciphertext = encrypt_credential_with_key(
+        json.dumps({"parameter_values": [{"value": "temporary-secret"}]}),
+        old_key,
+    )
+    db_session.execute(
+        text("UPDATE tr069_jobs SET secure_payload = :value WHERE id = :id"),
+        {"value": old_ciphertext, "id": job_id},
+    )
+    db_session.commit()
+
+    rotate_credential_encryption_material(
+        db_session,
+        old_key=old_key,
+        new_key=new_key,
+    )
+
+    rotated = db_session.execute(
+        text("SELECT secure_payload FROM tr069_jobs WHERE id = :id"),
+        {"id": job_id},
+    ).scalar_one()
+    decoded = decrypt_credential_with_key(rotated, new_key)
+    assert json.loads(str(decoded)) == {
+        "parameter_values": [{"value": "temporary-secret"}]
+    }
 
 
 def test_rotate_credential_encryption_material_raises_on_length_overflow(

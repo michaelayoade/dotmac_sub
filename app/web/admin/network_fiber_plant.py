@@ -16,6 +16,9 @@ from app.services import (
     web_network_fiber_plant_actions as web_network_fiber_plant_actions_service,
 )
 from app.services import (
+    web_network_fiber_plant_ledger as web_network_fiber_plant_ledger_service,
+)
+from app.services import (
     web_network_ont_identity_reviews as ont_identity_review_service,
 )
 from app.services.audit_helpers import log_audit_event
@@ -147,13 +150,16 @@ def _identity_proposal_response(
 )
 def fiber_plant_consolidated(
     request: Request,
-    tab: str = "cabinets",
+    asset_type: str = Query(default="fdh", alias="type"),
     db: Session = Depends(get_db),
 ):
-    """Consolidated view of fiber plant infrastructure."""
-    page_data = web_network_fiber_service.get_fiber_plant_consolidated_data(db)
+    """Consolidated fiber-plant ledger, projected from the fiber SOT owners."""
     context = _base_context(request, db, active_page="fiber-plant", active_menu="fiber")
-    context.update({"tab": tab, **page_data})
+    context.update(
+        web_network_fiber_plant_ledger_service.fiber_plant_ledger_data(
+            db, asset_type=asset_type
+        )
+    )
     return templates.TemplateResponse("admin/network/fiber-plant/index.html", context)
 
 

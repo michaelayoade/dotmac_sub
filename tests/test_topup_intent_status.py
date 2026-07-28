@@ -7,7 +7,12 @@ recovery, since a real gateway payment can legitimately arrive after expiry.
 import pytest
 
 from app.models.billing import TopupIntent
-from app.services.topup_intents import TopupIntentStatus, set_topup_intent_status
+from app.services.topup_intents import (
+    DirectTransferBankAccountEvidence,
+    TopupIntentError,
+    TopupIntentStatus,
+    set_topup_intent_status,
+)
 
 
 def test_valid_transition_sets_status():
@@ -41,3 +46,15 @@ def test_terminal_recovery_is_allowed_not_blocked():
         intent = TopupIntent(status=terminal)
         assert set_topup_intent_status(intent, "completed", source="webhook") is True
         assert intent.status == "completed"
+
+
+def test_direct_transfer_bank_evidence_fails_closed_when_incomplete():
+    with pytest.raises(TopupIntentError) as exc:
+        DirectTransferBankAccountEvidence(
+            id="bank-primary",
+            bank_name="",
+            account_name="Dotmac Payments",
+            account_number="0123456789",
+        )
+
+    assert exc.value.code == "financial.topup_intents.invalid_bank_account_evidence"

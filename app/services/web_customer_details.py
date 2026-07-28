@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -64,7 +66,9 @@ from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
+from app.services import subscriber_summary as subscriber_summary_service
 from app.services import web_customer_user_access as web_customer_user_access_service
+from app.services.access_resolution import resolve_customer_access
 from app.services.audit_helpers import (
     extract_changes,
     format_changes,
@@ -83,10 +87,16 @@ from app.services.invoice_collectibility import (
     overdue_debt_filters_for_accounts,
 )
 from app.services.network._common import decode_huawei_hex_serial
+from app.services.network.access_path import (
+    build_topology_trace,
+    summarize_customer_path,
+)
 from app.services.network.radius_sessions import (
-    latest_open_accounting_sessions_by_subscription,
+    SubscriptionSessionSnapshot,
+    subscription_session_snapshots,
 )
 from app.services.nin_matching import mask_nin
+from app.services.portal_account_health import build_portal_account_health
 from app.services.status_presentation import (
     access_session_status_presentation,
     account_status_presentation,
@@ -94,17 +104,14 @@ from app.services.status_presentation import (
     payment_status_presentation,
     subscription_status_presentation,
 )
+from app.services.subscription_lifecycle import is_subscription_restore_candidate
 from app.services.subscription_lifecycle_policy import (
     is_customer_impact_service_status,
     is_mrr_countable_service_status,
 )
+from app.services.topology.customer_path import resolve_customer_path
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from app.models.usage import RadiusAccountingSession
-
-_RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
 
 RESOLVED_TICKET_STATUSES = {
     "resolved",
@@ -158,20 +165,6 @@ def _coerce_setting_int(value: object | None) -> int | None:
     return None
 
 
-def _coerce_setting_bool(
-    value: object | None, default: bool | None = None
-) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
 def _coerce_setting_decimal(value: object | None) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
@@ -194,7 +187,7 @@ def _format_billing_value(key: str, value: object | None) -> str:
     if value is None:
         return "Not set"
     if key == "billing_enabled":
-        return "Enabled" if bool(value) else "Disabled"
+        return "Approved" if bool(value) else "Administratively disabled"
     if key in {"billing_day", "payment_due_days", "grace_period_days"}:
         if key == "billing_day":
             return f"Day {value}"
@@ -210,7 +203,7 @@ def _format_billing_value(key: str, value: object | None) -> str:
 
 
 def _billing_global_defaults(db: Session) -> dict[str, object | None]:
-    keys = {"billing_enabled", "billing_day", "minimum_balance"}
+    keys = {"billing_day", "minimum_balance"}
     rows = (
         db.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.billing)
@@ -222,7 +215,6 @@ def _billing_global_defaults(db: Session) -> dict[str, object | None]:
         for row in rows
     }
     return {
-        "billing_enabled": _coerce_setting_bool(raw.get("billing_enabled"), True),
         "billing_day": _coerce_setting_int(raw.get("billing_day")),
         "payment_due_days": resolve_payment_due_days(db),
         "min_balance": _coerce_setting_decimal(raw.get("minimum_balance")),
@@ -247,7 +239,7 @@ def _billing_policy_snapshot(
     global_defaults = _billing_global_defaults(db)
     tax_labels = _resolve_tax_labels(db, accounts)
     fields = [
-        ("billing_enabled", "Billing", True),
+        ("billing_enabled", "Billing and Service Approval", False),
         ("billing_day", "Billing Day", True),
         ("payment_due_days", "Payment Due", True),
         ("grace_period_days", "Grace Period", False),
@@ -1200,72 +1192,36 @@ def _build_map_payload(primary_address, customer_name: str):
 
 def _connection_status_for_session(
     subscription: Subscription,
-    session: RadiusAccountingSession | None,
+    session: SubscriptionSessionSnapshot,
 ) -> dict[str, object]:
-    def snapshot(
-        state: str,
-        *,
-        detail: str,
-        last_seen_at: datetime | None,
-        identifier: str | None,
-    ) -> dict[str, object]:
-        presentation = access_session_status_presentation(state)
-        return {
-            "state": state,
-            "label": presentation.label,
-            "detail": detail,
-            "last_seen_at": last_seen_at,
-            "identifier": identifier,
-            "status_presentation": presentation.model_dump(mode="json"),
-        }
-
-    if subscription.status != SubscriptionStatus.active:
-        return snapshot(
-            "inactive",
-            detail="Service is not active",
-            last_seen_at=None,
-            identifier=None,
-        )
-    if not session:
-        return snapshot(
-            "offline",
-            detail="No open RADIUS accounting session",
-            last_seen_at=None,
-            identifier=None,
-        )
-
-    last_seen_at = session.last_update_at or session.session_start or session.created_at
-    last_seen_utc = last_seen_at
-    if last_seen_utc and last_seen_utc.tzinfo is None:
-        last_seen_utc = last_seen_utc.replace(tzinfo=UTC)
-    is_fresh = bool(
-        last_seen_utc
-        and last_seen_utc
-        >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
-    )
-    return snapshot(
-        "connected" if is_fresh else "stale",
-        detail=(
-            "Open RADIUS accounting session"
-            if is_fresh
-            else "Open session has stale accounting updates"
-        ),
-        last_seen_at=last_seen_at,
-        identifier=session.framed_ip_address or session.session_id,
-    )
+    state = session.state.value
+    presentation = access_session_status_presentation(state)
+    detail = {
+        "connected": "Canonical live RADIUS session",
+        "stale": "Live session mirror has stale updates",
+        "offline": "No trustworthy live RADIUS session",
+        "inactive": "Service is not active",
+    }[state]
+    return {
+        "state": state,
+        "label": presentation.label,
+        "detail": detail,
+        "last_seen_at": session.observed_at,
+        "identifier": session.framed_ip_address or session.acct_session_id,
+        "status_presentation": presentation.model_dump(mode="json"),
+    }
 
 
 def _build_network_connection_snapshot(
     db: Session, subscriptions: list[Subscription]
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
-    sub_ids = [sub.id for sub in subscriptions if getattr(sub, "id", None)]
-    sessions_by_sub = latest_open_accounting_sessions_by_subscription(db, sub_ids)
+    sessions_by_sub = subscription_session_snapshots(db, subscriptions)
 
     by_subscription: dict[str, dict[str, object]] = {}
     for sub in subscriptions:
         by_subscription[str(sub.id)] = _connection_status_for_session(
             sub,
-            sessions_by_sub.get(sub.id),
+            sessions_by_sub[sub.id],
         )
 
     connected = [
@@ -1330,22 +1286,193 @@ def _active_additional_routes_by_subscriber(
     return routes_by_subscriber
 
 
+def _build_access_endpoint_projection(
+    db: Session, subscription, path=None
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Serving endpoint + active-path trace for one subscription.
+
+    Accepts an already-resolved path so the card, the trace and the diagnosis
+    share one resolution instead of paying for it each. Failures degrade to an
+    unresolved endpoint rather than breaking the page: an unavailable trace
+    must not take the customer record with it.
+    """
+
+    if path is None:
+        try:
+            path = resolve_customer_path(db, subscription)
+        except Exception:
+            logger.warning(
+                "Access path resolution failed for subscription %s",
+                getattr(subscription, "id", None),
+                exc_info=True,
+            )
+            return ({"endpoint_source": "unresolved"}, None)
+
+    summary = summarize_customer_path(subscription, path)
+    trace = build_topology_trace(subscription, path)
+    return (
+        {
+            "endpoint_display": summary.endpoint_display,
+            "endpoint_source": summary.endpoint_source,
+            "access_device_name": summary.access_device_name,
+            "access_device_id": str(summary.access_device_id)
+            if summary.access_device_id
+            else None,
+            "access_kind": summary.access_kind,
+            "pon_port_label": summary.pon_port_label,
+            "ont_serial": summary.ont_serial,
+            "radio_label": summary.radio_label,
+            "basestation_name": summary.basestation_name,
+            "gap": summary.gap,
+            "endpoint_complete": summary.endpoint_complete,
+        },
+        trace.to_dict(),
+    )
+
+
+def _build_access_state_facts(subscription) -> dict[str, object] | None:
+    """Why RADIUS is allowing or blocking this service, from the canonical owner.
+
+    Reports what access_resolution decided, with its own reason strings. It
+    deliberately does not infer a cause of its own: an agent reading the state
+    alongside the path draws a better conclusion than a guess would.
+    """
+
+    try:
+        decision = resolve_customer_access(subscription)
+    except Exception:
+        logger.warning(
+            "Access resolution failed for subscription %s",
+            getattr(subscription, "id", None),
+            exc_info=True,
+        )
+        return None
+
+    state = decision.radius_access_state
+    return {
+        "radius_state": getattr(state, "value", None),
+        "radius_allowed": decision.radius_allowed,
+        "radius_blocked": decision.radius_blocked,
+        "radius_mode": decision.radius_mode,
+        "access_block_reason": decision.access_block_reason,
+        "billing_block_reason": decision.billing_block_reason,
+        "source": "access.subscription_lifecycle",
+    }
+
+
+def _build_known_incident(db: Session, subscription) -> dict[str, object] | None:
+    """A detected incident already covering this customer, for the agent.
+
+    ``customer_service_state`` computes this for the portal, and its
+    ``support_context`` docstring names the subscriber detail page as a
+    consumer, but nothing wired it up. The result was that the *customer* was
+    told "we know, engineers are on it" while the *agent* looking at the same
+    account saw nothing, and asked the channel.
+
+    Returns None when there is no incident, so the panel stays absent rather
+    than rendering an empty "no known issues" box on every customer.
+    """
+
+    from app.services.customer_service_state import get_customer_service_state
+
+    try:
+        state = get_customer_service_state(db, subscription)
+    except Exception:
+        logger.warning(
+            "Service state resolution failed for subscription %s",
+            getattr(subscription, "id", None),
+            exc_info=True,
+        )
+        return None
+
+    if not (
+        state.area_outage
+        or state.active_outage_id
+        or state.open_infrastructure_ticket_id
+    ):
+        return None
+
+    return {
+        "area_outage": state.area_outage,
+        "connection_state": state.connection_state,
+        "incident_id": str(state.active_outage_id) if state.active_outage_id else None,
+        "infrastructure_ticket_id": (
+            str(state.open_infrastructure_ticket_id)
+            if state.open_infrastructure_ticket_id
+            else None
+        ),
+        "customer_message": state.customer_message,
+        "checked_at": state.checked_at.isoformat() if state.checked_at else None,
+    }
+
+
+def _ticket_prefill_url(subscription, card: dict[str, object]) -> str:
+    """Pre-filled ticket URL carrying the observed state as evidence.
+
+    The agent chooses the ticket type. Sub does not guess it: a wrong type is
+    worse than an empty one, and the create form already validates the choice.
+    """
+
+    endpoint = cast(dict, card.get("access_endpoint") or {})
+    access_state = cast(dict, card.get("access_state") or {})
+    connection = cast(dict, card.get("connection_status") or {})
+    lines: list[str] = []
+    if endpoint.get("endpoint_display"):
+        lines.append(
+            f"Serving endpoint: {endpoint['endpoint_display']} "
+            f"({endpoint.get('endpoint_source')})"
+        )
+    elif endpoint.get("endpoint_source") == "unresolved":
+        lines.append(
+            f"Serving endpoint: unresolved ({endpoint.get('gap') or 'no path'})"
+        )
+    if connection.get("label"):
+        lines.append(f"Session: {connection['label']} - {connection.get('detail')}")
+    if access_state.get("radius_state"):
+        lines.append(f"RADIUS access: {access_state['radius_state']}")
+    for key in ("access_block_reason", "billing_block_reason"):
+        if access_state.get(key):
+            lines.append(f"{key.replace('_', ' ').capitalize()}: {access_state[key]}")
+    trace = cast(dict, card.get("topology_trace") or {})
+    for node in cast(list, trace.get("nodes") or []):
+        detail = node.get("detail") or {}
+        rx = detail.get("onu_rx_signal_dbm")
+        suffix = f" rx {rx} dBm" if rx is not None else ""
+        lines.append(f"- {node['kind']}: {node['label']} [{node['state']}]{suffix}")
+    for gap in cast(list, trace.get("breaks") or []):
+        lines.append(f"- path break: {gap['code']} - {gap['message']}")
+
+    params = {
+        "subscriber_id": str(subscription.subscriber_id),
+        "description": "\n".join(lines),
+    }
+    return f"/admin/support/tickets/new?{urlencode(params)}"
+
+
 def _build_network_access_cards(
     subscriptions: list,
     connection_by_subscription: dict[str, dict[str, object]],
     additional_routes_by_subscriber: dict[UUID, list[dict[str, object]]] | None = None,
+    endpoints_by_subscription: dict[str, dict[str, object]] | None = None,
+    traces_by_subscription: dict[str, dict[str, object] | None] | None = None,
+    access_state_by_subscription: dict[str, dict[str, object] | None] | None = None,
+    incident_by_subscription: dict[str, dict[str, object] | None] | None = None,
+    service_health_by_subscription: Mapping[str, object] | None = None,
 ) -> list[dict]:
     """Build network access info cards from subscriptions with live access."""
     cards = []
     additional_routes_by_subscriber = additional_routes_by_subscriber or {}
+    endpoints_by_subscription = endpoints_by_subscription or {}
+    traces_by_subscription = traces_by_subscription or {}
+    access_state_by_subscription = access_state_by_subscription or {}
+    incident_by_subscription = incident_by_subscription or {}
+    service_health_by_subscription = service_health_by_subscription or {}
     for sub in subscriptions:
         raw_status = getattr(sub, "status", None)
         status_value = getattr(raw_status, "value", None)
         status = str(
             status_value if status_value is not None else raw_status or "unknown"
         )
-        if status == SubscriptionStatus.disabled.value:
-            continue
         if not sub.login and not sub.ipv4_address:
             continue
         sub_id = str(sub.id)
@@ -1369,9 +1496,19 @@ def _build_network_access_cards(
                 "mac_address": getattr(sub, "mac_address", None),
                 "nas_name": nas.name if nas else None,
                 "nas_id": str(nas.id) if nas else None,
+                # Where provisioning *intends* this subscription to sit. Kept,
+                # but no longer presented as the serving location.
                 "pop_site_name": pop_site.name if pop_site else None,
+                # Where the subscription is actually served, resolved from the
+                # access path rather than inferred from the provisioning NAS.
+                "access_endpoint": endpoints_by_subscription.get(sub_id, {}),
+                "topology_trace": traces_by_subscription.get(sub_id),
+                "access_state": access_state_by_subscription.get(sub_id),
+                "known_incident": incident_by_subscription.get(sub_id),
+                "service_health": service_health_by_subscription.get(sub_id),
             }
         )
+        cards[-1]["ticket_prefill_url"] = _ticket_prefill_url(sub, cards[-1])
     return cards
 
 
@@ -1618,11 +1755,20 @@ def _build_access_repair_state(
     }
 
 
-def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
+def build_customer_detail_snapshot(
+    db: Session,
+    customer_id: str,
+    *,
+    include_conversations: bool = False,
+) -> dict[str, Any]:
     """Build unified customer detail snapshot.
 
     Every customer is a subscriber. Business accounts store their
     company identity directly on the subscriber row.
+
+    ``include_conversations`` is decided by the caller's permission check. The
+    read is skipped entirely when false, so conversation data never reaches the
+    template context for a principal that may not see it.
     """
     customer = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     if customer.user_type != UserType.customer:
@@ -1793,6 +1939,10 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     except Exception as exc:
         customer_user_access = {"error": str(exc)}
 
+    account_health = build_portal_account_health(db, customer.id).for_active_services()
+    service_health_by_subscription = {
+        str(service.subscription_id): service for service in account_health.services
+    }
     pppoe_access = _build_pppoe_access_snapshot(db, account_ids)
     network_connection_status, connection_by_subscription = (
         _build_network_connection_snapshot(db, subscriptions)
@@ -1800,10 +1950,47 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     additional_routes_by_subscriber = _active_additional_routes_by_subscriber(
         db, account_ids
     )
+    endpoints_by_subscription: dict[str, dict[str, object]] = {}
+    traces_by_subscription: dict[str, dict[str, object] | None] = {}
+    access_state_by_subscription: dict[str, dict[str, object] | None] = {}
+    incident_by_subscription: dict[str, dict[str, object] | None] = {}
+    for sub in subscriptions:
+        if not sub.login and not sub.ipv4_address:
+            continue
+        access_state_by_subscription[str(sub.id)] = _build_access_state_facts(sub)
+        incident_by_subscription[str(sub.id)] = _build_known_incident(db, sub)
+        # One path resolution feeds both the endpoint card and the trace.
+        try:
+            path = resolve_customer_path(db, sub)
+        except Exception:
+            logger.warning(
+                "Access path resolution failed for subscription %s",
+                sub.id,
+                exc_info=True,
+            )
+            endpoints_by_subscription[str(sub.id)] = {"endpoint_source": "unresolved"}
+            traces_by_subscription[str(sub.id)] = None
+            continue
+        endpoint, trace = _build_access_endpoint_projection(db, sub, path)
+        endpoints_by_subscription[str(sub.id)] = endpoint
+        traces_by_subscription[str(sub.id)] = trace
     network_access_cards = _build_network_access_cards(
         subscriptions,
         connection_by_subscription,
         additional_routes_by_subscriber,
+        endpoints_by_subscription,
+        traces_by_subscription,
+        access_state_by_subscription,
+        incident_by_subscription,
+        service_health_by_subscription,
+    )
+    network_access_active_count = sum(
+        1
+        for card in network_access_cards
+        if card["status"] == SubscriptionStatus.active.value
+    )
+    network_access_inactive_count = (
+        len(network_access_cards) - network_access_active_count
     )
     pending_location_request = (
         db.query(CustomerLocationChangeRequest)
@@ -1816,8 +2003,25 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         .first()
     )
 
+    # Communications projection. `communications.team_inbox` owns these rows;
+    # the customer record reads its own scoped slice and links back to the
+    # workspace to act on one.
+    customer_conversations: Sequence[Any] = ()
+    if include_conversations:
+        from app.services import team_inbox_read
+
+        customer_conversations = team_inbox_read.list_conversations(
+            db,
+            subscriber_id=customer.id,
+            order_by="last_message_at",
+            order_dir="desc",
+            limit=5,
+        ).items
+
     return {
         "customer": customer,
+        "can_view_conversations": include_conversations,
+        "customer_conversations": customer_conversations,
         "customer_status_presentation": account_status_presentation(
             customer.status,
             is_active=customer.is_active,
@@ -1835,6 +2039,11 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
             for account in accounts
         },
         "subscriptions": subscriptions,
+        "restorable_subscription_ids": {
+            str(subscription.id)
+            for subscription in subscriptions
+            if is_subscription_restore_candidate(subscription.status)
+        },
         "subscription_status_presentations": {
             str(subscription.id): subscription_status_presentation(subscription.status)
             for subscription in subscriptions
@@ -1864,12 +2073,19 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "network_connection_status": network_connection_status,
         "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
+        "network_access_active_count": network_access_active_count,
+        "network_access_inactive_count": network_access_inactive_count,
+        "account_health": account_health,
+        "service_health_by_subscription": service_health_by_subscription,
         "access_repair_state": _build_access_repair_state(
             db,
             customer,
             subscriptions,
         ),
         "pending_location_request": pending_location_request,
+        "subscriber_summary": subscriber_summary_service.subscriber_summary(
+            db, customer_id
+        ),
         **relationship_data,
     }
 

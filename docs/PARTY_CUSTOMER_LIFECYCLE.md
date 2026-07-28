@@ -1,9 +1,9 @@
 # Party Customer Lifecycle and Attribution
 
-**Status:** Approved architecture; additive lifecycle foundation implemented locally  
-**Decision owner:** Michael  
-**System of record:** Sub  
-**Schema revision:** 345
+**Status:** Approved; end-to-end native lifecycle implemented through revision 389
+**Decision owner:** Michael
+**System of record:** Sub
+**Schema revision:** 389
 
 ## Decision
 
@@ -20,16 +20,25 @@ interaction observation
 reviewed Party identity --> Lead + immutable origin
                               |
                               v
+                  exact Subscriber account conversion
+                              |
+                              v
                             Quote
                               |
                               v
                          Sales Order
+                         /         \
+                        v           v
+          Project / implementation  pending Subscription
+                        \           /
+                         v         v
+                    Service Order / provision
                               |
                               v
-                    Subscriber account
+                     active Subscription
                               |
                               v
-                         Subscription
+                    Customer Experience handoff
                               |
                               v
                     Ticket / support history
@@ -47,10 +56,13 @@ person or organization is; each named domain owner keeps its own lifecycle.
 | Inbox/social interaction | `communications.team_inbox` | Observed conversation and routing, not a sales decision |
 | Native outbound campaign | `communications.campaigns` | Sub campaign, audience, recipients, and delivery state |
 | Lead identity and origin | `sales.lead_lifecycle` | Party-first Lead, immutable origin, reviewed account attachment |
-| Referral program | `referrals.program` | Party-first capture, reviewed account conversion, qualification and reward decision |
+| Referral program | `referrals.program` | Capture policy, canonical program and account-attachment records, qualification/reward policy, and atomic transitions |
 | Referral account orchestration | `referrals.account_conversion` | Exact Referral/Party/Lead context into atomic account creation or reviewed attachment |
 | Pipeline and Quote | `sales.service` | Opportunity progress and account-specific commercial offer |
 | Sales Order | `sales.orders` | Accepted/manual order and fulfilment handoff |
+| Sales implementation coordination | `sales.fulfillment` | Structural Project/InstallationProject creation and verified release coordination |
+| Service Order lifecycle | `operations.service_order_lifecycle` | Implementation gate, provisioning outcome, and activation consequence |
+| Customer Experience handoff | `customer.experience_handoff` | Readiness, attention, acceptance, and durable actor/time/event evidence |
 | Subscriber account | `customer.accounts` | Billing and service account owned by a Party |
 | Customer credential enrollment | `auth.customer_credential_enrollment` | Purpose-bound local credential creation and Subscriber-email verification; no Party activation |
 | Subscription state | `access.subscription_lifecycle` and catalog/subscription owners | Service lifecycle and access projection |
@@ -112,10 +124,12 @@ Approved capture methods are:
 - referral; and
 - reviewed legacy import.
 
-Every adapter calls `sales.lead_lifecycle`; it does not write attribution
-columns independently. Planned capture adapters are the Meta/Google lead-form
-webhooks, public landing forms, portal/self-serve requests, Inbox campaign
-responses, and the agent-reviewed Lead form.
+Every adapter calls `sales.capture`, which delegates immutable attribution to
+`sales.lead_lifecycle`; it does not write Party, Lead, or attribution columns
+independently. Revision 383 provides a signed provider-neutral webhook
+capability and an authenticated staff capture command. Provider-specific raw
+payload mapping remains connector configuration/code at the edge and submits
+the canonical capture contract; it is not embedded in the lifecycle owner.
 
 Revision 356 activates the referral adapter contract. Referral capture creates
 a quarantined Party and unverified Party contact points, then delegates Lead
@@ -133,17 +147,19 @@ delegates exact Party, Lead, and Referral links to their existing owners before
 one commit. It never selects identity by contact value. The full boundary is
 `docs/REFERRAL_ACCOUNT_CONVERSION.md`.
 
-For the unauthenticated handoff, capture returns a 24-hour signed capability
-containing only that UUID context and bounded purpose/version/time claims.
+For the unauthenticated handoff, capture returns a signed capability containing
+only that UUID context and bounded purpose/version/time claims.
 `auth.token_signing` owns the cryptographic envelope; the referral conversion
-owner owns claim meaning and canonical revalidation. Public signup cannot set
-account lifecycle, reseller, billing, verification, numbering, or permission
-or marketing-consent state and never compares submitted contact values with
-capture observations.
+owner owns claim meaning and canonical revalidation, and resolves lifetime only
+through `subscriber.referral_signup_context_expiry_minutes`. Public signup
+cannot set account lifecycle, reseller, billing, verification, numbering,
+permission, or marketing-consent state and never compares submitted contact
+values with capture observations.
 
 The subsequent credential handoff is separately owned by
 `auth.customer_credential_enrollment`. No local credential exists until the
-emailed 24-hour capability is redeemed with a customer-chosen password.
+emailed capability, whose lifetime resolves through the auth settings owner, is
+redeemed with a customer-chosen password.
 Completion verifies the Subscriber account email, not the quarantined Party or
 its contact point, and does not change billing-block or subscription state.
 
@@ -203,6 +219,21 @@ so new writes are protected without falsely claiming historical rows are clean.
 They are validated only after the audit and reviewed repair work reach zero
 unresolved violations.
 
+The signed CRM `customer.accepted` endpoint is now observation-only through
+`integration.inbox`. It cannot create a Subscriber or write any existing
+Subscriber name, email, phone, address, category, date of birth, gender,
+status, Party binding, or lifecycle state. Exact retained `crm_person_id`,
+`crm_sales_order_id`, or `crm_quote_id` provenance may report a read-only match;
+name and contact observations never establish identity. Unmatched and ambiguous
+observations remain in the Inbox for review instead of becoming accounts.
+The incident command at
+`scripts.one_off.restore_crm_placeholder_identity` is read-only by default.
+Its apply mode requires the exact digest from a fresh plan, an attributable
+actor and reason, and an explicitly named target. It locks and revalidates the
+complete candidate set, delegates legacy Subscriber corrections to
+`customer.name_repairs`, refuses Party-bound rows, and commits identity-index,
+per-account audit, batch audit, and `subscriber.updated` evidence atomically.
+
 Run the PII-free report in a read-only, repeatable-read transaction:
 
 ```bash
@@ -219,6 +250,8 @@ The report contains aggregate counts only for:
 - Quote-to-Lead and Order-to-Quote alignment;
 - Subscriber-to-Sales-Order and Subscription coverage; and
 - Ticket-to-Lead/account alignment.
+- SalesOrder-to-Project/InstallationProject/ServiceOrder convergence and CX
+  handoff coverage.
 
 It never binds a Party/account, infers attribution, changes a lifecycle state,
 or prints identity values.

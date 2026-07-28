@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from app.models.dispatch import TechnicianProfile
 from app.models.field_asset import FieldAsset, FieldAssetCustody
 from app.models.field_material import FieldInventoryItem
-from app.models.network import CPEDevice, DeviceStatus, DeviceType, OLTDevice, OntUnit
+from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
+    DeviceType,
+    OLTDevice,
+    OntUnit,
+    OnuOnlineStatus,
+)
 from app.models.network_monitoring import NetworkDevice
 from app.models.router_management import Router
 from app.models.subscriber import Subscriber, UserType
@@ -170,3 +178,36 @@ def test_asset_catalog_filters_customer_cpe_by_subscriber(db_session):
 
     assert result["count"] == 1
     assert result["items"][0]["serial_number"] == "CPE-OWNED"
+
+
+def test_asset_catalog_filters_onts_by_operational_status(db_session):
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            OntUnit(
+                serial_number="ONT-ASSET-WORKING",
+                olt_status=OnuOnlineStatus.online,
+                olt_status_seen_at=now,
+            ),
+            OntUnit(
+                serial_number="ONT-ASSET-EXPIRED",
+                olt_status=OnuOnlineStatus.online,
+                olt_status_seen_at=now - timedelta(days=1),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    working = asset_inventory.list_catalog(
+        db_session,
+        AssetCatalogFilters(source="ont", status="working", limit=50, offset=0),
+    )
+    not_working = asset_inventory.list_catalog(
+        db_session,
+        AssetCatalogFilters(source="ont", status="not_working", limit=50, offset=0),
+    )
+
+    assert [item["serial_number"] for item in working["items"]] == ["ONT-ASSET-WORKING"]
+    assert [item["serial_number"] for item in not_working["items"]] == [
+        "ONT-ASSET-EXPIRED"
+    ]

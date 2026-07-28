@@ -1,13 +1,12 @@
 """Contract tests for the Network Devices surface (UI projection contracts).
 
 The owner (``web_network_core_devices_inventory``) must project device-count
-summaries as ``Kpi`` and per-row management actions as ``Action``, with counts
-carried by ``StateValue`` so an unmeasured projection never renders as zero.
+summaries as ``Kpi`` and per-row management actions as ``Action``. Projection
+repair age does not create a third public device state.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -27,11 +26,8 @@ _SAMPLE_STATS = {
     "olt": 3,
     "ont": 30,
     "cpe": 4,
-    "up": 20,
-    "down": 7,
-    "degraded": 2,
-    "maintenance": 1,
-    "unknown": 12,
+    "working": 22,
+    "not_working": 20,
 }
 
 
@@ -43,18 +39,15 @@ def _query(**filters):
 
 
 def test_stat_kpis_are_kpi_contracts_with_present_state() -> None:
-    kpis = _device_stat_kpis(_SAMPLE_STATS, _query(), refreshed_at=datetime.now(UTC))
+    kpis = _device_stat_kpis(_SAMPLE_STATS, _query())
     assert set(kpis) >= {
         "total",
         "core",
         "olt",
         "ont",
         "cpe",
-        "up",
-        "down",
-        "degraded",
-        "maintenance",
-        "unknown",
+        "working",
+        "not_working",
     }
     for kpi in kpis.values():
         assert isinstance(kpi, Kpi)
@@ -62,7 +55,7 @@ def test_stat_kpis_are_kpi_contracts_with_present_state() -> None:
         assert kpi.value.is_present
         assert kpi.cohort_url.startswith("/")
     # Counts project through StateValue, not raw ints.
-    assert kpis["up"].value.value == 20
+    assert kpis["working"].value.value == 22
 
 
 def test_status_kpi_cohort_encodes_status_and_preserves_active_filters() -> None:
@@ -73,10 +66,9 @@ def test_status_kpi_cohort_encodes_status_and_preserves_active_filters() -> None
     kpis = _device_stat_kpis(
         _SAMPLE_STATS,
         _query(type="core", vendor="huawei", search="edge"),
-        refreshed_at=datetime.now(UTC),
     )
-    parsed = parse_qs(urlsplit(kpis["down"].cohort_url).query)
-    assert parsed["status"] == ["down"]
+    parsed = parse_qs(urlsplit(kpis["not_working"].cohort_url).query)
+    assert parsed["status"] == ["not_working"]
     assert parsed["vendor"] == ["huawei"]
     assert parsed["search"] == ["edge"]
     # The page's active type filter is deliberately dropped from the tile cohort.
@@ -87,9 +79,7 @@ def test_type_kpi_cohort_narrows_on_type_and_ignores_active_status() -> None:
     # An active STATUS filter is present, but type/total tiles are an overview
     # across every status: their cohort_url must narrow ONLY on type and must
     # NOT inherit the page's status filter.
-    kpis = _device_stat_kpis(
-        _SAMPLE_STATS, _query(status="down"), refreshed_at=datetime.now(UTC)
-    )
+    kpis = _device_stat_kpis(_SAMPLE_STATS, _query(status="not_working"))
     olt = parse_qs(urlsplit(kpis["olt"].cohort_url).query)
     assert olt["type"] == ["olt"]
     assert "status" not in olt
@@ -99,16 +89,8 @@ def test_type_kpi_cohort_narrows_on_type_and_ignores_active_status() -> None:
     assert "status" not in total
 
 
-def test_unreconciled_projection_counts_are_unknown_not_zero() -> None:
-    kpis = _device_stat_kpis(_SAMPLE_STATS, _query(), refreshed_at=None)
-    up = kpis["up"].value
-    assert not up.is_present
-    assert up.value is None
-    assert up.placeholder == "Unknown"
-
-
 def test_kpi_tiles_show_overview_counts_independent_of_page_filter(monkeypatch) -> None:
-    # Parity at the page level: even with an active status=down / type=core page
+    # Parity at the page level: even with an active status=not_working / type=core page
     # filter (which shrinks the table below), the KPI tiles must display the true
     # overview counts, computed by a stats query that drops the page status/type
     # filter. The tile value must equal the count at the cohort the tile links to.
@@ -139,20 +121,15 @@ def test_kpi_tiles_show_overview_counts_independent_of_page_filter(monkeypatch) 
         "query_device_projections",
         lambda *a, **k: ([], 0),
     )
-    monkeypatch.setattr(
-        mod.device_projection_views,
-        "latest_refreshed_at",
-        lambda db: datetime.now(UTC),
-    )
-
     list_query = NETWORK_DEVICE_LIST_DEFINITION.build_query(
-        search=None, filters={"type": "core", "status": "down", "vendor": None}
+        search=None,
+        filters={"type": "core", "status": "not_working", "vendor": None},
     )
     data = mod.devices_list_page_data(object(), list_query)
     kpis = data["device_kpis"]
 
     # Tiles show the overview counts, not the page-filtered (0-valued) subset.
-    assert kpis["up"].value.value == _SAMPLE_STATS["up"]
+    assert kpis["working"].value.value == _SAMPLE_STATS["working"]
     assert kpis["olt"].value.value == _SAMPLE_STATS["olt"]
     assert kpis["total"].value.value == _SAMPLE_STATS["total"]
     # An overview stats query (no page status/type) was issued to feed the tiles.
@@ -163,8 +140,8 @@ def test_kpi_tiles_show_overview_counts_independent_of_page_filter(monkeypatch) 
 
 def test_cohort_url_helper_drops_empty_params() -> None:
     assert _device_cohort_url(_query()) == "/admin/network/devices"
-    assert _device_cohort_url(_query(), status="up") == (
-        "/admin/network/devices?status=up"
+    assert _device_cohort_url(_query(), status="working") == (
+        "/admin/network/devices?status=working"
     )
 
 
@@ -196,12 +173,12 @@ def test_row_actions_block_ping_without_ip_and_reboot_for_cpe() -> None:
 
 def test_index_template_renders_kpi_contract_fields() -> None:
     text = (_TEMPLATES / "devices" / "index.html").read_text()
-    assert "device_kpis.up.cohort_url" in text
-    assert "device_kpis.up.value.is_present" in text
-    assert "device_kpis.up.tone" in text
+    assert "device_kpis.working.cohort_url" in text
+    assert "device_kpis.working.value.is_present" in text
+    assert "device_kpis.working.tone" in text
     assert "device_kpis.total" in text
     # No longer reads the raw stats dict for the tiles.
-    assert "stats.up" not in text
+    assert "stats.working" not in text
 
 
 def test_table_rows_template_gates_actions_on_eligibility() -> None:

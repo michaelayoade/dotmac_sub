@@ -3,7 +3,8 @@
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime
-from urllib.parse import quote_plus
+from decimal import Decimal
+from urllib.parse import quote_plus, urlsplit
 from uuid import UUID
 
 import anyio
@@ -29,12 +30,18 @@ from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
-from app.services import crm_portal, customer_portal
+from app.services import (
+    crm_portal,
+    customer_portal,
+    portal_ticket_deflection,
+    team_inbox_widget,
+)
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import payment_proofs as payment_proofs_service
+from app.services import service_address as service_address_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.audit_helpers import log_audit_event
@@ -42,6 +49,7 @@ from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
+    require_customer_account_id,
 )
 from app.services.customer_portal_context import (
     emit_customer_event,
@@ -51,6 +59,9 @@ from app.services.customer_portal_context import (
     resolve_customer_subscription,
 )
 from app.services.nin_matching import mask_nin
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -78,10 +89,25 @@ CARD_SAVE_ERROR_MESSAGE = (
     "from Payment Methods."
 )
 READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
+SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE = (
+    "Your verified prepaid funding position is still under review. "
+    "Contact support before changing this service."
+)
 
 
 def _is_read_only_customer(customer: dict | None) -> bool:
     return bool(customer and customer.get("read_only"))
+
+
+def _safe_portal_return_path(value: str | None) -> str:
+    """Keep notification-action redirects inside the customer portal."""
+    candidate = str(value or "").strip()
+    parsed = urlsplit(candidate)
+    if parsed.scheme or parsed.netloc:
+        return "/portal/notifications"
+    if parsed.path != "/portal" and not parsed.path.startswith("/portal/"):
+        return "/portal/notifications"
+    return parsed.path + (f"?{parsed.query}" if parsed.query else "")
 
 
 def _read_only_response(
@@ -211,6 +237,7 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
     masked_nin = (
         mask_nin(nin_value) if isinstance(nin_value, str) and nin_value else None
     )
+    parts = service_address_service.address_parts(subscriber)
     return {
         "first_name": subscriber.first_name,
         "last_name": subscriber.last_name,
@@ -221,12 +248,12 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "date_of_birth": _profile_value(subscriber.date_of_birth),
         "gender": _profile_value(subscriber.gender),
         "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
-        "address_line1": subscriber.address_line1,
-        "address_line2": subscriber.address_line2,
-        "city": subscriber.city,
-        "region": subscriber.region,
-        "postal_code": subscriber.postal_code,
-        "country_code": subscriber.country_code,
+        "address_line1": parts.address_line1,
+        "address_line2": parts.address_line2,
+        "city": parts.city,
+        "region": parts.region,
+        "postal_code": parts.postal_code,
+        "country_code": parts.country_code,
         "billing_notifications": bool(metadata.get("billing_notifications", True)),
         "sms_updates": bool(metadata.get("sms_updates", True)),
         "push_notifications": bool(metadata.get("push_notifications", True)),
@@ -350,7 +377,11 @@ def customer_portal_chat_session(
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         raise HTTPException(status_code=409, detail="Customer account is incomplete")
-    return chat_session_service.broker_customer_session(db, str(subscriber_id))
+    try:
+        return chat_session_service.broker_customer_session(db, str(subscriber_id))
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        status_code = 404 if exc.code.endswith("_not_found") else 503
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get("/support", response_class=HTMLResponse)
@@ -383,6 +414,11 @@ def customer_support_new(
             url="/portal/auth/login?next=/portal/support/new", status_code=303
         )
     context = crm_portal.ticket_create_context(request, customer)
+    # Tell the customer what we already know before asking them to describe it.
+    # Informational only — the form still accepts the report.
+    context.update(
+        portal_ticket_deflection.assess_ticket_deflection(db, customer).as_context()
+    )
     if title or description:
         context["form_values"] = {
             "title": title or "",
@@ -431,6 +467,9 @@ def customer_support_create(
             {
                 "ticket_id": str(ticket_id),
                 "subscriber_id": subscriber_lookup,
+                # The acknowledgement template renders {ticket_number}; fall
+                # back to the id so the message never ships an empty ref.
+                "ticket_number": str(ticket.get("number") or ticket_id),
             },
         )
         return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
@@ -523,6 +562,54 @@ def customer_support_rate(
     status = "ok" if result.get("success") else "error"
     return RedirectResponse(
         url=f"/portal/support/{ticket_id}?rated={status}", status_code=303
+    )
+
+
+@router.post("/support/{ticket_id}/confirm-resolution")
+def customer_support_confirm_resolution(
+    request: Request,
+    ticket_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
+    result = crm_portal.handle_ticket_resolution_response(
+        db,
+        resolve_allowed_subscriber_ids(customer, db),
+        ticket_id,
+        confirm=True,
+    )
+    status = "confirmed" if result.get("success") else "resolution_error"
+    return RedirectResponse(
+        url=f"/portal/support/{ticket_id}?resolution={status}", status_code=303
+    )
+
+
+@router.post("/support/{ticket_id}/dispute-resolution")
+def customer_support_dispute_resolution(
+    request: Request,
+    ticket_id: str,
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
+    result = crm_portal.handle_ticket_resolution_response(
+        db,
+        resolve_allowed_subscriber_ids(customer, db),
+        ticket_id,
+        confirm=False,
+        reason=reason,
+    )
+    status = "disputed" if result.get("success") else "resolution_error"
+    return RedirectResponse(
+        url=f"/portal/support/{ticket_id}?resolution={status}", status_code=303
     )
 
 
@@ -1133,20 +1220,42 @@ def customer_reboot_service_ont(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="services")
 
-    from app.services.customer_portal_flow_services import (
-        reboot_customer_subscription_ont,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        reboot_subscription_device,
     )
 
-    ok, message = reboot_customer_subscription_ont(db, customer, str(subscription_id))
-    if ok:
+    account_id = require_customer_account_id(db, customer)
+    try:
+        outcome = reboot_subscription_device(
+            db,
+            subscriber_id=UUID(str(account_id)),
+            subscription_id=subscription_id,
+            actor_id=str(customer.get("id") or account_id),
+        )
+        ok, message = outcome.success, outcome.message
+    except CustomerDeviceCommandError as exc:
+        outcome = None
+        ok, message = False, str(exc)
+    if outcome is not None and outcome.success:
         _emit_customer_event(
             db,
             "customer_service_reboot_requested",
             {"subscription_id": str(subscription_id)},
         )
     status = "rebooted" if ok else "reboot_error"
+    evidence = ""
+    if outcome is not None:
+        evidence = (
+            f"&command={outcome.command.value}&command_status={outcome.status.value}"
+            f"&device_id={outcome.device_id}"
+            f"&operation_id={outcome.operation_id or ''}"
+        )
     return RedirectResponse(
-        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        url=(
+            f"/portal/services/{subscription_id}?{status}=true"
+            f"&message={quote_plus(message)}{evidence}"
+        ),
         status_code=303,
     )
 
@@ -1167,27 +1276,48 @@ def customer_update_service_wifi(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="services")
 
-    from app.services.customer_portal_flow_services import (
-        update_customer_subscription_wifi,
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        update_subscription_wifi,
     )
 
-    ok, message = update_customer_subscription_wifi(
-        db,
-        customer,
-        str(subscription_id),
-        ssid=ssid,
-        password=password,
-        password_confirm=password_confirm,
-    )
-    if ok:
+    account_id = require_customer_account_id(db, customer)
+    try:
+        if password.strip() != password_confirm.strip():
+            raise CustomerDeviceCommandError(
+                "wifi_password_mismatch", "WiFi passwords do not match"
+            )
+        outcome = update_subscription_wifi(
+            db,
+            subscriber_id=UUID(str(account_id)),
+            subscription_id=subscription_id,
+            actor_id=str(customer.get("id") or account_id),
+            ssid=ssid,
+            password=password.strip() or None,
+        )
+        ok, message = outcome.success, outcome.message
+    except CustomerDeviceCommandError as exc:
+        outcome = None
+        ok, message = False, str(exc)
+    if outcome is not None and outcome.success:
         _emit_customer_event(
             db,
             "customer_wifi_updated",
             {"subscription_id": str(subscription_id), "ssid_updated": True},
         )
     status = "wifi_updated" if ok else "wifi_error"
+    evidence = ""
+    if outcome is not None:
+        evidence = (
+            f"&command={outcome.command.value}&command_status={outcome.status.value}"
+            f"&device_id={outcome.device_id}"
+            f"&operation_id={outcome.operation_id or ''}"
+        )
     return RedirectResponse(
-        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        url=(
+            f"/portal/services/{subscription_id}?{status}=true"
+            f"&message={quote_plus(message)}{evidence}"
+        ),
         status_code=303,
     )
 
@@ -1355,6 +1485,7 @@ def customer_notifications_mark_read(
     request: Request,
     read_key: str | None = Form(None),
     all_visible: bool = Form(False),
+    return_to: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Mark one or all visible customer notifications as read."""
@@ -1369,7 +1500,10 @@ def customer_notifications_mark_read(
         read_key=read_key,
         all_visible=all_visible,
     )
-    return RedirectResponse(url="/portal/notifications", status_code=303)
+    return RedirectResponse(
+        url=_safe_portal_return_path(return_to),
+        status_code=303,
+    )
 
 
 def _profile_context(
@@ -2090,8 +2224,11 @@ def customer_verify_payment(
                 "amount": result["amount"],
                 "reference": result["reference"],
                 "allocated_total": result.get("allocated_total"),
+                "amount_credited": result.get("amount_credited"),
+                "prepaid_amount_applied": result.get("prepaid_amount_applied"),
                 "credit_added": result.get("credit_added"),
                 "available_balance": result.get("available_balance"),
+                "renewed_services": result.get("renewed_services", []),
                 "already_recorded": result.get("already_recorded", False),
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
@@ -2124,7 +2261,7 @@ def customer_billing_topup(
     autopay_success: str | None = Query(None),
     transfer_success: str | None = Query(None),
     add_card: bool = Query(False),
-    amount: int | None = Query(None, ge=0),
+    amount: Decimal | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> Response:
     """Show Deposit Account Credit for a customer account."""
@@ -2133,10 +2270,6 @@ def customer_billing_topup(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     page_data = customer_portal.get_topup_page(db, customer)
-    if not page_data.get("payment_options"):
-        page_data["payment_options"] = [
-            {"provider_type": "paystack", "label": "Pay with Paystack"},
-        ]
     return templates.TemplateResponse(
         "customer/billing/topup.html",
         {
@@ -2188,6 +2321,7 @@ def customer_create_topup_intent(
             amount_value,
             provider=payload.get("provider"),
             payment_method_id=payload.get("payment_method_id"),
+            preview_fingerprint=payload.get("preview_fingerprint"),
             redirect_url=str(request.url_for("customer_verify_topup")),
             idempotency_key=idempotency_key,
         )
@@ -2201,6 +2335,26 @@ def customer_create_topup_intent(
         )
         return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
+    return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.post("/billing/topup/preview")
+def customer_preview_topup(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Return the server-owned Deposit Account Credit allocation preview."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    amount_value = payload.get("amount")
+    if amount_value is None:
+        return JSONResponse({"detail": "amount is required"}, status_code=400)
+    try:
+        result = customer_portal.preview_topup(db, customer, amount_value)
+    except (ValueError, HTTPException) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
     return JSONResponse(content=jsonable_encoder(result))
 
 
@@ -2356,8 +2510,11 @@ def customer_verify_topup(
                 "already_recorded": result["already_recorded"],
                 "allocated_to_invoices": result["allocated_to_invoices"],
                 "allocated_total": result["allocated_total"],
+                "amount_credited": result.get("amount_credited"),
+                "prepaid_amount_applied": result.get("prepaid_amount_applied", 0),
                 "credit_added": result["credit_added"],
                 "available_balance": result["available_balance"],
+                "renewed_services": result.get("renewed_services", []),
                 "policy_warnings": result["policy_warnings"],
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
@@ -2577,6 +2734,7 @@ def customer_change_plan_quote(
     request: Request,
     subscription_id: UUID,
     offer_id: str,
+    target_service_address_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Lazily compute the prorated plan-change quote for one target offer.
@@ -2587,9 +2745,22 @@ def customer_change_plan_quote(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    quote = customer_portal.get_plan_change_quote(
-        db, customer, str(subscription_id), offer_id
-    )
+    try:
+        quote = customer_portal.get_plan_change_quote(
+            db,
+            customer,
+            str(subscription_id),
+            offer_id,
+            target_service_address_id=target_service_address_id,
+        )
+    except PrepaidFundingBaselineMissingError:
+        return JSONResponse(
+            {
+                "error": "financial_position_unavailable",
+                "detail": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+            },
+            status_code=409,
+        )
     if quote is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
     return JSONResponse({"quote": quote})
@@ -2600,26 +2771,30 @@ def customer_submit_change_plan(
     request: Request,
     subscription_id: UUID,
     offer_id: str = Form(...),
+    target_service_address_id: str | None = Form(None),
     notes: str = Form(None),
     preview_fingerprint: str = Form(...),
+    field_quote_fingerprint: str | None = Form(None),
     preview_effective_at: datetime = Form(...),
     idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Instantly apply a plan change."""
+    """Confirm a service change using the owner-selected delivery mode."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="services")
     try:
-        result = customer_portal.apply_instant_plan_change(
+        result = customer_portal.confirm_service_change(
             db=db,
             customer=customer,
             subscription_id=str(subscription_id),
             offer_id=offer_id,
+            target_service_address_id=target_service_address_id,
             notes=notes,
             preview_fingerprint=preview_fingerprint,
+            field_quote_fingerprint=field_quote_fingerprint,
             preview_effective_at=preview_effective_at,
             idempotency_key=idempotency_key,
             confirmation_origin="customer_web",
@@ -2649,8 +2824,14 @@ def customer_submit_change_plan(
                 },
                 status_code=400,
             )
+        status = str(result.get("status") or "applied")
+        change_state = (
+            str(result.get("delivery_mode") or "pending")
+            if status == "scheduled"
+            else "applied"
+        )
         return RedirectResponse(
-            url=f"/portal/services/{subscription_id}?plan_changed=true",
+            url=f"/portal/services/{subscription_id}?service_change={change_state}",
             status_code=303,
         )
     except HTTPException as exc:
@@ -2677,44 +2858,23 @@ def customer_submit_change_plan(
             },
             status_code=exc.status_code,
         )
+    except PrepaidFundingBaselineMissingError:
+        error_ctx = customer_portal.get_change_plan_error_context(
+            db, str(subscription_id), selected_offer_id=offer_id
+        )
+        return templates.TemplateResponse(
+            "customer/services/change_plan.html",
+            {
+                "request": request,
+                "customer": customer,
+                **error_ctx,
+                "error": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+                "active_page": "services",
+            },
+            status_code=409,
+        )
     except ValueError as exc:
         message = str(exc)
-        if "same plan family" in message.lower():
-            try:
-                from app.models.catalog import CatalogOffer
-                from app.services.common import coerce_uuid
-
-                offer = db.get(CatalogOffer, coerce_uuid(offer_id))
-                target_family = str(getattr(offer, "plan_family", "") or "").strip()
-                if target_family:
-                    result = customer_portal.request_plan_migration(
-                        db=db,
-                        customer=customer,
-                        subscription_id=str(subscription_id),
-                        target_family=target_family,
-                        requested_offer_id=offer_id,
-                        notes=notes,
-                    )
-                    ticket = result.get("ticket") or {}
-                    ticket_id = str(ticket.get("id") or "")
-                    if ticket_id:
-                        emit_customer_event(
-                            db,
-                            "customer_ticket_created",
-                            {
-                                "ticket_id": ticket_id,
-                                "subscriber_id": str(
-                                    optional_customer_subscriber_id(db, customer) or ""
-                                ),
-                            },
-                        )
-                        return RedirectResponse(
-                            url=f"/portal/support/{ticket_id}",
-                            status_code=303,
-                        )
-                    return RedirectResponse(url="/portal/support", status_code=303)
-            except ValueError as migration_exc:
-                message = str(migration_exc)
         error_ctx = customer_portal.get_change_plan_error_context(
             db, str(subscription_id)
         )
@@ -2736,65 +2896,6 @@ def customer_submit_change_plan(
             "Plan change error for %s", subscription_id
         )
         raise
-
-
-@router.post(
-    "/services/{subscription_id}/migration-request",
-    response_class=HTMLResponse,
-)
-def customer_request_plan_migration(
-    request: Request,
-    subscription_id: UUID,
-    target_family: str = Form(...),
-    requested_offer_id: str | None = Form(None),
-    notes: str | None = Form(None),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Create a support ticket for a cross-family plan migration."""
-    customer = get_current_customer_from_request(request, db)
-    if not customer:
-        return RedirectResponse(url="/portal/auth/login", status_code=303)
-    if _is_read_only_customer(customer):
-        return _read_only_response(request, customer, active_page="services")
-    try:
-        result = customer_portal.request_plan_migration(
-            db=db,
-            customer=customer,
-            subscription_id=str(subscription_id),
-            target_family=target_family,
-            requested_offer_id=requested_offer_id,
-            notes=notes,
-        )
-        ticket = result.get("ticket") or {}
-        ticket_id = str(ticket.get("id") or "")
-        if ticket_id:
-            emit_customer_event(
-                db,
-                "customer_ticket_created",
-                {
-                    "ticket_id": ticket_id,
-                    "subscriber_id": str(
-                        optional_customer_subscriber_id(db, customer) or ""
-                    ),
-                },
-            )
-            return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
-        return RedirectResponse(url="/portal/support", status_code=303)
-    except ValueError as exc:
-        error_ctx = customer_portal.get_change_plan_error_context(
-            db, str(subscription_id)
-        )
-        return templates.TemplateResponse(
-            "customer/services/change_plan.html",
-            {
-                "request": request,
-                "customer": customer,
-                **error_ctx,
-                "error": str(exc),
-                "active_page": "services",
-            },
-            status_code=400,
-        )
 
 
 # =============================================================================

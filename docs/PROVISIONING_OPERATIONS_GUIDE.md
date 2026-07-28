@@ -40,6 +40,16 @@ Provisioning is intentionally staged. Do not authorize ONTs on a new OLT until t
 | 7. ONT authorization/provisioning | Register ONTs and apply service configuration only after readiness passes; authorization does not create customer assignments. | Autofind authorization and ONT provisioning tab. | `app/services/network/ont_authorization.py`, `app/services/network/acs_foundation.py`, `app/services/network/ont_provision_steps.py`, `app/services/network/ont_provisioning/orchestrator.py` |
 | 8. Backup, config audit, and drift checks | Keep read-only evidence that live OLT state matches intended state. | Scheduled SSH running-config backups, backup audits, live config-pack audits, compensation retry watchdog. | `app/tasks/olt_config_backup.py`, `app/services/network/olt_config_audit.py`, `app/services/network/olt_config_pack_live_audit.py`, `app/tasks/provisioning.py` |
 
+## Service-change execution reconciliation
+
+Use `/admin/provisioning/service-change-reconciliation` when a paid relocation,
+remote reprovision, or verified field change appears interrupted. The page is
+restricted by `provisioning:service_change_reconcile`. Review the reported
+structural evidence, supply a unique idempotency key and reason, and repair only
+the displayed reviewed head. A stale head must be refreshed and reviewed again.
+Non-repairable drift requires investigation; never infer settlement from invoice
+memo text or provisioning from work-order status alone.
+
 ### Verify System Configuration
 
 Before any network operations, confirm these are configured:

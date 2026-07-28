@@ -2,7 +2,7 @@
 
 > **Status: generated historical inventory, not an approved backlog.** An unchecked item is not authorization to implement it. Revalidate against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`, the current domain SOT, and current product priority.
 
-Total unchecked items across docs: **834**
+Total unchecked items across docs: **831**
 
 ## 01_smartolt_features.md
 Unchecked items: 38
@@ -1659,10 +1659,10 @@ Unchecked items: 183
 - [ ] **Compliance note** -- Display a warning banner on the data retention page noting that retention policies should comply with local regulatory requirements (e.g., GDPR, local telecom regulations)
   - context: `Section 8: System Configuration | 8.10 Log Rotation & Data Retention | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:156`
-- [ ] **Invoice auto-generation settings** -- Add a "Finance Automation" settings section with: enable/disable automatic invoice issuing, confirmation period (days before auto-confirming draft invoices), confirmation time of day, preview generation offset (days before billing day), and date mode selection (billing date vs. actual issuance date)
+- [won't-do] **Invoice auto-generation switch** -- Rejected by ADR 0003: invoice lifecycle work is permanent owner work, not an operator enable/disable decision. Timing and document policy may still be configured through their named owners.
   - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:166`
-- [ ] **Automatic service blocking rules** -- Add an "Automatic Blocking" settings section with: enable blocking period processing, blocking execution time (time of day), enable deactivation period processing, separate toggle for prepaid customer deactivation, toggle for blocking on one-time invoices, and toggles to process blocking on weekends and holidays
+- [won't-do] **Automatic service blocking switches** -- Rejected by ADR 0003: financial enforcement is permanent, every calendar day is eligible, and only the shared time-of-day window may defer adverse action. See `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
   - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:167`
 - [ ] **Dashboard billing notification** -- Add a toggle to show/hide a dashboard notification banner on the billing confirmation day, alerting admins that invoices are ready for review
@@ -1674,16 +1674,16 @@ Unchecked items: 183
 - [ ] **Per-partner preview generation** -- Add a toggle to generate billing previews separately for each reseller/partner organization
   - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:170`
-- [ ] **Holiday-aware blocking** -- Integrate with the localization/holiday calendar so that automatic blocking respects configured public holidays and weekends
+- [won't-do] **Holiday/weekend blocking bypass** -- Rejected by ADR 0003. Account-specific grace and shields remain canonical facts; weekends and holidays are ordinary enforcement days.
   - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:171`
-- [ ] **Recurring billing configuration** -- Add a billing settings page with: billing enabled toggle, payment period (monthly/quarterly/annual), default payment method selector, billing day of month (1-28) with a visual calendar showing the billing/blocking/deactivation timeline, toggle to use customer creation date as billing day, payment due period (days after invoice), blocking period (days after due date or "Same as due date"), deactivation period (days after blocking or "Disabled"), minimum balance threshold, and send billing notifications toggle
+- [ ] **Recurring billing policy configuration** -- Add a billing settings page for payment period, default payment method, billing anchor, payment due period, minimum funding/credit policy, and notification delivery policy. Do not add a lifecycle enable switch or a second blocking/deactivation ladder; those boundaries are fixed by ADR 0003 and `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
   - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:181`
 - [ ] **Billing day visual calendar** -- Display an interactive calendar widget showing the billing day highlighted in green, blocking period in amber, and deactivation period in rose, helping operators visualize the customer lifecycle timeline
   - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:182`
-- [ ] **Prepaid billing settings** -- Add a "Prepaid" settings section with: issue invoice after payment toggle, default line item text, default tax rate, auto-associate invoices with payments, and deactivation period for prepaid accounts
+- [ ] **Prepaid document policy settings** -- Add only owner-scoped defaults such as line-item text and tax presentation. Do not add issue/renew/enforce/deactivate switches or automatic payment-association policy outside the canonical payment and renewal owners.
   - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
   - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:183`
 - [ ] **Invoice numbering configuration** -- Add configurable invoice number format with template variables: `{year}`, `{month}`, `{day}`, `{partner_id}`, `{customer_id}`, `{location_id}`, `{rand_number}`, `{rand_string}`, `{next}` (auto-increment), and `{var|length}` for zero-padded numbers

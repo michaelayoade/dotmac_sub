@@ -17,12 +17,27 @@ from app.models.fup import (
     FupConsumptionPeriod,
     FupDataUnit,
     FupDirection,
+    FupPolicy,
     FupRule,
 )
 from app.services import catalog as catalog_service
 from app.services import control_registry
 from app.services.common import coerce_uuid, validate_enum
-from app.services.fup import _threshold_gb, fup_policies, simulate_fup
+from app.services.db_session_adapter import db_session_adapter
+from app.services.fup import (
+    AddFupRuleCommand,
+    CloneFupRulesCommand,
+    DeleteFupRuleCommand,
+    FupPolicySettings,
+    FupRulePatch,
+    FupRuleSpec,
+    UpdateFupPolicyCommand,
+    UpdateFupRuleCommand,
+    _threshold_gb,
+    fup_policies,
+    simulate_fup,
+)
+from app.services.owner_commands import CommandContext
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -77,7 +92,10 @@ def fup_context(request: Request, db: Session, offer_id: str) -> dict:
         Dict of template context variables.
     """
     offer = catalog_service.offers.get(db=db, offer_id=offer_id)
-    policy = fup_policies.get_or_create(db, offer_id)
+    policy = fup_policies.get_by_offer(db, offer_id) or FupPolicy(
+        offer_id=coerce_uuid(offer_id),
+        is_active=True,
+    )
 
     # Fetch all active offers for the clone dropdown (exclude current offer)
     all_offers = catalog_service.offers.list(
@@ -172,7 +190,12 @@ def _parse_days_of_week(form: FormData, field_name: str) -> list[int] | None:
     return days if days else None
 
 
-def handle_policy_update(db: Session, offer_id: str, form: FormData) -> None:
+def handle_policy_update(
+    db: Session,
+    offer_id: str,
+    form: FormData,
+    context: CommandContext,
+) -> None:
     """Update FUP policy accounting settings from form data.
 
     Args:
@@ -180,8 +203,6 @@ def handle_policy_update(db: Session, offer_id: str, form: FormData) -> None:
         offer_id: The catalog offer UUID.
         form: The submitted form data.
     """
-    policy = fup_policies.get_or_create(db, offer_id)
-
     traffic_start = _parse_time(str(form.get("traffic_accounting_start", "")))
     traffic_end = _parse_time(str(form.get("traffic_accounting_end", "")))
     traffic_inverse = form.get("traffic_inverse_interval") == "on"
@@ -192,17 +213,23 @@ def handle_policy_update(db: Session, offer_id: str, form: FormData) -> None:
     online_inverse = form.get("online_inverse_interval") == "on"
     online_days = _parse_days_of_week(form, "online_days_of_week")
 
+    db_session_adapter.release_read_transaction(db)
     fup_policies.update_policy(
         db,
-        str(policy.id),
-        traffic_accounting_start=traffic_start,
-        traffic_accounting_end=traffic_end,
-        traffic_inverse_interval=traffic_inverse,
-        traffic_days_of_week=traffic_days,
-        online_accounting_start=online_start,
-        online_accounting_end=online_end,
-        online_inverse_interval=online_inverse,
-        online_days_of_week=online_days,
+        UpdateFupPolicyCommand(
+            context=context,
+            offer_id=offer_id,
+            settings=FupPolicySettings(
+                traffic_accounting_start=traffic_start,
+                traffic_accounting_end=traffic_end,
+                traffic_inverse_interval=traffic_inverse,
+                traffic_days_of_week=traffic_days,
+                online_accounting_start=online_start,
+                online_accounting_end=online_end,
+                online_inverse_interval=online_inverse,
+                online_days_of_week=online_days,
+            ),
+        ),
     )
     logger.info("Updated FUP policy settings for offer %s", offer_id)
 
@@ -276,7 +303,12 @@ def _parse_sort_order(raw: str) -> int:
         ) from None
 
 
-def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
+def handle_add_rule(
+    db: Session,
+    offer_id: str,
+    form: FormData,
+    context: CommandContext,
+) -> None:
     """Add a new FUP rule from form data.
 
     Args:
@@ -284,8 +316,6 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
         offer_id: The catalog offer UUID.
         form: The submitted form data.
     """
-    policy = fup_policies.get_or_create(db, offer_id)
-
     name = str(form.get("name", "")).strip()
     consumption_period = str(form.get("consumption_period", "monthly"))
     _guard_submonthly_period(db, consumption_period)
@@ -311,27 +341,38 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
     days_of_week = [int(d) for d in days_of_week_raw if str(d).isdigit()] or None
     is_active = str(form.get("is_active", "")).lower() in {"on", "true", "1"}
 
+    db_session_adapter.release_read_transaction(db)
     fup_policies.add_rule(
         db,
-        str(policy.id),
-        name=name,
-        consumption_period=consumption_period,
-        direction=direction,
-        threshold_amount=threshold_amount,
-        threshold_unit=threshold_unit,
-        action=action,
-        speed_reduction_percent=speed_reduction_percent,
-        sort_order=sort_order,
-        time_start=time_start,
-        time_end=time_end,
-        enabled_by_rule_id=enabled_by_rule_id,
-        days_of_week=days_of_week,
-        is_active=is_active,
+        AddFupRuleCommand(
+            context=context,
+            offer_id=offer_id,
+            spec=FupRuleSpec(
+                name=name,
+                consumption_period=consumption_period,
+                direction=direction,
+                threshold_amount=threshold_amount,
+                threshold_unit=threshold_unit,
+                action=action,
+                speed_reduction_percent=speed_reduction_percent,
+                sort_order=sort_order,
+                time_start=time_start,
+                time_end=time_end,
+                enabled_by_rule_id=enabled_by_rule_id,
+                days_of_week=days_of_week,
+                is_active=is_active,
+            ),
+        ),
     )
     logger.info("Added FUP rule for offer %s", offer_id)
 
 
-def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
+def handle_update_rule(
+    db: Session,
+    rule_id: str,
+    form: FormData,
+    context: CommandContext,
+) -> None:
     """Update an existing FUP rule from form data.
 
     Args:
@@ -389,22 +430,57 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
         int(d) for d in days_of_week_raw if str(d).isdigit()
     ] or None
 
-    fup_policies.update_rule(db, rule_id, **kwargs)
+    db_session_adapter.release_read_transaction(db)
+    fup_policies.update_rule(
+        db,
+        UpdateFupRuleCommand(
+            context=context,
+            rule_id=rule_id,
+            patch=FupRulePatch(
+                updated_fields=frozenset(kwargs),
+                name=kwargs.get("name"),
+                consumption_period=kwargs.get("consumption_period"),
+                direction=kwargs.get("direction"),
+                threshold_amount=kwargs.get("threshold_amount"),
+                threshold_unit=kwargs.get("threshold_unit"),
+                action=kwargs.get("action"),
+                speed_reduction_percent=kwargs.get("speed_reduction_percent"),
+                time_start=kwargs.get("time_start"),
+                time_end=kwargs.get("time_end"),
+                enabled_by_rule_id=kwargs.get("enabled_by_rule_id"),
+                days_of_week=kwargs.get("days_of_week"),
+                is_active=kwargs.get("is_active"),
+            ),
+        ),
+    )
     logger.info("Updated FUP rule %s", rule_id)
 
 
-def handle_delete_rule(db: Session, rule_id: str) -> None:
+def handle_delete_rule(
+    db: Session,
+    rule_id: str,
+    context: CommandContext,
+) -> None:
     """Delete an FUP rule.
 
     Args:
         db: Database session.
         rule_id: The FUP rule UUID.
     """
-    fup_policies.delete_rule(db, rule_id)
+    db_session_adapter.release_read_transaction(db)
+    fup_policies.delete_rule(
+        db,
+        DeleteFupRuleCommand(context=context, rule_id=rule_id),
+    )
     logger.info("Deleted FUP rule %s", rule_id)
 
 
-def handle_clone_rules(db: Session, source_offer_id: str, target_offer_id: str) -> None:
+def handle_clone_rules(
+    db: Session,
+    source_offer_id: str,
+    target_offer_id: str,
+    context: CommandContext,
+) -> None:
     """Clone FUP rules from one offer to another.
 
     Args:
@@ -412,8 +488,15 @@ def handle_clone_rules(db: Session, source_offer_id: str, target_offer_id: str) 
         source_offer_id: The offer UUID to copy rules from.
         target_offer_id: The offer UUID to copy rules into.
     """
-    target_policy = fup_policies.get_or_create(db, target_offer_id)
-    fup_policies.clone_rules_from(db, source_offer_id, str(target_policy.id))
+    db_session_adapter.release_read_transaction(db)
+    fup_policies.clone_rules(
+        db,
+        CloneFupRulesCommand(
+            context=context,
+            source_offer_id=source_offer_id,
+            target_offer_id=target_offer_id,
+        ),
+    )
     logger.info(
         "Cloned FUP rules from offer %s to offer %s",
         source_offer_id,

@@ -14,8 +14,10 @@ from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, MFAMethod, UserCredential
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
+from app.services import credential_recovery
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.audit_adapter import record_audit_event
+from app.services.owner_commands import CommandContext
 from app.services.rate_limiter_adapter import allow_operation
 from app.services.settings_spec import resolve_value
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
@@ -119,29 +121,32 @@ def _set_subscriber_local_login_active(
 
 
 def _send_subscriber_reset_link(
-    db: Session, *, subscriber: Subscriber, email: str
+    db: Session,
+    *,
+    subscriber: Subscriber,
+    actor_id: str | None = None,
 ) -> str:
-    """Send a portal password-reset link to a customer (subscriber-keyed)."""
-    from app.services import auth_flow as auth_flow_service
-    from app.services import email as email_service
-
+    """Queue a portal password-reset link for one exact customer principal."""
     _ensure_subscriber_local_credential(db, subscriber)
+    principal_id = subscriber.id
     db.commit()
-    reset = auth_flow_service.request_password_reset(db=db, email=email)
-    if not reset or not reset.get("token"):
-        return "Password reset link could not be generated for this user."
-    sent = email_service.send_password_reset_email(
+    outcome = credential_recovery.request_exact_password_recovery(
         db,
-        to_email=email,
-        reset_token=reset["token"],
-        person_name=reset.get("subscriber_name"),
-        next_login_path=CUSTOMER_LOGIN_NEXT,
-        expires_minutes=reset.get("ttl_minutes"),
+        credential_recovery.RequestExactPasswordRecoveryCommand(
+            context=CommandContext.system(
+                actor=f"user:{actor_id or 'unknown-administrator'}",
+                scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+                reason="Administrator requested customer password recovery",
+            ),
+            principal_type="subscriber",
+            principal_id=principal_id,
+            next_login_path=CUSTOMER_LOGIN_NEXT,
+        ),
     )
     return (
-        "Password reset link sent successfully."
-        if sent
-        else "Password reset link could not be sent."
+        "Password reset link queued successfully."
+        if outcome.delivery_requested
+        else "Password reset link could not be queued."
     )
 
 
@@ -437,9 +442,9 @@ def send_customer_invite(
     )
     _ensure_subscriber_local_credential(db, target.subscriber)
     db.commit()
-    note = web_system_user_mutations_service.send_user_invite(
+    note = web_system_user_mutations_service.send_subscriber_invite(
         db,
-        email=target.email,
+        subscriber_id=str(target.subscriber.id),
         next_login_path=CUSTOMER_LOGIN_NEXT,
     )
     ok = "sent" in note.lower()
@@ -517,24 +522,11 @@ def send_customer_reset_link(
         db, customer_type=customer_type, customer_id=customer_id
     )
     note = _send_subscriber_reset_link(
-        db, subscriber=target.subscriber, email=target.email
-    )
-    ok = "sent" in note.lower()
-    record_audit_event(
         db,
-        action=RESET_AUDIT_ACTION,
-        entity_type="subscriber",
-        entity_id=str(state["target_subscriber_id"]),
+        subscriber=target.subscriber,
         actor_id=actor_id,
-        metadata={
-            "email": state.get("email"),
-            "email_source": state.get("email_source"),
-            "customer_type": customer_type,
-            "result": note,
-        },
-        status_code=200,
-        is_success=ok,
     )
+    ok = "queued" in note.lower()
     return {"ok": ok, "title": "Password reset", "message": note}
 
 

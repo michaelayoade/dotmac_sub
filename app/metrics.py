@@ -41,7 +41,7 @@ VICTORIAMETRICS_WRITE_FAILURES = Counter(
     ["adapter", "operation"],
 )
 
-# Connectivity state-machine observability (CONNECTIVITY_STATE_MACHINE.md step 2c).
+# Connectivity projection observability (FINANCIAL_ACCESS_ENFORCEMENT.md).
 # Direct (legacy) writes of connectivity-derived state, labelled by field and
 # the write source. ``source=reconciler`` is the legitimate single writer;
 # any other source is a legacy direct write we want to drive to zero before
@@ -561,8 +561,9 @@ class _BillingHealthCollector(Collector):
             "Absolute total negative prepaid wallet exposure",
         )
         yield _gauge_description(
-            "billing_negative_prepaid_sweep_disabled_accounts",
-            "Negative prepaid accounts while the prepaid balance sweep is disabled",
+            "billing_prepaid_funding_quarantined_accounts",
+            "Prepaid accounts excluded from funding enforcement for want of a "
+            "reviewed opening baseline (also excluded from the exposure gauges)",
         )
 
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
@@ -677,9 +678,11 @@ class _BillingHealthCollector(Collector):
                 "Absolute total negative prepaid wallet exposure",
             ),
             (
-                "negative_prepaid_sweep_disabled_accounts",
-                "billing_negative_prepaid_sweep_disabled_accounts",
-                "Negative prepaid accounts while the prepaid balance sweep is disabled",
+                "prepaid_funding_quarantined",
+                "billing_prepaid_funding_quarantined_accounts",
+                "Prepaid accounts excluded from funding enforcement for want of "
+                "a reviewed opening baseline (also excluded from the exposure "
+                "gauges)",
             ),
         )
         for signal, name, help_text in global_metrics:

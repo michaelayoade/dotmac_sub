@@ -165,12 +165,12 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ### Improvements
 
-- [ ] **Invoice auto-generation settings** -- Add a "Finance Automation" settings section with: enable/disable automatic invoice issuing, confirmation period (days before auto-confirming draft invoices), confirmation time of day, preview generation offset (days before billing day), and date mode selection (billing date vs. actual issuance date)
-- [ ] **Automatic service blocking rules** -- Add an "Automatic Blocking" settings section with: enable blocking period processing, blocking execution time (time of day), enable deactivation period processing, separate toggle for prepaid customer deactivation, toggle for blocking on one-time invoices, and toggles to process blocking on weekends and holidays
+- [won't-do] **Invoice auto-generation switch** -- Rejected by ADR 0003: invoice lifecycle work is permanent owner work, not an operator enable/disable decision. Timing and document policy may still be configured through their named owners.
+- [won't-do] **Automatic service blocking switches** -- Rejected by ADR 0003: financial enforcement is permanent, every calendar day is eligible, and only the shared time-of-day window may defer adverse action. See `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
 - [ ] **Dashboard billing notification** -- Add a toggle to show/hide a dashboard notification banner on the billing confirmation day, alerting admins that invoices are ready for review
 - [ ] **Automatic IP reclamation** -- Add settings to automatically release IP addresses and archive service credentials for inactive prepaid customers after a configurable period (in months), freeing resources back to the pool
 - [ ] **Per-partner preview generation** -- Add a toggle to generate billing previews separately for each reseller/partner organization
-- [ ] **Holiday-aware blocking** -- Integrate with the localization/holiday calendar so that automatic blocking respects configured public holidays and weekends
+- [won't-do] **Holiday/weekend blocking bypass** -- Rejected by ADR 0003. Account-specific grace and shields remain canonical facts; weekends and holidays are ordinary enforcement days.
 
 ---
 
@@ -180,9 +180,9 @@ This document catalogs feature improvements for the DotMac Sub ISP management sy
 
 ### Improvements
 
-- [ ] **Recurring billing configuration** -- Add a billing settings page with: billing enabled toggle, payment period (monthly/quarterly/annual), default payment method selector, billing day of month (1-28) with a visual calendar showing the billing/blocking/deactivation timeline, toggle to use customer creation date as billing day, payment due period (days after invoice), blocking period (days after due date or "Same as due date"), deactivation period (days after blocking or "Disabled"), minimum balance threshold, and send billing notifications toggle
+- [ ] **Recurring billing policy configuration** -- Add a billing settings page for payment period, default payment method, billing anchor, payment due period, minimum funding/credit policy, and notification delivery policy. Do not add a lifecycle enable switch or a second blocking/deactivation ladder; those boundaries are fixed by ADR 0003 and `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`.
 - [ ] **Billing day visual calendar** -- Display an interactive calendar widget showing the billing day highlighted in green, blocking period in amber, and deactivation period in rose, helping operators visualize the customer lifecycle timeline
-- [ ] **Prepaid billing settings** -- Add a "Prepaid" settings section with: issue invoice after payment toggle, default line item text, default tax rate, auto-associate invoices with payments, and deactivation period for prepaid accounts
+- [ ] **Prepaid document policy settings** -- Add only owner-scoped defaults such as line-item text and tax presentation. Do not add issue/renew/enforce/deactivate switches or automatic payment-association policy outside the canonical payment and renewal owners.
 - [ ] **Invoice numbering configuration** -- Add configurable invoice number format with template variables: `{year}`, `{month}`, `{day}`, `{partner_id}`, `{customer_id}`, `{location_id}`, `{rand_number}`, `{rand_string}`, `{next}` (auto-increment), and `{var|length}` for zero-padded numbers
 - [ ] **Receipt numbering configuration** -- Separate receipt number format configuration with the same variable system, plus `{type}` for payment type
 - [ ] **Proforma invoice automation** -- Add settings for: enable auto proforma invoice generation, generation day of month, proforma payment period, create proforma for current/next month, and proforma number pattern

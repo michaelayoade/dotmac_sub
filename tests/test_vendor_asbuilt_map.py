@@ -55,7 +55,11 @@ def test_asbuilt_action_is_owned_and_only_allows_the_assigned_vendor():
         bidding_open_at=None,
         bidding_close_at=None,
         approved_quote_id=None,
-        erp_purchase_order_id=None,
+        procurement_system=None,
+        procurement_order_reference=None,
+        procurement_delivery_status=None,
+        procurement_delivery_error=None,
+        procurement_delivered_at=None,
         notes=None,
         created_at=None,
         updated_at=None,
@@ -74,5 +78,5 @@ def test_detail_route_feeds_proposed_route_context():
     # ownership-based, so it does not call the admin route API).
     source = inspect.getsource(vendor_portal.vendor_project_detail)
     assert "route_geojson" in source
-    assert "build_project_route_geojson" in source
+    assert "build_vendor_project_route_geojson" in source
     assert "route_geojson" in TEMPLATE  # and the template consumes it

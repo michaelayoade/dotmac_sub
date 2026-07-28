@@ -50,6 +50,25 @@
         <p class="whitespace-pre-wrap text-sm text-stone-700 dark:text-stone-300">{{ ticket.get('description') or 'No description provided.' }}</p>
     </section>
 
+    {% set customer_action_keys = ticket.get('resolution_actions', []) | map(attribute='key') | list %}
+    {% if 'confirm_resolution' in customer_action_keys or 'dispute_resolution' in customer_action_keys %}
+    <section class="rounded-2xl border border-sky-200 bg-sky-50 p-6 shadow-premium dark:border-sky-800 dark:bg-sky-900/20">
+        <h2 class="text-base font-bold text-sky-900 dark:text-sky-100">Has this issue been resolved?</h2>
+        <p class="mt-1 text-sm text-sky-800 dark:text-sky-200">Support has proposed a resolution. Confirm it or tell us what still needs attention.</p>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+            {% if 'confirm_resolution' in customer_action_keys %}<form method="post" action="/portal/support/{{ ticket.get('id') }}/confirm-resolution">
+                {% include "components/forms/csrf_input.html" %}
+                <button class="w-full rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white">Yes, it is resolved</button>
+            </form>{% endif %}
+            {% if 'dispute_resolution' in customer_action_keys %}<form method="post" action="/portal/support/{{ ticket.get('id') }}/dispute-resolution" class="space-y-2">
+                {% include "components/forms/csrf_input.html" %}
+                <textarea name="reason" rows="2" maxlength="2000" placeholder="What is still wrong?" class="w-full rounded-xl border border-sky-200 bg-white p-2 text-sm dark:border-sky-700 dark:bg-sky-950 dark:text-white"></textarea>
+                <button class="w-full rounded-xl border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 dark:text-rose-300">No, I still need help</button>
+            </form>{% endif %}
+        </div>
+    </section>
+    {% endif %}
+
     <!-- Comments -->
     <section class="rounded-2xl border border-stone-200/60 bg-white p-6 shadow-premium dark:border-stone-700/60 dark:bg-stone-800">
         <h2 class="mb-4 text-sm font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Comments</h2>
@@ -105,7 +124,7 @@
             {% for i in range(1, 6) %}<span class="{{ 'text-amber-400' if i <= ticket.get('csat_rating') else 'text-stone-300 dark:text-stone-600' }}">★</span>{% endfor %}
         </div>
         <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">Thanks for your feedback.</p>
-        {% else %}
+        {% elif 'rate_support' in customer_action_keys %}
         <form method="post" action="/portal/support/{{ ticket.get('id') }}/rate" x-data="{ rating: 0 }">
             {% include "components/forms/csrf_input.html" %}
             <p class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">How was your support?</p>

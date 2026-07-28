@@ -10,6 +10,7 @@ class AuditEventBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     actor_type: AuditActorType = AuditActorType.system
     actor_id: str | None = None
+    actor_label: str | None = None
     action: str
     entity_type: str
     entity_id: str | None = None

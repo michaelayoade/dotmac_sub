@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, exists, func, not_, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased, defer, joinedload
 
 from app.models.network import (
@@ -100,7 +100,7 @@ class OntUnits(CRUDManager[OntUnit]):
         pon_hint: str | None = None,
         zone_id: str | None = None,
         signal_quality: str | None = None,
-        olt_status: str | None = None,
+        operational_status: str | None = None,
         authorization_status: str | None = None,
         vendor: str | None = None,
         search: str | None = None,
@@ -283,7 +283,9 @@ class OntUnits(CRUDManager[OntUnit]):
             )
 
         runtime_status_filter = (
-            olt_status if olt_status in {"online", "offline"} else None
+            operational_status
+            if operational_status in {"working", "not_working"}
+            else None
         )
 
         if signal_quality in {"good", "warning", "critical"}:
@@ -318,13 +320,15 @@ class OntUnits(CRUDManager[OntUnit]):
             stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
 
         if runtime_status_filter is not None:
-            from app.services.network.ont_status import effective_ont_online_clause
+            from app.services.network.ont_status import (
+                operational_ont_not_working_clause,
+                operational_ont_working_clause,
+            )
 
-            online_clause = effective_ont_online_clause()
             stmt = stmt.where(
-                online_clause
-                if runtime_status_filter == "online"
-                else not_(online_clause)
+                operational_ont_working_clause()
+                if runtime_status_filter == "working"
+                else operational_ont_not_working_clause()
             )
 
         count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())

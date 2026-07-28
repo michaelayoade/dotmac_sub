@@ -19,7 +19,7 @@ connection.
 ## Boundaries
 
 - `network.device_state` remains the NOC device-operational owner. Its
-  `up/degraded/down/maintenance` vocabulary is not customer connection health.
+  `working/not_working` vocabulary is not customer connection health.
 - RADIUS sessions, ONT observations, monitoring observations, access paths,
   and incidents are inputs. Their adapters do not independently decide the
   customer verdict.

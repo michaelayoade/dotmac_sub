@@ -1,0 +1,149 @@
+{#
+  Data / ledger spine (archetype D) — dotmac_sub admin.
+  Spec: docs/design/ADMIN_UI_ARCHETYPES.md
+
+  A full-width table you scan/filter/act on, with detail opening in an on-demand
+  row drawer (not a permanent panel). Pure projection: renders server-owned
+  fields + tone, links to owner endpoints; decides no state or color. Flat.
+
+  Compose: facet_bar (+ facet_select) for filtering; ledger_card wraps the table;
+  ledger_row makes a row open the drawer via HTMX; row_drawer() mounts the
+  off-canvas panel once per page. The drawer content is a server partial the row
+  hx-gets — same thin-projection boundary as the inbox conversation partial.
+#}
+{% from "components/ui/macros.html" import status_badge, status_presentation_badge, table_head %}
+
+{# ============================================================
+   FACET BAR — flat filter row: search + facet controls + count.
+   GET form so filters round-trip through the list query. `caller()`
+   supplies facet_select controls / toggles.
+   ============================================================ #}
+{% macro facet_bar(action, search="", search_name="search", placeholder="Search…", count=None) %}
+<form method="get" action="{{ action }}" class="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2.5 dark:border-slate-800 dark:bg-slate-900">
+    <div class="relative min-w-[14rem] flex-1">
+        <svg class="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
+        <input type="search" name="{{ search_name }}" value="{{ search }}" placeholder="{{ placeholder }}"
+               class="w-full rounded-lg border-slate-300 pl-8 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    </div>
+    {% if caller %}{{ caller() }}{% endif %}
+    <button type="submit" class="rounded-lg bg-accent-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-accent-700">Filter</button>
+    {% if count is not none %}<span class="ml-auto whitespace-nowrap text-xs font-medium text-slate-400 dark:text-slate-500">{{ count }} results</span>{% endif %}
+</form>
+{% endmacro %}
+
+{# A single facet dropdown for the facet bar. options: [{value,label}] or strings. #}
+{% macro facet_select(name, options, value="", all_label="All") %}
+<select name="{{ name }}" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    <option value="">{{ all_label }}</option>
+    {% for opt in options %}
+    {% set ov = opt.value if opt.value is defined else opt %}
+    {% set ol = opt.label if opt.label is defined else opt %}
+    <option value="{{ ov }}" {% if (ov | string) == (value | string) %}selected{% endif %}>{{ ol }}</option>
+    {% endfor %}
+</select>
+{% endmacro %}
+
+{# ============================================================
+   LEDGER CARD — flat table container (no gradient header). Pass
+   `columns` to render the head, or omit and supply your own thead
+   in the caller. `count` shows next to the title.
+   ============================================================ #}
+{% macro ledger_card(title="", count=None) %}
+<div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    {% if title %}
+    <div class="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+        <h2 class="font-display text-sm font-semibold text-slate-900 dark:text-white">{{ title }}{% if count is not none %} <span class="ml-1 font-normal text-slate-400 dark:text-slate-500">· {{ count }}</span>{% endif %}</h2>
+    </div>
+    {% endif %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-800">
+            {{ caller() }}
+        </table>
+    </div>
+</div>
+{% endmacro %}
+
+{# Flat header row from a list of column labels (right-aligns anything whose
+   label starts with '>'). #}
+{% macro ledger_head(columns) %}
+<thead>
+    <tr class="border-b border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-800/40">
+        {% for col in columns %}
+        {% set right = col.startswith('>') %}
+        <th scope="col" class="px-4 py-2.5 text-{{ 'right' if right else 'left' }} text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 dark:text-slate-500">{{ col[1:] if right else col }}</th>
+        {% endfor %}
+    </tr>
+</thead>
+{% endmacro %}
+
+{# ============================================================
+   LEDGER ROW — a scannable, clickable row that opens the drawer.
+   `drawer_url` is a server partial hx-get'd into #ledger-drawer.
+   Falls back to a normal link (href) for no-JS / deep links.
+   ============================================================ #}
+{% macro ledger_row(drawer_url, href="", active=False) %}
+<tr class="ledger-row cursor-pointer border-b border-slate-100 transition-colors last:border-0 dark:border-slate-800/70 {% if active %}bg-accent-50 dark:bg-accent-900/20{% else %}hover:bg-slate-50 dark:hover:bg-slate-800/50{% endif %}"
+    hx-get="{{ drawer_url }}" hx-target="#ledger-drawer" hx-swap="innerHTML"
+    onclick="openLedgerDrawer()"
+    {% if href %}data-href="{{ href }}"{% endif %}
+    tabindex="0" role="button">
+    {{ caller() }}
+</tr>
+{% endmacro %}
+
+{# ============================================================
+   ROW DRAWER — mount once per page. Off-canvas right panel that
+   slides in when a row is selected; #ledger-drawer is the hx target.
+   ============================================================ #}
+{% macro row_drawer() %}
+<div id="ledger-drawer-overlay" class="fixed inset-0 z-30 hidden bg-slate-900/25 backdrop-blur-sm dark:bg-black/40" onclick="closeLedgerDrawer()" aria-hidden="true"></div>
+<aside id="ledger-drawer-panel" class="fixed right-0 top-0 z-40 flex h-full w-full max-w-md translate-x-full flex-col overflow-hidden border-l border-slate-200 bg-white shadow-2xl transition-transform duration-200 dark:border-slate-800 dark:bg-slate-900" aria-label="Row detail" data-open="false">
+    <div id="ledger-drawer" class="flex h-full flex-col overflow-y-auto"></div>
+</aside>
+<script>
+    (function () {
+        var panel = document.getElementById('ledger-drawer-panel');
+        var overlay = document.getElementById('ledger-drawer-overlay');
+        window.openLedgerDrawer = function () {
+            panel.classList.remove('translate-x-full');
+            panel.setAttribute('data-open', 'true');
+            overlay.classList.remove('hidden');
+        };
+        window.closeLedgerDrawer = function () {
+            panel.classList.add('translate-x-full');
+            panel.setAttribute('data-open', 'false');
+            overlay.classList.add('hidden');
+            document.querySelectorAll('.ledger-row[aria-current]').forEach(function (r) {
+                r.removeAttribute('aria-current');
+                r.classList.remove('bg-accent-50', 'dark:bg-accent-900/20');
+            });
+        };
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') window.closeLedgerDrawer(); });
+        document.body.addEventListener('htmx:afterOnLoad', function (e) {
+            if (!e.detail || !e.detail.target || e.detail.target.id !== 'ledger-drawer') return;
+            var src = e.detail.requestConfig && e.detail.requestConfig.elt;
+            if (src && src.classList && src.classList.contains('ledger-row')) {
+                document.querySelectorAll('.ledger-row[aria-current]').forEach(function (r) {
+                    r.removeAttribute('aria-current');
+                    r.classList.remove('bg-accent-50', 'dark:bg-accent-900/20');
+                });
+                src.setAttribute('aria-current', 'true');
+                src.classList.add('bg-accent-50', 'dark:bg-accent-900/20');
+            }
+        });
+    })();
+</script>
+{% endmacro %}
+
+{# Drawer content header — use at the top of the row-detail partial. #}
+{% macro drawer_header(title, subtitle="") %}
+<header class="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+    <div class="min-w-0">
+        <h3 class="truncate font-display text-base font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+        {% if subtitle %}<p class="truncate text-xs text-slate-500 dark:text-slate-400">{{ subtitle }}</p>{% endif %}
+    </div>
+    <button type="button" onclick="closeLedgerDrawer()" class="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200" aria-label="Close">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </button>
+</header>
+{% endmacro %}

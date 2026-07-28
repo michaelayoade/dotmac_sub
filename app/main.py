@@ -76,6 +76,7 @@ _CORE_ROUTER_SPECS = [
     ("app.api.crm_webhooks", "router", "api", "none"),
     ("app.api.inbox_webhooks", "router", "api", "none"),
     ("app.api.meta_inbox_webhooks", "router", "api", "none"),
+    ("app.api.lead_capture_webhooks", "router", "api", "none"),
     ("app.api.chat_widget", "router", "web", "none"),
     ("app.api.crm", "router", "api", "none"),
     ("app.api.search", "router", "api", "readperm:customer:read"),
@@ -98,6 +99,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.notifications", "router", "api", "perm:monitoring"),
     ("app.api.external", "router", "api", "admin"),
     ("app.api.billing", "router", "api", "user"),
+    ("app.api.billing_treatments", "router", "api", "user"),
     ("app.api.files", "router", "api", "admin"),
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
@@ -121,6 +123,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     # Native sales vertical: per-route crm:lead / crm:quote /
     # crm:sales_order permission guards on top of the user-auth base.
     ("app.api.crm_sales", "router", "api", "user"),
+    ("app.api.customer_experience", "router", "api", "user"),
     ("app.api.sales", "router", "api", "user"),
     ("app.api.sales_orders", "router", "api", "user"),
     # Native projects vertical.
@@ -406,6 +409,7 @@ def _seed_startup_settings() -> None:
         seed_provisioning_workflows,
         seed_radius_policy_settings,
         seed_radius_settings,
+        seed_scheduler_runtime_settings,
         seed_scheduler_settings,
         seed_subscriber_settings,
         seed_tr069_settings,
@@ -469,6 +473,7 @@ def _seed_startup_settings() -> None:
         seed_lifecycle_settings(db)
         seed_comms_settings(db)
         seed_wireguard_settings(db)
+        seed_scheduler_runtime_settings(db)
     finally:
         db.close()
     logger.info(
@@ -498,6 +503,17 @@ def _startup_preflight() -> None:
     _assert_required_schema()
 
 
+def _prewarm_admin_dashboard() -> None:
+    from app.config import settings
+
+    if not settings.dashboard_prewarm_enabled:
+        return
+    from app.services import web_admin_dashboard
+
+    if not web_admin_dashboard.prewarm_dashboard_global_cache():
+        raise RuntimeError("dashboard cache prewarm failed")
+
+
 async def _run_deferred_startup() -> None:
     """Run slow, idempotent, non-fatal startup work in worker threads so it
     never blocks the event loop (single-worker safe) or delays serving.
@@ -506,6 +522,7 @@ async def _run_deferred_startup() -> None:
     inline kept the app dead to health checks for minutes after every restart.
     The seeds are idempotent (upsert/skip-if-exists), so deferring is safe."""
     for fn, step in (
+        (_prewarm_admin_dashboard, "dashboard_prewarm"),
         (_seed_startup_settings, "seed"),
         (_warn_on_scheduler_registry_drift, "scheduler_drift"),
     ):

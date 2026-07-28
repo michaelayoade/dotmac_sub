@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 
+from app.services import account_billing_approval
 from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -44,32 +47,47 @@ def cleanup_subscription_block_sessions(
         session.close()
 
 
-def reconcile_account_status_drift() -> dict[str, int]:
-    from app.services.account_status_reconcile import reconcile_cohort
-
-    db = SessionLocal()
-    try:
-        summary = reconcile_cohort(db, dry_run=False)
-        db.commit()
-        logger.info(
-            "reconcile_account_status_drift candidates=%s changed=%s errors=%s "
-            "radius_refreshed=%s sessions_kicked=%s",
-            summary.candidates,
-            summary.changed,
-            summary.errors,
-            summary.radius_refreshed,
-            summary.sessions_kicked,
+def reconcile_billing_approval_drift() -> dict[str, int]:
+    """Converge active service away from the unapproved-account split state."""
+    with db_session_adapter.read_session() as db:
+        account_ids = account_billing_approval.find_billing_approval_drift_account_ids(
+            db
         )
-        return {
-            "candidates": summary.candidates,
-            "changed": summary.changed,
-            "errors": summary.errors,
-        }
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+
+    stats = {
+        "candidates": len(account_ids),
+        "disabled": 0,
+        "treatment_aligned": 0,
+        "unchanged": 0,
+        "errors": 0,
+    }
+    for account_id in account_ids:
+        command_id = uuid4()
+        context = CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor="service:billing_approval_reconciler",
+            scope=account_billing_approval.BILLING_APPROVAL_WRITE_SCOPE,
+            reason="Repair active service with revoked billing approval",
+            idempotency_key=f"billing-approval-reconcile:{account_id}:{command_id}",
+        )
+        try:
+            with db_session_adapter.owner_command_session() as db:
+                outcome = account_billing_approval.reconcile_account_billing_approval(
+                    db,
+                    account_billing_approval.ReconcileAccountBillingApprovalCommand(
+                        context=context,
+                        account_id=account_id,
+                    ),
+                )
+            stats[outcome.action.value] += 1
+        except Exception:
+            stats["errors"] += 1
+            logger.exception(
+                "Billing-approval reconciliation failed for account %s",
+                account_id,
+            )
+    return stats
 
 
 def detect_stale_overdue_locks() -> dict[str, int]:

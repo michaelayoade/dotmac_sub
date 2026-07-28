@@ -6,9 +6,16 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from app.celery_app import celery_app
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-from app.services.account_lifecycle import restore_subscription
 from app.services.db_session_adapter import db_session_adapter
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandKind,
+    SubscriptionEffectiveTiming,
+    SubscriptionLifecycleCommand,
+    resolve_subscription_lifecycle,
+)
+from app.services.subscription_lifecycle_commands import execute_subscription_command
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -41,14 +48,33 @@ def resume_expired_holds() -> dict:
         failed = 0
         for lock in expired_holds:
             try:
-                # Use "customer" trigger since auto-resume honors customer's scheduled time
-                restored = restore_subscription(
+                snapshot = resolve_subscription_lifecycle(
+                    session, str(lock.subscription_id)
+                )
+                outcome = execute_subscription_command(
                     session,
-                    str(lock.subscription_id),
-                    trigger="customer",
-                    resolved_by="vacation_hold:auto_resume",
-                    reason=EnforcementReason.customer_hold,
-                    notes="Automatic resume after vacation hold period expired",
+                    SubscriptionLifecycleCommand(
+                        subscription_id=str(lock.subscription_id),
+                        kind=SubscriptionCommandKind.vacation_resume,
+                        source="customer:vacation_hold:auto_resume",
+                        effective_timing=SubscriptionEffectiveTiming.immediate,
+                        reason="Automatic resume after vacation hold period expired",
+                        expected_head=snapshot.head,
+                        idempotency_key=f"vacation-hold-auto-resume:{lock.id}",
+                    ),
+                )
+                if outcome.status.value not in {"applied", "skipped"}:
+                    failed += 1
+                    logger.warning(
+                        "Vacation auto-resume rejected for subscription %s: %s",
+                        lock.subscription_id,
+                        outcome.message,
+                    )
+                    continue
+                subscription = session.get(Subscription, lock.subscription_id)
+                restored = bool(
+                    subscription is not None
+                    and subscription.status == SubscriptionStatus.active
                 )
                 if restored:
                     resumed += 1
@@ -73,7 +99,6 @@ def resume_expired_holds() -> dict:
                     exc,
                 )
 
-        session.commit()
         logger.info(
             "Completed resume_expired_holds: %d resumed, %d failed, %d total",
             resumed,
@@ -85,8 +110,5 @@ def resume_expired_holds() -> dict:
             "resumed": resumed,
             "failed": failed,
         }
-    except Exception:
-        session.rollback()
-        raise
     finally:
         session.close()

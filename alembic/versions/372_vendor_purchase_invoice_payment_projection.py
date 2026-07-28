@@ -16,19 +16,25 @@ branch_labels = None
 depends_on = None
 
 
+def _columns(table: str) -> set[str]:
+    return {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table)}
+
+
 def upgrade() -> None:
     op.add_column(
         "vendor_purchase_invoices",
         sa.Column("erp_purchase_invoice_creation_status", sa.String(40)),
     )
-    op.execute(
-        sa.text(
-            "UPDATE vendor_purchase_invoices "
-            "SET erp_purchase_invoice_creation_status = erp_purchase_invoice_status, "
-            "erp_purchase_invoice_status = NULL "
-            "WHERE erp_purchase_invoice_status IS NOT NULL"
+    if "erp_purchase_invoice_status" in _columns("vendor_purchase_invoices"):
+        op.execute(
+            sa.text(
+                "UPDATE vendor_purchase_invoices "
+                "SET erp_purchase_invoice_creation_status = "
+                "erp_purchase_invoice_status, "
+                "erp_purchase_invoice_status = NULL "
+                "WHERE erp_purchase_invoice_status IS NOT NULL"
+            )
         )
-    )
     op.add_column(
         "vendor_purchase_invoices",
         sa.Column("erp_purchase_invoice_total_amount", sa.Numeric(20, 6)),

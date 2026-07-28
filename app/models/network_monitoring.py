@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -18,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -390,6 +391,14 @@ class DeviceInterface(Base):
 
 class DeviceMetric(Base):
     __tablename__ = "device_metrics"
+    __table_args__ = (
+        Index(
+            "ix_device_metrics_rx_bps_recorded_at",
+            "recorded_at",
+            postgresql_where=text("metric_type = 'rx_bps' AND value > 0"),
+            postgresql_include=["value"],
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -1069,14 +1078,18 @@ class DeviceProjection(Base):
     ``network.device_projection`` (the reconciler) is the sole canonical
     writer. It rebuilds this table idempotently from the authoritative device
     tables, so a row here is a rebuildable cache — never the only copy of
-    truth. ``refreshed_at`` carries the freshness of each row; stale rows are
-    repaired and orphans pruned on the next reconcile.
+    truth. ``refreshed_at`` is repair evidence, not a public device state;
+    divergent rows are repaired and orphans pruned on the next reconcile.
     """
 
     __tablename__ = "device_projections"
     __table_args__ = (
         UniqueConstraint(
             "device_type", "source_id", name="uq_device_projection_source"
+        ),
+        CheckConstraint(
+            "operational_status IN ('working', 'not_working')",
+            name="ck_device_projection_binary_operational_status",
         ),
         Index("ix_device_projection_type_status", "device_type", "operational_status"),
     )
@@ -1098,7 +1111,11 @@ class DeviceProjection(Base):
 
     # Pre-derived operational status (the whole point of materialising).
     operational_status: Mapped[str] = mapped_column(
-        String(40), nullable=False, default="unknown", index=True
+        String(40),
+        nullable=False,
+        default="not_working",
+        server_default="not_working",
+        index=True,
     )
     operational_reason: Mapped[str | None] = mapped_column(String(160))
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1107,6 +1124,11 @@ class DeviceProjection(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), index=True
     )
+
+    # Per-class operational facts (display-only), denormalised by the
+    # reconciler: ONT signal, OLT PON rollup, core site/role, NAS health,
+    # router RouterOS version. Rendered by the drawer/ledger; not filtered.
+    class_facts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Freshness of this projected row (set on every reconcile pass).
     refreshed_at: Mapped[datetime] = mapped_column(

@@ -244,6 +244,19 @@ def phase_for_router_push_result(status: Any) -> ControlPlanePhase:
     )
 
 
+def phase_for_provisioning_run(status: Any) -> ControlPlanePhase:
+    return _project(
+        status,
+        {
+            "pending": ControlPlanePhase.queued,
+            "running": ControlPlanePhase.applying,
+            "success": ControlPlanePhase.verified,
+            "failed": ControlPlanePhase.failed,
+        },
+        source="ProvisioningRun",
+    )
+
+
 def _project(
     status: Any,
     mapping: dict[str, ControlPlanePhase],

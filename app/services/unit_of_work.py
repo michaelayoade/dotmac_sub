@@ -1,21 +1,16 @@
-"""Unit of Work pattern for transaction boundary management.
+"""Legacy Unit of Work pattern for transaction boundary management.
+
+New and migrated public commands use
+``app.services.owner_commands.execute_owner_command`` so runtime transaction
+admission is verified against the typed architecture manifest. Existing
+``UnitOfWork`` callers remain migration debt; do not add new callers.
 
 Provides a consistent contract for transaction handling:
 - Auto-commit on successful exit
 - Auto-rollback on exception
 - Savepoint support for nested transactions
 
-Usage:
-    from app.services.unit_of_work import UnitOfWork
-
-    # In FastAPI routes (via get_uow dependency):
-    @router.post("/items")
-    def create_item(uow: UnitOfWork = Depends(get_uow)):
-        with uow:
-            item = service.create(uow.session, data)
-            return item  # Auto-commits on exit
-
-    # Manual usage in services:
+Usage inside a registered public command owner only:
     with UnitOfWork(session) as uow:
         service.create(uow.session, data)
         service.update(uow.session, other_data)
@@ -69,8 +64,9 @@ class UnitOfWork:
     - On exception: rolls back the transaction
     - Supports nested savepoints via savepoint() method
 
-    This removes ambiguity about who owns the transaction and ensures
-    consistent commit/rollback behavior across the codebase.
+    The registered service or application coordinator that enters this context
+    owns the transaction. Routes, tasks, event handlers, and CLI adapters must
+    not enter it.
 
     Attributes:
         session: The SQLAlchemy session for this unit of work.

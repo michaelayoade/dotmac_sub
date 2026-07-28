@@ -8,10 +8,12 @@ Provides handlers for processing events:
 
 from app.services.events.handlers.lifecycle import LifecycleHandler
 from app.services.events.handlers.notification import NotificationHandler
+from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
 from app.services.events.handlers.webhook import WebhookHandler
 
 __all__ = [
     "WebhookHandler",
     "LifecycleHandler",
     "NotificationHandler",
+    "PrepaidRenewalHandler",
 ]

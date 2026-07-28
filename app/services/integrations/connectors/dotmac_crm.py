@@ -20,6 +20,7 @@ CRM_SUBSCRIBER_OBSERVATION_CAPABILITY = "crm.subscriber_observation.v1"
 CRM_TICKET_OBSERVATION_CAPABILITY = "crm.ticket_observation.v1"
 CRM_OPERATIONAL_OBSERVATION_CAPABILITY = "crm.operational_observation.v1"
 CRM_PORTAL_SESSION_CAPABILITY = "crm.portal_session.v1"
+CRM_CHAT_SESSION_CAPABILITY = "crm.chat_session.v1"
 CRM_QUOTE_COMMAND_CAPABILITY = "crm.quote_command.v1"
 CRM_EVENT_RECEIVE_CAPABILITY = "crm.events.receive.v1"
 
@@ -49,11 +50,6 @@ class CrmTransport(Protocol):
     def list_ticket_comments(
         self, ticket_id: str, *, use_cache: bool = True
     ) -> list[dict[str, Any]]: ...
-    def list_work_orders(
-        self, subscriber_id: str | None = None
-    ) -> list[dict[str, Any]]: ...
-    def get_work_order(self, work_order_id: str) -> dict[str, Any]: ...
-    def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]: ...
     def create_portal_session(
         self,
         *,
@@ -61,16 +57,16 @@ class CrmTransport(Protocol):
         actor: str = "subscriber",
         scopes: list[str] | None = None,
     ) -> dict[str, Any]: ...
-    def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]: ...
-    def get_portal_projects(self, crm_subscriber_id: str) -> dict[str, Any]: ...
-    def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]: ...
-    def get_portal_technician_location(
+    def create_widget_session(
         self,
-        crm_subscriber_id: str,
-        work_order_id: str,
         *,
-        actor: str = "subscriber",
+        config_id: str,
+        email: str,
+        name: str | None,
+        crm_subscriber_id: str | None,
+        metadata: dict[str, Any],
     ) -> dict[str, Any]: ...
+    def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]: ...
     def get_portal_quotes(self, crm_subscriber_id: str) -> dict[str, Any]: ...
     def request_portal_quote(
         self,
@@ -109,16 +105,11 @@ _ACTIONS_BY_CAPABILITY = {
         "list_ticket_comments",
     },
     CRM_OPERATIONAL_OBSERVATION_CAPABILITY: {
-        "list_work_orders",
-        "get_work_order",
-        "list_work_order_notes",
         "get_portal_referrals",
-        "get_portal_projects",
-        "get_portal_work_orders",
-        "get_portal_technician_location",
         "get_portal_quotes",
     },
     CRM_PORTAL_SESSION_CAPABILITY: {"create_portal_session"},
+    CRM_CHAT_SESSION_CAPABILITY: {"create_widget_session"},
     CRM_QUOTE_COMMAND_CAPABILITY: {
         "request_portal_quote",
         "accept_portal_quote",
@@ -286,12 +277,6 @@ class DotmacCrmRunner:
                     str(params["ticket_id"]), use_cache=False
                 )
             }
-        if action == "list_work_orders":
-            return {"items": client.list_work_orders(params.get("subscriber_id"))}
-        if action == "get_work_order":
-            return {"item": client.get_work_order(str(params["work_order_id"]))}
-        if action == "list_work_order_notes":
-            return {"items": client.list_work_order_notes(str(params["work_order_id"]))}
         if action == "create_portal_session":
             return {
                 "item": client.create_portal_session(
@@ -300,25 +285,23 @@ class DotmacCrmRunner:
                     scopes=list(params.get("scopes") or []),
                 )
             }
+        if action == "create_widget_session":
+            return {
+                "item": client.create_widget_session(
+                    config_id=str(params["config_id"]),
+                    email=str(params["email"]),
+                    name=str(params["name"]) if params.get("name") else None,
+                    crm_subscriber_id=(
+                        str(params["crm_subscriber_id"])
+                        if params.get("crm_subscriber_id")
+                        else None
+                    ),
+                    metadata=dict(params.get("metadata") or {}),
+                )
+            }
         if action == "get_portal_referrals":
             return {
                 "item": client.get_portal_referrals(str(params["crm_subscriber_id"]))
-            }
-        if action == "get_portal_projects":
-            return {
-                "item": client.get_portal_projects(str(params["crm_subscriber_id"]))
-            }
-        if action == "get_portal_work_orders":
-            return {
-                "item": client.get_portal_work_orders(str(params["crm_subscriber_id"]))
-            }
-        if action == "get_portal_technician_location":
-            return {
-                "item": client.get_portal_technician_location(
-                    str(params["crm_subscriber_id"]),
-                    str(params["work_order_id"]),
-                    actor=str(params.get("actor") or "subscriber"),
-                )
             }
         if action == "get_portal_quotes":
             return {"item": client.get_portal_quotes(str(params["crm_subscriber_id"]))}

@@ -10,15 +10,14 @@ Compatibility and ownership decisions:
   assignments use sub principals = ``SystemUser`` ids, which is also how
   display/emails resolve — a legacy id that doesn't resolve simply skips the
   notification).
-* Task-to-ticket linkage is the real ``support_tickets`` foreign key.
-  Imported ``project_tasks.work_order_id`` remains a plain UUID validated
-  against ``work_order.public_id``; native ``sub-`` links require a later
-  project-task contract migration. The `work_links` work-order origin remains
-  deferred with that contract.
+* Task-to-ticket linkage is the real ``support_tickets`` foreign key. Field
+  execution links from ``work_order.project_task_id`` so one task can own many
+  visits; ``operations.work_order_commands`` is the sole writer of that link.
 * The fiber-stage engine (``FIBER_INSTALLATION_STAGE_ORDER``,
-  ``_compute_fiber_stage_due_at``, ``_seed_fiber_installation_tasks``),
+  ``_compute_fiber_stage_due_at``, ``_seed_fiber_installation_tasks``) and
   template instantiation (``replace_project_tasks`` + ``_calculate_task_dates``)
-  and ``build_portal_project_payload`` retain the established read contract.
+  remain project decisions. Customer composition lives in
+  ``customer_experience_lifecycle``.
 * Retired CRM-to-Sub mirror emitters are absent. The "Installation complete"
   consequence is owned by ``Projects.update``.
 * Events: sub has no ``project.*`` ``EventType`` members — lifecycle events are
@@ -39,15 +38,16 @@ from __future__ import annotations
 import enum as enum_module
 import html
 import logging
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.domain_settings import SettingDomain
 from app.models.project import (
     Project,
@@ -73,9 +73,9 @@ from app.models.ticket_workflow import (
     SlaClock,
     SlaClockStatus,
     SlaPolicy,
+    TicketAssignmentRule,
     WorkflowEntityType,
 )
-from app.models.work_order import WorkOrder
 from app.schemas.project import (
     ProjectCommentCreate,
     ProjectCommentUpdate,
@@ -89,7 +89,6 @@ from app.schemas.project import (
     ProjectTemplateUpdate,
     ProjectUpdate,
 )
-from app.services import control_registry
 from app.services import domain_settings as domain_settings_service
 from app.services.common import (
     apply_ordering,
@@ -98,13 +97,262 @@ from app.services.common import (
     ensure_exists,
     validate_enum,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.numbering import generate_number
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.response import ListResponseMixin
 from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
+
+_EnumT = TypeVar("_EnumT", bound=enum_module.Enum)
+
+_PROJECT_RECONCILE = OwnerCommandDefinition(
+    owner="operations.project_lifecycle",
+    concern="project derived-state reconciliation",
+    name="reconcile_project_projection",
+)
+_PROJECT_MUTATION = OwnerCommandDefinition(
+    owner="operations.project_lifecycle",
+    concern="Project and ProjectTask identity and lifecycle",
+    name="mutate_project_aggregate",
+)
+
+
+def _project_command_context(
+    *, action: str, actor: UUID | str | None, aggregate_id: UUID | str | None = None
+) -> CommandContext:
+    return CommandContext.system(
+        actor=str(actor or "system:projects-adapter"),
+        scope="operations:projects",
+        reason=action,
+        idempotency_key=(
+            f"{action}:{aggregate_id}" if aggregate_id is not None else None
+        ),
+    )
+
+
+def _stage_project_audit(
+    db: Session,
+    *,
+    context: CommandContext,
+    action: str,
+    entity_type: str,
+    entity_id: UUID,
+    changed_fields: list[str] | None = None,
+) -> None:
+    actor = context.actor.strip()
+    db.add(
+        AuditEvent(
+            actor_type=(
+                AuditActorType.system
+                if actor.startswith("system:")
+                else AuditActorType.user
+            ),
+            actor_id=actor,
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id),
+            request_id=str(context.correlation_id),
+            metadata_={
+                "command_id": str(context.command_id),
+                "reason": context.reason,
+                "changed_fields": sorted(changed_fields or []),
+            },
+        )
+    )
+    db.flush()
+
+
+@dataclass(frozen=True)
+class ProjectProjectionRepairOutcome:
+    project_id: UUID
+    task_count: int
+    repaired_sla_clocks: int
+    repaired_primary_assignees: int
+
+
+def reconcile_project_projection(
+    db: Session,
+    *,
+    project_id: UUID,
+    context: CommandContext,
+) -> ProjectProjectionRepairOutcome:
+    """Idempotently repair synchronous Project-derived state."""
+
+    db_session_adapter.release_read_transaction(db)
+
+    def operation() -> ProjectProjectionRepairOutcome:
+        project = db.scalar(
+            select(Project).where(Project.id == project_id).with_for_update()
+        )
+        if project is None:
+            raise SalesProjectLifecycleError(
+                "operations.project_lifecycle.not_found", "Project not found"
+            )
+        before_project_clock = _latest_project_sla_clock(db, project.id)
+        _sync_project_sla_clock(db, project)
+        db.flush()
+        repaired_clocks = int(
+            before_project_clock is None
+            and _latest_project_sla_clock(db, project.id) is not None
+        )
+        tasks = db.scalars(
+            select(ProjectTask)
+            .where(ProjectTask.project_id == project.id)
+            .order_by(ProjectTask.id)
+            .with_for_update()
+        ).all()
+        repaired_assignees = 0
+        for task in tasks:
+            before_task_clock = _latest_task_sla_clock(db, task.id)
+            _sync_task_sla_clock(db, task)
+            db.flush()
+            repaired_clocks += int(
+                before_task_clock is None
+                and _latest_task_sla_clock(db, task.id) is not None
+            )
+            normalized = _normalize_assignee_ids(
+                [str(row.person_id) for row in task.assignees]
+            )
+            if (
+                task.assigned_to_person_id
+                and str(task.assigned_to_person_id) not in normalized
+            ):
+                normalized.insert(0, str(task.assigned_to_person_id))
+                _sync_project_task_assignees(db, task, normalized)
+                repaired_assignees += 1
+        db.flush()
+        return ProjectProjectionRepairOutcome(
+            project_id=project.id,
+            task_count=len(tasks),
+            repaired_sla_clocks=repaired_clocks,
+            repaired_primary_assignees=repaired_assignees,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_PROJECT_RECONCILE,
+        context=context,
+        operation=operation,
+    )
+
+
+def apply_project_assignment_rule(
+    db: Session,
+    *,
+    project: Project,
+    rule: TicketAssignmentRule,
+    authoritative_creation: bool,
+) -> dict[str, object] | None:
+    """Apply a policy decision inside the Project owner's transaction.
+
+    The shared ticket-assignment engine evaluates and orders rules but delegates
+    every authoritative Project and ProjectTask write to this flush-only helper.
+    """
+    config = rule.match_config if isinstance(rule.match_config, dict) else {}
+    assignee = str(config.get("assignee_person_id") or "").strip() or None
+    target = str(config.get("assignment_target") or "technician").strip().lower()
+    has_scope = any(
+        config.get(key)
+        for key in (
+            "entity_types",
+            "ticket_types",
+            "project_types",
+            "regions",
+            "service_team_ids",
+            "tags_any",
+        )
+    )
+    if authoritative_creation:
+        if assignee or not has_scope:
+            return None
+        changed = False
+        if rule.team_id and project.service_team_id != rule.team_id:
+            project.service_team_id = rule.team_id
+            changed = True
+        for field in (
+            "manager_person_id",
+            "project_manager_person_id",
+            "assistant_manager_person_id",
+        ):
+            if getattr(project, field):
+                setattr(project, field, None)
+                changed = True
+        if changed:
+            db.flush()
+        return {
+            "assigned": bool(rule.team_id),
+            "project_id": str(project.id),
+            "rule_id": str(rule.id),
+            "rule_name": rule.name,
+            "strategy": "group" if rule.team_id else None,
+            "assignment_target": "team" if rule.team_id else "rule_scope",
+            "fallback_service_team_id": str(rule.team_id) if rule.team_id else None,
+            "reason": "group_assigned"
+            if rule.team_id
+            else "individual_assignment_suppressed_by_rule",
+        }
+    if not assignee:
+        return None
+    assignee_uuid = coerce_uuid(assignee)
+    changed = False
+    if target == "technical_supervisor":
+        for field in ("manager_person_id", "project_manager_person_id"):
+            if not getattr(project, field):
+                setattr(project, field, assignee_uuid)
+                changed = True
+    elif target == "site_coordinator":
+        if not project.assistant_manager_person_id:
+            project.assistant_manager_person_id = assignee_uuid
+            changed = True
+    elif target == "technician":
+        tasks = db.scalars(
+            select(ProjectTask)
+            .where(ProjectTask.project_id == project.id)
+            .where(ProjectTask.is_active.is_(True))
+            .order_by(ProjectTask.id)
+        ).all()
+        for task in tasks:
+            if not task.assigned_to_person_id:
+                task.assigned_to_person_id = assignee_uuid
+                changed = True
+            if not any(str(row.person_id) == assignee for row in task.assignees):
+                task.assignees.append(
+                    ProjectTaskAssignee(task_id=task.id, person_id=assignee_uuid)
+                )
+                changed = True
+    else:
+        return {
+            "assigned": False,
+            "project_id": str(project.id),
+            "rule_id": str(rule.id),
+            "rule_name": rule.name,
+            "assignment_target": target,
+            "assignee_person_id": assignee,
+            "reason": "unsupported_assignment_target",
+        }
+    if changed:
+        db.flush()
+    return {
+        "assigned": changed,
+        "project_id": str(project.id),
+        "rule_id": str(rule.id),
+        "rule_name": rule.name,
+        "strategy": "direct",
+        "assignment_target": target,
+        "candidate_count": 1,
+        "assignee_person_id": assignee,
+        "reason": "assigned" if changed else "already_assigned",
+    }
+
 
 FIBER_INSTALLATION_STAGE_ORDER: tuple[str, ...] = (
     "project_plan",
@@ -124,6 +372,8 @@ FIBER_INSTALLATION_STAGE_TITLES: dict[str, str] = {
     "power_splicing_activation": "Power Direction, Splicing & Customer Activation",
 }
 
+FIBER_ACTIVATION_STAGE_KEY = FIBER_INSTALLATION_STAGE_ORDER[-1]
+
 FIBER_PROJECT_TASK_SLA_POLICY_NAME = "Fiber Project Task SLA"
 PROJECT_COMPLETION_SLA_POLICY_NAME = "Project Completion SLA"
 
@@ -137,6 +387,77 @@ _PROJECT_TERMINAL_STATUSES = {
     ProjectStatus.completed.value,
     ProjectStatus.canceled.value,
 }
+# Provenance marker for projects rooted in a network buildout rather than a
+# sale. Paired with ``Project.external_reference`` (the BuildoutProject id) it
+# reuses ``uq_projects_external_system_reference`` as the idempotency key.
+BUILDOUT_PROJECT_SYSTEM = "buildout"
+_PROJECT_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    status.value: frozenset(
+        candidate.value
+        for candidate in ProjectStatus
+        if candidate.value not in {status.value}
+    )
+    for status in ProjectStatus
+    if status.value not in _PROJECT_TERMINAL_STATUSES
+}
+_PROJECT_TASK_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    status.value: frozenset(
+        candidate.value
+        for candidate in ProjectTaskStatus
+        if candidate.value not in {status.value}
+    )
+    for status in ProjectTaskStatus
+    if status.value not in _TASK_TERMINAL_STATUSES
+}
+
+
+class SalesProjectLifecycleError(ValueError):
+    """Transport-neutral error raised by the sales implementation seam."""
+
+    def __init__(self, code: str, message: str, *, kind: str = "conflict") -> None:
+        super().__init__(message)
+        self.code = code
+        self.kind = kind
+
+
+class ProjectServiceError(DomainError):
+    """Transport-neutral Projects boundary error."""
+
+
+def _project_error(code: str, message: str, **details: object) -> ProjectServiceError:
+    return ProjectServiceError(
+        code=f"operations.project_lifecycle.{code}",
+        message=message,
+        details=details,
+    )
+
+
+def _require_status_transition(
+    *,
+    current: str,
+    requested: str,
+    transitions: dict[str, frozenset[str]],
+    aggregate: str,
+) -> None:
+    if current == requested:
+        return
+    if requested not in transitions.get(current, frozenset()):
+        raise _project_error(
+            "invalid_transition",
+            f"Invalid {aggregate} status transition",
+            aggregate=aggregate,
+            current_status=current,
+            requested_status=requested,
+        )
+
+
+def _sales_project_enum(value: str, enum_cls: type[_EnumT], label: str) -> _EnumT:
+    try:
+        return enum_cls(value)
+    except ValueError as exc:
+        raise SalesProjectLifecycleError(
+            f"invalid_{label}", f"Invalid {label}", kind="invalid"
+        ) from exc
 
 
 def _model_data(data: dict[str, Any]) -> dict[str, Any]:
@@ -235,18 +556,6 @@ def _lead_subscriber(db: Session, project: Project) -> Subscriber | None:
     if lead.subscriber_id:
         return db.get(Subscriber, lead.subscriber_id)
     return None
-
-
-def _resolve_customer_email(db: Session, project: Project) -> str | None:
-    """Resolve the customer party from Subscriber, then lead subscriber."""
-    email = _subscriber_email(project.subscriber)
-    if email:
-        return email
-    if project.subscriber_id and project.subscriber is None:
-        email = _subscriber_email(db.get(Subscriber, project.subscriber_id))
-        if email:
-            return email
-    return _subscriber_email(_lead_subscriber(db, project))
 
 
 def _resolve_customer_name(db: Session, project: Project) -> str:
@@ -508,17 +817,6 @@ def _queue_in_app_notification(
     )
 
 
-def _queue_email_notification(
-    db: Session, recipient: str, subject: str, body: str
-) -> None:
-    queue_staff_email(
-        db,
-        recipient=recipient,
-        subject=subject,
-        body=body,
-    )
-
-
 def _company_name(db: Session) -> str:
     """Company display name for customer-facing emails (best-effort)."""
     try:
@@ -603,8 +901,7 @@ def _next_template_task_label(
 def _notify_customer_task_completed(
     db: Session, project: Project, task: ProjectTask
 ) -> None:
-    recipient = _resolve_customer_email(db, project)
-    if not recipient:
+    if project.subscriber_id is None:
         return
     customer_name = _resolve_customer_name(db, project)
     next_stage = _next_template_task_label(
@@ -676,43 +973,53 @@ def _notify_customer_task_completed(
         "</p>"
         "</div>"
     )
-    _queue_email_notification(db, recipient, subject, body)
+    from app.models.notification import NotificationChannel
+    from app.services import customer_experience_communications
+
+    if project.subscriber_id is not None:
+        customer_experience_communications.request_update(
+            db,
+            subscriber_id=project.subscriber_id,
+            event_type="project_task_completed",
+            subject=subject,
+            body=body,
+            metadata={
+                "type": "project",
+                "project_id": str(project.id),
+                "project_task_id": str(task.id),
+            },
+            dedupe_key=f"project-task-completed:{task.id}:{task.completed_at}",
+            default_channels=(NotificationChannel.email,),
+        )
 
 
 def _notify_customer_project_completed(db: Session, project: Project) -> None:
-    recipient = _resolve_customer_email(db, project)
-    if not recipient:
+    if project.subscriber_id is None:
         return
     project_ref = project.number or str(project.id)
     subject = f"Project completed: {project.name}"
     body = (
         f"Your installation project '{project.name}' ({project_ref}) is now "
         "completed.\n"
-        "Please reply to this email to confirm your satisfaction with the service."
+        "You can review the completed installation and contact support from self-care."
     )
-    _queue_email_notification(db, recipient, subject, body)
+    from app.models.notification import NotificationChannel
+    from app.services import customer_experience_communications
 
-
-def _push_installation_complete(db: Session, project: Project) -> None:
-    """Project-owned customer push on completion.
-
-    ``data.project_id`` retains the established UUID contract so mobile deep
-    links keep resolving. A push failure never breaks the project update.
-    """
-    if not project.subscriber_id:
-        return
-    try:
-        from app.services import push as push_service
-
-        push_service.send_push(
-            db,
-            str(project.subscriber_id),
-            title="Installation complete",
-            body="Your installation project is now complete.",
-            data={"type": "project", "project_id": str(project.id)},
-        )
-    except Exception as exc:  # noqa: BLE001 - notification is advisory
-        logger.warning("project_push_failed project_id=%s: %s", project.id, exc)
+    customer_experience_communications.request_update(
+        db,
+        subscriber_id=project.subscriber_id,
+        event_type="project_completed",
+        subject=subject,
+        body=body,
+        metadata={"type": "project", "project_id": str(project.id)},
+        dedupe_key=f"project-completed:{project.id}:{project.completed_at}",
+        default_channels=(
+            NotificationChannel.email,
+            NotificationChannel.whatsapp,
+            NotificationChannel.push,
+        ),
+    )
 
 
 def notify_project_task_sla_breach(db: Session, clock: SlaClock) -> None:
@@ -834,6 +1141,256 @@ def _seed_fiber_installation_tasks(db: Session, project: Project) -> None:
         _sync_task_sla_clock(db, task)
 
 
+def resolve_activation_gate_task(db: Session, project_id: UUID) -> ProjectTask | None:
+    """Return the uniquely configured activation-stage task for a project.
+
+    The project domain owns the stage vocabulary. Callers persist the returned
+    task identity and never infer readiness from titles or duplicate stage keys.
+    """
+
+    tasks = (
+        db.query(ProjectTask)
+        .filter(
+            ProjectTask.project_id == project_id,
+            ProjectTask.is_active.is_(True),
+        )
+        .order_by(ProjectTask.created_at.asc(), ProjectTask.id.asc())
+        .all()
+    )
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task.metadata_, dict)
+        and task.metadata_.get("fiber_stage_key") == FIBER_ACTIVATION_STAGE_KEY
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def prepare_sales_project(
+    db: Session,
+    *,
+    sales_order_id: UUID,
+    quote_id: UUID | None,
+    subscriber_id: UUID,
+    lead_id: UUID | None,
+    name: str,
+    project_type: str,
+    customer_address: str | None,
+    region: str | None,
+    actor_id: str,
+) -> Project:
+    """Create the native project root for one exact SalesOrder, without commit."""
+
+    existing = (
+        db.query(Project).filter(Project.sales_order_id == sales_order_id).one_or_none()
+    )
+    if existing is not None:
+        if (
+            existing.subscriber_id != subscriber_id
+            or existing.quote_id != quote_id
+            or existing.lead_id != lead_id
+        ):
+            raise SalesProjectLifecycleError(
+                "project_binding_conflict",
+                "SalesOrder project binding conflicts with canonical state",
+            )
+        return existing
+    normalized_type = _sales_project_enum(
+        project_type, ProjectType, "project_type"
+    ).value
+    configured_status = _read_text_setting(
+        db, SettingDomain.projects, "default_project_status"
+    )
+    configured_priority = _read_text_setting(
+        db, SettingDomain.projects, "default_project_priority"
+    )
+    project_status = _sales_project_enum(
+        configured_status or ProjectStatus.open.value,
+        ProjectStatus,
+        "default_project_status",
+    ).value
+    project_priority = _sales_project_enum(
+        configured_priority or ProjectPriority.normal.value,
+        ProjectPriority,
+        "default_project_priority",
+    ).value
+    number = generate_number(
+        db=db,
+        domain=SettingDomain.projects,
+        sequence_key="project_number",
+        enabled_key="project_number_enabled",
+        prefix_key="project_number_prefix",
+        padding_key="project_number_padding",
+        start_key="project_number_start",
+    )
+    now = datetime.now(UTC)
+    duration_days = Projects._duration_days_for_type(normalized_type)
+    project = Project(
+        name=str(name).strip()[:160],
+        number=number,
+        description="Implementation scope created from an accepted sales order",
+        customer_address=(customer_address or "").strip() or None,
+        project_type=normalized_type,
+        status=project_status,
+        priority=project_priority,
+        subscriber_id=subscriber_id,
+        lead_id=lead_id,
+        quote_id=quote_id,
+        sales_order_id=sales_order_id,
+        start_at=now,
+        due_at=now + timedelta(days=duration_days) if duration_days else None,
+        region=(region or "").strip() or None,
+        metadata_={"fulfillment_contract_version": 1},
+    )
+    db.add(project)
+    db.flush()
+    _sync_project_sla_clock(db, project)
+    _seed_fiber_installation_tasks(db, project)
+    emit_event(
+        db,
+        EventType.project_created,
+        {
+            "project_id": str(project.id),
+            "sales_order_id": str(sales_order_id),
+            "quote_id": str(quote_id) if quote_id else None,
+            "subscriber_id": str(subscriber_id),
+            "project_type": normalized_type,
+        },
+        actor=actor_id,
+        subscriber_id=subscriber_id,
+    )
+    return project
+
+
+def prepare_buildout_project(
+    db: Session,
+    *,
+    buildout_project_id: UUID,
+    name: str,
+    project_type: str,
+    customer_address: str | None = None,
+    region: str | None = None,
+    actor_id: str,
+) -> Project:
+    """Create the native project root for one exact BuildoutProject, no commit.
+
+    Network buildout is the other way work reaches a vendor. It has no
+    subscriber, quote, or sales order — the project exists because we decided
+    to build plant, not because someone bought a service. ``Project`` already
+    allows that (``subscriber_id`` is nullable); only the sales entry point
+    required one, which is why buildout could not previously be scoped.
+
+    Idempotency rides the existing ``uq_projects_external_system_reference``
+    constraint rather than a new column: one native project per buildout root.
+    """
+
+    existing = (
+        db.query(Project)
+        .filter(Project.external_system == BUILDOUT_PROJECT_SYSTEM)
+        .filter(Project.external_reference == str(buildout_project_id))
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
+    normalized_type = _sales_project_enum(
+        project_type, ProjectType, "project_type"
+    ).value
+    configured_priority = _read_text_setting(
+        db, SettingDomain.projects, "default_project_priority"
+    )
+    project_priority = _sales_project_enum(
+        configured_priority or ProjectPriority.normal.value,
+        ProjectPriority,
+        "default_project_priority",
+    ).value
+    number = generate_number(
+        db=db,
+        domain=SettingDomain.projects,
+        sequence_key="project_number",
+        enabled_key="project_number_enabled",
+        prefix_key="project_number_prefix",
+        padding_key="project_number_padding",
+        start_key="project_number_start",
+    )
+    now = datetime.now(UTC)
+    duration_days = Projects._duration_days_for_type(normalized_type)
+    project = Project(
+        name=str(name).strip()[:160],
+        number=number,
+        description="Implementation scope created from a network buildout project",
+        customer_address=(customer_address or "").strip() or None,
+        project_type=normalized_type,
+        status=ProjectStatus.open.value,
+        priority=project_priority,
+        external_system=BUILDOUT_PROJECT_SYSTEM,
+        external_reference=str(buildout_project_id),
+        start_at=now,
+        due_at=now + timedelta(days=duration_days) if duration_days else None,
+        region=(region or "").strip() or None,
+        metadata_={"buildout_project_id": str(buildout_project_id)},
+    )
+    db.add(project)
+    db.flush()
+    _sync_project_sla_clock(db, project)
+    emit_event(
+        db,
+        EventType.project_created,
+        {
+            "project_id": str(project.id),
+            "buildout_project_id": str(buildout_project_id),
+            "project_type": normalized_type,
+        },
+        actor=actor_id,
+    )
+    return project
+
+
+def complete_from_verified_installation(
+    db: Session,
+    *,
+    project_id: UUID,
+    actor_id: str,
+    verification_event_id: UUID,
+) -> Project:
+    """Apply verified implementation evidence to the native project root."""
+
+    project = db.scalars(
+        select(Project).where(Project.id == project_id).with_for_update()
+    ).one_or_none()
+    if project is None:
+        raise SalesProjectLifecycleError(
+            "project_not_found", "Project not found", kind="not_found"
+        )
+    if project.status == ProjectStatus.completed.value:
+        return project
+    if project.status == ProjectStatus.canceled.value:
+        raise SalesProjectLifecycleError(
+            "project_canceled",
+            "Canceled project cannot receive implementation verification",
+        )
+    project.status = ProjectStatus.completed.value
+    project.completed_at = datetime.now(UTC)
+    metadata = dict(project.metadata_ or {})
+    metadata["implementation_verification_event_id"] = str(verification_event_id)
+    project.metadata_ = metadata
+    _sync_project_sla_clock(db, project)
+    _emit_project_event(
+        db,
+        "project.completed",
+        project,
+        {
+            "project_id": str(project.id),
+            "sales_order_id": str(project.sales_order_id)
+            if project.sales_order_id
+            else None,
+            "verification_event_id": str(verification_event_id),
+            "actor_id": actor_id,
+        },
+    )
+    db.flush()
+    return project
+
+
 def _notify_project_roles_created_in_app(db: Session, project: Project) -> None:
     """In-app notifications for internal roles on project creation.
 
@@ -900,7 +1457,7 @@ def _notify_project_roles_created_in_app(db: Session, project: Project) -> None:
             body="\n".join(body_lines),
         )
 
-    db.commit()
+    db.flush()
 
 
 # ── reference guards ──────────────────────────────────────────────────────────
@@ -911,13 +1468,13 @@ def _ensure_staff_uuid(person_id: str) -> None:
     try:
         coerce_uuid(str(person_id))
     except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid person id") from exc
+        raise _project_error("invalid_input", "Invalid person id") from exc
 
 
 def _ensure_project_template(db: Session, template_id: str) -> ProjectTemplate:
     template = db.get(ProjectTemplate, coerce_uuid(template_id))
     if not template:
-        raise HTTPException(status_code=404, detail="Project template not found")
+        raise _project_error("not_found", "Project template not found")
     return template
 
 
@@ -928,29 +1485,13 @@ def _ensure_subscriber(db: Session, subscriber_id: str) -> None:
 def _ensure_lead(db: Session, lead_id: str) -> None:
     lead = db.get(Lead, coerce_uuid(lead_id))
     if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+        raise _project_error("not_found", "Lead not found")
 
 
 def _ensure_ticket(db: Session, ticket_id) -> None:
     ticket = db.get(Ticket, coerce_uuid(str(ticket_id)))
     if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-
-
-def _ensure_work_order(db: Session, work_order_id) -> None:
-    """Validate a work-order link against Sub's native identity
-    (`work_order.public_id`, WORK_ORDER_IDENTITY_SOT). Imported rows seed
-    public_id from their CRM id, so legacy links keep resolving."""
-    row = db.query(WorkOrder).filter(WorkOrder.public_id == str(work_order_id)).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Work order not found")
-
-
-def _link_work_order_origin(db: Session, task: ProjectTask) -> None:
-    """Deferred owner boundary for the ``project_task.linked_work_order``
-    contract. Until the shared work-link schema supports native work-order
-    identity, ``project_tasks.work_order_id`` carries the imported association."""
-    del db, task
+        raise _project_error("not_found", "Ticket not found")
 
 
 # ── assignee handling ─────────────────────────────────────────────────────────
@@ -1024,8 +1565,6 @@ def _notify_project_task_assigned(
     assigned_to: SystemUser,
     created_by: SystemUser | None,
 ) -> None:
-    from app.services import email as email_service
-
     try:
         if not assigned_to.email:
             logger.warning("project_task_assigned_missing_email task_id=%s", task.id)
@@ -1142,13 +1681,11 @@ def _notify_project_task_assigned(
             "</div>"
         )
 
-        email_service.send_email(
-            db=db,
-            to_email=assigned_to.email,
+        queue_staff_email(
+            db,
+            recipient=assigned_to.email,
             subject=subject,
-            body_html=body,
-            body_text=None,
-            track=True,
+            body=body,
         )
         queue_staff_push(
             db,
@@ -1164,7 +1701,9 @@ def _notify_project_task_assigned(
         )
 
 
-def _maybe_auto_assign_project(db: Session, project: Project):
+def _maybe_auto_assign_project(
+    db: Session, project: Project, *, context: CommandContext
+):
     """Apply workflow rule-based project assignments when enabled.
 
     The shared workflow control keeps its established external key
@@ -1175,40 +1714,33 @@ def _maybe_auto_assign_project(db: Session, project: Project):
     if not enabled:
         return None
 
-    from app.services.audit_helpers import log_audit_event
     from app.services.ticket_assignment import auto_assign_project
 
     actor_id = (
         str(project.created_by_person_id) if project.created_by_person_id else None
     )
     results = auto_assign_project(
-        db, str(project.id), trigger="create", actor_person_id=actor_id
+        db,
+        str(project.id),
+        trigger="create",
+        actor_person_id=actor_id,
+        context=context,
     )
     for result in results:
         action = (
             "project_auto_assigned" if result.assigned else "project_auto_assign_noop"
         )
-        log_audit_event(
+        _stage_project_audit(
             db,
-            None,
+            context=context,
             action=action,
             entity_type="project",
-            entity_id=str(project.id),
-            actor_id=actor_id,
-            metadata={
-                "assigned": bool(result.assigned),
-                "rule_id": result.rule_id,
-                "rule_name": result.rule_name,
-                "strategy": result.strategy,
-                "assignment_target": result.assignment_target,
-                "candidate_count": result.candidate_count,
-                "assignee_person_id": result.assignee_person_id,
-                "reason": result.reason,
-            },
+            entity_id=project.id,
+            changed_fields=["assignment"] if result.assigned else [],
         )
     # The engine flushes; persist assignments + audit rows here (the CRM
     # engine committed per rule).
-    db.commit()
+    db.flush()
     return results
 
 
@@ -1233,130 +1765,6 @@ def _emit_project_event(
         {"name": event_name, **payload},
         subscriber_id=project.subscriber_id,
     )
-
-
-# ── customer installation tracker read contract ──────────────────────────────
-
-
-def _portal_stage_status(task_status: str | None) -> str:
-    if task_status == ProjectTaskStatus.done.value:
-        return "done"
-    if task_status in (
-        ProjectTaskStatus.in_progress.value,
-        ProjectTaskStatus.blocked.value,
-    ):
-        return "in_progress"
-    return "pending"
-
-
-def build_portal_project_payload(project: Project) -> dict:
-    """Customer-facing project view: stage timeline + progress %.
-
-    This retains the established CRM and ``project_mirror`` response shape:
-    item keys, integer ``progress_pct``, stage
-    ``status ∈ pending|in_progress|done`` and ``id`` = project UUID (the same
-    value the mirror exposed as ``crm_project_id``). Fiber installs use
-    the canonical 6-stage order; other project types fall back to a generic
-    per-task timeline.
-    """
-    tasks = [t for t in (project.tasks or []) if getattr(t, "is_active", True)]
-    fiber_tasks: dict[str, ProjectTask] = {}
-    for t in tasks:
-        key = _resolve_fiber_stage_key(t)
-        if key:
-            fiber_tasks.setdefault(key, t)
-
-    stages: list[dict] = []
-    if fiber_tasks:
-        for key in FIBER_INSTALLATION_STAGE_ORDER:
-            t = fiber_tasks.get(key)
-            title = FIBER_INSTALLATION_STAGE_TITLES.get(key, key)
-            if t is None:
-                stages.append(
-                    {
-                        "key": key,
-                        "title": title,
-                        "status": "pending",
-                        "completed_at": None,
-                    }
-                )
-            else:
-                stages.append(
-                    {
-                        "key": key,
-                        "title": title,
-                        "status": _portal_stage_status(t.status),
-                        "completed_at": t.completed_at.isoformat()
-                        if t.completed_at
-                        else None,
-                    }
-                )
-    else:
-        for t in tasks:
-            stages.append(
-                {
-                    "key": None,
-                    "title": t.title,
-                    "status": _portal_stage_status(t.status),
-                    "completed_at": t.completed_at.isoformat()
-                    if t.completed_at
-                    else None,
-                }
-            )
-
-    total = len(stages)
-    done = sum(1 for s in stages if s["status"] == "done")
-    completed = project.status == ProjectStatus.completed.value
-    progress_pct = 100 if completed else (round(done / total * 100) if total else 0)
-    current_stage = (
-        None
-        if completed
-        else next((s["title"] for s in stages if s["status"] != "done"), None)
-    )
-
-    return {
-        "id": str(project.id),
-        "name": project.name,
-        "status": project.status if project.status else "open",
-        "project_type": project.project_type,
-        "progress_pct": progress_pct,
-        "current_stage": current_stage,
-        "stages": stages,
-        "customer_address": project.customer_address,
-        "region": project.region,
-        "start_at": project.start_at.isoformat() if project.start_at else None,
-        "due_at": project.due_at.isoformat() if project.due_at else None,
-        "completed_at": project.completed_at.isoformat()
-        if project.completed_at
-        else None,
-        "created_at": project.created_at.isoformat() if project.created_at else None,
-    }
-
-
-# Mirror parity: projects_mirror.read_for_subscriber counts these as inactive.
-_PORTAL_INACTIVE_STATUSES = ("completed", "canceled")
-
-
-def native_read_enabled(db: Session) -> bool:
-    """Explicit native-project read control.
-
-    OFF (default) — ``/me/projects``, the web tracker and the reseller views
-    keep serving ``projects_mirror``; ON — they serve the native ``projects``
-    table via ``portal_read_for_subscriber`` / ``Projects.portal_list``. The
-    cutover requires verified parity and an approved authority decision.
-    """
-    return control_registry.is_enabled(db, "projects.native_read")
-
-
-def portal_read_for_subscriber(db: Session, subscriber_id: str) -> dict:
-    """Native ``GET /me/projects`` / web-tracker payload — the exact response
-    shell ``projects_mirror.read_for_subscriber`` served:
-    ``{projects[], total, active}`` with ``build_portal_project_payload``
-    items. Customer reads use this owner only when the explicit native-read
-    control is enabled."""
-    items = Projects.portal_list(db, subscriber_id)
-    active = sum(1 for i in items if i["status"] not in _PORTAL_INACTIVE_STATUSES)
-    return {"projects": items, "total": len(items), "active": active}
 
 
 class Projects(ListResponseMixin):
@@ -1421,29 +1829,23 @@ class Projects(ListResponseMixin):
         )
 
     @staticmethod
-    def portal_list(db: Session, subscriber_ids: list[str] | str) -> list[dict]:
-        """Customer-facing project list (stage timeline + progress %) for the
-        installation tracker. Scoped to one subscriber, or to a set of
-        subscribers in a reseller's customer subtree. Native customer and
-        reseller reads consume this projection after the approved cutover."""
-        if isinstance(subscriber_ids, str):
-            subscriber_ids = [subscriber_ids]
-        uuids = [coerce_uuid(str(s)) for s in subscriber_ids]
-        uuids = [u for u in uuids if u is not None]
-        if not uuids:
-            return []
-        projects = (
-            db.query(Project)
-            .options(selectinload(Project.tasks))
-            .filter(Project.subscriber_id.in_(uuids))
-            .filter(Project.is_active.is_(True))
-            .order_by(Project.created_at.desc())
-            .all()
-        )
-        return [build_portal_project_payload(p) for p in projects]
-
-    @staticmethod
-    def create(db: Session, payload: ProjectCreate):
+    def create(
+        db: Session,
+        payload: ProjectCreate,
+        *,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="create_project", actor=payload.created_by_person_id
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: Projects.create(db, payload, context=context),
+            )
         if payload.created_by_person_id:
             _ensure_staff_uuid(str(payload.created_by_person_id))
         if payload.owner_person_id:
@@ -1520,12 +1922,12 @@ class Projects(ListResponseMixin):
         db.add(project)
         db.flush()
         _sync_project_sla_clock(db, project)
-        db.commit()
+        db.flush()
         db.refresh(project)
 
         if not payload.project_template_id:
             _seed_fiber_installation_tasks(db, project)
-            db.commit()
+            db.flush()
             db.refresh(project)
 
         customer_name = _subscriber_name(project.subscriber)
@@ -1538,9 +1940,9 @@ class Projects(ListResponseMixin):
                 project_id=str(project.id),
                 template_id=str(payload.project_template_id),
             )
-            _maybe_auto_assign_project(db, project)
+            _maybe_auto_assign_project(db, project, context=context)
         else:
-            _maybe_auto_assign_project(db, project)
+            _maybe_auto_assign_project(db, project, context=context)
 
         # Emit project created event after core project setup so failed
         # handlers cannot prevent template task creation or other intrinsic
@@ -1558,17 +1960,15 @@ class Projects(ListResponseMixin):
                 "customer_name": customer_name,
             },
         )
+        _stage_project_audit(
+            db,
+            context=context,
+            action="create",
+            entity_type="project",
+            entity_id=project.id,
+        )
 
-        # In-app notifications for internal project roles. Project has already
-        # been committed above, so failures here won't roll back creation.
-        try:
-            _notify_project_roles_created_in_app(db, project)
-        except Exception:  # noqa: BLE001 - advisory
-            db.rollback()
-            logger.exception(
-                "project_created_in_app_notifications_failed project_id=%s",
-                project.id,
-            )
+        _notify_project_roles_created_in_app(db, project)
 
         return project
 
@@ -1576,16 +1976,16 @@ class Projects(ListResponseMixin):
     def get(db: Session, project_id: str):
         project = db.get(Project, coerce_uuid(project_id))
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         return project
 
     @staticmethod
     def get_by_number(db: Session, number: str):
         if not number:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         project = db.query(Project).filter(Project.number == number).first()
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         return project
 
     @staticmethod
@@ -1677,6 +2077,7 @@ class Projects(ListResponseMixin):
                 "priority": Project.priority,
             },
         )
+        query = query.order_by(Project.id.asc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
@@ -1749,7 +2150,6 @@ class Projects(ListResponseMixin):
     @staticmethod
     def update_gantt_date(db: Session, project_id: str, field: str, value: str) -> dict:
         """Update a project date through the canonical project writer."""
-        Projects.get(db, project_id)
         field_map = {
             "due_date": "due_at",
             "start_date": "start_at",
@@ -1759,11 +2159,11 @@ class Projects(ListResponseMixin):
             "completed_at": "completed_at",
         }
         if field not in field_map:
-            raise HTTPException(status_code=400, detail="Invalid field")
+            raise _project_error("invalid_input", "Invalid field", field=field)
         try:
             target_day = date.fromisoformat(value)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid date") from exc
+            raise _project_error("invalid_input", "Invalid date", field=field) from exc
         Projects.update(
             db,
             project_id,
@@ -1782,33 +2182,103 @@ class Projects(ListResponseMixin):
     @staticmethod
     def update_status(db: Session, project_id: str, new_status: str) -> dict:
         """Move a Kanban card through the canonical project lifecycle writer."""
-        Projects.get(db, project_id)
         try:
             payload = ProjectUpdate(status=ProjectStatus(new_status))
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid status") from exc
+            raise _project_error("invalid_transition", "Invalid status") from exc
         Projects.update(db, project_id, payload)
         return {"status": "ok"}
 
     @staticmethod
-    def delete(db: Session, project_id: str):
+    def delete(
+        db: Session,
+        project_id: str,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
         """Soft delete a project."""
-        project = db.get(Project, coerce_uuid(project_id))
+        if context is None:
+            context = _project_command_context(
+                action="delete_project", actor=actor_id, aggregate_id=project_id
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: Projects.delete(
+                    db,
+                    project_id,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        project = db.scalar(
+            select(Project)
+            .where(Project.id == coerce_uuid(project_id))
+            .with_for_update()
+        )
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         project.is_active = False
-        db.commit()
+        _stage_project_audit(
+            db,
+            context=context,
+            action="delete",
+            entity_type="project",
+            entity_id=project.id,
+            changed_fields=["is_active"],
+        )
+        db.flush()
 
     @staticmethod
-    def update(db: Session, project_id: str, payload: ProjectUpdate):
-        project = db.get(Project, coerce_uuid(project_id))
+    def update(
+        db: Session,
+        project_id: str,
+        payload: ProjectUpdate,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="update_project",
+                actor=actor_id or payload.created_by_person_id,
+                aggregate_id=project_id,
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: Projects.update(
+                    db,
+                    project_id,
+                    payload,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        project = db.scalar(
+            select(Project)
+            .where(Project.id == coerce_uuid(project_id))
+            .with_for_update()
+        )
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         previous_status = project.status
         previous_template_id = (
             str(project.project_template_id) if project.project_template_id else None
         )
         data = _model_data(payload.model_dump(exclude_unset=True))
+        if data.get("status"):
+            _require_status_transition(
+                current=project.status,
+                requested=str(data["status"]),
+                transitions=_PROJECT_STATUS_TRANSITIONS,
+                aggregate="project",
+            )
         if data.get("created_by_person_id"):
             _ensure_staff_uuid(str(data["created_by_person_id"]))
         if data.get("owner_person_id"):
@@ -1855,7 +2325,7 @@ class Projects(ListResponseMixin):
         ):
             project.completed_at = datetime.now(UTC)
         _sync_project_sla_clock(db, project)
-        db.commit()
+        db.flush()
         db.refresh(project)
 
         # Emit events based on status changes
@@ -1880,8 +2350,6 @@ class Projects(ListResponseMixin):
                 },
             )
             _notify_customer_project_completed(db, project)
-            # Completion consequences are owned by the project lifecycle.
-            _push_installation_complete(db, project)
         elif (
             new_status == ProjectStatus.canceled.value
             and previous_status != ProjectStatus.canceled.value
@@ -1921,8 +2389,15 @@ class Projects(ListResponseMixin):
                 ProjectTemplateTasks.replace_project_tasks(
                     db=db, project_id=str(project.id), template_id=new_template_id
                 )
-        # Persist notifications/events queued after the initial update commit.
-        db.commit()
+        _stage_project_audit(
+            db,
+            context=context,
+            action="update",
+            entity_type="project",
+            entity_id=project.id,
+            changed_fields=changed_fields,
+        )
+        db.flush()
         return project
 
 
@@ -1940,7 +2415,7 @@ class ProjectTemplates(ListResponseMixin):
     def get(db: Session, template_id: str):
         template = db.get(ProjectTemplate, coerce_uuid(template_id))
         if not template:
-            raise HTTPException(status_code=404, detail="Project template not found")
+            raise _project_error("not_found", "Project template not found")
         return template
 
     @staticmethod
@@ -1976,7 +2451,7 @@ class ProjectTemplates(ListResponseMixin):
     def update(db: Session, template_id: str, payload: ProjectTemplateUpdate):
         template = db.get(ProjectTemplate, coerce_uuid(template_id))
         if not template:
-            raise HTTPException(status_code=404, detail="Project template not found")
+            raise _project_error("not_found", "Project template not found")
         data = _model_data(payload.model_dump(exclude_unset=True))
         for key, value in data.items():
             setattr(template, key, value)
@@ -1988,7 +2463,7 @@ class ProjectTemplates(ListResponseMixin):
     def delete(db: Session, template_id: str):
         template = db.get(ProjectTemplate, coerce_uuid(template_id))
         if not template:
-            raise HTTPException(status_code=404, detail="Project template not found")
+            raise _project_error("not_found", "Project template not found")
         template.is_active = False
         db.commit()
 
@@ -2021,9 +2496,7 @@ class ProjectTemplateTasks(ListResponseMixin):
     def get(db: Session, task_id: str):
         task = db.get(ProjectTemplateTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(
-                status_code=404, detail="Project template task not found"
-            )
+            raise _project_error("not_found", "Project template task not found")
         return task
 
     @staticmethod
@@ -2060,9 +2533,7 @@ class ProjectTemplateTasks(ListResponseMixin):
     def update(db: Session, task_id: str, payload: ProjectTemplateTaskUpdate):
         task = db.get(ProjectTemplateTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(
-                status_code=404, detail="Project template task not found"
-            )
+            raise _project_error("not_found", "Project template task not found")
         data = _model_data(payload.model_dump(exclude_unset=True))
         for key, value in data.items():
             setattr(task, key, value)
@@ -2074,9 +2545,7 @@ class ProjectTemplateTasks(ListResponseMixin):
     def delete(db: Session, task_id: str):
         task = db.get(ProjectTemplateTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(
-                status_code=404, detail="Project template task not found"
-            )
+            raise _project_error("not_found", "Project template task not found")
         task.is_active = False
         db.query(ProjectTemplateTaskDependency).filter(
             ProjectTemplateTaskDependency.template_task_id == task.id
@@ -2104,7 +2573,7 @@ class ProjectTemplateTasks(ListResponseMixin):
             ProjectTask.template_task_id.isnot(None),
         ).delete(synchronize_session=False)
         if not template_id:
-            db.commit()
+            db.flush()
             return
         template_tasks = (
             db.query(ProjectTemplateTask)
@@ -2185,7 +2654,7 @@ class ProjectTemplateTasks(ListResponseMixin):
         )
         _calculate_task_dates(task_obj_map, dep_graph, project_start)
 
-        db.commit()
+        db.flush()
 
 
 def _calculate_task_dates(
@@ -2230,22 +2699,36 @@ def _calculate_task_dates(
 
 class ProjectTasks(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: ProjectTaskCreate):
+    def create(
+        db: Session,
+        payload: ProjectTaskCreate,
+        *,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="create_project_task", actor=payload.created_by_person_id
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: ProjectTasks.create(db, payload, context=context),
+            )
         project = db.get(Project, coerce_uuid(str(payload.project_id)))
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         if payload.parent_task_id:
             parent = db.get(ProjectTask, coerce_uuid(str(payload.parent_task_id)))
             if not parent:
-                raise HTTPException(status_code=404, detail="Parent task not found")
+                raise _project_error("not_found", "Parent task not found")
         if payload.assigned_to_person_id:
             _ensure_staff_uuid(str(payload.assigned_to_person_id))
         if payload.created_by_person_id:
             _ensure_staff_uuid(str(payload.created_by_person_id))
         if payload.ticket_id:
             _ensure_ticket(db, payload.ticket_id)
-        if payload.work_order_id:
-            _ensure_work_order(db, payload.work_order_id)
         data = _model_data(payload.model_dump(exclude={"assigned_to_person_ids"}))
         fields_set = payload.model_fields_set
         assignee_ids: list[str] | None = None
@@ -2292,9 +2775,7 @@ class ProjectTasks(ListResponseMixin):
             task.completed_at = datetime.now(UTC)
         _sync_task_sla_clock(db, task)
         _sync_project_task_assignees(db, task, assignee_ids)
-        if task.work_order_id:
-            _link_work_order_origin(db, task)
-        db.commit()
+        db.flush()
         db.refresh(task)
         if task.assigned_to_person_id:
             assigned_to = db.get(SystemUser, task.assigned_to_person_id)
@@ -2309,22 +2790,41 @@ class ProjectTasks(ListResponseMixin):
                     assigned_to=assigned_to,
                     created_by=created_by,
                 )
+        _stage_project_audit(
+            db,
+            context=context,
+            action="create",
+            entity_type="project_task",
+            entity_id=task.id,
+        )
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "name": "project_task.created",
+                "task_id": str(task.id),
+                "project_id": str(project.id),
+                "status": task.status,
+                "priority": task.priority,
+            },
+            subscriber_id=project.subscriber_id,
+        )
         return task
 
     @staticmethod
     def get(db: Session, task_id: str):
         task = db.get(ProjectTask, coerce_uuid(task_id))
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         return task
 
     @staticmethod
     def get_by_number(db: Session, number: str):
         if not number:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         task = db.query(ProjectTask).filter(ProjectTask.number == number).first()
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         return task
 
     @staticmethod
@@ -2388,14 +2888,50 @@ class ProjectTasks(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, task_id: str, payload: ProjectTaskUpdate):
-        task = db.get(ProjectTask, coerce_uuid(task_id))
+    def update(
+        db: Session,
+        task_id: str,
+        payload: ProjectTaskUpdate,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="update_project_task",
+                actor=actor_id or payload.created_by_person_id,
+                aggregate_id=task_id,
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: ProjectTasks.update(
+                    db,
+                    task_id,
+                    payload,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        task = db.scalar(
+            select(ProjectTask)
+            .where(ProjectTask.id == coerce_uuid(task_id))
+            .with_for_update()
+        )
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         previous_status = task.status
-        previous_work_order_id = task.work_order_id
         changed_fields: list[str] = []
         data = _model_data(payload.model_dump(exclude_unset=True))
+        if data.get("status"):
+            _require_status_transition(
+                current=task.status,
+                requested=str(data["status"]),
+                transitions=_PROJECT_TASK_STATUS_TRANSITIONS,
+                aggregate="project_task",
+            )
         assignee_ids: list[str] | None = None
         if "assigned_to_person_ids" in payload.model_fields_set:
             assignee_ids = [
@@ -2410,19 +2946,17 @@ class ProjectTasks(ListResponseMixin):
         if "project_id" in data:
             project = db.get(Project, coerce_uuid(str(data["project_id"])))
             if not project:
-                raise HTTPException(status_code=404, detail="Project not found")
+                raise _project_error("not_found", "Project not found")
         if data.get("parent_task_id"):
             parent = db.get(ProjectTask, coerce_uuid(str(data["parent_task_id"])))
             if not parent:
-                raise HTTPException(status_code=404, detail="Parent task not found")
+                raise _project_error("not_found", "Parent task not found")
         if data.get("assigned_to_person_id"):
             _ensure_staff_uuid(str(data["assigned_to_person_id"]))
         if data.get("created_by_person_id"):
             _ensure_staff_uuid(str(data["created_by_person_id"]))
         if data.get("ticket_id"):
             _ensure_ticket(db, data["ticket_id"])
-        if data.get("work_order_id"):
-            _ensure_work_order(db, data["work_order_id"])
         changed_fields.extend(list(data.keys()))
         for key, value in data.items():
             setattr(task, key, value)
@@ -2431,9 +2965,7 @@ class ProjectTasks(ListResponseMixin):
             task.completed_at = datetime.now(UTC)
         _sync_task_sla_clock(db, task)
         _sync_project_task_assignees(db, task, assignee_ids)
-        if task.work_order_id and task.work_order_id != previous_work_order_id:
-            _link_work_order_origin(db, task)
-        db.commit()
+        db.flush()
         db.refresh(task)
         if (
             "assigned_to_person_ids" in payload.model_fields_set
@@ -2459,7 +2991,7 @@ class ProjectTasks(ListResponseMixin):
             project = db.get(Project, task.project_id)
             if project:
                 _notify_customer_task_completed(db, project, task)
-                db.commit()
+                db.flush()
             emit_event(
                 db,
                 EventType.custom,
@@ -2474,15 +3006,59 @@ class ProjectTasks(ListResponseMixin):
                 {"name": "project_task.updated", **event_payload},
                 subscriber_id=project.subscriber_id if project else None,
             )
+        _stage_project_audit(
+            db,
+            context=context,
+            action="update",
+            entity_type="project_task",
+            entity_id=task.id,
+            changed_fields=changed_fields,
+        )
         return task
 
     @staticmethod
-    def delete(db: Session, task_id: str):
-        task = db.get(ProjectTask, coerce_uuid(task_id))
+    def delete(
+        db: Session,
+        task_id: str,
+        *,
+        actor_id: UUID | None = None,
+        context: CommandContext | None = None,
+    ):
+        if context is None:
+            context = _project_command_context(
+                action="delete_project_task",
+                actor=actor_id,
+                aggregate_id=task_id,
+            )
+            db_session_adapter.release_read_transaction(db)
+            return execute_owner_command(
+                db,
+                definition=_PROJECT_MUTATION,
+                context=context,
+                operation=lambda: ProjectTasks.delete(
+                    db,
+                    task_id,
+                    actor_id=actor_id,
+                    context=context,
+                ),
+            )
+        task = db.scalar(
+            select(ProjectTask)
+            .where(ProjectTask.id == coerce_uuid(task_id))
+            .with_for_update()
+        )
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         task.is_active = False
-        db.commit()
+        _stage_project_audit(
+            db,
+            context=context,
+            action="delete",
+            entity_type="project_task",
+            entity_id=task.id,
+            changed_fields=["is_active"],
+        )
+        db.flush()
 
 
 class ProjectTaskComments(ListResponseMixin):
@@ -2490,7 +3066,7 @@ class ProjectTaskComments(ListResponseMixin):
     def create(db: Session, payload: ProjectTaskCommentCreate):
         task = db.get(ProjectTask, coerce_uuid(str(payload.task_id)))
         if not task:
-            raise HTTPException(status_code=404, detail="Project task not found")
+            raise _project_error("not_found", "Project task not found")
         if payload.author_person_id:
             _ensure_staff_uuid(str(payload.author_person_id))
         comment = ProjectTaskComment(**payload.model_dump())
@@ -2525,7 +3101,7 @@ class ProjectComments(ListResponseMixin):
     def create(db: Session, payload: ProjectCommentCreate):
         project = db.get(Project, coerce_uuid(str(payload.project_id)))
         if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise _project_error("not_found", "Project not found")
         if payload.author_person_id:
             _ensure_staff_uuid(str(payload.author_person_id))
         comment = ProjectComment(**payload.model_dump())
@@ -2538,7 +3114,7 @@ class ProjectComments(ListResponseMixin):
     def update(db: Session, comment_id: str, payload: ProjectCommentUpdate):
         comment = db.get(ProjectComment, coerce_uuid(comment_id))
         if not comment:
-            raise HTTPException(status_code=404, detail="Comment not found")
+            raise _project_error("not_found", "Comment not found")
         data = payload.model_dump(exclude_unset=True)
         if "body" in data and data["body"] is None:
             data.pop("body")

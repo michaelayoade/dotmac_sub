@@ -110,7 +110,7 @@ def test_suspended_account_billing_allowed_usage_suppressed(db_session):
     assert db_session.query(Notification).count() > base
 
 
-def test_kill_switch_disables_gate(db_session):
+def test_retired_false_row_cannot_disable_status_policy(db_session):
     _invoice_template(db_session)
     db_session.add(
         DomainSetting(
@@ -123,5 +123,4 @@ def test_kill_switch_disables_gate(db_session):
     sub = _subscriber(db_session, SubscriberStatus.canceled, "KillSwitch")
     before = db_session.query(Notification).count()
     _handle(db_session, EventType.invoice_overdue, sub.id)
-    # Gate disabled → the canceled account is no longer blocked by status.
-    assert db_session.query(Notification).count() > before
+    assert db_session.query(Notification).count() == before

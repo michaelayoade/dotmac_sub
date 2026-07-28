@@ -1,15 +1,16 @@
 """Derive and apply the RADIUS access state.
 
-``derive_access_state`` is the pure policy mapping.
-``set_subscription_access_state`` — write app DB ``access_state`` and expose
-the subscriber aggregate consumed by the external projection owner.
+``derive_access_state`` is the pure policy mapping. Persisted
+``Subscription.access_state`` is written only by
+``access.subscription_lifecycle``.
 
-See ``docs/radius_state_refactor/phase0_state_model.md``.
+See ``docs/FINANCIAL_ACCESS_ENFORCEMENT.md``.
 """
 
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,7 +25,27 @@ from app.models.enforcement_lock import AccessRestrictionMode
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
 
-AccessStateWriteResult = dict[str, int | str | None]
+
+def stage_subscription_radius_profile(
+    db: Session,
+    *,
+    subscription_id: UUID,
+    credential_id: UUID,
+    radius_profile_id: UUID,
+) -> AccessCredential:
+    """Stage one exact subscription credential's desired RADIUS profile."""
+
+    credential = db.get(AccessCredential, credential_id)
+    if (
+        credential is None
+        or credential.subscription_id != subscription_id
+        or not credential.is_active
+    ):
+        raise ValueError("Active credential does not belong to the subscription")
+    credential.radius_profile_id = radius_profile_id
+    db.flush()
+    return credential
+
 
 # Status sets — declared here as constants so callers can also reason
 # about which SubscriptionStatus values map to a given AccessState
@@ -41,6 +62,7 @@ _BLOCKED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
         SubscriptionStatus.suspended,
         SubscriptionStatus.blocked,
         SubscriptionStatus.stopped,
+        SubscriptionStatus.disabled,
     }
 )
 
@@ -48,7 +70,6 @@ _TERMINATED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
     {
         SubscriptionStatus.canceled,
         SubscriptionStatus.expired,
-        SubscriptionStatus.disabled,
     }
 )
 
@@ -110,6 +131,10 @@ def derive_access_state(
     policy resolved a persisted restriction to that effective mode.
     """
     if subscription_status in _ACTIVE_STATUSES:
+        if restriction_mode == AccessRestrictionMode.captive:
+            return AccessState.captive
+        if restriction_mode == AccessRestrictionMode.hard_reject or hard_reject:
+            return AccessState.suspended
         return AccessState.active
     if subscription_status in _BLOCKED_STATUSES:
         if restriction_mode is None:
@@ -182,67 +207,3 @@ def derive_subscriber_access_state(
         if candidate in states:
             return candidate
     return None
-
-
-def set_subscription_access_state(
-    db: Session,
-    subscription_id: str,
-    state: AccessState | None,
-) -> AccessStateWriteResult:
-    """Set ``subscription.access_state`` and derive the subscriber aggregate.
-
-    Two writes happen:
-
-      1. ``subscription.access_state = state`` (per-sub column write).
-         Reflects what this single subscription thinks its state should
-         be. Used for observability/debugging.
-
-      2. The subscriber aggregate is returned to callers for observability.
-         ``radius_population`` derives and projects the configured access group
-         after the source transaction is durable.
-
-    Returns counts for observability:
-      {"credentials": n, "external_rows_written": n,
-       "external_rows_deleted": n, "aggregate_state": str | None}
-    """
-    sub = db.get(Subscription, coerce_uuid(subscription_id))
-    if sub is None:
-        return {
-            "credentials": 0,
-            "external_rows_written": 0,
-            "external_rows_deleted": 0,
-            "aggregate_state": None,
-        }
-
-    # 1. Per-sub column write
-    new_value = state.value if state is not None else None
-    if sub.access_state != new_value:
-        sub.access_state = new_value
-        db.flush()
-
-    # 2. Subscriber aggregate is returned for observability. External group
-    # projection is owned by radius_population and is requested by the caller
-    # after the source-state transaction is durable.
-    aggregate_state = derive_subscriber_access_state(db, sub.subscriber_id)
-
-    credentials = list(
-        db.scalars(
-            select(AccessCredential).where(
-                AccessCredential.subscriber_id == sub.subscriber_id
-            )
-        ).all()
-    )
-    if not credentials:
-        return {
-            "credentials": 0,
-            "external_rows_written": 0,
-            "external_rows_deleted": 0,
-            "aggregate_state": aggregate_state.value if aggregate_state else None,
-        }
-
-    return {
-        "credentials": len(credentials),
-        "external_rows_written": 0,
-        "external_rows_deleted": 0,
-        "aggregate_state": aggregate_state.value if aggregate_state else None,
-    }

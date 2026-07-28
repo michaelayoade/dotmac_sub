@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -14,15 +15,23 @@ from app.services import auth_flow as auth_flow_service
 from app.services import (
     crm_portal,
     customer_portal,
+    customer_portal_flow_changes,
+    customer_work_order_selfcare,
     reseller_crm_views,
     reseller_portal,
-    work_orders_mirror,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     PageMeta,
     request_needs_canonicalization,
+)
+from app.services.owner_commands import CommandContext
+from app.services.portal_account_health import build_portal_account_health
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
 )
 from app.web.reseller.branding import get_reseller_templates
 
@@ -64,6 +73,11 @@ RESELLER_INVOICE_LIST_DEFINITION = ListDefinition(
 )
 
 templates = get_reseller_templates()
+
+SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE = (
+    "The verified prepaid funding position is still under review. "
+    "Finance must complete reconstruction before this service can change."
+)
 
 
 RESELLER_LOGIN_URL = "/reseller/auth/login"
@@ -361,14 +375,155 @@ def reseller_account_detail(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "account": detail,
-            # Eligibility/reason owned by the backend; the raw preview dict on
-            # `account.status_actions` still supplies each POST's fingerprint.
+            "account_health": build_portal_account_health(db, UUID(detail["id"])),
             "status_action_contracts": reseller_portal.account_status_action_contracts(
                 detail["status_actions"]
             ),
             "status_success": request.query_params.get("status_success"),
             "status_error": request.query_params.get("status_error"),
         },
+    )
+
+
+def reseller_service_change_page(
+    request: Request,
+    db: Session,
+    account_id: str,
+    subscription_id: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+    page = customer_portal_flow_changes.get_change_plan_page(
+        db, {"account_id": str(account.id)}, subscription_id
+    )
+    if page is None:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+    return templates.TemplateResponse(
+        "reseller/accounts/service_change.html",
+        {
+            "request": request,
+            "active_page": "accounts",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "account": account,
+            **page,
+        },
+    )
+
+
+def reseller_service_change_quote(
+    request: Request,
+    db: Session,
+    account_id: str,
+    subscription_id: str,
+    offer_id: str,
+    target_service_address_id: str | None,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    try:
+        quote = customer_portal_flow_changes.get_plan_change_quote(
+            db,
+            {"account_id": str(account.id)},
+            subscription_id,
+            offer_id,
+            target_service_address_id=target_service_address_id,
+        )
+    except PrepaidFundingBaselineMissingError:
+        return JSONResponse(
+            {
+                "error": "financial_position_unavailable",
+                "detail": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+            },
+            status_code=409,
+        )
+    if quote is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse({"quote": quote})
+
+
+def reseller_service_change_confirm(
+    request: Request,
+    db: Session,
+    account_id: str,
+    subscription_id: str,
+    *,
+    offer_id: str,
+    target_service_address_id: str | None,
+    preview_fingerprint: str,
+    field_quote_fingerprint: str | None,
+    preview_effective_at: str,
+    idempotency_key: str,
+    notes: str | None,
+):
+    from datetime import datetime
+    from urllib.parse import quote_plus
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return RedirectResponse(url="/reseller/accounts", status_code=303)
+    try:
+        result = customer_portal_flow_changes.confirm_service_change(
+            db,
+            {"account_id": str(account.id)},
+            subscription_id,
+            offer_id,
+            notes,
+            target_service_address_id=target_service_address_id,
+            preview_fingerprint=preview_fingerprint,
+            field_quote_fingerprint=field_quote_fingerprint,
+            preview_effective_at=datetime.fromisoformat(preview_effective_at),
+            idempotency_key=idempotency_key,
+            confirmation_origin="reseller_web",
+        )
+        if not result.get("success", False):
+            raise ValueError("Additional prepaid funding is required")
+    except (HTTPException, PrepaidFundingBaselineMissingError, ValueError) as exc:
+        db.rollback()
+        message = (
+            SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE
+            if isinstance(exc, PrepaidFundingBaselineMissingError)
+            else str(getattr(exc, "detail", exc))
+        )
+        return RedirectResponse(
+            url=(
+                f"/reseller/accounts/{account_id}?status_error=" + quote_plus(message)
+            ),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=(
+            f"/reseller/accounts/{account_id}?status_success="
+            + quote_plus(str(result.get("message") or "Service change confirmed"))
+        ),
+        status_code=303,
     )
 
 
@@ -388,13 +543,23 @@ def reseller_account_status_update(
     try:
         proposal = reseller_portal.preview_customer_account_status_confirmation(
             db,
-            reseller_id=str(context["reseller"].id),
-            account_id=account_id,
-            action=action,
-            expected_preview_fingerprint=preview_fingerprint,
+            reseller_portal.PreviewCustomerAccountStatusConfirmationRequest(
+                reseller_id=context["reseller"].id,
+                account_id=UUID(account_id),
+                action=reseller_portal.ResellerAccountStatusAction(
+                    action.strip().lower()
+                ),
+                expected_preview_fingerprint=preview_fingerprint,
+            ),
         )
-    except ValueError as exc:
-        message = str(exc) or "Unsupported status action"
+    except DomainError as exc:
+        message = exc.message
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
+            status_code=303,
+        )
+    except ValueError:
+        message = "Unsupported status action"
         return RedirectResponse(
             url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
             status_code=303,
@@ -444,17 +609,37 @@ def reseller_account_status_confirm(
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     try:
+        reseller_id = context["reseller"].id
+        resolved_account_id = UUID(account_id)
+        resolved_action = reseller_portal.ResellerAccountStatusAction(
+            action.strip().lower()
+        )
+        actor = f"reseller:{reseller_id}:principal:{context['principal_id']}"
+        command = reseller_portal.ConfirmCustomerAccountStatusCommand(
+            context=CommandContext.system(
+                actor=actor,
+                scope=str(resolved_account_id),
+                reason=f"confirm_{resolved_action.value}_account",
+                idempotency_key=idempotency_key,
+            ),
+            reseller_id=reseller_id,
+            account_id=resolved_account_id,
+            action=resolved_action,
+            expected_preview_fingerprint=preview_fingerprint,
+        )
+        db_session_adapter.release_read_transaction(db)
         result = reseller_portal.confirm_customer_account_status_action(
             db,
-            reseller_id=str(context["reseller"].id),
-            account_id=account_id,
-            action=action,
-            actor_id=context["principal_id"],
-            expected_preview_fingerprint=preview_fingerprint,
-            idempotency_key=idempotency_key,
+            command,
         )
-    except ValueError as exc:
-        message = str(exc) or "Unsupported status action"
+    except DomainError as exc:
+        message = exc.message
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
+            status_code=303,
+        )
+    except ValueError:
+        message = "Unsupported status action"
         return RedirectResponse(
             url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
             status_code=303,
@@ -1024,8 +1209,10 @@ def reseller_technician_location(
     account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
     if account is None:
         return JSONResponse({"available": False, "reason": "not_found"})
-    data = work_orders_mirror.technician_location(db, str(account.id), work_order_id)
-    return JSONResponse(data)
+    data = customer_work_order_selfcare.technician_location(
+        db, str(account.id), work_order_id
+    )
+    return JSONResponse(data.model_dump(mode="json"))
 
 
 def reseller_rate_technician(
@@ -1045,7 +1232,7 @@ def reseller_rate_technician(
         status_flag = "error"
     else:
         try:
-            work_orders_mirror.rate_technician(
+            customer_work_order_selfcare.rate_technician(
                 db,
                 str(account.id),
                 work_order_id,

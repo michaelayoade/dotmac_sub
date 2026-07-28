@@ -3,12 +3,13 @@
 import logging
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_network_access_ledger as web_network_access_ledger_service
 from app.services import web_network_radius as web_network_radius_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
@@ -374,3 +375,18 @@ def radius_auth_errors_page(
         )
     )
     return templates.TemplateResponse("admin/network/radius_errors.html", context)
+
+
+@router.get(
+    "/access",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:radius:read"))],
+)
+def access_ledger_page(
+    request: Request,
+    facet: str = Query(default="sessions"),
+    db: Session = Depends(get_db),
+):
+    context = _base_context(request, db, active_page="access")
+    context.update(web_network_access_ledger_service.access_ledger_data(db, facet))
+    return templates.TemplateResponse("admin/network/access/index.html", context)

@@ -10,7 +10,7 @@ from app import team_inbox_smtp as smtp_runtime
 from app.config import settings
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.team_inbox import InboxMessage, TeamInboxEmailRoute
-from app.services import team_inbox_smtp_inbound
+from app.services import team_inbox_health, team_inbox_smtp_inbound
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -133,15 +133,16 @@ def test_probe_header_survives_owner_ingestion(db_session):
     assert result.kind == "received"
     assert row.external_message_id == external_message_id
     assert row.metadata_["smtp_probe"] == smtp_runtime.PROBE_HEADER_VALUE
+    db_session.commit()
 
-    delivered = team_inbox_smtp_inbound.verify_smtp_probe_delivery(
+    delivered = team_inbox_health.verify_smtp_probe_delivery(
         db_session,
         external_message_id=external_message_id,
     )
     db_session.refresh(row)
 
     assert delivered is not None
-    assert row.metadata_[team_inbox_smtp_inbound.SMTP_PROBE_VERIFIED_KEY] is True
+    assert row.metadata_[team_inbox_health.SMTP_PROBE_VERIFIED_KEY] is True
 
 
 def test_probe_submission_uses_canonical_email_owner(monkeypatch):

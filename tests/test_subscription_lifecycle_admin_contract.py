@@ -73,6 +73,38 @@ def test_catalog_write_authorizes_every_lifecycle_command(monkeypatch) -> None:
         catalog_routes._assert_lifecycle_command_permission(request, object(), kind)
 
 
+def test_lifecycle_preview_accepts_reader_or_exact_action_permission(
+    monkeypatch,
+) -> None:
+    request = SimpleNamespace(
+        state=SimpleNamespace(auth={"principal_id": "operator-preview"})
+    )
+    granted = {"subscription:activate"}
+    monkeypatch.setattr(
+        catalog_routes,
+        "has_permission",
+        lambda auth, db, permission: permission in granted,
+    )
+
+    catalog_routes._assert_lifecycle_preview_permission(
+        request,
+        object(),
+        SubscriptionCommandKind.restore,
+    )
+    with pytest.raises(HTTPException) as suspended:
+        catalog_routes._assert_lifecycle_preview_permission(
+            request,
+            object(),
+            SubscriptionCommandKind.suspend,
+        )
+    assert suspended.value.status_code == 403
+
+    granted.clear()
+    granted.add("catalog:read")
+    for kind in SubscriptionCommandKind:
+        catalog_routes._assert_lifecycle_preview_permission(request, object(), kind)
+
+
 def test_legacy_bulk_adapters_delegate_without_direct_lifecycle_writes() -> None:
     for adapter in (
         web_catalog_subscriptions.bulk_update_status,
@@ -97,11 +129,17 @@ def test_generic_edit_form_does_not_offer_parallel_lifecycle_mutations() -> None
         'value="{{ subscription.offer_id }}">' in template
     )
     assert "Use <strong>Change Plan</strong>" in template
-    assert '<select name="status"' not in template
-    assert (
-        'name="status" value="{{ subscription.status if subscription.id '
-        "else 'pending' }}\""
-    ) in template
+    assert '<select name="status" id="status"' in template
+    for value, label in (
+        ("pending", "Pending"),
+        ("active", "Active"),
+        ("suspended", "Suspended"),
+        ("disabled", "Disabled"),
+        ("canceled", "Canceled"),
+    ):
+        assert f'<option value="{value}"' in template
+        assert f">{label}</option>" in template
+    assert 'name="status" value="{{ subscription.status }}"' in template
     assert (
         'id="billing_mode" x-model="billingMode" '
         "{% if subscription.id %}disabled" in template
@@ -111,6 +149,6 @@ def test_generic_edit_form_does_not_offer_parallel_lifecycle_mutations() -> None
     assert 'id="canceled_at" readonly' in template
     assert 'id="cancel_reason" readonly' in template
     assert "{% if subscription.id %}\n        {# Lifecycle facts" in template
-    assert "Activate after creation" in template
+    assert "Activate after creation" not in template
     assert "Set status to Active instead of Pending" not in template
     assert "bg-violet-600" not in template

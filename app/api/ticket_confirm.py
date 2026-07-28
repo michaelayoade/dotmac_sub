@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import support as support_service
+from app.services.db_session_adapter import db_session_adapter
 
 router = APIRouter(prefix="/ticket-confirm", tags=["ticket-confirm"])
 
@@ -35,6 +36,7 @@ def _load_token_or_error(db: Session, token: str):
 @router.get("/{token}")
 def get_confirmation_state(token: str, db: Session = Depends(get_db)) -> dict:
     token_row = _load_token_or_error(db, token)
+    db_session_adapter.release_read_transaction(db)
     support_service.ticket_access_tokens.mark_accessed(db, token_row)
     ticket = token_row.ticket
     return {
@@ -50,6 +52,7 @@ def get_confirmation_state(token: str, db: Session = Depends(get_db)) -> dict:
 @router.post("/{token}/confirm")
 def confirm_resolution(token: str, db: Session = Depends(get_db)) -> dict:
     token_row = _load_token_or_error(db, token)
+    db_session_adapter.release_read_transaction(db)
     ticket = support_service.tickets.confirm_resolution(db, token_row)
     return {
         "ok": True,
@@ -66,6 +69,7 @@ def dispute_resolution(
     db: Session = Depends(get_db),
 ) -> dict:
     token_row = _load_token_or_error(db, token)
+    db_session_adapter.release_read_transaction(db)
     ticket = support_service.tickets.dispute_resolution(
         db, token_row, reason=payload.reason
     )

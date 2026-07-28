@@ -1,9 +1,8 @@
 """Online payment provider flows for customer portal."""
 
-import json
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import UploadFile
@@ -21,13 +20,20 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
-from app.services import control_registry
 from app.services import customer_portal_flow_payment_methods as customer_cards
-from app.services.account_credit_deposits import AccountCreditDeposits
+from app.services import gateway_topup_intents
+from app.services.account_credit_deposits import (
+    SETTLEMENT_SCOPE,
+    AccountCreditDeposits,
+    AccountCreditDepositSettlementSource,
+    ActiveDepositRequest,
+    SettleAccountCreditDepositCommand,
+)
+from app.services.billing import collection_account_directory
 from app.services.billing._common import lock_account
 from app.services.billing.account_credit import eligible_invoices
 from app.services.billing_adapter import PaymentIntent, billing_adapter
@@ -42,9 +48,17 @@ from app.services.customer_context import (
 from app.services.customer_portal_context import (
     get_invoice_billing_contact,
 )
-from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.db_session_adapter import db_session_adapter
+from app.services.integrations import payment_capability
+from app.services.integrations.runtime_execution import RuntimeExecutionError
+from app.services.owner_commands import CommandContext
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayContext,
+    payment_gateway_adapter,
+)
 from app.services.payment_routing import (
-    eligible_routes,
+    GatewayOption,
+    gateway_options,
     provider_for_intent,
     select_checkout_provider,
 )
@@ -52,18 +66,73 @@ from app.services.provider_payment_settlements import (
     settle_verified_invoice_payment,
 )
 from app.services.settings_spec import resolve_value
-from app.services.topup_intents import set_topup_intent_status
+from app.services.topup_intents import (
+    COMPLETION_SCOPE,
+    DIRECT_TRANSFER_PROVIDER,
+    CompleteTopupIntentCommand,
+    DirectTransferAccountMapping,
+    DirectTransferAdapterSettings,
+    DirectTransferBankAccountEvidence,
+    TopupIntentCompletionSource,
+    TopupIntentStatus,
+    direct_transfer_configuration,
+    stage_topup_intent_completion,
+)
 
 logger = logging.getLogger(__name__)
-_TOPUP_INTENT_TTL = timedelta(minutes=30)
 _ONLINE_PROVIDER_LABELS = {
     "paystack": "Pay with Paystack",
     "flutterwave": "Pay with Flutterwave",
 }
-_DIRECT_TRANSFER_PROVIDER = "direct_bank_transfer"
 _DIRECT_TRANSFER_LABEL = "Direct bank transfer"
-_DIRECT_TRANSFER_TTL = timedelta(days=7)
 _DEFAULT_TOPUP_PRESET_AMOUNTS = (1000, 2000, 5000, 10000, 20000, 50000)
+
+
+def _serialize_deposit_preview(preview) -> dict[str, object]:
+    return {
+        "account_id": str(preview.account_id),
+        "currency": preview.currency,
+        "current_account_credit": preview.current_account_credit,
+        "requested_deposit": preview.requested_deposit,
+        "eligible_invoice_count": preview.eligible_invoice_count,
+        "invoice_applications": [
+            {
+                "invoice_id": str(item.invoice_id),
+                "invoice_number": item.invoice_number,
+                "currency": item.currency,
+                "amount_applied": item.amount_applied,
+                "outstanding_after_application": item.outstanding_after_application,
+            }
+            for item in preview.invoice_applications
+        ],
+        "total_applied_to_invoices": preview.total_applied_to_invoices,
+        "total_outstanding_after_application": (
+            preview.total_outstanding_after_application
+        ),
+        "remaining_account_credit": preview.remaining_account_credit,
+        "projected_available_credit": preview.projected_available_credit,
+        "allocation_policy": preview.allocation_policy,
+        "credit_application_policy": preview.credit_application_policy,
+        "policy_version": preview.policy_version,
+        "preview_fingerprint": preview.fingerprint,
+    }
+
+
+def _serialize_active_deposit_request(
+    request: ActiveDepositRequest,
+) -> dict[str, object]:
+    return {
+        "intent_id": str(request.intent_id),
+        "phase": request.phase.value,
+        "next_action": request.next_action.value,
+        "provider_type": request.provider_type,
+        "reference": request.reference,
+        "amount": request.amount,
+        "currency": request.currency,
+        "created_at": request.created_at,
+        "expires_at": request.expires_at,
+        "observed_at": request.observed_at,
+    }
 
 
 def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
@@ -96,17 +165,14 @@ def _payment_by_gateway_identity(
     return db.scalars(query).first()
 
 
-def online_gateway_payment_options(
-    db: Session,
-    _legacy_default_provider: str | None = None,
-) -> list[dict[str, str]]:
+def online_gateway_payment_options(db: Session) -> list[dict[str, str]]:
     """Return healthy gateways in canonical routing order."""
     return [
         {
             "provider_type": route.provider_type.value,
             "label": _ONLINE_PROVIDER_LABELS[route.provider_type.value],
         }
-        for route in eligible_routes(db)
+        for route in gateway_options(db)
     ]
 
 
@@ -117,9 +183,64 @@ def _default_online_route(db: Session):
         return None
 
 
+def _runtime_ready_gateway_contexts(
+    db: Session,
+    *,
+    invoice_number: str | None = None,
+) -> list[tuple[GatewayOption, PaymentGatewayContext]]:
+    """Map runtime-unavailable gateways to an honest UI availability state."""
+
+    contexts: list[tuple[GatewayOption, PaymentGatewayContext]] = []
+    for route in gateway_options(db):
+        try:
+            context = payment_gateway_adapter.build_context(
+                db,
+                provider_type=route.provider_type.value,
+                capability_binding_id=route.capability_binding_id,
+                invoice_number=invoice_number,
+            )
+        except (
+            RuntimeExecutionError,
+            payment_capability.PaymentCapabilityError,
+        ) as exc:
+            logger.warning(
+                "Payment gateway unavailable for customer presentment",
+                extra={
+                    "event": "payment_gateway_presentment_unavailable",
+                    "provider_type": route.provider_type.value,
+                    "capability_binding_id": str(route.capability_binding_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            continue
+        contexts.append((route, context))
+    return contexts
+
+
+def _payment_options_for_runtime_ready_routes(
+    routes: list[tuple[GatewayOption, PaymentGatewayContext]],
+    *,
+    direct_transfer_enabled: bool,
+) -> list[dict[str, str]]:
+    options = [
+        {
+            "provider_type": route.provider_type.value,
+            "label": _ONLINE_PROVIDER_LABELS[route.provider_type.value],
+        }
+        for route, _context in routes
+    ]
+    if direct_transfer_enabled:
+        options.append(
+            {
+                "provider_type": DIRECT_TRANSFER_PROVIDER,
+                "label": _DIRECT_TRANSFER_LABEL,
+            }
+        )
+    return options
+
+
 def _topup_payment_options(
     db: Session,
-    _legacy_default_provider: str | None = None,
     *,
     direct_transfer_enabled: bool | None = None,
 ) -> list[dict[str, str]]:
@@ -137,112 +258,27 @@ def _topup_payment_options(
     if direct_transfer_enabled:
         options.append(
             {
-                "provider_type": _DIRECT_TRANSFER_PROVIDER,
+                "provider_type": DIRECT_TRANSFER_PROVIDER,
                 "label": _DIRECT_TRANSFER_LABEL,
             }
         )
     return options
 
 
-def direct_bank_transfer_settings(db: Session) -> dict[str, str]:
-    """Customer-visible direct bank transfer settings."""
-    keys = [
-        "direct_bank_transfer_enabled",
-        "direct_bank_transfer_bank_name",
-        "direct_bank_transfer_account_name",
-        "direct_bank_transfer_account_number",
-        "direct_bank_transfer_sort_code",
-        "direct_bank_transfer_instructions",
-        "direct_bank_transfer_accounts",
-    ]
-    settings = dict.fromkeys(keys, "")
-    rows = db.scalars(
-        select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.billing)
-        .where(DomainSetting.key.in_(keys))
-        .where(DomainSetting.is_active.is_(True))
-    ).all()
-    for row in rows:
-        settings[row.key] = str(row.value_text or "").strip()
-    settings["direct_bank_transfer_accounts_list"] = direct_bank_transfer_accounts(
-        settings
-    )
-    return settings
+def direct_bank_transfer_settings(db: Session) -> DirectTransferAdapterSettings:
+    """Serialize the canonical transfer configuration for legacy adapters."""
+
+    return direct_transfer_configuration(db).to_adapter_settings()
 
 
-def direct_bank_transfer_accounts(
-    settings: dict[str, str] | None = None,
-) -> list[dict[str, str]]:
-    settings = settings or {}
-    raw = settings.get("direct_bank_transfer_accounts") or ""
-    accounts: list[dict[str, str]] = []
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = []
-        if isinstance(parsed, list):
-            for item in parsed:
-                if not isinstance(item, dict):
-                    continue
-                account = {
-                    "id": str(item.get("id") or "").strip() or uuid.uuid4().hex,
-                    "enabled": "true"
-                    if str(item.get("enabled", "")).lower()
-                    in {"1", "true", "yes", "on"}
-                    else "false",
-                    "bank_name": str(item.get("bank_name") or "").strip(),
-                    "account_name": str(item.get("account_name") or "").strip(),
-                    "account_number": str(item.get("account_number") or "").strip(),
-                    "sort_code": str(item.get("sort_code") or "").strip(),
-                }
-                if (
-                    account["bank_name"]
-                    and account["account_name"]
-                    and account["account_number"]
-                ):
-                    accounts.append(account)
-    if accounts:
-        return accounts
-
-    bank_name = (settings.get("direct_bank_transfer_bank_name") or "").strip()
-    account_name = (settings.get("direct_bank_transfer_account_name") or "").strip()
-    account_number = (settings.get("direct_bank_transfer_account_number") or "").strip()
-    sort_code = (settings.get("direct_bank_transfer_sort_code") or "").strip()
-    if bank_name and account_name and account_number:
-        accounts.append(
-            {
-                "id": "legacy",
-                "enabled": "true",
-                "bank_name": bank_name,
-                "account_name": account_name,
-                "account_number": account_number,
-                "sort_code": sort_code,
-            }
-        )
-    return accounts
-
-
-def enabled_direct_bank_transfer_accounts(db: Session) -> list[dict[str, str]]:
-    settings = direct_bank_transfer_settings(db)
-    return [
-        account
-        for account in settings.get("direct_bank_transfer_accounts_list", [])
-        if account.get("enabled") == "true"
-    ]
+def enabled_direct_bank_transfer_accounts(
+    db: Session,
+) -> list[DirectTransferAccountMapping]:
+    return collection_account_directory.enabled_transfer_accounts(db)
 
 
 def direct_bank_transfer_enabled(db: Session) -> bool:
-    if not control_registry.is_enabled(db, "billing.direct_bank_transfer"):
-        return False
-    # The canonical feature control owns enablement. Billing settings own only
-    # the configured accounts and customer instructions.
-    settings = direct_bank_transfer_settings(db)
-    has_account = any(
-        account.get("enabled") == "true"
-        for account in settings.get("direct_bank_transfer_accounts_list", [])
-    )
-    return bool(has_account)
+    return direct_transfer_configuration(db).enabled
 
 
 def _resolve_topup_limits(db: Session) -> tuple[int, int]:
@@ -364,7 +400,6 @@ def _finalize_legacy_topup_intent(
     intent: TopupIntent,
     *,
     payment: Payment,
-    external_id: str,
     actual_amount: Decimal,
     policy_violations: list[str],
     min_amount: int,
@@ -380,13 +415,21 @@ def _finalize_legacy_topup_intent(
             "policy_violations": policy_violations,
         }
     )
-    intent.completed_payment_id = payment.id
-    intent.external_id = external_id
-    intent.actual_amount = actual_amount
-    set_topup_intent_status(intent, "completed", source="legacy_portal_verify")
-    intent.completed_at = datetime.now(UTC)
     intent.metadata_ = metadata
     db.add(intent)
+    stage_topup_intent_completion(
+        db,
+        CompleteTopupIntentCommand(
+            intent_id=intent.id,
+            payment_id=payment.id,
+            source=TopupIntentCompletionSource.customer_legacy_topup_verify,
+        ),
+        context=CommandContext.system(
+            actor=f"customer:{intent.account_id}",
+            scope=COMPLETION_SCOPE,
+            reason="Project verified legacy payment onto top-up intent",
+        ),
+    )
     db.commit()
     db.refresh(intent)
 
@@ -446,6 +489,9 @@ def _verify_and_record_legacy_topup(
         db,
         provider_type=provider_type,
         reference=reference,
+        capability_binding_id=(
+            str(intent.capability_binding_id) if intent.capability_binding_id else None
+        ),
     )
     amount = round_money(transaction.amount)
     metadata_intent_id = str((transaction.metadata or {}).get("topup_intent_id") or "")
@@ -503,7 +549,6 @@ def _verify_and_record_legacy_topup(
         db,
         intent,
         payment=payment,
-        external_id=transaction.external_id,
         actual_amount=amount,
         policy_violations=policy_violations,
         min_amount=min_amount,
@@ -584,8 +629,30 @@ def _build_topup_summary(db: Session, payment: Payment) -> dict:
         )
 
     total_allocated = round_money(total_allocated)
-    payment_amount = round_money(to_decimal(getattr(payment, "amount", 0) or 0))
-    credit_added = round_money(max(Decimal("0.00"), payment_amount - total_allocated))
+    application = billing_service.payments.application_summary(db, payment)
+    # The payment owner distinguishes gross cash received from customer value
+    # credited after provider fees. Never display the fee as retained credit.
+    credit_added = application.unallocated_credit
+
+    from app.models.catalog import CatalogOffer, Subscription
+    from app.services.prepaid_service_renewals import renewal_outcomes_for_payment
+
+    renewed_services: list[dict[str, object]] = []
+    for outcome in renewal_outcomes_for_payment(db, payment.id):
+        subscription = db.get(Subscription, outcome.subscription_id)
+        offer = (
+            db.get(CatalogOffer, subscription.offer_id)
+            if subscription is not None
+            else None
+        )
+        renewed_services.append(
+            {
+                "subscription_id": str(outcome.subscription_id),
+                "offer_name": getattr(offer, "name", None) or "Service",
+                "amount": outcome.amount,
+                "renewed_through": outcome.renewed_through,
+            }
+        )
 
     available_balance: Decimal | None = None
     try:
@@ -602,8 +669,11 @@ def _build_topup_summary(db: Session, payment: Payment) -> dict:
     return {
         "allocated_to_invoices": allocated_to_invoices,
         "allocated_total": total_allocated,
+        "amount_credited": application.amount_credited,
+        "prepaid_amount_applied": application.prepaid_amount_applied,
         "credit_added": credit_added,
         "available_balance": available_balance,
+        "renewed_services": renewed_services,
     }
 
 
@@ -652,21 +722,18 @@ def get_payment_page(
     # (``initiate_payment``) instead consumes a single pre-minted gateway
     # context, so keep ``provider_public_key``/``payment_reference`` for it.
     dbt_enabled = direct_bank_transfer_enabled(db)
-    default_route = _default_online_route(db)
-    gateway_context = None
-    if default_route:
-        gateway_context = payment_gateway_adapter.build_context(
-            db,
-            provider_type=default_route.provider_type.value,
-            invoice_number=getattr(invoice, "invoice_number", None),
-        )
+    runtime_ready_gateways = _runtime_ready_gateway_contexts(
+        db,
+        invoice_number=getattr(invoice, "invoice_number", None),
+    )
+    gateway_context = runtime_ready_gateways[0][1] if runtime_ready_gateways else None
     return {
         "invoice": invoice,
         "amount": amount_due,
         "provider_type": (
             gateway_context.provider_type
             if gateway_context
-            else _DIRECT_TRANSFER_PROVIDER
+            else DIRECT_TRANSFER_PROVIDER
             if dbt_enabled
             else None
         ),
@@ -675,8 +742,9 @@ def get_payment_page(
         if gateway_context and gateway_context.provider_type == "paystack"
         else None,
         "payment_reference": gateway_context.reference if gateway_context else None,
-        "payment_options": _topup_payment_options(
-            db, direct_transfer_enabled=dbt_enabled
+        "payment_options": _payment_options_for_runtime_ready_routes(
+            runtime_ready_gateways,
+            direct_transfer_enabled=dbt_enabled,
         ),
         "payment_methods": payment_methods,
         "direct_bank_transfer_enabled": dbt_enabled,
@@ -717,9 +785,10 @@ def _reserve_charge_idempotency_key(
     immediately and not charge again. Otherwise ``reservation`` is a freshly
     committed row whose ``ref_id`` the caller sets after a successful charge
     (:func:`_commit_charge_idempotency_ref`) or releases on failure
-    (:func:`_release_charge_idempotency_key`). ``replay(ref_id)`` maps a stored
-    ref_id to a replay payload, or None when the prior attempt left no usable
-    result (then the stale key is dropped and re-reserved).
+    the failure command owner releases atomically with the failed intent.
+    ``replay(ref_id)`` maps a stored ref_id to a replay payload, or None when
+    the prior attempt left no usable result (then the stale key is dropped and
+    re-reserved).
     """
     prior = db.scalars(
         select(IdempotencyKey).where(
@@ -759,15 +828,6 @@ def _reserve_charge_idempotency_key(
     return reservation, None
 
 
-def _release_charge_idempotency_key(
-    db: Session, reservation: "IdempotencyKey | None"
-) -> None:
-    """Release a reserved key so the customer can retry (e.g. after a decline)."""
-    if reservation is not None:
-        db.delete(reservation)
-        db.commit()
-
-
 def _commit_charge_idempotency_ref(
     db: Session, reservation: "IdempotencyKey | None", ref_id: str
 ) -> None:
@@ -787,6 +847,7 @@ def _init_flutterwave_checkout(
     redirect_url: str | None,
     metadata: dict,
     default_callback_path: str,
+    capability_binding_id: uuid.UUID,
     currency: str | None = None,
 ) -> str:
     """Start a Flutterwave hosted checkout and return its link.
@@ -818,6 +879,7 @@ def _init_flutterwave_checkout(
             ),
             metadata=metadata,
             currency=currency,
+            checkout_binding_id=capability_binding_id,
         )
     except ValueError:
         raise
@@ -843,7 +905,8 @@ def _charge_saved_card_for_invoice(
     amount: Decimal,
     payment_method_id: str,
     checkout_metadata: dict,
-    provider_id: str,
+    provider_id: uuid.UUID,
+    capability_binding_id: uuid.UUID,
     idempotency_key: str | None,
 ) -> dict:
     """Charge a saved card server-side for an invoice (Paystack only).
@@ -864,6 +927,7 @@ def _charge_saved_card_for_invoice(
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type="paystack",
+        capability_binding_id=capability_binding_id,
         invoice_number=getattr(invoice, "invoice_number", None),
     )
     reference = gateway_context.reference
@@ -883,13 +947,29 @@ def _charge_saved_card_for_invoice(
         if replayed is not None:
             return replayed
 
-    intent = _record_invoice_checkout_intent(
-        db,
+    reservation_id = reservation.id if reservation is not None else None
+    created_by = str(optional_customer_subscriber_id(db, customer) or account_id)
+    create_command = gateway_topup_intents.CreateCustomerGatewayTopupIntentCommand(
+        flow=gateway_topup_intents.CustomerGatewayTopupFlow.invoice_payment,
         account_id=account_id,
+        invoice_id=invoice.id,
         reference=reference,
         provider_type=gateway_context.provider_type,
-        amount=amount,
-        metadata={**checkout_metadata, "provider_id": provider_id},
+        provider_id=provider_id,
+        capability_binding_id=capability_binding_id,
+        payment_method_id=method.id,
+        created_by=created_by,
+    )
+    db_session_adapter.release_read_transaction(db)
+    intent_result = gateway_topup_intents.create_customer_gateway_topup_intent(
+        db,
+        create_command,
+        context=CommandContext.system(
+            actor=f"customer:{created_by}",
+            scope=gateway_topup_intents.CREATE_CUSTOMER_SCOPE,
+            reason="Customer saved-card invoice checkout intent",
+            idempotency_key=idem_key,
+        ),
     )
 
     from app.services.integrations import payment_capability
@@ -902,13 +982,23 @@ def _charge_saved_card_for_invoice(
             amount_kobo=payment_capability.amount_to_kobo(amount),
             reference=reference,
             metadata=checkout_metadata,
+            checkout_binding_id=capability_binding_id,
         )
     except Exception:
-        # Release the key so the customer can retry with a different card.
-        _release_charge_idempotency_key(db, reservation)
-        set_topup_intent_status(intent, "failed", source="saved_card_charge")
-        db.add(intent)
-        db.commit()
+        db_session_adapter.release_read_transaction(db)
+        gateway_topup_intents.fail_saved_card_charge(
+            db,
+            gateway_topup_intents.FailSavedCardChargeCommand(
+                intent_id=intent_result.intent_id,
+                reservation_id=reservation_id,
+                reservation_scope=gateway_topup_intents.SavedCardChargeScope.invoice,
+            ),
+            context=CommandContext.system(
+                actor=f"customer:{created_by}",
+                scope=gateway_topup_intents.FAIL_SAVED_CARD_SCOPE,
+                reason="Record failed saved-card invoice charge",
+            ),
+        )
         raise
     _commit_charge_idempotency_ref(db, reservation, reference)
 
@@ -916,8 +1006,8 @@ def _charge_saved_card_for_invoice(
         "provider_type": "paystack",
         "provider_public_key": gateway_context.public_key,
         "reference": reference,
-        "amount": amount,
-        "currency": "NGN",
+        "amount": intent_result.requested_amount,
+        "currency": intent_result.currency,
         "checkout_metadata": checkout_metadata,
         "charged": True,
         "checkout_url": None,
@@ -953,23 +1043,17 @@ def create_invoice_payment_intent(
         db, customer, getattr(invoice, "account_id", None)
     ):
         raise ValueError("Invoice not found or access denied")
-    if invoice.status in (
-        InvoiceStatus.paid,
-        InvoiceStatus.void,
-        InvoiceStatus.written_off,
+    if (
+        invoice.status
+        in (
+            InvoiceStatus.draft,
+            InvoiceStatus.paid,
+            InvoiceStatus.void,
+            InvoiceStatus.written_off,
+        )
+        or invoice.is_proforma
     ):
         raise ValueError("Invoice is no longer payable")
-    if invoice.status == InvoiceStatus.draft:
-        transition = billing_service.invoices.issue_draft_system(
-            db,
-            str(invoice.id),
-            issued_at=datetime.now(UTC),
-            due_at=invoice.due_at,
-            reason="customer_invoice_payment_checkout",
-            announce=False,
-            commit=True,
-        )
-        invoice = transition.invoice
 
     amount = round_money(
         to_decimal(
@@ -984,16 +1068,20 @@ def create_invoice_payment_intent(
     # Limits are NOT enforced here (a real invoice may be below the top-up
     # minimum, e.g. a small reconnection fee). The reviewed transfer credits the
     # account and auto-allocation settles outstanding invoices oldest-first.
-    if provider == _DIRECT_TRANSFER_PROVIDER:
+    if provider == DIRECT_TRANSFER_PROVIDER:
         return create_direct_transfer_topup_intent(
             db,
             customer,
             amount,
             invoice_id=str(invoice.id),
-            enforce_limits=False,
+            idempotency_key=idempotency_key,
         )
 
-    route = select_checkout_provider(db, provider)
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    route = select_checkout_provider(
+        db,
+        "paystack" if selected_payment_method_id else provider,
+    )
     provider_type = route.provider_type.value
     customer_email = _resolve_customer_email(db, customer)
     _require_gateway_email(provider_type, customer_email)
@@ -1004,11 +1092,10 @@ def create_invoice_payment_intent(
         "invoice_id": str(invoice.id),
         "invoice_number": invoice_number or "",
         "account_id": str(invoice.account_id),
-        "provider_id": route.provider_id,
+        "provider_id": str(route.provider_id),
     }
 
     # Saved card -> server-to-server Paystack charge.
-    selected_payment_method_id = str(payment_method_id or "").strip() or None
     if selected_payment_method_id:
         if provider_type != "paystack":
             raise ValueError("Saved cards can only be used with Paystack")
@@ -1020,6 +1107,7 @@ def create_invoice_payment_intent(
             payment_method_id=selected_payment_method_id,
             checkout_metadata=checkout_metadata,
             provider_id=route.provider_id,
+            capability_binding_id=route.capability_binding_id,
             idempotency_key=idempotency_key,
         )
 
@@ -1028,26 +1116,43 @@ def create_invoice_payment_intent(
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type=provider_type,
+        capability_binding_id=route.capability_binding_id,
         invoice_number=invoice_number,
     )
     # Durable, expirable trace of the started checkout, mirroring the TopupIntent
     # the top-up flow always creates — so a hosted checkout that debits the
     # customer but never returns is reconcilable. Completed in
     # verify_and_record_payment's caller via complete_invoice_payment_intent.
-    _record_invoice_checkout_intent(
-        db,
+    created_by = str(
+        optional_customer_subscriber_id(db, customer) or invoice.account_id
+    )
+    create_command = gateway_topup_intents.CreateCustomerGatewayTopupIntentCommand(
+        flow=gateway_topup_intents.CustomerGatewayTopupFlow.invoice_payment,
         account_id=uuid.UUID(str(invoice.account_id)),
+        invoice_id=invoice.id,
         reference=gateway_context.reference,
         provider_type=gateway_context.provider_type,
-        amount=amount,
-        metadata=checkout_metadata,
+        provider_id=route.provider_id,
+        capability_binding_id=route.capability_binding_id,
+        created_by=created_by,
+    )
+    db_session_adapter.release_read_transaction(db)
+    intent_result = gateway_topup_intents.create_customer_gateway_topup_intent(
+        db,
+        create_command,
+        context=CommandContext.system(
+            actor=f"customer:{created_by}",
+            scope=gateway_topup_intents.CREATE_CUSTOMER_SCOPE,
+            reason="Customer invoice gateway checkout intent",
+            idempotency_key=(str(idempotency_key or "").strip() or None),
+        ),
     )
     result = {
         "provider_type": gateway_context.provider_type,
         "provider_public_key": gateway_context.public_key,
         "reference": gateway_context.reference,
-        "amount": amount,
-        "currency": "NGN",
+        "amount": intent_result.requested_amount,
+        "currency": intent_result.currency,
         "invoice_number": invoice_number,
         "customer_email": customer_email,
         "checkout_metadata": checkout_metadata,
@@ -1058,44 +1163,15 @@ def create_invoice_payment_intent(
         result["checkout_url"] = _init_flutterwave_checkout(
             db,
             customer,
-            amount=amount,
+            amount=intent_result.requested_amount,
             reference=gateway_context.reference,
             redirect_url=redirect_url,
             metadata=checkout_metadata,
             default_callback_path="/portal/billing/pay/verify",
-            currency=getattr(invoice, "currency", None),
+            capability_binding_id=route.capability_binding_id,
+            currency=intent_result.currency,
         )
     return result
-
-
-def _record_invoice_checkout_intent(
-    db: Session,
-    *,
-    account_id: uuid.UUID,
-    reference: str,
-    provider_type: str,
-    amount: Decimal,
-    metadata: dict,
-) -> TopupIntent:
-    """Persist a pending record tracing a started invoice gateway checkout.
-
-    Reuses ``TopupIntent`` so checkout selection is durable and verification
-    cannot be redirected to a different provider by caller input.
-    """
-    intent = TopupIntent(
-        account_id=account_id,
-        reference=reference,
-        provider_type=provider_type,
-        currency="NGN",
-        requested_amount=amount,
-        status="pending",
-        expires_at=datetime.now(UTC) + _TOPUP_INTENT_TTL,
-        metadata_=dict(metadata),
-    )
-    db.add(intent)
-    db.commit()
-    db.refresh(intent)
-    return intent
 
 
 def complete_invoice_payment_intent(
@@ -1103,20 +1179,29 @@ def complete_invoice_payment_intent(
 ) -> None:
     """Best-effort: mark a pending invoice checkout record completed after verify.
 
-    No-op when the reference has no invoice checkout record (saved-card charges
-    use an IdempotencyKey instead; bearer-API/legacy references have none)."""
+    No-op when the reference has no invoice checkout record (bearer API and
+    legacy references may have none)."""
     try:
         intent = db.scalars(
             select(TopupIntent).where(TopupIntent.reference == reference)
         ).first()
-        if intent is None or intent.completed_payment_id:
+        if intent is None or payment is None:
             return
         if str((intent.metadata_ or {}).get("payment_flow")) != "invoice_payment":
             return
-        intent.completed_payment_id = getattr(payment, "id", None)
-        set_topup_intent_status(intent, "completed", source="invoice_verify")
-        intent.completed_at = datetime.now(UTC)
-        db.add(intent)
+        stage_topup_intent_completion(
+            db,
+            CompleteTopupIntentCommand(
+                intent_id=intent.id,
+                payment_id=payment.id,
+                source=TopupIntentCompletionSource.customer_invoice_verify,
+            ),
+            context=CommandContext.system(
+                actor=f"customer:{intent.account_id}",
+                scope=COMPLETION_SCOPE,
+                reason="Project verified invoice payment onto checkout intent",
+            ),
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -1151,6 +1236,9 @@ def verify_and_record_payment(
         db,
         provider_type=provider_type,
         reference=reference,
+        capability_binding_id=(
+            str(intent.capability_binding_id) if intent.capability_binding_id else None
+        ),
     )
     invoice_id = tx.metadata.get("invoice_id")
     expected_invoice_id = str((intent.metadata_ or {}).get("invoice_id") or "")
@@ -1233,7 +1321,7 @@ def _resolve_customer_email(db: Session, customer: dict) -> str:
 
 
 def _require_gateway_email(provider_type: str, email: str) -> None:
-    if provider_type != _DIRECT_TRANSFER_PROVIDER and not email:
+    if provider_type != DIRECT_TRANSFER_PROVIDER and not email:
         raise ValueError(
             "A valid customer email address is required before starting card payment."
         )
@@ -1245,12 +1333,14 @@ def get_topup_page(
 ) -> dict:
     """Build context for the customer top-up page."""
     account_id = optional_customer_account_id(db, customer)
-    default_route = _default_online_route(db)
+    direct_transfer_available = direct_bank_transfer_enabled(db)
+    runtime_ready_gateways = _runtime_ready_gateway_contexts(db)
+    gateway_context = runtime_ready_gateways[0][1] if runtime_ready_gateways else None
     provider_type = (
-        default_route.provider_type.value
-        if default_route
-        else _DIRECT_TRANSFER_PROVIDER
-        if direct_bank_transfer_enabled(db)
+        gateway_context.provider_type
+        if gateway_context
+        else DIRECT_TRANSFER_PROVIDER
+        if direct_transfer_available
         else None
     )
 
@@ -1280,9 +1370,20 @@ def get_topup_page(
             )
 
     payable_invoices = eligible_invoices(db, str(account_id)) if account_id else []
+    active_deposit_request = (
+        AccountCreditDeposits.active_request(
+            db,
+            account_id=uuid.UUID(str(account_id)),
+        )
+        if account_id
+        else None
+    )
     context = {
         "provider_type": provider_type,
-        "payment_options": _topup_payment_options(db),
+        "payment_options": _payment_options_for_runtime_ready_routes(
+            runtime_ready_gateways,
+            direct_transfer_enabled=direct_transfer_available,
+        ),
         "customer_email": email,
         "prepaid_balance": prepaid_balance,
         "account_credit": prepaid_balance,
@@ -1301,7 +1402,7 @@ def get_topup_page(
                 Decimal("0.00"),
             )
         ),
-        "deposit_allowed": not payable_invoices,
+        "deposit_allowed": active_deposit_request is None,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
         "preset_amounts": _resolve_topup_presets(
@@ -1311,23 +1412,12 @@ def get_topup_page(
         ),
         "payment_methods": payment_methods,
     }
-    try:
-        account_uuid = _customer_account_uuid(db, customer)
-        pending_direct = _latest_pending_direct_transfer_intent(db, account_uuid)
-    except Exception:
-        pending_direct = None
-    if pending_direct:
-        context["pending_direct_transfer"] = {
-            "reference": pending_direct.reference,
-            "amount": pending_direct.requested_amount,
-            "currency": pending_direct.currency,
-        }
-
-    if default_route:
-        gateway_context = payment_gateway_adapter.build_context(
-            db,
-            provider_type=default_route.provider_type.value,
+    if active_deposit_request:
+        context["active_deposit_request"] = _serialize_active_deposit_request(
+            active_deposit_request
         )
+
+    if gateway_context:
         context["provider_public_key"] = gateway_context.public_key
         if gateway_context.provider_type == "paystack":
             context["paystack_public_key"] = gateway_context.public_key
@@ -1335,6 +1425,24 @@ def get_topup_page(
         context["provider_public_key"] = None
 
     return context
+
+
+def preview_topup(
+    db: Session,
+    customer: dict,
+    amount: Decimal | int | float | str,
+) -> dict[str, object]:
+    account_id = _customer_account_uuid(db, customer)
+    min_amount_value, max_amount_value = _resolve_topup_limits(db)
+    preview = AccountCreditDeposits.preview(
+        db,
+        account_id=account_id,
+        amount=amount,
+        currency="NGN",
+        minimum=min_amount_value,
+        maximum=max_amount_value,
+    )
+    return _serialize_deposit_preview(preview)
 
 
 def get_payment_methods_page(
@@ -1385,7 +1493,7 @@ def get_payment_methods_page(
         "provider_type": (
             default_route.provider_type.value
             if default_route
-            else _DIRECT_TRANSFER_PROVIDER
+            else DIRECT_TRANSFER_PROVIDER
         ),
         "direct_bank_transfer_enabled": direct_bank_transfer_enabled(db),
         "bank_transfer": direct_bank_transfer_settings(db),
@@ -1436,6 +1544,7 @@ def create_topup_intent(
     *,
     provider: str | None = None,
     payment_method_id: str | None = None,
+    preview_fingerprint: str | None = None,
     redirect_url: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
@@ -1447,18 +1556,25 @@ def create_topup_intent(
     charging the card a second time)."""
     account_id = _customer_account_uuid(db, customer)
     requested_amount = round_money(to_decimal(amount))
-    min_amount_value, max_amount_value = _resolve_topup_limits(db)
+    if provider == DIRECT_TRANSFER_PROVIDER:
+        return create_direct_transfer_topup_intent(
+            db,
+            customer,
+            requested_amount,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        )
 
-    if provider == _DIRECT_TRANSFER_PROVIDER:
-        return create_direct_transfer_topup_intent(db, customer, requested_amount)
-
-    route = select_checkout_provider(db, provider)
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    route = select_checkout_provider(
+        db,
+        "paystack" if selected_payment_method_id else provider,
+    )
     provider_type = route.provider_type.value
 
     customer_email = _resolve_customer_email(db, customer)
     _require_gateway_email(provider_type, customer_email)
 
-    selected_payment_method_id = str(payment_method_id or "").strip() or None
     selected_payment_method = None
     selected_payment_token = None
     if selected_payment_method_id:
@@ -1477,6 +1593,7 @@ def create_topup_intent(
     gateway_context = payment_gateway_adapter.build_context(
         db,
         provider_type=provider_type,
+        capability_binding_id=route.capability_binding_id,
     )
 
     # Saved-card charges hit the card server-side, so they need double-submit
@@ -1496,31 +1613,37 @@ def create_topup_intent(
         if replayed is not None:
             return replayed
 
-    intent_metadata = {"payment_flow": "account_credit_deposit"}
-    if selected_payment_method_id:
-        intent_metadata["payment_method_id"] = selected_payment_method_id
-
-    deposit_key = idem_key or f"account-credit-intent-{gateway_context.reference}"
-    intent, preview, _intent_replayed = AccountCreditDeposits.create_intent(
-        db,
+    reservation_id = reservation.id if reservation is not None else None
+    created_by = str(optional_customer_subscriber_id(db, customer) or account_id)
+    create_command = gateway_topup_intents.CreateCustomerGatewayTopupIntentCommand(
+        flow=gateway_topup_intents.CustomerGatewayTopupFlow.account_credit_deposit,
         account_id=account_id,
-        amount=requested_amount,
-        currency="NGN",
-        minimum=min_amount_value,
-        maximum=max_amount_value,
+        requested_amount=requested_amount,
         reference=gateway_context.reference,
         provider_type=gateway_context.provider_type,
-        provider_id=_coerce_uuid_or_none(route.provider_id),
-        expires_at=datetime.now(UTC) + _TOPUP_INTENT_TTL,
-        idempotency_key=deposit_key,
-        channel="customer_selfcare",
-        created_by=str(optional_customer_subscriber_id(db, customer) or account_id),
-        metadata=intent_metadata,
+        provider_id=route.provider_id,
+        capability_binding_id=route.capability_binding_id,
+        payment_method_id=(
+            selected_payment_method.id if selected_payment_method is not None else None
+        ),
+        created_by=created_by,
+        expected_preview_fingerprint=preview_fingerprint,
+    )
+    db_session_adapter.release_read_transaction(db)
+    intent_result = gateway_topup_intents.create_customer_gateway_topup_intent(
+        db,
+        create_command,
+        context=CommandContext.system(
+            actor=f"customer:{created_by}",
+            scope=gateway_topup_intents.CREATE_CUSTOMER_SCOPE,
+            reason="Customer account-credit gateway checkout intent",
+            idempotency_key=idem_key,
+        ),
     )
 
     # Provider metadata is deliberately opaque. Settlement reloads every amount,
     # account and policy field from Sub using this reference.
-    checkout_metadata = {"topup_intent_id": str(intent.id)}
+    checkout_metadata = {"topup_intent_id": str(intent_result.intent_id)}
     charged = False
     if selected_payment_method is not None:
         from app.services.integrations import payment_capability
@@ -1530,63 +1653,59 @@ def create_topup_intent(
                 db,
                 authorization_code=selected_payment_token,
                 email=customer_email,
-                amount_kobo=payment_capability.amount_to_kobo(requested_amount),
-                reference=gateway_context.reference,
+                amount_kobo=payment_capability.amount_to_kobo(
+                    intent_result.requested_amount
+                ),
+                reference=intent_result.reference,
                 metadata=checkout_metadata,
+                checkout_binding_id=route.capability_binding_id,
             )
         except Exception:
-            # Release the key so the customer can retry with a different card.
-            set_topup_intent_status(intent, "failed", source="saved_card_charge")
-            db.add(intent)
-            db.commit()
-            _release_charge_idempotency_key(db, reservation)
+            db_session_adapter.release_read_transaction(db)
+            gateway_topup_intents.fail_saved_card_charge(
+                db,
+                gateway_topup_intents.FailSavedCardChargeCommand(
+                    intent_id=intent_result.intent_id,
+                    reservation_id=reservation_id,
+                    reservation_scope=(
+                        gateway_topup_intents.SavedCardChargeScope.account_credit_deposit
+                    ),
+                ),
+                context=CommandContext.system(
+                    actor=f"customer:{created_by}",
+                    scope=gateway_topup_intents.FAIL_SAVED_CARD_SCOPE,
+                    reason="Record failed saved-card account-credit charge",
+                ),
+            )
             raise
         charged = True
-        _commit_charge_idempotency_ref(db, reservation, str(intent.id))
+        _commit_charge_idempotency_ref(db, reservation, str(intent_result.intent_id))
 
     checkout_url = None
     if gateway_context.provider_type == "flutterwave":
         checkout_url = _init_flutterwave_checkout(
             db,
             customer,
-            amount=requested_amount,
-            reference=gateway_context.reference,
+            amount=intent_result.requested_amount,
+            reference=intent_result.reference,
             redirect_url=redirect_url,
             metadata=checkout_metadata,
             default_callback_path="/portal/billing/topup/verify",
+            capability_binding_id=route.capability_binding_id,
         )
 
     return {
-        "intent_id": str(intent.id),
+        "intent_id": str(intent_result.intent_id),
         "provider_type": gateway_context.provider_type,
         "provider_public_key": gateway_context.public_key,
         "reference": gateway_context.reference,
-        "requested_amount": preview.requested_deposit,
-        "currency": intent.currency,
-        "preview_fingerprint": preview.fingerprint,
+        "requested_amount": intent_result.requested_amount,
+        "currency": intent_result.currency,
+        "preview_fingerprint": intent_result.preview_fingerprint,
         "checkout_metadata": checkout_metadata,
         "charged": charged,
         "checkout_url": checkout_url,
     }
-
-
-def _cancel_pending_direct_transfer_intents(db: Session, account_id: uuid.UUID) -> None:
-    pending = db.scalars(
-        select(TopupIntent)
-        .where(TopupIntent.account_id == account_id)
-        .where(TopupIntent.provider_type == _DIRECT_TRANSFER_PROVIDER)
-        .where(TopupIntent.status == "pending")
-    ).all()
-    changed = False
-    for intent in pending:
-        set_topup_intent_status(intent, "canceled", source="portal_replace")
-        metadata = dict(intent.metadata_ or {})
-        metadata["canceled_reason"] = "replaced_by_new_topup"
-        intent.metadata_ = metadata
-        db.add(intent)
-        changed = True
-    if changed:
-        db.flush()
 
 
 def _latest_pending_direct_transfer_intent(
@@ -1595,8 +1714,8 @@ def _latest_pending_direct_transfer_intent(
     return db.scalars(
         select(TopupIntent)
         .where(TopupIntent.account_id == account_id)
-        .where(TopupIntent.provider_type == _DIRECT_TRANSFER_PROVIDER)
-        .where(TopupIntent.status == "pending")
+        .where(TopupIntent.provider_type == DIRECT_TRANSFER_PROVIDER)
+        .where(TopupIntent.status == TopupIntentStatus.pending.value)
         .order_by(TopupIntent.created_at.desc())
     ).first()
 
@@ -1606,82 +1725,41 @@ def create_direct_transfer_topup_intent(
     customer: dict,
     amount: Decimal | int | float | str,
     *,
+    preview_fingerprint: str | None = None,
     invoice_id: str | None = None,
-    enforce_limits: bool = True,
+    idempotency_key: str | None = None,
 ) -> dict:
-    """Create or replace a pending direct-transfer intent.
-
-    Used for both account top-ups and (with ``invoice_id`` set) invoice
-    payments. For invoice payments ``enforce_limits=False`` skips the top-up
-    min/max so a small invoice can still be paid by transfer, and the invoice is
-    tagged in metadata so the submitted proof is traceable to it.
-    """
-    if not direct_bank_transfer_enabled(db):
-        raise ValueError("Direct bank transfer is not configured")
+    """Adapt a customer request to the typed direct-transfer command owner."""
 
     account_id = _customer_account_uuid(db, customer)
-    requested_amount = round_money(to_decimal(amount))
-    if requested_amount <= Decimal("0.00"):
-        raise ValueError("Top-up amount must be greater than ₦0.00")
+    created_by = str(optional_customer_subscriber_id(db, customer) or account_id)
+    from app.services import direct_transfer_intents
 
-    if enforce_limits:
-        min_amount_value, max_amount_value = _resolve_topup_limits(db)
-        if requested_amount < Decimal(str(min_amount_value)):
-            raise ValueError(
-                f"Top-up amount must be at least {_format_naira(min_amount_value)}"
-            )
-        if requested_amount > Decimal(str(max_amount_value)):
-            raise ValueError(
-                f"Top-up amount must not exceed {_format_naira(max_amount_value)}"
-            )
-
-    intent_metadata: dict[str, str] = {
-        "payment_method": "bank_transfer",
-        "payment_flow": ("invoice_payment" if invoice_id else "account_credit_deposit"),
-    }
-    if invoice_id:
-        intent_metadata["invoice_id"] = invoice_id
-
-    reference = f"TRF-{uuid.uuid4().hex[:12].upper()}"
-    if invoice_id:
-        _cancel_pending_direct_transfer_intents(db, account_id)
-        intent = TopupIntent(
-            account_id=account_id,
-            reference=reference,
-            provider_type=_DIRECT_TRANSFER_PROVIDER,
-            currency="NGN",
-            requested_amount=requested_amount,
-            status="pending",
-            expires_at=datetime.now(UTC) + _DIRECT_TRANSFER_TTL,
-            metadata_=intent_metadata,
-        )
-        db.add(intent)
-        db.commit()
-        db.refresh(intent)
-    else:
-        min_amount_value, max_amount_value = _resolve_topup_limits(db)
-        intent, _preview, _replayed = AccountCreditDeposits.create_intent(
-            db,
-            account_id=account_id,
-            amount=requested_amount,
-            currency="NGN",
-            minimum=min_amount_value,
-            maximum=max_amount_value,
-            reference=reference,
-            provider_type=_DIRECT_TRANSFER_PROVIDER,
-            provider_id=None,
-            expires_at=datetime.now(UTC) + _DIRECT_TRANSFER_TTL,
-            idempotency_key=f"account-credit-intent-{reference}",
-            channel="customer_selfcare",
-            created_by=str(optional_customer_subscriber_id(db, customer) or account_id),
-            metadata=intent_metadata,
-        )
+    command = direct_transfer_intents.CreateDirectTransferIntentCommand(
+        account_id=account_id,
+        created_by=created_by,
+        requested_amount=amount if invoice_id is None else None,
+        invoice_id=uuid.UUID(invoice_id) if invoice_id else None,
+        expected_preview_fingerprint=preview_fingerprint,
+    )
+    context = CommandContext.system(
+        actor=f"customer:{created_by}",
+        scope=direct_transfer_intents.CREATE_SCOPE,
+        reason=(
+            "Customer portal invoice direct-transfer intent"
+            if invoice_id
+            else "Customer portal account-credit direct-transfer intent"
+        ),
+        idempotency_key=(str(idempotency_key or "").strip() or None),
+    )
+    db_session_adapter.release_read_transaction(db)
+    result = direct_transfer_intents.create_direct_transfer_intent(
+        db,
+        command,
+        context=context,
+    )
     return {
-        "intent_id": str(intent.id),
-        "provider_type": _DIRECT_TRANSFER_PROVIDER,
-        "reference": intent.reference,
-        "requested_amount": requested_amount,
-        "currency": intent.currency,
+        **result.to_dict(),
         "redirect_url": "/portal/billing/topup/transfer",
     }
 
@@ -1698,6 +1776,7 @@ def get_direct_transfer_topup_page(db: Session, customer: dict) -> dict:
         "intent": intent,
         "bank_transfer": direct_bank_transfer_settings(db),
         "bank_transfer_accounts": enabled_direct_bank_transfer_accounts(db),
+        "withholding_tax": dict((intent.metadata_ or {}).get("withholding_tax") or {}),
     }
 
 
@@ -1712,7 +1791,6 @@ async def submit_direct_transfer_topup(
     """Submit the pending direct-transfer top-up for admin review."""
     if not made_payment:
         raise ValueError("Confirm that you have made the payment")
-    settings = direct_bank_transfer_settings(db)
     if not direct_bank_transfer_enabled(db):
         raise ValueError("Direct bank transfer is not configured")
 
@@ -1740,29 +1818,34 @@ async def submit_direct_transfer_topup(
     from app.services import payment_proofs
 
     path = await payment_proofs.save_proof_file(file)
-    proof = payment_proofs.submit_proof(
-        db,
-        str(account_id),
-        submitted_by=str(optional_customer_subscriber_id(db, customer) or account_id),
-        amount=intent.requested_amount,
-        bank_name=selected_account.get("bank_name"),
-        reference=intent.reference,
+    submitted_by = uuid.UUID(
+        str(optional_customer_subscriber_id(db, customer) or account_id)
+    )
+    command = payment_proofs.DirectTransferProofSubmissionCommand(
+        intent_id=intent.id,
+        account_id=account_id,
+        submitted_by=submitted_by,
+        selected_bank_account=DirectTransferBankAccountEvidence(
+            id=str(selected_account.get("id") or ""),
+            bank_name=str(selected_account.get("bank_name") or ""),
+            account_name=str(selected_account.get("account_name") or ""),
+            account_number=str(selected_account.get("account_number") or ""),
+            sort_code=str(selected_account.get("sort_code") or ""),
+        ),
         paid_at=datetime.now(UTC),
         file_path=path,
     )
-    set_topup_intent_status(intent, "submitted", source="portal_proof_submit")
-    metadata = dict(intent.metadata_ or {})
-    metadata["payment_proof_id"] = proof.get("id")
-    metadata["selected_bank_account"] = {
-        "id": selected_account.get("id"),
-        "bank_name": selected_account.get("bank_name"),
-        "account_name": selected_account.get("account_name"),
-        "account_number": selected_account.get("account_number"),
-    }
-    intent.metadata_ = metadata
-    db.add(intent)
-    db.commit()
-    return proof
+    db_session_adapter.release_read_transaction(db)
+    proof_result = payment_proofs.submit_direct_transfer_proof(
+        db,
+        command,
+        context=CommandContext.system(
+            actor=f"customer:{command.submitted_by}",
+            scope=payment_proofs.SUBMISSION_SCOPE,
+            reason="Customer portal direct-transfer evidence submission",
+        ),
+    )
+    return proof_result.to_dict()
 
 
 def verify_and_record_topup(
@@ -1793,20 +1876,52 @@ def verify_and_record_topup(
         db,
         provider_type=provider_type,
         reference=reference,
+        capability_binding_id=(
+            str(intent.capability_binding_id) if intent.capability_binding_id else None
+        ),
     )
     metadata = dict(tx.metadata or {})
     metadata_intent_id = str(metadata.get("topup_intent_id") or "")
-    if metadata_intent_id and metadata_intent_id != str(intent.id):
+    try:
+        provider_intent_id = uuid.UUID(metadata_intent_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Verified payment did not identify the original checkout session"
+        ) from exc
+    if provider_intent_id != intent.id:
         raise ValueError("Verified payment did not match the original checkout session")
 
-    settlement = AccountCreditDeposits.settle_verified(
-        db, intent_id=intent.id, transaction=tx
+    command = SettleAccountCreditDepositCommand(
+        intent_id=intent.id,
+        provider_type=tx.provider_type,
+        external_transaction_id=tx.external_id,
+        amount=tx.amount,
+        currency=tx.currency,
+        provider_intent_id=provider_intent_id,
+        source=AccountCreditDepositSettlementSource.customer_gateway_verify,
+        provider_fee=round_money(to_decimal(getattr(tx, "provider_fee", 0))),
     )
+    context = CommandContext.system(
+        actor=f"customer:{account_id}",
+        scope=SETTLEMENT_SCOPE,
+        reason="Settle customer-verified account-credit deposit",
+        idempotency_key=f"account-credit-deposit-{intent.id}",
+    )
+    db_session_adapter.release_read_transaction(db)
+    settlement = AccountCreditDeposits.settle_verified(
+        db,
+        command,
+        context=context,
+    )
+    payment = db.get(Payment, settlement.payment_id)
+    settled_intent = db.get(TopupIntent, settlement.intent_id)
+    if payment is None or settled_intent is None:
+        raise ValueError("Deposit settlement evidence is unavailable")
     return _build_topup_result(
         db,
-        payment=settlement.payment,
-        intent=settlement.intent,
-        amount=round_money(settlement.payment.amount),
+        payment=payment,
+        intent=settled_intent,
+        amount=settlement.amount,
         reference=reference,
         already_recorded=settlement.already_recorded,
     )
@@ -1823,6 +1938,7 @@ __all__ = [
     "get_direct_transfer_topup_page",
     "get_payment_page",
     "get_topup_page",
+    "preview_topup",
     "submit_direct_transfer_topup",
     "verify_and_record_payment",
     "verify_and_record_topup",

@@ -373,6 +373,11 @@ adapter_registry.register(example_adapter)
 - `set_parameter_values()` returns immediately (async on ACS)
 - `set_parameter_values_and_wait()` polls until completion (timeout configurable)
 - `wait_for_task_completion()` polls task status with exponential backoff
+- The periodic GenieACS inventory reconciliation loads one active-ONT serial
+  index per ACS pass. Serial ambiguity still fails closed, but device count no
+  longer multiplies complete ONT-table reads. Batch commits preserve bounded
+  progress, and a Celery soft timeout aborts the pass and disposes its database
+  session rather than continuing on an interrupted connection.
 
 ### Credential Encryption
 - ACS passwords encrypted at rest using Fernet (from `credential_crypto`)

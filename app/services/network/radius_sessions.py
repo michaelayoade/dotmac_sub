@@ -7,8 +7,12 @@ outage impact; higher layers compose those answers.
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from typing import Protocol
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -18,6 +22,59 @@ from app.models.radius_active_session import RadiusActiveSession
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services.common import coerce_uuid
 from app.services.network.identity import NetworkIdentity, identity_for_radius_session
+
+ACTIVE_SESSION_FRESHNESS = timedelta(minutes=15)
+
+
+class SubscriptionSessionTarget(Protocol):
+    """Minimal cross-domain input required for session binding."""
+
+    @property
+    def id(self) -> object: ...
+
+    @property
+    def subscriber_id(self) -> object: ...
+
+    @property
+    def status(self) -> object: ...
+
+
+class SubscriptionSessionState(StrEnum):
+    connected = "connected"
+    stale = "stale"
+    offline = "offline"
+    inactive = "inactive"
+
+
+class SubscriptionSessionBinding(StrEnum):
+    exact_subscription = "exact_subscription"
+    single_service_unbound = "single_service_unbound"
+    none = "none"
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionSessionSnapshot:
+    """Subscription-scoped live-session observation.
+
+    An unbound session is used only when the subscriber has one visible service.
+    This prevents a single subscriber-level session from being projected onto
+    every sibling subscription in a multi-service account.
+    """
+
+    subscription_id: object
+    state: SubscriptionSessionState
+    binding: SubscriptionSessionBinding
+    observed_at: datetime | None
+    framed_ip_address: str | None
+    nas_device_id: object | None
+    acct_session_id: str | None
+
+    @property
+    def is_online(self) -> bool:
+        return self.state in {
+            SubscriptionSessionState.connected,
+            SubscriptionSessionState.stale,
+        }
 
 
 @dataclass(frozen=True)
@@ -100,6 +157,121 @@ def resolve_subscriber_radius_sessions(
         primary_session=primary,
         primary_identity=identity_for_radius_session(db, primary) if primary else None,
     )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _active_session_observed_at(session: RadiusActiveSession) -> datetime:
+    observed_at = _as_utc(
+        session.last_update or session.session_start or session.created_at
+    )
+    if observed_at is None:
+        raise ValueError("Active RADIUS session has no observation timestamp")
+    return observed_at
+
+
+def _active_session_order_key(session: RadiusActiveSession) -> tuple[float, float, str]:
+    observed_at = _active_session_observed_at(session)
+    started_at = _as_utc(session.session_start) or observed_at
+    return (-observed_at.timestamp(), -started_at.timestamp(), str(session.id))
+
+
+def subscription_session_snapshots(
+    db: Session,
+    subscriptions: Sequence[SubscriptionSessionTarget],
+    *,
+    now: datetime | None = None,
+) -> dict[object, SubscriptionSessionSnapshot]:
+    """Resolve one trustworthy live-session observation per subscription.
+
+    Exact subscription bindings always win. A subscriber-level, unbound session
+    may backstop only a single-service account; it is deliberately ignored for a
+    multi-service account so IP and NAS evidence cannot leak across siblings.
+    """
+    current = tuple(subscriptions)
+    if not current:
+        return {}
+    observed_now = _as_utc(now) or datetime.now(UTC)
+    subscriber_ids = {subscription.subscriber_id for subscription in current}
+    rows = list(
+        db.scalars(
+            select(RadiusActiveSession)
+            .where(RadiusActiveSession.subscriber_id.in_(subscriber_ids))
+            .order_by(RadiusActiveSession.id)
+        ).all()
+    )
+    sessions_by_subscriber: dict[object, list[RadiusActiveSession]] = defaultdict(list)
+    for row in rows:
+        if row.subscriber_id is not None:
+            sessions_by_subscriber[row.subscriber_id].append(row)
+
+    service_count_by_subscriber: dict[object, int] = defaultdict(int)
+    for subscription in current:
+        if getattr(subscription.status, "value", subscription.status) == "active":
+            service_count_by_subscriber[subscription.subscriber_id] += 1
+
+    snapshots: dict[object, SubscriptionSessionSnapshot] = {}
+    for subscription in current:
+        if getattr(subscription.status, "value", subscription.status) != "active":
+            snapshots[subscription.id] = SubscriptionSessionSnapshot(
+                subscription_id=subscription.id,
+                state=SubscriptionSessionState.inactive,
+                binding=SubscriptionSessionBinding.none,
+                observed_at=None,
+                framed_ip_address=None,
+                nas_device_id=None,
+                acct_session_id=None,
+            )
+            continue
+
+        subscriber_rows = sessions_by_subscriber.get(subscription.subscriber_id, [])
+        exact = [
+            row for row in subscriber_rows if row.subscription_id == subscription.id
+        ]
+        binding = SubscriptionSessionBinding.exact_subscription
+        candidates = exact
+        if (
+            not candidates
+            and service_count_by_subscriber[subscription.subscriber_id] == 1
+        ):
+            candidates = [row for row in subscriber_rows if row.subscription_id is None]
+            binding = SubscriptionSessionBinding.single_service_unbound
+
+        if not candidates:
+            snapshots[subscription.id] = SubscriptionSessionSnapshot(
+                subscription_id=subscription.id,
+                state=SubscriptionSessionState.offline,
+                binding=SubscriptionSessionBinding.none,
+                observed_at=None,
+                framed_ip_address=None,
+                nas_device_id=None,
+                acct_session_id=None,
+            )
+            continue
+
+        session = min(candidates, key=_active_session_order_key)
+        observed_at = _active_session_observed_at(session)
+        state = (
+            SubscriptionSessionState.connected
+            if observed_at >= observed_now - ACTIVE_SESSION_FRESHNESS
+            else SubscriptionSessionState.stale
+        )
+        snapshots[subscription.id] = SubscriptionSessionSnapshot(
+            subscription_id=subscription.id,
+            state=state,
+            binding=binding,
+            observed_at=observed_at,
+            framed_ip_address=session.framed_ip_address,
+            nas_device_id=session.nas_device_id,
+            acct_session_id=session.acct_session_id,
+        )
+    return snapshots
 
 
 def online_summary(db: Session) -> dict[str, int]:

@@ -3,9 +3,10 @@
 {% block title %}Deposit Account Credit - Customer Portal{% endblock %}
 
 {% block content %}
-{% set topup_options = payment_options|default([
-    {"provider_type": "paystack", "label": "Pay with Paystack"}
-], true) %}
+{% set topup_options = payment_options|default([], true) %}
+{% set topup_provider_values = topup_options|map(attribute="provider_type")|list %}
+{% set default_topup_provider = provider_type if provider_type in topup_provider_values else (topup_options[0].provider_type if topup_options else "") %}
+{% set default_payment_choice = ("provider:" ~ default_topup_provider) if default_topup_provider else (("card:" ~ payment_methods[0].id) if payment_methods|default([]) else "") %}
 <div class="space-y-6" x-data="topupPage()">
     <div>
         <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
@@ -15,7 +16,7 @@
         </nav>
         <h1 class="text-2xl font-bold text-stone-900 dark:text-white">Deposit Account Credit</h1>
         <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
-            Deposit credit for future payable invoices. This is account credit, not a wallet, and it does not add service time by itself.
+            Deposit credit at any time. Eligible invoices are paid first in canonical order, and the exact remainder stays as account credit. A deposit alone does not add service time.
         </p>
     </div>
     {% if transfer_success %}
@@ -24,34 +25,50 @@
     </div>
     {% endif %}
     {% if add_card %}
+    {% if "paystack" in topup_provider_values %}
     <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">
         <p class="font-semibold">Adding a card</p>
         <p class="mt-1">Pay with Paystack and we&rsquo;ll save the card for next time. The receipt becomes evidenced account credit. &ldquo;Save this card&rdquo; is already ticked below.</p>
     </div>
+    {% else %}
+    <div class="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+        <p class="font-semibold">Card setup is temporarily unavailable</p>
+        <p class="mt-1">The card-capable payment connector is not currently enabled. No card will be requested or stored.</p>
+    </div>
     {% endif %}
-    {% if pending_direct_transfer %}
+    {% endif %}
+    {% if active_deposit_request %}
     <div class="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between">
         <div>
-            <p class="font-semibold">You have a pending account-credit deposit.</p>
-            <p class="mt-1">Reference {{ pending_direct_transfer.reference }} for {{ pending_direct_transfer.currency }} {{ "{:,.2f}".format(pending_direct_transfer.amount) }}.</p>
+            {% if active_deposit_request.phase == "awaiting_receipt" %}
+            <p class="font-semibold">Upload the receipt for your pending deposit.</p>
+            <p class="mt-1">Complete the bank-transfer request below. Do not start another deposit for the same payment.</p>
+            {% elif active_deposit_request.phase == "under_review" %}
+            <p class="font-semibold">Your transfer receipt is under review.</p>
+            <p class="mt-1">Your receipt was received successfully. You do not need to upload it again; account credit is recorded only after staff verifies the transfer.</p>
+            {% else %}
+            <p class="font-semibold">Payment confirmation is pending.</p>
+            <p class="mt-1">The payment provider has not confirmed this request yet. Refresh this page after confirmation or after the request expires.</p>
+            {% endif %}
+            <p class="mt-1">Reference {{ active_deposit_request.reference }} for {{ active_deposit_request.currency }} {{ "{:,.2f}".format(active_deposit_request.amount) }}.</p>
+            <p class="mt-1">A new deposit will become available when this request completes or expires.</p>
         </div>
+        {% if active_deposit_request.next_action == "upload_receipt" %}
         <a href="/portal/billing/topup/transfer" class="inline-flex items-center justify-center rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">
             Continue
         </a>
+        {% endif %}
     </div>
     {% endif %}
 
-    {% if not deposit_allowed %}
+    {% if eligible_unpaid_invoices %}
     <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/40 dark:bg-amber-900/20">
-        <h2 class="text-lg font-semibold text-amber-900 dark:text-amber-200">Pay your invoice balance first</h2>
+        <h2 class="text-lg font-semibold text-amber-900 dark:text-amber-200">Existing invoices will be applied first</h2>
         <p class="mt-2 text-sm text-amber-800 dark:text-amber-300">
-            You have {{ eligible_unpaid_invoices|length }} eligible unpaid invoice{% if eligible_unpaid_invoices|length != 1 %}s{% endif %} totalling &#8358;{{ "{:,.2f}".format(eligible_unpaid_total) }}. Deposit Account Credit is unavailable while payable debt exists.
+            You currently have {{ eligible_unpaid_invoices|length }} eligible unpaid invoice{% if eligible_unpaid_invoices|length != 1 %}s{% endif %} totalling &#8358;{{ "{:,.2f}".format(eligible_unpaid_total) }}. The live preview below shows the exact invoice applications for the amount you enter.
         </p>
-        <a href="/portal/billing" class="mt-4 inline-flex items-center justify-center rounded-xl bg-amber-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-800">
-            Review and pay invoices
-        </a>
     </div>
-    {% else %}
+    {% endif %}
     <div class="grid gap-6 lg:grid-cols-[1.5fr,1fr]">
         <div class="space-y-6">
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
@@ -82,11 +99,12 @@
                         id="custom_amount"
                         x-model="customAmount"
                         @input="syncCustomAmount()"
+                        :disabled="!depositAllowed"
                         type="number"
-                        inputmode="numeric"
+                        inputmode="decimal"
                         min="{{ min_amount }}"
                         max="{{ max_amount }}"
-                        step="100"
+                        step="0.01"
                         placeholder="Enter amount"
                         class="w-full border-0 bg-transparent p-0 text-lg font-semibold text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white"
                     >
@@ -133,6 +151,12 @@
                 {% include "customer/billing/_payment_method_choice.html" %}
                 {% endfor %}
             </div>
+            {% if not topup_options and not payment_methods|default([]) %}
+            <div class="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+                <p class="font-semibold">Online payment is temporarily unavailable</p>
+                <p class="mt-1">No validated payment gateway or bank-transfer route is currently enabled. Please try again later or contact support.</p>
+            </div>
+            {% endif %}
 
             <label
                 x-show="selectedPaymentChoice === 'provider:paystack'"
@@ -177,6 +201,9 @@
         <div class="space-y-4">
             <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
                 <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Deposit preview</h2>
+                <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">
+                    This preview is generated by the billing owner and rechecked when checkout starts.
+                </p>
                 <dl class="mt-5 space-y-4 text-sm">
                     <div class="flex items-center justify-between gap-4">
                         <dt class="text-stone-500 dark:text-stone-400">Current account credit</dt>
@@ -186,19 +213,47 @@
                     </div>
                     <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
                         <dt class="text-stone-500 dark:text-stone-400">Eligible unpaid invoices</dt>
-                        <dd class="font-semibold text-stone-900 dark:text-white">None</dd>
+                        <dd class="font-semibold text-stone-900 dark:text-white" x-text="eligibleInvoiceCountLabel()"></dd>
                     </div>
                     <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
                         <dt class="text-stone-500 dark:text-stone-400">Requested deposit</dt>
                         <dd class="font-semibold text-stone-900 dark:text-white" x-text="requestedDepositLabel()"></dd>
                     </div>
                     <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
-                        <dt class="text-stone-500 dark:text-stone-400">Estimated available credit</dt>
-                        <dd class="text-right font-semibold text-stone-900 dark:text-white" x-text="projectedCreditLabel()"></dd>
+                        <dt class="text-stone-500 dark:text-stone-400">Applied to invoices</dt>
+                        <dd class="text-right font-semibold text-stone-900 dark:text-white" x-text="appliedToInvoicesLabel()"></dd>
+                    </div>
+                    <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <dt class="text-stone-500 dark:text-stone-400">Invoice amount left after application</dt>
+                        <dd class="text-right font-semibold text-stone-900 dark:text-white" x-text="outstandingAfterApplicationLabel()"></dd>
+                    </div>
+                    <div class="flex items-center justify-between gap-4 border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <dt class="text-stone-500 dark:text-stone-400">Remaining account credit</dt>
+                        <dd class="text-right font-semibold text-stone-900 dark:text-white" x-text="remainingAccountCreditLabel()"></dd>
                     </div>
                 </dl>
+                <div x-show="previewLoading" class="mt-5 text-sm text-stone-500 dark:text-stone-400">
+                    Loading latest allocation preview...
+                </div>
+                <p x-show="previewError" x-text="previewError" class="mt-5 rounded-xl bg-red-50 p-3 text-xs leading-5 text-red-700 dark:bg-red-900/20 dark:text-red-300"></p>
+                <div x-show="invoiceApplications.length" class="mt-5 space-y-3">
+                    <template x-for="item in invoiceApplications" :key="item.invoice_id">
+                        <div class="rounded-xl border border-stone-200 px-4 py-3 dark:border-stone-700">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <p class="text-sm font-semibold text-stone-900 dark:text-white" x-text="item.invoice_number || 'Invoice'"></p>
+                                    <p class="mt-1 text-xs text-stone-500 dark:text-stone-400" x-text="item.invoice_id"></p>
+                                </div>
+                                <div class="text-right text-sm">
+                                    <p class="font-semibold text-stone-900 dark:text-white" x-text="'Applied: ' + formatNaira(Number(item.amount_applied || 0))"></p>
+                                    <p class="mt-1 text-stone-500 dark:text-stone-400" x-text="'Outstanding after: ' + formatNaira(Number(item.outstanding_after_application || 0))"></p>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
                 <p class="mt-5 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                    Future payable invoices may automatically consume this credit, oldest debt first.
+                    Eligible invoices remain server-ordered oldest first. If a new invoice appears after checkout starts, the confirmed payment is still accepted and applied safely on settlement.
                 </p>
             </div>
             <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
@@ -255,24 +310,33 @@
             </ol>
         </div>
     </div>
-    {% endif %}
 </div>
 
 <script>
 function topupPage() {
     return {
         processing: false,
+        depositAllowed: {{ 'true' if deposit_allowed else 'false' }},
         liveReference: '',
         customAmount: '{{ prefill_amount if prefill_amount else "" }}',
         validationError: '',
         providerErrors: {},
         showTopupHelp: false,
         saveCard: {{ 'true' if add_card else 'false' }},
-        selectedPaymentChoice: 'provider:{{ provider_type }}',
+        selectedPaymentChoice: {{ default_payment_choice|tojson }},
         idempotencyKey: null,
         currentCredit: {% if account_credit is not none %}Number('{{ account_credit }}'){% else %}null{% endif %},
-        minAmount: {{ min_amount | int }},
-        maxAmount: {{ max_amount | int }},
+        previewFingerprint: '',
+        previewLoading: false,
+        previewError: '',
+        invoiceApplications: [],
+        eligibleInvoiceCount: {{ eligible_unpaid_invoices|length }},
+        totalAppliedToInvoices: 0,
+        totalOutstandingAfterApplication: Number('{{ eligible_unpaid_total or 0 }}'),
+        remainingAccountCredit: {% if account_credit is not none %}Number('{{ account_credit }}'){% else %}0{% endif %},
+        previewRequestId: 0,
+        minAmount: {{ min_amount }},
+        maxAmount: {{ max_amount }},
         formatNaira(value) {
             return new Intl.NumberFormat('en-NG', {
                 style: 'currency',
@@ -284,15 +348,9 @@ function topupPage() {
             const amount = this.currentAmount();
             return amount === null ? 'Enter an amount' : this.formatNaira(amount);
         },
-        projectedCreditLabel() {
-            const amount = this.currentAmount();
-            if (this.currentCredit === null) return 'Balance unavailable';
-            return amount === null
-                ? this.formatNaira(this.currentCredit)
-                : this.formatNaira(this.currentCredit + amount);
-        },
         syncCustomAmount() {
             this.validationError = '';
+            this.refreshPreview();
         },
         providerErrorFor(providerType) {
             return this.providerErrors[providerType] || '';
@@ -301,17 +359,28 @@ function topupPage() {
             this.providerErrors = {};
         },
         currentAmount() {
-            const parsed = parseInt(this.customAmount, 10);
+            const parsed = parseFloat(this.customAmount);
             return Number.isFinite(parsed) ? parsed : null;
         },
+        hasValidPrecision() {
+            // Kobo is the smallest unit: reject more than two decimal places.
+            const raw = String(this.customAmount).trim();
+            return raw === '' || /^\d+(\.\d{1,2})?$/.test(raw);
+        },
         canPay() {
+            if (!this.depositAllowed) {
+                return false;
+            }
             const amount = this.currentAmount();
-            if (!amount) {
+            if (!this.selectedPaymentChoice || !amount || !this.hasValidPrecision() || !this.previewFingerprint) {
                 return false;
             }
             return amount >= this.minAmount && amount <= this.maxAmount;
         },
         validationMessage() {
+            if (!this.depositAllowed) {
+                return 'Finish or wait for the current deposit request before starting another.';
+            }
             if (this.validationError) {
                 return this.validationError;
             }
@@ -319,13 +388,44 @@ function topupPage() {
             if (!amount) {
                 return 'Choose a preset amount or enter a custom amount.';
             }
+            if (!this.hasValidPrecision()) {
+                return 'Enter an amount with at most two decimal places (kobo).';
+            }
             if (amount < this.minAmount) {
                 return 'Amount must be at least ' + this.formatCurrency(this.minAmount) + '.';
             }
             if (amount > this.maxAmount) {
                 return 'Amount must not exceed ' + this.formatCurrency(this.maxAmount) + '.';
             }
+            if (this.previewError) {
+                return this.previewError;
+            }
             return 'You are depositing ' + this.formatCurrency(amount) + ' as account credit.';
+        },
+        eligibleInvoiceCountLabel() {
+            if (!this.eligibleInvoiceCount) {
+                return 'None';
+            }
+            return this.eligibleInvoiceCount + ' invoice' + (this.eligibleInvoiceCount === 1 ? '' : 's');
+        },
+        appliedToInvoicesLabel() {
+            return this.previewFingerprint
+                ? this.formatNaira(this.totalAppliedToInvoices)
+                : 'Enter an amount';
+        },
+        outstandingAfterApplicationLabel() {
+            return this.previewFingerprint
+                ? this.formatNaira(this.totalOutstandingAfterApplication)
+                : 'Enter an amount';
+        },
+        remainingAccountCreditLabel() {
+            if (this.previewFingerprint) {
+                return this.formatNaira(this.remainingAccountCredit);
+            }
+            if (this.currentCredit === null) {
+                return 'Balance unavailable';
+            }
+            return this.formatNaira(this.currentCredit);
         },
         formatCurrency(amount) {
             return new Intl.NumberFormat('en-NG', {
@@ -351,14 +451,84 @@ function topupPage() {
             if (this.processing) {
                 return 'Processing...';
             }
+            if (!this.depositAllowed) {
+                return 'Existing request in progress';
+            }
             const amount = this.currentAmount();
             return amount ? 'Deposit ' + this.formatCurrency(amount) : 'Enter an amount';
+        },
+        clearPreview() {
+            this.previewFingerprint = '';
+            this.previewError = '';
+            this.previewLoading = false;
+            this.invoiceApplications = [];
+            this.eligibleInvoiceCount = {{ eligible_unpaid_invoices|length }};
+            this.totalAppliedToInvoices = 0;
+            this.totalOutstandingAfterApplication = Number('{{ eligible_unpaid_total or 0 }}');
+            this.remainingAccountCredit = this.currentCredit || 0;
+        },
+        async refreshPreview() {
+            if (!this.depositAllowed) {
+                this.clearPreview();
+                return false;
+            }
+            const amount = this.currentAmount();
+            if (!amount || !this.hasValidPrecision() || amount < this.minAmount || amount > this.maxAmount) {
+                this.clearPreview();
+                return false;
+            }
+            this.previewLoading = true;
+            this.previewError = '';
+            const requestId = ++this.previewRequestId;
+            let csrf = this.csrfToken();
+            let response = await fetch('/portal/billing/topup/preview', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrf,
+                },
+                body: JSON.stringify({ amount: amount.toFixed(2) }),
+            });
+            if (response.status === 403) {
+                csrf = await this.refreshCsrf();
+                response = await fetch('/portal/billing/topup/preview', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': csrf,
+                    },
+                    body: JSON.stringify({ amount: amount.toFixed(2) }),
+                });
+            }
+            const payload = await response.json().catch(() => ({}));
+            if (requestId !== this.previewRequestId) {
+                return false;
+            }
+            this.previewLoading = false;
+            if (!response.ok) {
+                this.clearPreview();
+                this.previewError = payload.detail || 'Unable to build the latest allocation preview.';
+                return false;
+            }
+            this.previewFingerprint = payload.preview_fingerprint || '';
+            this.invoiceApplications = payload.invoice_applications || [];
+            this.eligibleInvoiceCount = payload.eligible_invoice_count || 0;
+            this.totalAppliedToInvoices = Number(payload.total_applied_to_invoices || 0);
+            this.totalOutstandingAfterApplication = Number(payload.total_outstanding_after_application || 0);
+            this.remainingAccountCredit = Number(payload.remaining_account_credit || 0);
+            return true;
         },
         async startPayment() {
             const amount = this.currentAmount();
             this.clearProviderErrors();
             if (!amount) {
                 this.validationError = 'Enter a valid amount before continuing.';
+                return;
+            }
+            if (!this.hasValidPrecision()) {
+                this.validationError = 'Enter an amount with at most two decimal places (kobo).';
                 return;
             }
             if (amount < this.minAmount) {
@@ -369,14 +539,17 @@ function topupPage() {
                 this.validationError = 'Amount must not exceed ' + this.formatCurrency(this.maxAmount) + '.';
                 return;
             }
+            if (!(await this.refreshPreview()) || !this.previewFingerprint) {
+                this.validationError = this.previewError || 'Review the latest allocation preview before continuing.';
+                return;
+            }
 
             this.processing = true;
             this.validationError = '';
             this.clearProviderErrors();
             const self = this;
-            const selectedChoice = this.selectedPaymentChoice || 'provider:{{ provider_type }}';
+            const selectedChoice = this.selectedPaymentChoice || '';
             const selectedProvider = selectedChoice.startsWith('provider:') ? selectedChoice.replace('provider:', '') : '';
-            const requestProvider = selectedProvider || 'paystack';
             const selectedPaymentMethodId = selectedChoice.startsWith('card:') ? selectedChoice.replace('card:', '') : null;
             // One idempotency key per page session (not per click): a saved-card
             // charge that succeeded but lost its response replays on re-click
@@ -394,9 +567,10 @@ function topupPage() {
                     refreshCsrf: () => self.refreshCsrf(),
                     idempotencyKey: this.idempotencyKey,
                     body: {
-                        amount: amount,
-                        provider: requestProvider,
+                        amount: amount.toFixed(2),
+                        provider: selectedProvider || null,
                         payment_method_id: selectedPaymentMethodId,
+                        preview_fingerprint: this.previewFingerprint,
                     },
                 });
             } catch (error) {
@@ -429,7 +603,7 @@ function topupPage() {
                 const handler = PaystackPop.setup({
                     key: intent.provider_public_key,
                     email: '{{ customer_email }}',
-                    amount: amount * 100,
+                    amount: Math.round(amount * 100),
                     currency: intent.currency || 'NGN',
                     ref: intent.reference,
                     metadata: intent.checkout_metadata || {},
@@ -445,14 +619,16 @@ function topupPage() {
                 self.processing = false;
                 self.validationError = 'Could not open the payment window. Please try again.';
             }
-        }
+        },
+        init() {
+            this.syncCustomAmount();
+        },
     };
 }
 </script>
 
 {% include "customer/billing/_payment_intent_js.html" %}
-{% set topup_provider_types = topup_options|map(attribute="provider_type")|list %}
-{% if "paystack" in topup_provider_types %}
+{% if "paystack" in topup_provider_values %}
 <script src="https://js.paystack.co/v1/inline.js"></script>
 {% endif %}
 {% endblock %}

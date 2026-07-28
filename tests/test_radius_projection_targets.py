@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+from app.models.catalog import SubscriptionStatus
 from app.models.radius import RadiusSyncJob
 from app.services import radius_population
 from app.services.external_radius_targets import (
@@ -58,14 +59,15 @@ def test_owner_writes_auth_reply_and_both_configured_group_types(tmp_path):
     _schema(path)
     target = _target(path)
     work = [
-        (
-            "customer-1",
-            "secret",
-            [("Framed-IP-Address", ":=", "10.0.0.1")],
-            False,
-            "active",
-            "active",
-            "fiber-profile",
+        radius_population.RadiusProjectionWorkItem(
+            username="customer-1",
+            cleartext_password="secret",
+            check_attrs=(("Simultaneous-Use", ":=", "1"),),
+            reply_attrs=(("Framed-IP-Address", ":=", "10.0.0.1"),),
+            blocked=False,
+            status=SubscriptionStatus.active,
+            mode="active",
+            profile_group="fiber-profile",
         )
     ]
 
@@ -87,7 +89,8 @@ def test_owner_writes_auth_reply_and_both_configured_group_types(tmp_path):
             )
 
     assert _read(path, "radcheck") == [
-        ("customer-1", "Cleartext-Password", ":=", "secret")
+        ("customer-1", "Cleartext-Password", ":=", "secret"),
+        ("customer-1", "Simultaneous-Use", ":=", "1"),
     ]
     assert _read(path, "radreply") == [
         ("customer-1", "Framed-IP-Address", ":=", "10.0.0.1")
@@ -145,7 +148,18 @@ def test_owner_reject_replaces_password_reply_and_projects_suspended_group(tmp_p
             "INSERT INTO radreply VALUES (?, ?, ?, ?)",
             ("blocked", "Framed-IP-Address", ":=", "10.0.0.1"),
         )
-    work = [("blocked", "unused", [], True, "suspended", "reject", None)]
+    work = [
+        radius_population.RadiusProjectionWorkItem(
+            username="blocked",
+            cleartext_password="unused",
+            check_attrs=(("Simultaneous-Use", ":=", "1"),),
+            reply_attrs=(),
+            blocked=True,
+            status=SubscriptionStatus.suspended,
+            mode="reject",
+            profile_group=None,
+        )
+    ]
     engine = radius_population.get_external_engine(target["db_url"])
     with engine.begin() as conn:
         radius_population._write_radius_projection(

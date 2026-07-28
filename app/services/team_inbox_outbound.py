@@ -27,19 +27,33 @@ from app.services.communication_intents import (
     submit,
 )
 from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 T = TypeVar("T")
+OWNER = "communications.team_inbox_outbound_intents"
+_OUTBOUND_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="transactional outbound communication intent",
+    name="execute_team_inbox_outbound_intent",
+)
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
-    try:
-        result = action()
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
+    return execute_owner_command(
+        db,
+        definition=_OUTBOUND_COMMAND,
+        context=CommandContext.system(
+            actor="system:team-inbox-outbound-adapter",
+            scope="team-inbox:outbound-intent",
+            reason="create transactional Team Inbox communication intent",
+        ),
+        operation=action,
+    )
 
 
 @dataclass(frozen=True)
@@ -90,52 +104,6 @@ def _owner_team_id(conversation: InboxConversation) -> UUID | None:
     return link.service_team_id if link is not None else None
 
 
-def apply_whatsapp_delivery_status(
-    db: Session,
-    status_item: dict[str, Any],
-) -> dict[str, object]:
-    provider_message_id = str(status_item["message_id"])
-    message = (
-        db.query(InboxMessage)
-        .filter(InboxMessage.channel_type == InboxChannelType.whatsapp.value)
-        .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
-        .filter(InboxMessage.external_message_id == provider_message_id)
-        .order_by(InboxMessage.created_at.desc())
-        .first()
-    )
-    if message is None:
-        return {
-            "kind": "not_found",
-            "provider_message_id": provider_message_id,
-            "status": status_item["status"],
-        }
-
-    metadata = dict(message.metadata_ or {})
-    history = metadata.get("delivery_status_history")
-    if not isinstance(history, list):
-        history = []
-    event = {
-        "status": status_item["status"],
-        "timestamp": status_item.get("timestamp"),
-        "recipient_id": status_item.get("recipient_id"),
-        "errors": status_item.get("errors"),
-    }
-    history.append({key: value for key, value in event.items() if value is not None})
-    metadata["delivery_status"] = status_item["status"]
-    metadata["delivery_status_at"] = status_item.get("timestamp")
-    metadata["delivery_recipient_id"] = status_item.get("recipient_id")
-    if status_item.get("errors") is not None:
-        metadata["delivery_errors"] = status_item["errors"]
-    metadata["delivery_status_history"] = history[-20:]
-    message.metadata_ = metadata
-    return {
-        "kind": "updated",
-        "message_id": str(message.id),
-        "provider_message_id": provider_message_id,
-        "status": status_item["status"],
-    }
-
-
 def _reply_subject(conversation: InboxConversation, explicit: str | None) -> str:
     raw = (explicit or conversation.subject or "Message").strip() or "Message"
     if raw.lower().startswith("re:"):
@@ -174,6 +142,7 @@ def _queue_outbox_reply(
     now: datetime | None = None,
     from_address: str | None = None,
     metadata: dict[str, Any] | None = None,
+    existing_message: InboxMessage | None = None,
 ) -> InboxReplyResult:
     intent_metadata = dict(payload.metadata or {})
     intent_metadata.update(metadata or {})
@@ -200,7 +169,7 @@ def _queue_outbox_reply(
             channels=(channel,),
             include_reseller=False,
             persist_policy_suppressions=False,
-            subscriber_recipients={channel: recipient},
+            recipients={channel: recipient},
             metadata=intent_metadata,
         ),
     )
@@ -218,25 +187,26 @@ def _queue_outbox_reply(
         )
 
     queued_at = now or datetime.now(UTC)
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        notification_id=notification.id,
-        channel_type=channel.value,
-        direction=InboxMessageDirection.outbound.value,
-        subject=subject,
-        body=body
-        if channel == NotificationChannel.whatsapp
-        else payload.body_html or body,
-        external_thread_id=conversation.external_thread_id,
-        from_address=from_address,
-        to_addresses=[recipient],
-        cc_addresses=[],
-        metadata_={**intent_metadata, "delivery_status": "queued"},
+    message = existing_message or InboxMessage(conversation_id=conversation.id)
+    message.notification_id = notification.id
+    message.channel_type = channel.value
+    message.direction = InboxMessageDirection.outbound.value
+    message.subject = subject
+    message.body = (
+        body if channel == NotificationChannel.whatsapp else payload.body_html or body
     )
-    db.add(message)
+    message.external_thread_id = conversation.external_thread_id
+    message.from_address = from_address
+    message.to_addresses = [recipient]
+    message.cc_addresses = []
+    message.sent_at = queued_at
+    message.metadata_ = {**intent_metadata, "delivery_status": "queued"}
+    if existing_message is None:
+        db.add(message)
     conversation.last_message_at = queued_at
     db.flush()
     team_inbox_realtime.publish_conversation_event(
+        db,
         str(conversation.id),
         event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
         payload=team_inbox_realtime.message_event_payload(
@@ -269,6 +239,7 @@ def _send_whatsapp_reply(
     payload: InboxReplyPayload,
     now: datetime | None,
     record_failure: bool = False,
+    existing_message: InboxMessage | None = None,
 ) -> InboxReplyResult:
     recipient = normalize_phone_identifier(conversation.contact_address)
     if not recipient:
@@ -306,6 +277,76 @@ def _send_whatsapp_reply(
             "message_kind": "template" if use_template else "text",
             "whatsapp_template": template_spec if use_template else None,
         },
+        existing_message=existing_message,
+    )
+
+
+def _send_field_job_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    now: datetime | None,
+    existing_message: InboxMessage | None = None,
+) -> InboxReplyResult:
+    """Deliver a job-chat message in the app, over the conversation socket.
+
+    There is no external transport and therefore no recipient address, no
+    notification and no delivery receipt to wait for: both parties are
+    authenticated in Sub and subscribed to this conversation's topic. The
+    message is sent the moment it is persisted and published.
+    """
+    body_text = _plain_text_reply(payload)
+    if not body_text:
+        return InboxReplyResult(
+            kind="empty_body",
+            conversation_id=str(conversation.id),
+            reason="Reply body is required",
+        )
+
+    sent_at = now or datetime.now(UTC)
+    message = existing_message or InboxMessage(conversation_id=conversation.id)
+    message.channel_type = InboxChannelType.field_job.value
+    message.direction = InboxMessageDirection.outbound.value
+    message.subject = None
+    message.body = body_text
+    message.external_thread_id = conversation.external_thread_id
+    message.to_addresses = []
+    message.cc_addresses = []
+    message.sent_at = sent_at
+    author_name = str((payload.metadata or {}).get("author_name") or "Technician")
+    message.metadata_ = {
+        **(payload.metadata or {}),
+        "channel_type": InboxChannelType.field_job.value,
+        "delivery_status": "delivered",
+    }
+    if existing_message is None:
+        db.add(message)
+    conversation.last_message_at = sent_at
+    db.flush()
+    team_inbox_realtime.publish_conversation_event(
+        db,
+        str(conversation.id),
+        event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
+        payload=team_inbox_realtime.message_event_payload(
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            body=message.body,
+            direction=message.direction,
+            channel_type=message.channel_type,
+            created_at=message.created_at,
+            author_name=author_name,
+            extra={
+                "sender_type": "agent",
+                "from_customer": False,
+                "delivery_status": "delivered",
+            },
+        ),
+    )
+    return InboxReplyResult(
+        kind="queued",
+        conversation_id=str(conversation.id),
+        message_id=str(message.id),
     )
 
 
@@ -316,6 +357,7 @@ def send_inbox_reply(
     payload: InboxReplyPayload,
     now: datetime | None = None,
     record_failure: bool = False,
+    existing_message: InboxMessage | None = None,
 ) -> InboxReplyResult:
     if not conversation.is_active:
         return InboxReplyResult(
@@ -337,6 +379,16 @@ def send_inbox_reply(
             payload=payload,
             now=now,
             record_failure=record_failure,
+            existing_message=existing_message,
+        )
+
+    if conversation.channel_type == InboxChannelType.field_job.value:
+        return _send_field_job_reply(
+            db,
+            conversation=conversation,
+            payload=payload,
+            now=now,
+            existing_message=existing_message,
         )
 
     to_email = _reply_to_address(conversation, payload.to_email)
@@ -389,6 +441,7 @@ def send_inbox_reply(
             "sender_key": config.get("sender_key") or sender.sender_key,
             "activity": sender.activity,
         },
+        existing_message=existing_message,
     )
     return InboxReplyResult(
         kind=result.kind,
@@ -550,3 +603,184 @@ def retry_outbound_message(
     message.metadata_ = metadata
     db.flush()
     return result
+
+
+SCHEDULED_DELIVERY_STATUS = "scheduled"
+
+
+def schedule_inbox_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    send_after: datetime,
+) -> InboxMessage:
+    """Record a reply to be sent later, without sending it now.
+
+    Stored as a normal outbound ``InboxMessage`` with ``sent_at`` unset and a
+    ``scheduled`` delivery status, so the thread shows what is queued rather
+    than hiding it until it goes. ``release_due_scheduled_replies`` sends it.
+
+    No new table: the message *is* the queue entry, which keeps one row per
+    reply whether it was sent immediately or later, and means a scheduled reply
+    already carries its attachments and provenance.
+    """
+    if send_after.tzinfo is None:
+        send_after = send_after.replace(tzinfo=UTC)
+    if send_after <= datetime.now(UTC):
+        raise ValueError("Choose a send time in the future.")
+
+    metadata = dict(payload.metadata or {})
+    metadata.update(
+        {
+            "source": "team_inbox_reply",
+            "delivery_status": SCHEDULED_DELIVERY_STATUS,
+            "scheduled_for": send_after.isoformat(),
+            "body_text": payload.body_text,
+            "body_html": payload.body_html,
+            "sent_by_person_id": str(payload.sent_by_person_id)
+            if payload.sent_by_person_id
+            else None,
+        }
+    )
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type=conversation.channel_type,
+        direction="outbound",
+        subject=_reply_subject(conversation, payload.subject),
+        body=payload.body_text,
+        from_address=None,
+        sent_at=None,
+        metadata_=metadata,
+    )
+    db.add(message)
+    db.flush()
+    return message
+
+
+def due_scheduled_replies(
+    db: Session, *, now: datetime | None = None, limit: int = 50
+) -> list[InboxMessage]:
+    """Scheduled replies whose send time has passed."""
+    moment = (now or datetime.now(UTC)).isoformat()
+    return (
+        db.query(InboxMessage)
+        .filter(InboxMessage.direction == "outbound")
+        .filter(InboxMessage.sent_at.is_(None))
+        .filter(
+            InboxMessage.metadata_["delivery_status"].as_string()
+            == SCHEDULED_DELIVERY_STATUS
+        )
+        .filter(InboxMessage.metadata_["scheduled_for"].as_string() <= moment)
+        .order_by(InboxMessage.created_at.asc())
+        .limit(limit)
+        # Two maintenance workers must never claim the same scheduled reply.
+        # The owner transaction holds these row locks through intent staging.
+        .with_for_update(skip_locked=True)
+        .all()
+    )
+
+
+def send_scheduled_reply(db: Session, *, message: InboxMessage) -> InboxReplyResult:
+    """Send one previously scheduled reply through the normal outbound path."""
+    conversation = db.get(InboxConversation, message.conversation_id)
+    if conversation is None or not conversation.is_active:
+        metadata = dict(message.metadata_ or {})
+        metadata["delivery_status"] = "cancelled"
+        metadata["cancel_reason"] = "conversation is no longer active"
+        message.metadata_ = metadata
+        db.flush()
+        return InboxReplyResult(
+            kind="cancelled",
+            conversation_id=str(message.conversation_id),
+            reason="conversation is no longer active",
+        )
+
+    metadata = dict(message.metadata_ or {})
+    release_metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"delivery_status", "scheduled_for", "body_html", "body_text"}
+    }
+    release_metadata["source"] = "team_inbox_scheduled_reply"
+    result = send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=InboxReplyPayload(
+            body_html=str(metadata.get("body_html") or ""),
+            body_text=str(metadata.get("body_text") or message.body or ""),
+            subject=message.subject,
+            sent_by_person_id=metadata.get("sent_by_person_id"),
+            metadata=release_metadata,
+        ),
+        record_failure=True,
+        existing_message=message,
+    )
+    released_at = datetime.now(UTC)
+    current_metadata = dict(message.metadata_ or {})
+    current_metadata["scheduled_released_at"] = released_at.isoformat()
+    if result.kind not in {"sent", "queued"}:
+        current_metadata["delivery_status"] = "failed"
+        current_metadata["send_error"] = result.reason or "Scheduled reply failed"
+        current_metadata["retry_count"] = int(current_metadata.get("retry_count") or 0)
+        message.sent_at = released_at
+    message.metadata_ = current_metadata
+    db.flush()
+    return result
+
+
+def send_transcript(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    recipient: str,
+    subject: str,
+    body_html: str,
+    sent_by_person_id: str | UUID | None = None,
+) -> InboxReplyResult:
+    """Deliver a transcript to an arbitrary address.
+
+    Uses the same communication intent as a reply so the team's sender and
+    delivery handling apply, but records no `InboxMessage`: a transcript is a
+    copy of the conversation, not a new turn in it, and adding it to the thread
+    would make the next transcript include the previous one.
+    """
+    result = submit(
+        db,
+        CommunicationIntent(
+            subscriber_id=conversation.subscriber_id,
+            event_type="team_inbox.transcript",
+            category="service",
+            communication_class=CommunicationClass.transactional,
+            subject=subject,
+            body=body_html,
+            channels=(NotificationChannel.email,),
+            include_reseller=False,
+            persist_policy_suppressions=False,
+            recipients={NotificationChannel.email: recipient},
+            metadata={
+                "source": "team_inbox_transcript",
+                "conversation_id": str(conversation.id),
+                "sent_by_person_id": str(sent_by_person_id)
+                if sent_by_person_id
+                else None,
+            },
+        ),
+    )
+    notification = next(
+        (item for item in result.queued if item.status == NotificationStatus.queued),
+        None,
+    )
+    if notification is None:
+        return InboxReplyResult(
+            kind="suppressed",
+            conversation_id=str(conversation.id),
+            to_email=recipient,
+            reason=", ".join(result.suppressed)
+            or "Communication policy suppressed the transcript",
+        )
+    return InboxReplyResult(
+        kind="queued",
+        conversation_id=str(conversation.id),
+        to_email=recipient,
+    )

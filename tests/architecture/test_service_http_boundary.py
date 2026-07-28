@@ -12,8 +12,16 @@ PURE_SERVICE_MODULES = (
     ROOT / "app/services/vendor_portal_operations.py",
     ROOT / "app/services/vendor_as_built_review_proposals.py",
     ROOT / "app/services/vendor_project_review_proposals.py",
+    ROOT / "app/services/vendor_route_review_proposals.py",
     ROOT / "app/services/vendor_submission_proposals.py",
     ROOT / "app/services/work_order_errors.py",
+    ROOT / "app/services/sales/capture.py",
+    ROOT / "app/services/sales/account_conversion.py",
+    ROOT / "app/services/sales_fulfillment.py",
+    ROOT / "app/services/installation_projects.py",
+    ROOT / "app/services/service_order_lifecycle.py",
+    ROOT / "app/services/customer_experience_handoffs.py",
+    ROOT / "app/services/sales_lifecycle_reconciliation.py",
 )
 
 

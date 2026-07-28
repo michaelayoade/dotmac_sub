@@ -8,7 +8,7 @@ from app.services import gis_sync as gis_sync_service
 from app.services import web_system_geocode_tool as web_system_geocode_tool_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.observability import record_task_run
-from app.services.scheduler_config import _effective_bool
+from app.services.settings_spec import resolve_boolean
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -25,26 +25,20 @@ def sync_gis_sources():
     deactivate_missing = False
     session = SessionLocal()
     try:
-        sync_pops = _effective_bool(
+        sync_pops = resolve_boolean(
             session,
             SettingDomain.gis,
             "sync_pop_sites",
-            "GIS_SYNC_POP_SITES",
-            True,
         )
-        sync_addresses = _effective_bool(
+        sync_addresses = resolve_boolean(
             session,
             SettingDomain.gis,
             "sync_addresses",
-            "GIS_SYNC_ADDRESSES",
-            True,
         )
-        deactivate_missing = _effective_bool(
+        deactivate_missing = resolve_boolean(
             session,
             SettingDomain.gis,
             "sync_deactivate_missing",
-            "GIS_SYNC_DEACTIVATE_MISSING",
-            False,
         )
         logger.info(
             "GIS sync start pops=%s addresses=%s deactivate_missing=%s",

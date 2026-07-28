@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -9,9 +10,42 @@ from sqlalchemy.orm import Session
 from app.models.catalog import BillingMode, CatalogOffer, Subscription
 from app.models.subscriber import Subscriber
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+from app.services.domain_errors import DomainError
 
 
-@dataclass(frozen=True)
+class BillingProfileSource(StrEnum):
+    """Authoritative record set that supplied the effective billing mode."""
+
+    MIXED_SUBSCRIPTIONS = "mixed_subscriptions"
+    SUBSCRIPTION = "subscription"
+    ACCOUNT = "account"
+
+
+class BillingProfileReason(StrEnum):
+    """Stable reason vocabulary for billing-profile decisions and failures."""
+
+    MIXED_COLLECTIBLE_SUBSCRIPTION_BILLING_MODES = (
+        "mixed_collectible_subscription_billing_modes"
+    )
+    ACCOUNT_BILLING_MODE_MISSING = "account_billing_mode_missing"
+    ALREADY_ALIGNED = "already_aligned"
+    ALIGN_ACCOUNT_TO_COLLECTIBLE_SUBSCRIPTIONS = (
+        "align_account_to_collectible_subscriptions"
+    )
+    ACCOUNT_SUBSCRIPTION_BILLING_MODE_MISMATCH = (
+        "account_subscription_billing_mode_mismatch"
+    )
+    COLLECTIBLE_SUBSCRIPTIONS_REQUIRE_ALIGNMENT = (
+        "collectible_subscriptions_require_alignment"
+    )
+    ACCOUNT_OFFER_BILLING_MODE_MISMATCH = "account_offer_billing_mode_mismatch"
+    BILLING_MODE_UNRESOLVED = "billing_mode_unresolved"
+    REQUESTED_BILLING_MODE_MISMATCH = "requested_billing_mode_mismatch"
+    SUBSCRIBER_NOT_FOUND = "subscriber_not_found"
+    OFFER_NOT_FOUND = "offer_not_found"
+
+
+@dataclass(frozen=True, slots=True)
 class BillingProfile:
     """Resolved billing-mode authority for one account.
 
@@ -25,9 +59,9 @@ class BillingProfile:
     account_mode: BillingMode | None
     subscription_modes: frozenset[BillingMode]
     effective_mode: BillingMode | None
-    source: str
+    source: BillingProfileSource
     account_subscription_mismatch: bool
-    invalid_reason: str | None = None
+    invalid_reason: BillingProfileReason | None = None
 
     @property
     def has_collectible_subscriptions(self) -> bool:
@@ -54,31 +88,50 @@ class BillingProfile:
         return BillingMode.prepaid in self.subscription_modes
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BillingModeTransitionDecision:
     account_id: UUID
     current_mode: BillingMode | None
     target_mode: BillingMode
     allowed: bool
-    reason: str | None
+    reason: BillingProfileReason | None
     requires_subscription_alignment: bool
     profile: BillingProfile
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SubscriptionBillingModeWriteDecision:
     account_mode: BillingMode | None
     offer_mode: BillingMode | None
     requested_mode: BillingMode | None
     resolved_mode: BillingMode | None
     allowed: bool
-    reason: str | None = None
+    reason: BillingProfileReason | None = None
 
 
-class BillingModeWriteRejected(ValueError):
-    def __init__(self, reason: str):
+class BillingProfileError(DomainError):
+    """Stable transport-neutral billing-profile failure."""
+
+    def __init__(self, reason: BillingProfileReason):
         self.reason = reason
-        super().__init__(reason.replace("_", " "))
+        super().__init__(
+            code=f"financial.billing_profile.{reason.value}",
+            message=reason.value.replace("_", " "),
+        )
+
+
+class BillingModeWriteRejected(BillingProfileError):
+    """A subscription billing-mode write conflicts with canonical evidence."""
+
+
+def require_effective_billing_mode(profile: BillingProfile) -> BillingMode:
+    """Return a valid effective mode or fail closed with a stable domain error."""
+
+    if profile.invalid_reason is not None:
+        raise BillingProfileError(profile.invalid_reason)
+    if profile.effective_mode is None:
+        raise BillingProfileError(BillingProfileReason.BILLING_MODE_UNRESOLVED)
+    return profile.effective_mode
 
 
 def _profile_from_modes(
@@ -92,9 +145,11 @@ def _profile_from_modes(
             account_mode=account_mode,
             subscription_modes=modes,
             effective_mode=None,
-            source="mixed_subscriptions",
+            source=BillingProfileSource.MIXED_SUBSCRIPTIONS,
             account_subscription_mismatch=True,
-            invalid_reason="mixed_collectible_subscription_billing_modes",
+            invalid_reason=(
+                BillingProfileReason.MIXED_COLLECTIBLE_SUBSCRIPTION_BILLING_MODES
+            ),
         )
 
     if len(modes) == 1:
@@ -104,12 +159,14 @@ def _profile_from_modes(
             account_mode=account_mode,
             subscription_modes=modes,
             effective_mode=effective,
-            source="subscription",
+            source=BillingProfileSource.SUBSCRIPTION,
             account_subscription_mismatch=(
                 account_mode is not None and account_mode != effective
             ),
             invalid_reason=(
-                "account_billing_mode_missing" if account_mode is None else None
+                BillingProfileReason.ACCOUNT_BILLING_MODE_MISSING
+                if account_mode is None
+                else None
             ),
         )
 
@@ -118,7 +175,7 @@ def _profile_from_modes(
         account_mode=account_mode,
         subscription_modes=modes,
         effective_mode=account_mode,
-        source="account",
+        source=BillingProfileSource.ACCOUNT,
         account_subscription_mismatch=False,
     )
 
@@ -172,7 +229,7 @@ def plan_billing_mode_transition(
             current_mode=profile.effective_mode,
             target_mode=target_mode,
             allowed=True,
-            reason="already_aligned",
+            reason=BillingProfileReason.ALREADY_ALIGNED,
             requires_subscription_alignment=False,
             profile=profile,
         )
@@ -187,7 +244,7 @@ def plan_billing_mode_transition(
             current_mode=profile.account_mode,
             target_mode=target_mode,
             allowed=True,
-            reason="align_account_to_collectible_subscriptions",
+            reason=BillingProfileReason.ALIGN_ACCOUNT_TO_COLLECTIBLE_SUBSCRIPTIONS,
             requires_subscription_alignment=False,
             profile=profile,
         )
@@ -198,7 +255,7 @@ def plan_billing_mode_transition(
             current_mode=profile.effective_mode,
             target_mode=target_mode,
             allowed=False,
-            reason="mixed_collectible_subscription_billing_modes",
+            reason=(BillingProfileReason.MIXED_COLLECTIBLE_SUBSCRIPTION_BILLING_MODES),
             requires_subscription_alignment=True,
             profile=profile,
         )
@@ -209,7 +266,7 @@ def plan_billing_mode_transition(
             current_mode=profile.effective_mode,
             target_mode=target_mode,
             allowed=False,
-            reason="account_subscription_billing_mode_mismatch",
+            reason=BillingProfileReason.ACCOUNT_SUBSCRIPTION_BILLING_MODE_MISMATCH,
             requires_subscription_alignment=True,
             profile=profile,
         )
@@ -219,7 +276,11 @@ def plan_billing_mode_transition(
         current_mode=profile.effective_mode,
         target_mode=target_mode,
         allowed=True,
-        reason=None,
+        reason=(
+            BillingProfileReason.COLLECTIBLE_SUBSCRIPTIONS_REQUIRE_ALIGNMENT
+            if profile.has_collectible_subscriptions
+            else None
+        ),
         requires_subscription_alignment=profile.has_collectible_subscriptions,
         profile=profile,
     )
@@ -242,7 +303,7 @@ def plan_subscription_billing_mode_write(
             requested_mode=requested_mode,
             resolved_mode=None,
             allowed=False,
-            reason="account_offer_billing_mode_mismatch",
+            reason=BillingProfileReason.ACCOUNT_OFFER_BILLING_MODE_MISMATCH,
         )
 
     resolved_mode = offer_mode or account_mode or requested_mode
@@ -253,7 +314,7 @@ def plan_subscription_billing_mode_write(
             requested_mode=requested_mode,
             resolved_mode=None,
             allowed=False,
-            reason="billing_mode_unresolved",
+            reason=BillingProfileReason.BILLING_MODE_UNRESOLVED,
         )
     if requested_mode is not None and requested_mode != resolved_mode:
         return SubscriptionBillingModeWriteDecision(
@@ -262,7 +323,7 @@ def plan_subscription_billing_mode_write(
             requested_mode=requested_mode,
             resolved_mode=resolved_mode,
             allowed=False,
-            reason="requested_billing_mode_mismatch",
+            reason=BillingProfileReason.REQUESTED_BILLING_MODE_MISMATCH,
         )
     return SubscriptionBillingModeWriteDecision(
         account_mode=account_mode,
@@ -282,15 +343,17 @@ def resolve_subscription_billing_mode_for_write(
 ) -> BillingMode:
     account = db.get(Subscriber, account_id)
     if account is None:
-        raise BillingModeWriteRejected("subscriber_not_found")
+        raise BillingModeWriteRejected(BillingProfileReason.SUBSCRIBER_NOT_FOUND)
     offer = db.get(CatalogOffer, offer_id)
     if offer is None:
-        raise BillingModeWriteRejected("offer_not_found")
+        raise BillingModeWriteRejected(BillingProfileReason.OFFER_NOT_FOUND)
     decision = plan_subscription_billing_mode_write(
         account_mode=account.billing_mode,
         offer_mode=offer.billing_mode,
         requested_mode=requested_mode,
     )
     if not decision.allowed or decision.resolved_mode is None:
-        raise BillingModeWriteRejected(decision.reason or "billing_mode_unresolved")
+        raise BillingModeWriteRejected(
+            decision.reason or BillingProfileReason.BILLING_MODE_UNRESOLVED
+        )
     return decision.resolved_mode

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
+
+from redis.exceptions import RedisError
 
 from app.services import app_cache
 
@@ -155,6 +157,23 @@ def invalidate_principal(principal_type: str, principal_id: str) -> int:
     if app_cache.delete_key(_claims_key(principal_type, principal_id)):
         deleted += 1
     return deleted
+
+
+def invalidate_principal_strict(principal_type: str, principal_id: str) -> int:
+    """Invalidate one principal or fail so an event handler can retry repair."""
+
+    client = app_cache.get_cache_redis()
+    if client is None:
+        raise RuntimeError("Durable auth cache is unavailable")
+    index_key = _principal_sessions_key(principal_type, principal_id)
+    try:
+        raw_session_ids = cast(set[object], client.smembers(index_key))
+        session_ids = {str(value) for value in raw_session_ids}
+        keys = [_session_key(session_id) for session_id in session_ids]
+        keys.extend((index_key, _claims_key(principal_type, principal_id)))
+        return cast(int, client.delete(*keys))
+    except RedisError as exc:
+        raise RuntimeError("Durable auth cache invalidation failed") from exc
 
 
 def invalidate_all_auth_cache() -> int:

@@ -1157,6 +1157,58 @@ def assign_role(
     return role
 
 
+def ensure_role(
+    db: Session,
+    *,
+    party_id: UUID,
+    role_type: str | PartyRoleType,
+    role_key: str | None = None,
+    status: str | PartyRoleStatus = PartyRoleStatus.active,
+    source: str | None = None,
+    metadata: dict | None = None,
+) -> PartyRole:
+    """Idempotently establish a role without bypassing suspended/ended state."""
+
+    party = _party(db, party_id)
+    contract = role_contract(role_type, role_key)
+    normalized_status = _enum_value(status, PartyRoleStatus, "status")
+    existing = (
+        db.query(PartyRole)
+        .filter(
+            PartyRole.party_id == party.id,
+            PartyRole.role_type == contract.role_type,
+            PartyRole.role_key == contract.role_key,
+        )
+        .one_or_none()
+    )
+    if existing is None:
+        return assign_role(
+            db,
+            party_id=party.id,
+            role_type=contract.role_type,
+            role_key=contract.role_key,
+            status=normalized_status,
+            source=source,
+            metadata=metadata,
+        )
+    if existing.status == normalized_status:
+        return existing
+    if (
+        existing.status == PartyRoleStatus.pending.value
+        and normalized_status == PartyRoleStatus.active.value
+    ):
+        existing.status = normalized_status
+        if source and not existing.source:
+            existing.source = source.strip() or None
+        db.flush()
+        return existing
+    raise PartyInvariantError(
+        f"Party role '{contract.role_type}:{contract.role_key}' is "
+        f"'{existing.status}' and cannot be implicitly changed to "
+        f"'{normalized_status}'"
+    )
+
+
 def transition_role(
     db: Session,
     *,

@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.rbac import Permission, RolePermission
-from app.schemas.rbac import RoleCreate, RolePermissionCreate, RoleUpdate
-from app.services import rbac as rbac_service
+from app.schemas.rbac import RoleCreate, RoleUpdate
+from app.services import rbac_catalog
+from app.services.owner_commands import CommandContext
 
 logger = logging.getLogger(__name__)
 
@@ -63,24 +64,26 @@ def create_role_with_permissions(
     *,
     payload: RoleCreate,
     permission_ids: list[str],
+    context: CommandContext,
 ):
-    """Create role and attach selected permissions."""
-    role = rbac_service.roles.create(db, payload)
-    normalized_ids = normalize_permission_ids(permission_ids)
-    for permission_id in normalized_ids:
-        rbac_service.role_permissions.create(
-            db,
-            RolePermissionCreate(
-                role_id=role.id,
-                permission_id=UUID(permission_id),
-            ),
-        )
-    return role
+    """Create a role and its complete permission policy atomically."""
+    return rbac_catalog.create_role(
+        db,
+        rbac_catalog.CreateRoleCommand(
+            context=context,
+            name=payload.name,
+            description=payload.description,
+            is_active=payload.is_active,
+            permission_ids=parse_permission_ids(permission_ids),
+        ),
+    )
 
 
 def get_role_edit_data(db: Session, role_id: str):
     """Return role form data for editing."""
-    role = rbac_service.roles.get(db, role_id)
+    role = rbac_catalog.get_role(db, UUID(role_id))
+    if role is None:
+        raise ValueError("Role not found")
     permissions = get_permissions_for_form(db)
     selected_permission_ids = {
         str(permission_id)
@@ -97,8 +100,15 @@ def get_role_edit_data(db: Session, role_id: str):
     }
 
 
+def parse_permission_ids(permission_ids: list[str]) -> tuple[UUID, ...]:
+    """Reject malformed permission identifiers instead of silently dropping them."""
+
+    return tuple(dict.fromkeys(UUID(permission_id) for permission_id in permission_ids))
+
+
 def normalize_permission_ids(permission_ids: list[str]) -> set[str]:
-    """Normalize posted permission ids into validated UUID-string set."""
+    """Normalize identifiers for error-form presentation only."""
+
     normalized: set[str] = set()
     for permission_id in permission_ids:
         try:
@@ -108,54 +118,27 @@ def normalize_permission_ids(permission_ids: list[str]) -> set[str]:
     return normalized
 
 
-def sync_role_permissions(db: Session, *, role_id, permission_ids: list[str]) -> None:
-    """Replace role-permission links with desired set."""
-    desired_ids = {
-        UUID(permission_id)
-        for permission_id in normalize_permission_ids(permission_ids)
-    }
-    role = rbac_service.roles.get(db, str(role_id))
-    if desired_ids:
-        found_ids = {
-            str(permission_id)
-            for permission_id in db.execute(
-                select(Permission.id)
-                .where(Permission.id.in_(desired_ids))
-                .where(Permission.is_active.is_(True))
-                .where(Permission.is_ui_assignable.is_(True))
-            ).scalars()
-        }
-        missing = {str(permission_id) for permission_id in desired_ids} - found_ids
-        if missing:
-            raise ValueError("One or more permissions are not assignable.")
-
-    existing_links = (
-        db.execute(select(RolePermission).where(RolePermission.role_id == role_id))
-        .scalars()
-        .all()
-    )
-    existing_ids = {link.permission_id: link for link in existing_links}
-
-    for permission_id, link in existing_ids.items():
-        if role.name == "admin" and not link.permission.is_ui_assignable:
-            continue
-        if permission_id not in desired_ids:
-            db.delete(link)
-    for permission_id in desired_ids - set(existing_ids.keys()):
-        db.add(RolePermission(role_id=role_id, permission_id=permission_id))
-
-
 def update_role_with_permissions(
     db: Session,
     *,
     role_id: str,
     payload: RoleUpdate,
     permission_ids: list[str],
+    context: CommandContext,
 ) -> None:
-    """Update role attributes and sync permissions in a single transaction."""
-    role = rbac_service.roles.update(db, role_id, payload)
-    sync_role_permissions(db, role_id=role.id, permission_ids=permission_ids)
-    db.commit()
+    """Update role attributes and its complete permission policy atomically."""
+    rbac_catalog.update_role(
+        db,
+        rbac_catalog.UpdateRoleCommand(
+            context=context,
+            role_id=UUID(role_id),
+            name=payload.name,
+            description=payload.description,
+            update_description=True,
+            is_active=payload.is_active,
+            permission_ids=parse_permission_ids(permission_ids),
+        ),
+    )
 
 
 def build_role_error_state(

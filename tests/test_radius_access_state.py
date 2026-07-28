@@ -13,13 +13,22 @@ class TestDeriveAccessStateActive:
     def test_active_maps_to_active(self):
         assert derive_access_state(SubscriptionStatus.active) == AccessState.active
 
-    def test_active_ignores_captive_restriction(self):
+    def test_active_service_with_captive_lock_maps_to_captive(self):
         assert (
             derive_access_state(
                 SubscriptionStatus.active,
                 restriction_mode=AccessRestrictionMode.captive,
             )
-            == AccessState.active
+            == AccessState.captive
+        )
+
+    def test_active_service_with_hard_reject_lock_maps_to_suspended(self):
+        assert (
+            derive_access_state(
+                SubscriptionStatus.active,
+                restriction_mode=AccessRestrictionMode.hard_reject,
+            )
+            == AccessState.suspended
         )
 
 
@@ -73,11 +82,13 @@ class TestDeriveAccessStateTerminated:
         [
             SubscriptionStatus.canceled,
             SubscriptionStatus.expired,
-            SubscriptionStatus.disabled,
         ],
     )
     def test_terminal_statuses_map_to_terminated(self, status):
         assert derive_access_state(status) == AccessState.terminated
+
+    def test_disabled_maps_to_reversible_suspended_access(self):
+        assert derive_access_state(SubscriptionStatus.disabled) == AccessState.suspended
 
     def test_terminal_ignores_captive_restriction(self):
         assert (

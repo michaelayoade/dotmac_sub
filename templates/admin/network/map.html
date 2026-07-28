@@ -400,6 +400,9 @@
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.access_points }}</span>
                     </div>
                     <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Support Structures</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.support_structures }}</span>
+                    <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">Fiber Segments</span>
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.fiber_segments }}</span>
                     </div>
@@ -408,38 +411,24 @@
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.network_devices }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>Device Up</span>
-                        <span class="status-foreground status-tone-positive font-medium">{{ stats.network_devices_online }}</span>
+                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>Device Working</span>
+                        <span class="status-foreground status-tone-positive font-medium">{{ stats.network_devices_working }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>Device Down</span>
-                        <span class="status-foreground status-tone-negative font-medium">{{ stats.network_devices_offline }}</span>
+                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>Device Not Working</span>
+                        <span class="status-foreground status-tone-negative font-medium">{{ stats.network_devices_not_working }}</span>
                     </div>
-                    <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-warning flex items-center gap-1"><span class="status-tone-dot status-tone-dot-warning h-2 w-2 rounded-full"></span>Device Degraded</span>
-                        <span class="status-foreground status-tone-warning font-medium">{{ stats.network_devices_degraded }}</span>
-                    </div>
-                    <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-neutral flex items-center gap-1"><span class="status-tone-dot status-tone-dot-neutral h-2 w-2 rounded-full"></span>Maintenance</span>
-                        <span class="status-foreground status-tone-neutral font-medium">{{ stats.network_devices_maintenance }}</span>
-                    </div>
-                    {% if stats.network_devices_retry_pending %}
-                    <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-warning">Refresh pending</span>
-                        <span class="status-foreground status-tone-warning font-medium">{{ stats.network_devices_retry_pending }}</span>
-                    </div>
-                    {% endif %}
                     <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">ONT Units (GPS)</span>
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.onts }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>ONT Online</span>
-                        <span class="status-foreground status-tone-positive font-medium">{{ stats.onts_online }}</span>
+                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>ONT Working</span>
+                        <span class="status-foreground status-tone-positive font-medium">{{ stats.onts_working }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>ONT Offline</span>
-                        <span class="status-foreground status-tone-negative font-medium">{{ stats.onts_offline }}</span>
+                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>ONT Not Working</span>
+                        <span class="status-foreground status-tone-negative font-medium">{{ stats.onts_not_working }}</span>
                     </div>
                     {% if stats.onts_warning %}
                     <div class="flex justify-between pl-3">
@@ -598,6 +587,10 @@
                         <span class="text-sm text-slate-700 dark:text-slate-300">Access Points</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-support-structures" checked class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Support Structures</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-network-devices" checked class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
                         <span class="text-sm text-slate-700 dark:text-slate-300">Network Devices</span>
                     </label>
@@ -704,6 +697,7 @@
         fdh: L.layerGroup().addTo(map),
         closures: L.layerGroup().addTo(map),
         accessPoints: L.layerGroup().addTo(map),
+        supportStructures: L.layerGroup().addTo(map),
         networkDevices: L.layerGroup().addTo(map),
         onts: L.layerGroup().addTo(map),
         customers: L.layerGroup().addTo(map),
@@ -747,14 +741,21 @@
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
-        network_device_online: L.divIcon({
+        support_structure: L.divIcon({
+            html: '<div style="background:var(--color-data-2);width:18px;height:18px;border-radius:3px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 012 0v16a1 1 0 01-2 0V2z"/><path d="M5 6l10 4-10 4V6z"/></svg></div>',
+            className: '',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9],
+            popupAnchor: [0, -9]
+        }),
+        network_device_working: L.divIcon({
             html: '<div style="background:var(--color-semantic-positive-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
-        network_device_offline: L.divIcon({
+        network_device_not_working: L.divIcon({
             html: '<div style="background:var(--color-semantic-negative-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
@@ -782,14 +783,14 @@
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
-        ont_online: L.divIcon({
+        ont_working: L.divIcon({
             html: '<div style="background:var(--color-accent-600);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
             className: '',
             iconSize: [16, 16],
             iconAnchor: [8, 8],
             popupAnchor: [0, -8]
         }),
-        ont_offline: L.divIcon({
+        ont_not_working: L.divIcon({
             html: '<div style="background:var(--color-semantic-negative-600);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
             className: '',
             iconSize: [16, 16],
@@ -900,18 +901,23 @@
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>';
                 typeLabel = 'Access Point';
                 break;
+            case 'support_structure':
+                iconBg = themeColor('data-2');
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 012 0v16a1 1 0 01-2 0V2z"/><path d="M5 6l10 4-10 4V6z"/></svg>';
+                typeLabel = 'Support Structure';
+                break;
             case 'ont':
                 if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
                     iconBg = p.signal_quality === 'critical'
                         ? themeColor('semantic-negative-600')
                         : themeColor('semantic-warning-600');
                     typeLabel = `ONT (Signal ${p.signal_quality})`;
-                } else if (p.status === 'online') {
+                } else if (p.status === 'working') {
                     iconBg = themeColor('accent-600');
-                    typeLabel = 'ONT (Online)';
+                    typeLabel = 'ONT (Working)';
                 } else {
                     iconBg = themeColor('semantic-negative-600');
-                    typeLabel = 'ONT (Offline)';
+                    typeLabel = 'ONT (Not Working)';
                 }
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg>';
                 detailUrl = `/admin/network/onts/${p.id}`;
@@ -1043,17 +1049,17 @@
                 } else if (p.type === 'ont') {
                     if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
                         icon = icons.ont_warning;
-                    } else if (p.status === 'online') {
-                        icon = icons.ont_online;
+                    } else if (p.status === 'working') {
+                        icon = icons.ont_working;
                     } else {
-                        icon = icons.ont_offline;
+                        icon = icons.ont_not_working;
                     }
                 } else if (p.type === 'network_device') {
                     const tone = p.status_presentation?.tone || 'neutral';
                     if (tone === 'positive') {
-                        icon = icons.network_device_online;
+                        icon = icons.network_device_working;
                     } else if (tone === 'negative') {
-                        icon = icons.network_device_offline;
+                        icon = icons.network_device_not_working;
                     } else if (tone === 'warning') {
                         icon = icons.network_device_degraded;
                     } else {
@@ -1094,6 +1100,7 @@
                     case 'fdh_cabinet': layers.fdh.addLayer(marker); break;
                     case 'splice_closure': layers.closures.addLayer(marker); break;
                     case 'access_point': layers.accessPoints.addLayer(marker); break;
+                    case 'support_structure': layers.supportStructures.addLayer(marker); break;
                     case 'network_device': layers.networkDevices.addLayer(marker); break;
                     case 'ont': layers.onts.addLayer(marker); break;
                     case 'customer': layers.customers.addLayer(marker); break;
@@ -1145,6 +1152,7 @@
         'layer-fdh': 'fdh',
         'layer-closures': 'closures',
         'layer-access-points': 'accessPoints',
+        'layer-support-structures': 'supportStructures',
         'layer-network-devices': 'networkDevices',
         'layer-onts': 'onts',
         'layer-customers': 'customers',

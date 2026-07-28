@@ -570,6 +570,7 @@ def test_parse_subscription_create_rejects_forged_lifecycle_facts():
     parsed = web_catalog_subscriptions_service.parse_subscription_form(form)
 
     assert parsed["status"] == "pending"
+    assert parsed["requested_status"] == "active"
     for field in (
         "start_at",
         "end_at",
@@ -589,7 +590,7 @@ def test_activate_after_create_stages_pending_before_canonical_command():
 
     flags = web_catalog_subscriptions_service.apply_create_quick_options(
         payload,
-        FormData({"activate_immediately": "1"}),
+        FormData({"status": "active"}),
     )
 
     assert flags == (True, False, False)
@@ -607,10 +608,9 @@ def test_subscription_create_activates_through_canonical_lifecycle(
             {
                 "account_id": str(subscriber.id),
                 "offer_id": str(catalog_offer.id),
-                "status": "canceled",
+                "status": "active",
                 "start_at": "2025-01-01T00:00",
                 "ipv4_method": "dynamic",
-                "activate_immediately": "1",
             }
         ),
         request=None,
@@ -660,8 +660,8 @@ def test_subscription_create_keeps_pending_and_redirects_to_record_on_activation
             {
                 "account_id": str(subscriber.id),
                 "offer_id": str(catalog_offer.id),
+                "status": "active",
                 "ipv4_method": "dynamic",
-                "activate_immediately": "1",
             }
         ),
         request=None,
@@ -683,6 +683,47 @@ def test_subscription_create_keeps_pending_and_redirects_to_record_on_activation
         f"/admin/catalog/subscriptions/{created.id}?error="
     )
     assert "Provisioning+owner+unavailable" in result["redirect_url"]
+
+
+@pytest.mark.parametrize(
+    ("selected_status", "expected_status"),
+    [
+        ("pending", SubscriptionStatus.pending),
+        ("suspended", SubscriptionStatus.suspended),
+        ("disabled", SubscriptionStatus.disabled),
+        ("canceled", SubscriptionStatus.canceled),
+    ],
+)
+def test_subscription_create_applies_selected_lifecycle_state(
+    db_session,
+    subscriber,
+    catalog_offer,
+    selected_status,
+    expected_status,
+):
+    result = web_catalog_subscription_workflows_service.handle_subscription_create_form(
+        db_session,
+        form=FormData(
+            {
+                "account_id": str(subscriber.id),
+                "offer_id": str(catalog_offer.id),
+                "status": selected_status,
+                "ipv4_method": "dynamic",
+            }
+        ),
+        request=None,
+        actor_id="operator-3",
+    )
+
+    created = (
+        db_session.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .filter(Subscription.offer_id == catalog_offer.id)
+        .one()
+    )
+    db_session.refresh(created)
+    assert created.status == expected_status
+    assert result["redirect_url"].endswith(f"/{subscriber.id}#subscriptions")
 
 
 def test_subscription_detail_context_exposes_events_notifications_and_radius_sync(
@@ -1021,8 +1062,20 @@ def test_force_subscription_reauth_reconciles_disconnects_and_audits(
     captured: dict[str, object] = {}
 
     def fake_reconcile(db, subscription_id):
+        from app.services.radius import (
+            ConnectivityProjectionDisposition,
+            SubscriptionConnectivityOutcome,
+        )
+
         captured["reconcile_subscription_id"] = subscription_id
-        return {"external_credentials_synced": 1}
+        return SubscriptionConnectivityOutcome(
+            subscription_id=subscription_id,
+            disposition=ConnectivityProjectionDisposition.projected,
+            external_credentials_synced=1,
+            requested_logins=1,
+            projected_logins=1,
+            projection_targets=1,
+        )
 
     def fake_disconnect(db, subscription_id, reason=None):
         captured["disconnect_subscription_id"] = subscription_id
@@ -2845,7 +2898,7 @@ def test_bulk_change_plan_excludes_suspended_by_default(
     from app.schemas.catalog import CatalogOfferCreate
     from app.services.web_catalog_subscriptions import bulk_change_plan
 
-    # Same plan_family so the change-plan family guard permits the migration.
+    # Commercial family does not decide delivery; catalog compatibility does.
     catalog_offer.plan_family = "std"
     target = catalog_service.offers.create(
         db_session,
@@ -2887,7 +2940,7 @@ def test_bulk_change_plan_include_suspended_opt_in(
     from app.schemas.catalog import CatalogOfferCreate
     from app.services.web_catalog_subscriptions import bulk_change_plan
 
-    # Same plan_family so the change-plan family guard permits the migration.
+    # Commercial family does not decide delivery; catalog compatibility does.
     catalog_offer.plan_family = "std"
     target = catalog_service.offers.create(
         db_session,

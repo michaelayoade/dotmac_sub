@@ -16,6 +16,7 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.gis import _point_wkt
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,16 @@ class SyncResult(ListResponseMixin):
     created: int = 0
     updated: int = 0
     skipped: int = 0
+
+
+@dataclass
+class GeoImportResult(ListResponseMixin):
+    """Outcome of an owner-side coordinate write from an external source."""
+
+    matched: int = 0  # target rows found for the supplied ids
+    written: int = 0  # coordinates set or changed
+    unchanged: int = 0  # target already carried the supplied coordinates
+    missing: int = 0  # supplied ids with no matching row (defensive)
 
 
 def _address_display_name(address: Address) -> str:
@@ -293,6 +304,72 @@ class GeoSync(ListResponseMixin):
                 )
             missing_query.update({"is_active": False}, synchronize_session=False)
         db.commit()
+        return result
+
+    @staticmethod
+    def apply_pop_coordinates(
+        db: Session, coordinates: dict[uuid.UUID, tuple[float, float]]
+    ) -> GeoImportResult:
+        """Write POP-site coordinates from an external source, idempotently.
+
+        ``coordinates`` maps ``pop_sites.id`` to ``(latitude, longitude)``. This
+        is the owner-side spatial write for ``gis.spatial_sync``: it sets
+        ``latitude``/``longitude``/``geom`` only when they differ, then projects
+        the POPs into ``geo_locations`` via :meth:`sync_pop_sites`. Callers
+        (e.g. the Splynx backfill runner) own resolving the external source to
+        Sub ``pop_sites`` ids; they never write the geometry themselves.
+        """
+        result = GeoImportResult()
+        if not coordinates:
+            return result
+        pops = db.query(PopSite).filter(PopSite.id.in_(coordinates.keys())).all()
+        for pop in pops:
+            result.matched += 1
+            latitude, longitude = coordinates[pop.id]
+            if pop.latitude == latitude and pop.longitude == longitude:
+                result.unchanged += 1
+                continue
+            pop.latitude = latitude
+            pop.longitude = longitude
+            pop.geom = _point_wkt(latitude, longitude)
+            result.written += 1
+        result.missing = len(coordinates) - result.matched
+        db.commit()
+        if result.written:
+            GeoSync.sync_pop_sites(db)
+        return result
+
+    @staticmethod
+    def apply_address_coordinates(
+        db: Session, coordinates: dict[uuid.UUID, tuple[float, float]]
+    ) -> GeoImportResult:
+        """Write subscriber-address coordinates from an external source.
+
+        ``coordinates`` maps ``addresses.id`` to ``(latitude, longitude)``.
+        Owner-side spatial write for ``gis.spatial_sync``: sets
+        ``latitude``/``longitude``/``geom`` only when they differ, then projects
+        the affected addresses into ``geo_locations`` via
+        :meth:`sync_addresses`. Callers own resolving the external subscriber to
+        its Sub ``addresses`` row.
+        """
+        result = GeoImportResult()
+        if not coordinates:
+            return result
+        rows = db.query(Address).filter(Address.id.in_(coordinates.keys())).all()
+        for address in rows:
+            result.matched += 1
+            latitude, longitude = coordinates[address.id]
+            if address.latitude == latitude and address.longitude == longitude:
+                result.unchanged += 1
+                continue
+            address.latitude = latitude
+            address.longitude = longitude
+            address.geom = _point_wkt(latitude, longitude)
+            result.written += 1
+        result.missing = len(coordinates) - result.matched
+        db.commit()
+        if result.written:
+            GeoSync.sync_addresses(db)
         return result
 
 

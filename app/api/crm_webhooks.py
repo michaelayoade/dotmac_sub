@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.integration_platform import IntegrationInbox
-from app.services import projects_mirror, quotes_mirror, work_orders_mirror
-from app.services.crm_customers import upsert_customer_from_payload
+from app.services import quotes_mirror
+from app.services.crm_customers import CRMCustomerObservation, observe_customer
 from app.services.integrations import inbox as integration_inbox
 from app.services.integrations.crm_capability import inbound_secret_material
 
@@ -29,27 +29,20 @@ DELIVERY_HEADER = "X-Webhook-Delivery-Id"
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 CHAT_EVENTS = {"message.outbound"}
-PROJECT_EVENTS = {
-    "project.created",
-    "project.updated",
-    "project.completed",
-    "project.canceled",
-    "project_task.completed",
-    "project_task.updated",
-}
-WORK_ORDER_EVENTS = {
-    "work_order.created",
-    "work_order.updated",
-    "work_order.dispatched",
-    "work_order.completed",
-    "work_order.canceled",
-}
 QUOTE_EVENTS = {
     "quote.created",
     "quote.updated",
     "quote.accepted",
     "quote.rejected",
 }
+
+
+class CrmTicketObservationNotReady(RuntimeError):
+    """The ticket event is valid but its executable capability is unavailable."""
+
+    def __init__(self, issue_codes: tuple[str, ...]) -> None:
+        super().__init__("CRM ticket observation capability is not ready")
+        self.issue_codes = issue_codes
 
 
 def _verify_signature(raw_body: bytes, presented: str | None, secret: str) -> None:
@@ -107,7 +100,7 @@ async def _receive_verified(
     provider_event_id = str(request.headers.get(DELIVERY_HEADER) or "").strip()
     if not provider_event_id:
         provider_event_id = f"{event_type}:{hashlib.sha256(raw_body).hexdigest()}"
-    receipt, _created = integration_inbox.receive_verified(
+    receipt, should_process = integration_inbox.receive_and_claim_verified(
         db,
         capability_binding_id=binding.id,
         provider_event_id=provider_event_id,
@@ -122,9 +115,7 @@ async def _receive_verified(
             if value
         },
     )
-    if not integration_inbox.claim_for_processing(receipt):
-        return event_type, payload, receipt, False
-    return event_type, payload, receipt, True
+    return event_type, payload, receipt, should_process
 
 
 def _body(payload: dict[str, Any]) -> dict[str, Any]:
@@ -137,18 +128,27 @@ def _complete(
     receipt: IntegrationInbox,
     consequence: dict[str, Any],
 ) -> dict[str, Any]:
-    integration_inbox.mark_processed(receipt, consequence=consequence)
-    db.commit()
-    return consequence
-
-
-def _failed(db: Session, receipt: IntegrationInbox, exc: Exception) -> None:
-    integration_inbox.mark_failed(
-        receipt,
-        error_code="crm_consequence_failed",
-        error_detail=type(exc).__name__,
+    return integration_inbox.complete_consequence(
+        db,
+        receipt=receipt,
+        consequence=consequence,
     )
-    db.commit()
+
+
+def _failed(
+    db: Session,
+    receipt: IntegrationInbox,
+    exc: Exception,
+    *,
+    error_code: str = "crm_consequence_failed",
+    error_detail: str | None = None,
+) -> None:
+    integration_inbox.fail_consequence(
+        db,
+        receipt=receipt,
+        error_code=error_code,
+        error_detail=error_detail or type(exc).__name__,
+    )
 
 
 def _existing(receipt: IntegrationInbox, should_process: bool) -> dict[str, Any] | None:
@@ -171,8 +171,8 @@ async def receive_crm_customer(
     try:
         if event_type not in CUSTOMER_EVENTS:
             return _complete(db, receipt, {"status": "ignored", "event": event_type})
-        consequence = upsert_customer_from_payload(db, payload)
-        consequence["status"] = "ok"
+        observation = CRMCustomerObservation.from_payload(payload)
+        consequence = observe_customer(db, observation).as_consequence()
         return _complete(db, receipt, consequence)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
@@ -221,6 +221,13 @@ async def receive_crm_event(
                     "event": event_type,
                 },
             )
+        from app.services.integrations.crm_ticket_readiness import (
+            resolve_crm_ticket_pull_readiness,
+        )
+
+        readiness = resolve_crm_ticket_pull_readiness(db, control_enabled=True)
+        if not readiness.ready:
+            raise CrmTicketObservationNotReady(readiness.issue_codes)
         ticket_id = str(payload.get("ticket_id") or "").strip()
         if not ticket_id:
             return _complete(
@@ -247,7 +254,15 @@ async def receive_crm_event(
             {"status": "queued", "event": event_type, "ticket_id": ticket_id},
         )
     except Exception as exc:
-        _failed(db, receipt, exc)
+        if isinstance(exc, CrmTicketObservationNotReady):
+            integration_inbox.fail_claimed_consequence(
+                db,
+                receipt_id=receipt.id,
+                error_code="crm_ticket_observation_not_ready",
+                error_detail=",".join(exc.issue_codes),
+            )
+        else:
+            _failed(db, receipt, exc)
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(
@@ -350,35 +365,6 @@ async def _receive_mirror_event(
     except Exception as exc:
         _failed(db, receipt, exc)
         raise
-
-
-@router.post("/projects")
-async def receive_crm_project_event(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    return await _receive_mirror_event(
-        request,
-        db,
-        allowed_events=PROJECT_EVENTS,
-        default_event="project.updated",
-        consequence_owner=projects_mirror.apply_webhook,
-    )
-
-
-@router.post("/work-orders")
-async def receive_crm_work_order_event(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    return await _receive_mirror_event(
-        request,
-        db,
-        allowed_events=WORK_ORDER_EVENTS,
-        default_event="work_order.updated",
-        consequence_owner=work_orders_mirror.apply_webhook,
-        control_key="crm.work_order_pull",
-    )
 
 
 @router.post("/quotes")

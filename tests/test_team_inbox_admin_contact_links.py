@@ -17,7 +17,7 @@ from app.models.team_inbox import (
     InboxMessageTemplate,
     InboxReplyMacro,
 )
-from app.services import team_inbox_operations, team_inbox_read
+from app.services import team_inbox_operations, team_inbox_projection, team_inbox_read
 from app.web.admin import inbox as inbox_web
 
 
@@ -74,10 +74,10 @@ def test_admin_contact_link_candidates_match_timeline_context(db_session):
     conversation = _conversation(db_session, subject="Ada social message")
     timeline = team_inbox_read.get_conversation_timeline(db_session, conversation.id)
 
-    candidates = inbox_web._contact_link_candidates(db_session, timeline)
+    candidates = team_inbox_projection.contact_link_candidates(db_session, timeline)
 
-    assert candidates["subscribers"][0]["id"] == str(subscriber.id)
-    assert candidates["resellers"][0]["id"] == str(reseller.id)
+    assert candidates.subscribers[0].id == str(subscriber.id)
+    assert candidates.resellers[0].id == str(reseller.id)
 
 
 def test_admin_contact_link_route_links_subscriber(db_session, monkeypatch):
@@ -256,6 +256,7 @@ def test_admin_macro_create_and_reply_records_execution(db_session, monkeypatch)
     monkeypatch.setattr(
         web_admin_service, "get_actor_id", lambda request: str(actor_id)
     )
+    db_session.commit()
 
     create_response = inbox_web.team_inbox_macro_create(
         conversation.id,
@@ -333,6 +334,7 @@ def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
     monkeypatch.setattr(
         web_admin_service, "get_actor_id", lambda request: str(actor_id)
     )
+    db_session.commit()
     create_response = inbox_web.team_inbox_template_create(
         conversation.id,
         name="Outage update",

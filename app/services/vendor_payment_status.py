@@ -1,4 +1,4 @@
-"""Vendor-facing projection of refreshed ERP accounts-payable observations."""
+"""Vendor-facing projection of replaceable payables observations."""
 
 from __future__ import annotations
 
@@ -7,24 +7,24 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 
-from app.services.status_presentation import (
-    erp_supplier_invoice_status_presentation,
-)
+from app.services.status_presentation import supplier_invoice_status_presentation
 from app.services.ui_contracts import StateValue
 
-ERP_PAYMENT_OBSERVATION_MAX_AGE = timedelta(minutes=15)
+PAYMENT_OBSERVATION_MAX_AGE = timedelta(minutes=15)
+# Compatibility for callers of the pre-boundary projection API.
+ERP_PAYMENT_OBSERVATION_MAX_AGE = PAYMENT_OBSERVATION_MAX_AGE
 
 
 class VendorPaymentObservation(Protocol):
     currency: str
-    erp_purchase_invoice_id: str | None
-    erp_purchase_invoice_status: str | None
-    erp_purchase_invoice_total_amount: Decimal | None
-    erp_purchase_invoice_amount_paid: Decimal | None
-    erp_purchase_invoice_balance_due: Decimal | None
-    erp_purchase_invoice_status_observed_at: datetime | None
-    erp_purchase_invoice_status_source_updated_at: datetime | None
-    erp_purchase_invoice_status_error: str | None
+    payables_document_reference: str | None
+    payment_status: str | None
+    payment_total_amount: Decimal | None
+    payment_amount_paid: Decimal | None
+    payment_balance_due: Decimal | None
+    payment_observed_at: datetime | None
+    payment_source_updated_at: datetime | None
+    payment_observation_error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,23 +59,19 @@ def project_vendor_payment_status(
     *,
     now: datetime | None = None,
 ) -> VendorPaymentProjection:
-    """Render payment truth only when the ERP refresher has observed it."""
-    observed_at = _aware(
-        getattr(invoice, "erp_purchase_invoice_status_observed_at", None)
-    )
-    error = str(
-        getattr(invoice, "erp_purchase_invoice_status_error", None) or ""
-    ).strip()
+    """Render payment truth only from a timestamped payables observation."""
+    observed_at = _aware(getattr(invoice, "payment_observed_at", None))
+    error = str(getattr(invoice, "payment_observation_error", None) or "").strip()
     currency = str(invoice.currency or "NGN").upper()
     if observed_at is None:
         absent_state_factory = StateValue.unavailable if error else StateValue.unknown
         detail = (
-            "ERP payment status is temporarily unavailable."
+            "Payment status is temporarily unavailable."
             if error
             else (
-                "Waiting for ERP payment status."
-                if getattr(invoice, "erp_purchase_invoice_id", None)
-                else "Waiting for this invoice to be created in ERP."
+                "Waiting for payment status."
+                if getattr(invoice, "payables_document_reference", None)
+                else "Waiting for this invoice to reach the payables system."
             )
         )
         return VendorPaymentProjection(
@@ -87,16 +83,10 @@ def project_vendor_payment_status(
             detail=detail,
         )
 
-    total_amount: Decimal | None = getattr(
-        invoice, "erp_purchase_invoice_total_amount", None
-    )
-    amount_paid: Decimal | None = getattr(
-        invoice, "erp_purchase_invoice_amount_paid", None
-    )
-    balance_due: Decimal | None = getattr(
-        invoice, "erp_purchase_invoice_balance_due", None
-    )
-    status = getattr(invoice, "erp_purchase_invoice_status", None)
+    total_amount: Decimal | None = getattr(invoice, "payment_total_amount", None)
+    amount_paid: Decimal | None = getattr(invoice, "payment_amount_paid", None)
+    balance_due: Decimal | None = getattr(invoice, "payment_balance_due", None)
+    status = getattr(invoice, "payment_status", None)
     if not status or total_amount is None or amount_paid is None or balance_due is None:
         return VendorPaymentProjection(
             status=StateValue.unavailable(),
@@ -104,12 +94,12 @@ def project_vendor_payment_status(
             amount_paid=StateValue.unavailable(),
             balance_due=StateValue.unavailable(),
             currency=currency,
-            detail="ERP returned an incomplete payment observation.",
+            detail="The payables source returned an incomplete observation.",
         )
 
     current_time = _aware(now) or datetime.now(UTC)
-    stale = bool(error) or current_time - observed_at > ERP_PAYMENT_OBSERVATION_MAX_AGE
-    presentation = erp_supplier_invoice_status_presentation(status)
+    stale = bool(error) or current_time - observed_at > PAYMENT_OBSERVATION_MAX_AGE
+    presentation = supplier_invoice_status_presentation(status)
     return VendorPaymentProjection(
         status=_observed_state(presentation, stale=stale, observed_at=observed_at),
         total_amount=_observed_state(
@@ -123,11 +113,9 @@ def project_vendor_payment_status(
         ),
         currency=currency,
         detail=(
-            "Last known ERP payment status; refresh is delayed."
+            "Last known payment status; refresh is delayed."
             if stale
-            else "Payment status confirmed by ERP."
+            else "Payment status confirmed by the payables source."
         ),
-        source_updated_at=_aware(
-            getattr(invoice, "erp_purchase_invoice_status_source_updated_at", None)
-        ),
+        source_updated_at=_aware(getattr(invoice, "payment_source_updated_at", None)),
     )

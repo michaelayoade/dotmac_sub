@@ -1,4 +1,9 @@
-"""Sub-side facade for version-pinned DotMac ERP capabilities."""
+"""Sub-side facade for version-pinned back-office capabilities.
+
+The historical module and class names remain for compatibility. Provider
+selection belongs to the enabled/default capability binding, so a replacement
+connector can implement the same contracts without changing Sub domain callers.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.services.dotmac_erp.client import DotMacERPError, DotMacERPTransientError
 from app.services.integrations import installations
-from app.services.integrations.connectors.dotmac_erp import (
+from app.services.integrations.backoffice_contracts import (
     ERP_INVENTORY_CAPABILITY,
     ERP_OPERATIONAL_SYNC_CAPABILITY,
     ERP_OUTBOX_CAPABILITY,
@@ -21,11 +26,9 @@ from app.services.integrations.runtime_execution import (
     make_operation_executor,
 )
 
-CONNECTOR_KEY = "dotmac.erp"
-
 
 class ErpCapabilityClient:
-    """Client-shaped facade whose every call passes through a typed binding."""
+    """Legacy-shaped facade whose every call passes through a typed binding."""
 
     def __init__(self, db: Session) -> None:
         self._db = db
@@ -51,7 +54,6 @@ class ErpCapabilityClient:
         binding = installations.require_enabled_capability_binding(
             self._db,
             capability_id=capability_id,
-            connector_key=CONNECTOR_KEY,
         )
         context = build_execution_context(
             self._db,
@@ -231,7 +233,6 @@ def capability_enabled(db: Session, capability_id: str) -> bool:
         installations.require_enabled_capability_binding(
             db,
             capability_id=capability_id,
-            connector_key=CONNECTOR_KEY,
         )
     except installations.InstallationError:
         return False

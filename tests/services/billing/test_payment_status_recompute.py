@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -31,6 +32,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.enforcement_lock import EnforcementReason
+from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.billing import PaymentAllocationApply, PaymentCreate
 from app.services import billing as billing_service
@@ -85,6 +87,9 @@ def _make_subscription(
         offer_id=offer.id,
         status=status,
         billing_mode=billing_mode,
+        unit_price=(
+            Decimal("1000.00") if billing_mode == BillingMode.prepaid else None
+        ),
         next_billing_at=next_billing_at,
     )
     db.add(subscription)
@@ -439,15 +444,28 @@ def test_current_prepaid_invoice_payment_keeps_existing_period_anchor(db_session
     assert entitlement.ends_at == _utc_naive(period_end)
 
 
-def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
-    from app.services.billing.payments import apply_prepaid_service_credit
+@pytest.mark.parametrize(
+    "subscription_status",
+    [
+        SubscriptionStatus.active,
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+    ],
+)
+def test_canonical_prepaid_funding_renewal_creates_entitlement(
+    db_session, subscription_status
+):
+    from app.services.prepaid_service_renewals import (
+        FundingChangeRenewalDisposition,
+        apply_due_prepaid_service_after_funding_change,
+    )
 
     subscriber = _make_subscriber(db_session, status=SubscriberStatus.active)
     paid_at = datetime(2026, 8, 5, 14, 30, tzinfo=UTC)
     subscription = _make_subscription(
         db_session,
         subscriber,
-        status=SubscriptionStatus.active,
+        status=subscription_status,
         billing_mode=BillingMode.prepaid,
         billing_cycle=BillingCycle.monthly,
         next_billing_at=paid_at.replace(hour=0, minute=0, second=0, microsecond=0),
@@ -485,7 +503,15 @@ def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
     )
     db_session.commit()
 
-    assert apply_prepaid_service_credit(db_session, payment) is True
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=paid_at,
+        funding_currency="NGN",
+        evidence_ref=f"pytest:payment:{payment.id}",
+        trigger_payment_id=payment.id,
+    )
+    assert result.disposition == FundingChangeRenewalDisposition.funded
     db_session.flush()
 
     db_session.refresh(subscription)
@@ -495,5 +521,20 @@ def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
         .one()
     )
     assert entitlement.amount_funded == Decimal("1000.00")
-    assert entitlement.starts_at == _utc_naive(datetime(2026, 8, 5, tzinfo=UTC))
-    assert entitlement.ends_at == subscription.next_billing_at
+    assert _utc_naive(entitlement.starts_at) == _utc_naive(
+        datetime(2026, 8, 5, tzinfo=UTC)
+    )
+    assert _utc_naive(entitlement.ends_at) == _utc_naive(subscription.next_billing_at)
+    event = (
+        db_session.query(EventStore)
+        .filter_by(
+            event_type="prepaid_service.renewed",
+            subscription_id=subscription.id,
+        )
+        .one()
+    )
+    assert event.payload["source"] == "account_credit"
+    assert event.payload["trigger_payment_id"] == str(payment.id)
+    assert (
+        event.payload["renewed_through"] == datetime(2026, 9, 5, tzinfo=UTC).isoformat()
+    )

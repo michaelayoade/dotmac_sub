@@ -1,5 +1,8 @@
 from app.models.network import OLTDevice, OntUnit
-from app.services.network.ont_serials import find_unique_active_ont_by_serial
+from app.services.network.ont_serials import (
+    build_active_ont_serial_index,
+    find_unique_active_ont_by_serial,
+)
 
 
 def test_find_unique_active_ont_by_serial_matches_huawei_hex_variant(db_session):
@@ -50,3 +53,22 @@ def test_find_unique_active_ont_by_serial_ignores_synthetic_serials(db_session):
         )
         is None
     )
+
+
+def test_active_ont_serial_index_preserves_unique_and_ambiguous_matching(db_session):
+    ont = OntUnit(serial_number="HWTC7D4701C3", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+
+    index = build_active_ont_serial_index(db_session)
+    assert index.get(ont.id) == ont
+    assert index.find_unique("485754437D4701C3") == ont
+
+    duplicate = OntUnit(serial_number="485754437D4701C3", is_active=True)
+    db_session.add(duplicate)
+    db_session.commit()
+
+    index = build_active_ont_serial_index(db_session)
+
+    assert index.find_unique("HWTC7D4701C3") is None
+    assert index.find_unique("HWTC7D4701C3", exclude_ont_id=duplicate.id) == ont

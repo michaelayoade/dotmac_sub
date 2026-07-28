@@ -28,16 +28,6 @@ class HandlerStage(enum.IntEnum):
 
 
 @dataclass(frozen=True)
-class SettingRef:
-    domain: SettingDomain
-    key: str
-
-    @property
-    def locator(self) -> str:
-        return f"{self.domain.value}.{self.key}"
-
-
-@dataclass(frozen=True)
 class ControlRelationship:
     name: str
     mode: RelationshipMode
@@ -91,15 +81,6 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
         rule="First non-empty field wins in declared tenant-to-platform order.",
     ),
     ControlRelationship(
-        name="payment_gateway_failover",
-        mode=RelationshipMode.exclusive,
-        members=(
-            "billing.payment_gateway_primary_provider",
-            "billing.payment_gateway_secondary_provider",
-        ),
-        rule="Primary and secondary providers must differ while failover is enabled.",
-    ),
-    ControlRelationship(
         name="team_email_sender_resolution",
         mode=RelationshipMode.precedence,
         members=(
@@ -117,18 +98,6 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
         rule=(
             "An enabled whatsapp installation configured for meta_cloud_api is "
             "the only transport provider."
-        ),
-    ),
-    ControlRelationship(
-        name="prepaid_enforcement_cutover",
-        mode=RelationshipMode.chain,
-        members=(
-            "financial.prepaid_funding_reconciliation",
-            "collections.prepaid_balance_enforcement",
-        ),
-        rule=(
-            "A fresh exact-cohort funding reconciliation, including any signed "
-            "quarantine, must be recorded before prepaid enforcement is enabled."
         ),
     ),
     ControlRelationship(
@@ -181,14 +150,74 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     "ProvisioningHandler": HandlerControl(
         "ProvisioningHandler", HandlerStage.state, 40, ("service_provisioning",)
     ),
+    "SalesLifecycleProjectionHandler": HandlerControl(
+        "SalesLifecycleProjectionHandler",
+        HandlerStage.state,
+        45,
+        ("sales_to_service_lifecycle_projection",),
+    ),
+    "BillingLifecycleProjectionHandler": HandlerControl(
+        "BillingLifecycleProjectionHandler",
+        HandlerStage.state,
+        47,
+        ("billing_shadow_owner_output_projection",),
+    ),
+    "OutageLifecycleProjectionHandler": HandlerControl(
+        "OutageLifecycleProjectionHandler",
+        HandlerStage.state,
+        46,
+        ("outage_lifecycle_projection",),
+    ),
+    "SupportLifecycleProjectionHandler": HandlerControl(
+        "SupportLifecycleProjectionHandler",
+        HandlerStage.state,
+        48,
+        ("support_lifecycle_projection",),
+    ),
+    "MaterialsLifecycleProjectionHandler": HandlerControl(
+        "MaterialsLifecycleProjectionHandler",
+        HandlerStage.state,
+        49,
+        ("materials_lifecycle_projection",),
+    ),
+    "IdentityLifecycleProjectionHandler": HandlerControl(
+        "IdentityLifecycleProjectionHandler",
+        HandlerStage.state,
+        44,
+        ("identity_lifecycle_projection",),
+    ),
     "EnforcementHandler": HandlerControl(
         "EnforcementHandler", HandlerStage.state, 50, ("service_enforcement",)
+    ),
+    "CredentialSessionProjectionHandler": HandlerControl(
+        "CredentialSessionProjectionHandler",
+        HandlerStage.state,
+        60,
+        ("credential_session_projection_invalidation",),
+    ),
+    "IPAssignmentProjectionHandler": HandlerControl(
+        "IPAssignmentProjectionHandler",
+        HandlerStage.state,
+        55,
+        ("exact_service_ipv4_projection",),
     ),
     "ArrangementHandler": HandlerControl(
         "ArrangementHandler", HandlerStage.state, 20, ("payment_arrangements",)
     ),
+    "SubscriptionChangeExecutionHandler": HandlerControl(
+        "SubscriptionChangeExecutionHandler",
+        HandlerStage.state,
+        25,
+        ("subscription_change_payment_release",),
+    ),
     "ReferralHandler": HandlerControl(
         "ReferralHandler", HandlerStage.state, 30, ("referral_qualification",)
+    ),
+    "PrepaidRenewalHandler": HandlerControl(
+        "PrepaidRenewalHandler",
+        HandlerStage.state,
+        47,
+        ("prepaid_service_renewal_after_funding",),
     ),
     "NotificationHandler": HandlerControl(
         "NotificationHandler",
@@ -196,18 +225,33 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
         10,
         ("customer_notifications",),
     ),
+    "StaffInviteHandler": HandlerControl(
+        "StaffInviteHandler",
+        HandlerStage.communication,
+        20,
+        ("staff_invitation_intents",),
+    ),
+    "ResellerInviteHandler": HandlerControl(
+        "ResellerInviteHandler",
+        HandlerStage.communication,
+        30,
+        ("reseller_invitation_intents",),
+    ),
+    "PasswordRecoveryHandler": HandlerControl(
+        "PasswordRecoveryHandler",
+        HandlerStage.communication,
+        40,
+        ("password_recovery_intents",),
+    ),
     "WebhookHandler": HandlerControl(
         "WebhookHandler", HandlerStage.external, 10, ("external_webhooks",)
     ),
 }
 
-RELATIONSHIP_SETTING_KEYS = {
-    (SettingDomain.billing, "payment_gateway_failover_enabled"),
-    (SettingDomain.billing, "payment_gateway_primary_provider"),
-    (SettingDomain.billing, "payment_gateway_secondary_provider"),
-}
+RELATIONSHIP_SETTING_KEYS: set[tuple[SettingDomain, str]] = set()
 
 CHAINED_EVENT_TYPES = {
+    "account_credit.deposited",
     "subscription.activated",
     "subscription.suspended",
     "subscription.resumed",
@@ -224,6 +268,12 @@ CHAINED_EVENT_TYPES = {
 # Dependencies within the same stage. Stage-to-stage dependencies are derived
 # automatically for chained events.
 EVENT_HANDLER_DEPENDENCIES: dict[str, dict[str, tuple[str, ...]]] = {
+    "account_credit.deposited": {
+        "EnforcementHandler": ("PrepaidRenewalHandler",),
+    },
+    "payment.received": {
+        "EnforcementHandler": ("PrepaidRenewalHandler",),
+    },
     "subscription.activated": {
         "EnforcementHandler": ("ProvisioningHandler",),
     },
@@ -245,10 +295,38 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP
 
         return frozenset(item.value for item in SUBSCRIPTION_LIFECYCLE_MAP)
+    if handler_name == "CredentialSessionProjectionHandler":
+        from app.services.events.handlers.credential_session_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "IPAssignmentProjectionHandler":
+        from app.services.events.handlers.ip_assignment_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "NotificationHandler":
         from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
 
         return frozenset(item.value for item in EVENT_NOTIFICATION_SPECS)
+    if handler_name == "PrepaidRenewalHandler":
+        from app.services.events.handlers.prepaid_renewal import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "StaffInviteHandler":
+        from app.services.events.handlers.staff_invite import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "ResellerInviteHandler":
+        from app.services.events.handlers.reseller_invite import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "PasswordRecoveryHandler":
+        from app.services.events.handlers.password_recovery import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "WebhookHandler":
         # Event subscriptions are data-driven; the delivery adapter is a
         # wildcard and filters by enabled typed subscriptions at runtime.
@@ -257,12 +335,54 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         from app.services.events.handlers.arrangements import HANDLED_EVENT_TYPES
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "SubscriptionChangeExecutionHandler":
+        from app.services.events.handlers.subscription_change_execution import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "EnforcementHandler":
         from app.services.events.handlers.enforcement import HANDLED_EVENT_TYPES
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "ProvisioningHandler":
         from app.services.events.handlers.provisioning import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "SalesLifecycleProjectionHandler":
+        from app.services.events.handlers.sales_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "BillingLifecycleProjectionHandler":
+        from app.services.events.handlers.billing_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "OutageLifecycleProjectionHandler":
+        from app.services.events.handlers.outage_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "SupportLifecycleProjectionHandler":
+        from app.services.events.handlers.support_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "MaterialsLifecycleProjectionHandler":
+        from app.services.events.handlers.materials_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "IdentityLifecycleProjectionHandler":
+        from app.services.events.handlers.identity_lifecycle_projection import (
+            HANDLED_EVENT_TYPES,
+        )
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "ReferralHandler":
@@ -314,6 +434,16 @@ def event_execution_plan(
                 for prior in applicable
                 if HANDLER_CONTROLS[prior.__class__.__name__].stage < control.stage
             )
+        elif chained:
+            # Preserve deterministic behavior for extensions/tests that have not
+            # entered the production control registry yet.
+            dependencies.extend(
+                prior.__class__.__name__ for prior in applicable[:index]
+            )
+        if all_declared and control is not None:
+            # Explicit owner-to-owner ordering is narrower than a chained event:
+            # it must not make independent communication or external delivery
+            # depend on an unrelated state consequence.
             dependencies.extend(
                 dependency
                 for dependency in EVENT_HANDLER_DEPENDENCIES.get(event_type, {}).get(
@@ -323,12 +453,6 @@ def event_execution_plan(
                     candidate.__class__.__name__ == dependency
                     for candidate in applicable
                 )
-            )
-        elif chained:
-            # Preserve deterministic behavior for extensions/tests that have not
-            # entered the production control registry yet.
-            dependencies.extend(
-                prior.__class__.__name__ for prior in applicable[:index]
             )
         steps.append(
             EventHandlerStep(
@@ -361,19 +485,17 @@ def validate_event_execution_policy(handlers: Iterable[Any]) -> None:
                 f"Event handler {name} declares unknown event types: {', '.join(unknown)}"
             )
 
-    non_chained_dependencies = sorted(
-        set(EVENT_HANDLER_DEPENDENCIES) - CHAINED_EVENT_TYPES
-    )
-    if non_chained_dependencies:
+    dependency_event_types = set(EVENT_HANDLER_DEPENDENCIES)
+    unknown_dependency_events = sorted(dependency_event_types - valid_event_types)
+    if unknown_dependency_events:
         raise ControlRelationshipError(
-            "Event dependencies declared for non-chained events: "
-            + ", ".join(non_chained_dependencies)
+            "Unknown dependency event types: " + ", ".join(unknown_dependency_events)
         )
 
-    for event_type in CHAINED_EVENT_TYPES:
+    for event_type in CHAINED_EVENT_TYPES | dependency_event_types:
         dependencies_by_handler = EVENT_HANDLER_DEPENDENCIES.get(event_type, {})
         plan = event_execution_plan(event_type, resolved)
-        if len(plan) < 2:
+        if event_type in CHAINED_EVENT_TYPES and len(plan) < 2:
             raise ControlRelationshipError(
                 f"Chained event {event_type} has fewer than two subscribed handlers"
             )
@@ -507,64 +629,12 @@ def audit_event_relationships() -> list[ControlFinding]:
     return []
 
 
-def _value(
-    db: Session,
-    ref: SettingRef,
-    pending: tuple[SettingDomain, str, object] | None = None,
-) -> object:
-    if pending and pending[0] == ref.domain and pending[1] == ref.key:
-        return pending[2]
-    from app.services.settings_spec import resolve_value
-
-    return resolve_value(db, ref.domain, ref.key)
-
-
-def _enabled(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def audit_setting_relationships(
     db: Session,
     *,
     pending: tuple[SettingDomain, str, object] | None = None,
 ) -> list[ControlFinding]:
-    findings: list[ControlFinding] = []
-    failover = _enabled(
-        _value(
-            db,
-            SettingRef(SettingDomain.billing, "payment_gateway_failover_enabled"),
-            pending,
-        )
-    )
-    primary = str(
-        _value(
-            db,
-            SettingRef(SettingDomain.billing, "payment_gateway_primary_provider"),
-            pending,
-        )
-        or ""
-    )
-    secondary = str(
-        _value(
-            db,
-            SettingRef(SettingDomain.billing, "payment_gateway_secondary_provider"),
-            pending,
-        )
-        or ""
-    )
-    if failover and primary and primary == secondary:
-        findings.append(
-            ControlFinding(
-                code="payment_provider_not_exclusive",
-                severity="error",
-                message="Payment failover primary and secondary providers must differ.",
-                members=(primary, secondary),
-            )
-        )
-
-    return findings
+    return []
 
 
 def audit_feature_control_relationships(
@@ -598,27 +668,6 @@ def audit_feature_control_relationships(
                 members=("quotes.native_write", "quotes.native_read"),
             )
         )
-    if enabled("collections.prepaid_balance_enforcement"):
-        from app.services.prepaid_enforcement_readiness import (
-            prepaid_enforcement_readiness_block_reason,
-        )
-
-        reason = prepaid_enforcement_readiness_block_reason(db)
-        if reason:
-            findings.append(
-                ControlFinding(
-                    code=reason,
-                    severity="error",
-                    message=(
-                        "Prepaid enforcement requires current exact-cohort "
-                        f"funding readiness record ({reason})."
-                    ),
-                    members=(
-                        "financial.prepaid_funding_reconciliation",
-                        "collections.prepaid_balance_enforcement",
-                    ),
-                )
-            )
     return findings
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -105,6 +106,7 @@ def new_form_state(db: Session, *, account_id: str | None) -> dict[str, object]:
         "account_number": selected_account.account_number if selected_account else None,
         "selected_account_id": str(selected_account.id) if selected_account else None,
         "account_x_model": "accountId",
+        "draft_idempotency_key": secrets.token_urlsafe(24),
     }
 
 
@@ -150,4 +152,5 @@ def edit_form_state(db: Session, *, invoice_id: str) -> dict[str, object] | None
         if selected_account
         else str(invoice.account_id),
         "account_x_model": "accountId",
+        "draft_idempotency_key": secrets.token_urlsafe(24),
     }

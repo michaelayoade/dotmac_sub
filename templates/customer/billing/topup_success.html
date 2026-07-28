@@ -88,9 +88,19 @@
                         <span class="text-sm text-stone-500 dark:text-stone-400">Amount received</span>
                         <span class="text-lg font-bold text-emerald-600 dark:text-emerald-400">&#8358;{{ "{:,.2f}".format(amount) }}</span>
                     </div>
+                    {% if amount_credited is not none %}
+                    <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <span class="text-sm text-stone-500 dark:text-stone-400">Amount credited</span>
+                        <span class="text-sm font-semibold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(amount_credited) }}</span>
+                    </div>
+                    {% endif %}
                     <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                         <span class="text-sm text-stone-500 dark:text-stone-400">Applied to invoices</span>
                         <span class="text-sm font-semibold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(allocated_total) }}</span>
+                    </div>
+                    <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <span class="text-sm text-stone-500 dark:text-stone-400">Applied to prepaid service</span>
+                        <span class="text-sm font-semibold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(prepaid_amount_applied or 0) }}</span>
                     </div>
                     <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                         <span class="text-sm text-stone-500 dark:text-stone-400">Remaining from this deposit</span>
@@ -138,13 +148,34 @@
                     </div>
                     {% endfor %}
                 </div>
+                {% elif prepaid_amount_applied and prepaid_amount_applied > 0 %}
+                <div class="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                    No invoice was paid from this transaction. Account credit was applied to prepaid service renewal.
+                </div>
                 {% else %}
                 <div class="mt-5 rounded-xl border border-dashed border-stone-300 bg-stone-50 p-4 text-sm text-stone-600 dark:border-stone-600 dark:bg-stone-900/20 dark:text-stone-300">
-                    No outstanding invoices were paid from this transaction. The full amount remains on your account as credit.
+                    No outstanding invoices or prepaid service periods were paid from this transaction. The credited amount remains on your account.
                 </div>
                 {% endif %}
             </div>
         </div>
+
+        {% if renewed_services %}
+        <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 dark:border-emerald-800 dark:bg-emerald-900/20">
+            <h2 class="text-lg font-semibold text-emerald-900 dark:text-emerald-200">Service renewal confirmed</h2>
+            <div class="mt-4 space-y-3">
+                {% for renewal in renewed_services %}
+                <div class="flex items-center justify-between gap-4 rounded-xl bg-white px-4 py-3 dark:bg-stone-800">
+                    <div>
+                        <p class="text-sm font-semibold text-stone-900 dark:text-white">{{ renewal.offer_name }}</p>
+                        <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Renewed through {{ renewal.renewed_through.strftime('%B %d, %Y') }}</p>
+                    </div>
+                    <p class="text-sm font-semibold text-emerald-700 dark:text-emerald-300">&#8358;{{ "{:,.2f}".format(renewal.amount) }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
         <div class="flex flex-col gap-3 sm:flex-row sm:justify-center">
             <a href="/portal/billing/topup" class="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-brand-700)]">

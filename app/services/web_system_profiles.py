@@ -219,13 +219,16 @@ def get_user_edit_data(
         .all()
     )
 
-    current_role_ids = {
-        str(role_id)
-        for role_id in db.execute(
-            select(SystemUserRole.role_id).where(
-                SystemUserRole.system_user_id == user.id
-            )
+    role_grants = tuple(
+        db.execute(
+            select(SystemUserRole).where(SystemUserRole.system_user_id == user.id)
         ).scalars()
+    )
+    current_role_ids = {str(grant.role_id) for grant in role_grants}
+    managed_role_ids = {
+        str(grant.role_id)
+        for grant in role_grants
+        if grant.source != "local" or grant.scope_type or grant.scope_id
     }
 
     all_permissions = (
@@ -252,6 +255,7 @@ def get_user_edit_data(
         "user": user,
         "roles": roles,
         "current_role_ids": current_role_ids,
+        "managed_role_ids": managed_role_ids,
         "all_permissions": all_permissions,
         "direct_permission_ids": direct_permission_ids,
     }

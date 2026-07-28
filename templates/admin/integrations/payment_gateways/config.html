@@ -1,0 +1,133 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ provider_label }} Payment Gateway - Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/integrations/marketplace" class="hover:text-primary-600">Integrations</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ provider_label }}</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ provider_label }} payment gateway</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Configure the connector, secret references, checkout ordering, webhooks, reconciliation, and refunds as one capability bundle.
+        </p>
+    </div>
+
+    {% if request.query_params.get("saved") == "1" %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Configuration saved and statically validated. Run connection validation to enable customer checkout.
+    </div>
+    {% elif request.query_params.get("enabled") == "1" %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Connection validation passed. {{ provider_label }} is enabled for checkout.
+    </div>
+    {% elif request.query_params.get("disabled") == "1" %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+        {{ provider_label }} checkout is disabled.
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Checkout state</p>
+            <p class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">{{ health.health_label }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Installation</p>
+            <p class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">{{ installation.state if installation else "Not installed" }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Capability bundle</p>
+            <p class="mt-2 text-lg font-semibold text-slate-900 dark:text-white">{{ "Operational" if health.lifecycle_ready else "Incomplete" }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Gateway configuration</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    Enter references only. Secret values are managed under Settings and are never rendered here.
+                </p>
+            </div>
+            <a href="/admin/system/secrets" class="text-sm font-semibold text-primary-600 hover:text-primary-700">Manage secrets →</a>
+        </div>
+
+        <form method="post" action="/admin/integrations/payment-gateways/{{ provider_type }}" class="mt-6 space-y-5">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Checkout presentment priority</label>
+                <input name="presentment_priority" type="number" value="{{ form.presentment_priority }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:max-w-xs">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Higher values appear first. This is ordering, not failover.</p>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Gateway credential reference</label>
+                    <input name="gateway_credentials" value="" placeholder="bao://secret/integrations/{{ provider_type }}#secret_key" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% if form.gateway_credentials_masked %}<p class="mt-1 text-xs text-slate-500">Stored: {{ form.gateway_credentials_masked }}</p>{% endif %}
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Public key reference{% if "public_key" not in required_refs %} (optional){% endif %}</label>
+                    <input name="public_key" value="" placeholder="bao://secret/integrations/{{ provider_type }}#public_key" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% if form.public_key_masked %}<p class="mt-1 text-xs text-slate-500">Stored: {{ form.public_key_masked }}</p>{% endif %}
+                </div>
+            </div>
+
+            {% if provider_type == "flutterwave" %}
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Webhook signing secret reference</label>
+                <input name="webhook_signing_secret" value="" placeholder="bao://secret/integrations/flutterwave#webhook_signing_secret" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% if form.webhook_signing_secret_masked %}<p class="mt-1 text-xs text-slate-500">Stored: {{ form.webhook_signing_secret_masked }}</p>{% endif %}
+            </div>
+            {% endif %}
+
+            <div class="flex flex-wrap justify-end gap-2">
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save configuration</button>
+            </div>
+        </form>
+
+        {% if installation %}
+        <div class="mt-6 flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-5 dark:border-slate-700">
+            {% if health.health == "healthy" %}
+            <form method="post" action="/admin/integrations/payment-gateways/{{ provider_type }}/disable" class="max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/50 dark:bg-amber-900/20">
+                {% include "components/forms/csrf_input.html" %}
+                <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">Impact preview</p>
+                <p class="mt-1 text-sm text-amber-800 dark:text-amber-300">New customer and reseller checkouts stop immediately. Webhooks, reconciliation, and refunds stay enabled for in-flight payments.</p>
+                <label class="mt-3 flex items-start gap-2 text-sm text-amber-900 dark:text-amber-200">
+                    <input type="checkbox" name="confirm_disable" value="true" required class="mt-0.5 rounded border-amber-400">
+                    <span>I confirm the impact on new checkouts.</span>
+                </label>
+                <button type="submit" class="mt-3 rounded-lg border border-amber-300 px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100">Disable new checkout</button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/integrations/payment-gateways/{{ provider_type }}/enable" class="max-w-xl rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/50 dark:bg-emerald-900/20">
+                {% include "components/forms/csrf_input.html" %}
+                <p class="text-sm font-semibold text-emerald-900 dark:text-emerald-200">Impact preview</p>
+                <p class="mt-1 text-sm text-emerald-800 dark:text-emerald-300">A successful live credential check enables this gateway and may expose it for new customer and reseller checkouts according to its presentment priority.</p>
+                <label class="mt-3 flex items-start gap-2 text-sm text-emerald-900 dark:text-emerald-200">
+                    <input type="checkbox" name="confirm_enable" value="true" required class="mt-0.5 rounded border-emerald-400">
+                    <span>I confirm the gateway may become customer-visible.</span>
+                </label>
+                <button type="submit" class="mt-3 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Validate connection and enable</button>
+            </form>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    {% set activity_title = provider_label ~ " Integration Activity" %}
+    {% set activity_link = "/admin/system/audit" %}
+    {% include "components/data/recent_activity_panel.html" %}
+</div>
+{% endblock %}

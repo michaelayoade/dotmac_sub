@@ -19,10 +19,12 @@ from app.services import (
 )
 from app.services import web_billing_tax_rates as web_billing_tax_rates_service
 from app.services.audit_helpers import (
-    build_audit_activities_for_types,
+    build_tax_rate_audit_activities,
     log_audit_event,
 )
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -48,14 +50,6 @@ def _created_changes(
     snapshot: dict[str, object | None],
 ) -> dict[str, dict[str, object | None]]:
     return {key: {"from": None, "to": value} for key, value in snapshot.items()}
-
-
-def _tax_rate_audit_items(db: Session, limit: int = 5) -> list[dict]:
-    try:
-        return build_audit_activities_for_types(db, ["tax_rate"], limit=limit)
-    except Exception:
-        db.rollback()
-        return []
 
 
 def _tax_accounting_redirect(
@@ -107,7 +101,7 @@ def billing_tax_rates(request: Request, db: Session = Depends(get_db)):
         {
             "request": request,
             **state,
-            "audit_items": _tax_rate_audit_items(db),
+            "audit_items": build_tax_rate_audit_activities(db),
             "active_page": "tax-rates",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -156,7 +150,67 @@ def billing_tax_rate_create(
             {
                 "request": request,
                 **state,
-                "audit_items": _tax_rate_audit_items(db),
+                "audit_items": build_tax_rate_audit_activities(db),
+                "error": str(exc),
+                "active_page": "tax-rates",
+                "active_menu": "billing",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+    return RedirectResponse(url="/admin/billing/tax-rates", status_code=303)
+
+
+@router.post(
+    "/tax-rates/withholding-tax",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:tax:write"))],
+)
+def billing_withholding_tax_rate_update(
+    request: Request,
+    rate_percent: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        before = web_billing_tax_rates_service.get_withholding_tax_rate_percent(db)
+        setting = web_billing_tax_rates_service.save_withholding_tax_rate_percent(
+            db,
+            rate_percent=rate_percent,
+        )
+        after = web_billing_tax_rates_service.get_withholding_tax_rate_percent(db)
+        if before != after:
+            log_audit_event(
+                db=db,
+                request=request,
+                action="update",
+                entity_type="domain_setting",
+                entity_id=str(setting.id),
+                actor_id=_actor_id(request),
+                metadata={
+                    "changes": {
+                        "withholding_tax_rate_percent": {
+                            "from": before,
+                            "to": after,
+                        }
+                    }
+                },
+            )
+    except Exception as exc:
+        # The WHT-rate save validates before writing and its settings owner
+        # manages its own transaction, so the adapter only needs to release the
+        # read transaction (fails closed on any pending mutation) before
+        # re-rendering — it must not own a rollback.
+        db_session_adapter.release_read_transaction(db)
+        state = web_billing_tax_rates_service.list_data(db)
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        return templates.TemplateResponse(
+            "admin/billing/tax_rates.html",
+            {
+                "request": request,
+                **state,
+                "audit_items": build_tax_rate_audit_activities(db),
                 "error": str(exc),
                 "active_page": "tax-rates",
                 "active_menu": "billing",
@@ -255,7 +309,7 @@ def billing_wht_transition(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     try:
-        record = web_billing_tax_accounting_service.transition_wht(
+        result = web_billing_tax_accounting_service.transition_wht(
             db,
             record_id=record_id,
             target_status=target_status,
@@ -263,23 +317,10 @@ def billing_wht_transition(
             certificate_reference=certificate_reference,
             notes=notes,
         )
-        log_audit_event(
-            db=db,
-            request=request,
-            action="transition",
-            entity_type="withholding_tax_record",
-            entity_id=str(record.id),
-            actor_id=_actor_id(request),
-            metadata={
-                "status": record.status.value,
-                "certificate_reference": record.certificate_reference,
-            },
-        )
-    except Exception as exc:
-        db.rollback()
-        return _tax_accounting_redirect(error=str(exc))
+    except DomainError as exc:
+        return _tax_accounting_redirect(error=exc.message)
     return _tax_accounting_redirect(
-        message=f"WHT record moved to {record.status.value.replace('_', ' ')}"
+        message=f"WHT record moved to {result.status.value.replace('_', ' ')}"
     )
 
 
@@ -295,6 +336,7 @@ def billing_ar_aging(
     partner_id: str | None = Query(None),
     location: str | None = Query(None),
     debtor_period: str | None = Query(None),
+    auth: dict = Depends(require_permission("billing:ledger:read")),
     db: Session = Depends(get_db),
 ):
     state = web_billing_overview_service.build_ar_aging_data(
@@ -316,6 +358,11 @@ def billing_ar_aging(
             "active_menu": "billing",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
+            "can_send_reminders": has_permission(
+                auth,
+                db,
+                "billing:invoice:update",
+            ),
         },
     )
 

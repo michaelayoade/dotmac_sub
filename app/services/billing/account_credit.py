@@ -9,6 +9,8 @@ It never creates payments or ledger entries directly and never commits.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,10 +18,11 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    CreditNoteApplication,
     Invoice,
     InvoiceStatus,
     LedgerEntry,
@@ -27,6 +30,7 @@ from app.models.billing import (
     LedgerSource,
     Payment,
     PaymentAllocation,
+    PaymentSettlement,
     PaymentStatus,
     TopupIntent,
 )
@@ -34,6 +38,7 @@ from app.models.integration_platform import (
     IntegrationCapabilityBinding,
     IntegrationInbox,
 )
+from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
 from app.schemas.billing import (
     PaymentAllocationConfirm,
     PaymentAllocationPreviewRequest,
@@ -46,6 +51,7 @@ from app.services.billing._common import (
 from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import PaymentAllocations
 from app.services.common import coerce_uuid, round_money, to_decimal
+from app.services.domain_errors import DomainError
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +77,63 @@ class AccountCreditApplicationResult:
         return self.applied > 0
 
 
+@dataclass(frozen=True, slots=True)
+class AccountCreditInvoiceFundingPreview:
+    """Exact payment-backed funding available to one invoice."""
+
+    invoice_id: UUID
+    account_id: UUID
+    currency: str
+    invoice_remaining: Decimal
+    account_credit: Decimal
+    payment_backed_credit: Decimal
+    spendable_credit: Decimal
+    shortfall: Decimal
+    unbacked_credit: Decimal
+    source_payment_ids: tuple[UUID, ...]
+    fingerprint: str
+
+    @property
+    def fully_funded(self) -> bool:
+        return self.invoice_remaining > Decimal("0.00") and self.shortfall == Decimal(
+            "0.00"
+        )
+
+
+class AccountCreditApplicationError(DomainError):
+    """Fail-closed exact account-credit application failure."""
+
+
 @dataclass(frozen=True)
 class AccountCreditInvariantViolation:
     code: str
     account_id: str
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class AccountCreditInvariantSummary:
+    """Bounded full-fleet account-credit invariant observation."""
+
+    eligible_invoice_with_unused_credit: int = 0
+    payment_overallocated: int = 0
+    negative_payment_credit_source_availability: int = 0
+    paid_invoice_underfunded: int = 0
+    settled_deposit_without_exact_payment: int = 0
+    duplicate_provider_reference: int = 0
+    deposit_webhook_unresolved: int = 0
+
+    @property
+    def total(self) -> int:
+        return (
+            self.eligible_invoice_with_unused_credit
+            + self.payment_overallocated
+            + self.negative_payment_credit_source_availability
+            + self.paid_invoice_underfunded
+            + self.settled_deposit_without_exact_payment
+            + self.duplicate_provider_reference
+            + self.deposit_webhook_unresolved
+        )
 
 
 @dataclass(frozen=True)
@@ -173,6 +231,7 @@ def eligible_invoices(db: Session, account_id: str) -> list[Invoice]:
         db.query(Invoice)
         .filter(Invoice.account_id == coerce_uuid(account_id))
         .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.is_proforma.is_not(True))
         .filter(Invoice.status.in_(ELIGIBLE_INVOICE_STATUSES))
         .filter(Invoice.balance_due > 0)
         .order_by(
@@ -226,8 +285,212 @@ def _allocation_key(payment: Payment, invoice: Invoice) -> str:
     return f"account-credit-apply-{payment.id}-{invoice.id}"
 
 
+def _invoice_funding_fingerprint(payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 class AccountCreditApplications:
     """Single orchestration owner for payment-backed account-credit use."""
+
+    @staticmethod
+    def preview_invoice_funding(
+        db: Session,
+        invoice: Invoice,
+    ) -> AccountCreditInvoiceFundingPreview:
+        """Project exact payment-backed credit for one invoice without writes."""
+
+        currency = (invoice.currency or "NGN").upper()
+        invoice_remaining = max(
+            Decimal("0.00"),
+            round_money(to_decimal(invoice.balance_due or Decimal("0.00"))),
+        )
+        account_credit = max(
+            Decimal("0.00"),
+            round_money(
+                get_account_credit_balance(
+                    db,
+                    str(invoice.account_id),
+                    currency=currency,
+                )
+            ),
+        )
+        sources = tuple(
+            (payment, room)
+            for payment, room in _source_payments(db, str(invoice.account_id))
+            if (payment.currency or "NGN").upper() == currency
+        )
+        payment_backed = round_money(
+            sum((room for _payment, room in sources), Decimal("0.00"))
+        )
+        spendable = min(account_credit, payment_backed)
+        shortfall = max(
+            Decimal("0.00"),
+            round_money(invoice_remaining - spendable),
+        )
+        unbacked = max(
+            Decimal("0.00"),
+            round_money(account_credit - payment_backed),
+        )
+        source_payment_ids = tuple(payment.id for payment, _room in sources)
+        payload: dict[str, object] = {
+            "invoice_id": invoice.id,
+            "account_id": invoice.account_id,
+            "status": invoice.status.value,
+            "currency": currency,
+            "invoice_remaining": invoice_remaining,
+            "account_credit": account_credit,
+            "payment_backed_credit": payment_backed,
+            "spendable_credit": spendable,
+            "shortfall": shortfall,
+            "unbacked_credit": unbacked,
+            "source_payments": tuple(
+                (payment.id, round_money(room)) for payment, room in sources
+            ),
+        }
+        return AccountCreditInvoiceFundingPreview(
+            invoice_id=invoice.id,
+            account_id=invoice.account_id,
+            currency=currency,
+            invoice_remaining=invoice_remaining,
+            account_credit=account_credit,
+            payment_backed_credit=payment_backed,
+            spendable_credit=spendable,
+            shortfall=shortfall,
+            unbacked_credit=unbacked,
+            source_payment_ids=source_payment_ids,
+            fingerprint=_invoice_funding_fingerprint(payload),
+        )
+
+    @staticmethod
+    def apply_invoice_fully(
+        db: Session,
+        invoice: Invoice,
+        *,
+        preview_fingerprint: str,
+    ) -> AccountCreditApplicationResult:
+        """Apply exact payment-backed credit only when it covers the invoice."""
+
+        return AccountCreditApplications._apply_invoice_payment_sources(
+            db,
+            invoice,
+            preview_fingerprint=preview_fingerprint,
+            require_full_funding=True,
+        )
+
+    @staticmethod
+    def apply_invoice_available(
+        db: Session,
+        invoice: Invoice,
+        *,
+        preview_fingerprint: str,
+    ) -> AccountCreditApplicationResult:
+        """Apply all exact payment-backed credit before another typed source."""
+
+        return AccountCreditApplications._apply_invoice_payment_sources(
+            db,
+            invoice,
+            preview_fingerprint=preview_fingerprint,
+            require_full_funding=False,
+        )
+
+    @staticmethod
+    def _apply_invoice_payment_sources(
+        db: Session,
+        invoice: Invoice,
+        *,
+        preview_fingerprint: str,
+        require_full_funding: bool,
+    ) -> AccountCreditApplicationResult:
+        lock_account(db, str(invoice.account_id))
+        db.refresh(invoice)
+        preview = AccountCreditApplications.preview_invoice_funding(db, invoice)
+        if preview.fingerprint != preview_fingerprint:
+            raise AccountCreditApplicationError(
+                code="financial.account_credit_applications.stale_preview",
+                message="Invoice funding changed after preview; preview again.",
+                details={"invoice_id": str(invoice.id)},
+            )
+        if require_full_funding and not preview.fully_funded:
+            raise AccountCreditApplicationError(
+                code="financial.account_credit_applications.insufficient_funding",
+                message="Exact payment-backed credit does not fully fund the invoice.",
+                details={
+                    "invoice_id": str(invoice.id),
+                    "shortfall": str(preview.shortfall),
+                },
+            )
+
+        result = AccountCreditApplicationResult(
+            account_id=str(invoice.account_id),
+            available_credit=preview.spendable_credit,
+            unbacked_credit=preview.unbacked_credit,
+        )
+        remaining = preview.invoice_remaining
+        sources = [
+            (payment, room)
+            for payment, room in _source_payments(db, str(invoice.account_id))
+            if (payment.currency or "NGN").upper() == preview.currency
+        ]
+        for payment, room in sources:
+            if remaining <= Decimal("0.00"):
+                break
+            amount = min(remaining, room)
+            if amount <= Decimal("0.00"):
+                continue
+            request = PaymentAllocationPreviewRequest(
+                payment_id=payment.id,
+                invoice_id=invoice.id,
+                amount=amount,
+            )
+            try:
+                allocation_preview = PaymentAllocations.preview(db, request)
+                confirmation = PaymentAllocations.stage_confirm(
+                    db,
+                    PaymentAllocationConfirm(
+                        **request.model_dump(),
+                        preview_fingerprint=allocation_preview.fingerprint,
+                        idempotency_key=_allocation_key(payment, invoice),
+                    ),
+                )
+            except HTTPException as exc:
+                raise AccountCreditApplicationError(
+                    code="financial.account_credit_applications.allocation_rejected",
+                    message="Payment-allocation owner rejected exact invoice funding.",
+                    details={
+                        "invoice_id": str(invoice.id),
+                        "payment_id": str(payment.id),
+                        "reason": str(exc.detail),
+                    },
+                ) from exc
+            applied = round_money(to_decimal(confirmation.allocation.amount))
+            result.applied = round_money(result.applied + applied)
+            result.allocation_ids.append(str(confirmation.allocation.id))
+            remaining = round_money(remaining - applied)
+
+        db.flush()
+        db.refresh(invoice)
+        if require_full_funding and (
+            remaining != Decimal("0.00") or invoice.status != InvoiceStatus.paid
+        ):
+            raise AccountCreditApplicationError(
+                code="financial.account_credit_applications.incomplete_application",
+                message="Exact invoice funding did not produce a paid invoice.",
+                details={
+                    "invoice_id": str(invoice.id),
+                    "remaining": str(remaining),
+                    "status": invoice.status.value,
+                },
+            )
+        result.invoices_touched.append(str(invoice.id))
+        if invoice.status == InvoiceStatus.paid:
+            result.invoices_settled.append(str(invoice.id))
+        return result
 
     @staticmethod
     def apply(db: Session, account_id: str) -> AccountCreditApplicationResult:
@@ -304,14 +567,13 @@ class AccountCreditApplications:
                     amount=amount,
                 )
                 preview = PaymentAllocations.preview(db, request)
-                confirmation = PaymentAllocations.confirm(
+                confirmation = PaymentAllocations.stage_confirm(
                     db,
                     PaymentAllocationConfirm(
                         **request.model_dump(),
                         preview_fingerprint=preview.fingerprint,
                         idempotency_key=_allocation_key(payment, invoice),
                     ),
-                    commit=False,
                 )
                 applied = round_money(to_decimal(confirmation.allocation.amount))
                 result.applied = round_money(result.applied + applied)
@@ -491,9 +753,7 @@ class AccountCreditApplications:
             )
         for invoice in paid_query.all():
             settlement = resolve_invoice_settlement_amounts(db, invoice.id)
-            funded = round_money(
-                settlement.payments_applied + settlement.credits_applied
-            )
+            funded = settlement.total_applied
             total = round_money(to_decimal(invoice.total))
             if funded < total:
                 violations.append(
@@ -583,10 +843,360 @@ class AccountCreditApplications:
                 )
         return violations
 
+    @staticmethod
+    def summarize_invariants(db: Session) -> AccountCreditInvariantSummary:
+        """Return full-fleet invariant counts with a fixed query budget.
+
+        The detailed inspector above is an operator-facing forensic read model:
+        it returns exact entity references and therefore may walk individual
+        records. Billing health needs only bounded counts. This projection keeps
+        the same invariant definitions but lets the database aggregate source
+        facts in bulk, so snapshot runtime does not grow by one query per payment
+        or paid invoice.
+        """
+        zero = Decimal("0.00")
+
+        payable_currencies = (
+            select(
+                Invoice.account_id.label("account_id"),
+                func.upper(func.coalesce(Invoice.currency, "NGN")).label("currency"),
+            )
+            .where(
+                Invoice.is_active.is_(True),
+                Invoice.is_proforma.is_not(True),
+                Invoice.status.in_(ELIGIBLE_INVOICE_STATUSES),
+                Invoice.balance_due > zero,
+            )
+            .distinct()
+            .subquery()
+        )
+        credit_total = func.coalesce(
+            func.sum(
+                case(
+                    (
+                        LedgerEntry.entry_type == LedgerEntryType.credit,
+                        LedgerEntry.amount,
+                    ),
+                    else_=zero,
+                )
+            ),
+            zero,
+        )
+        debit_total = func.coalesce(
+            func.sum(
+                case(
+                    (
+                        and_(
+                            LedgerEntry.entry_type == LedgerEntryType.debit,
+                            or_(
+                                LedgerEntry.source.is_(None),
+                                LedgerEntry.source.notin_(
+                                    [LedgerSource.refund, LedgerSource.payment]
+                                ),
+                                LedgerEntry.payment_id.is_(None),
+                            ),
+                        ),
+                        LedgerEntry.amount,
+                    ),
+                    else_=zero,
+                )
+            ),
+            zero,
+        )
+        unused_credit_rows = db.execute(
+            select(
+                payable_currencies.c.account_id,
+                payable_currencies.c.currency,
+                credit_total.label("credit_total"),
+                debit_total.label("debit_total"),
+            )
+            .select_from(payable_currencies)
+            .outerjoin(
+                LedgerEntry,
+                and_(
+                    LedgerEntry.account_id == payable_currencies.c.account_id,
+                    LedgerEntry.currency == payable_currencies.c.currency,
+                    LedgerEntry.invoice_id.is_(None),
+                    LedgerEntry.is_active.is_(True),
+                ),
+            )
+            .group_by(
+                payable_currencies.c.account_id,
+                payable_currencies.c.currency,
+            )
+        ).all()
+        eligible_invoice_with_unused_credit = sum(
+            1
+            for row in unused_credit_rows
+            if round_money(to_decimal(row.credit_total) - to_decimal(row.debit_total))
+            > zero
+        )
+
+        allocation_totals = (
+            select(
+                PaymentAllocation.payment_id.label("payment_id"),
+                func.coalesce(func.sum(PaymentAllocation.amount), zero).label(
+                    "allocated"
+                ),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                PaymentAllocation.consumption_ledger_entry_id.is_not(
+                                    None
+                                ),
+                                PaymentAllocation.amount,
+                            ),
+                            else_=zero,
+                        )
+                    ),
+                    zero,
+                ).label("source_consumed"),
+            )
+            .where(PaymentAllocation.is_active.is_(True))
+            .group_by(PaymentAllocation.payment_id)
+            .subquery()
+        )
+        allocated = func.coalesce(allocation_totals.c.allocated, zero)
+        source_consumed = func.coalesce(
+            allocation_totals.c.source_consumed,
+            zero,
+        )
+        source_capacity = (
+            PaymentSettlement.unallocated_amount - PaymentSettlement.prepaid_amount
+        )
+        payment_invariant_rows = db.execute(
+            select(
+                Payment.id,
+                Payment.amount,
+                allocated.label("allocated"),
+                PaymentSettlement.id.label("settlement_id"),
+                source_consumed.label("source_consumed"),
+                source_capacity.label("source_capacity"),
+            )
+            .outerjoin(
+                allocation_totals,
+                allocation_totals.c.payment_id == Payment.id,
+            )
+            .outerjoin(
+                PaymentSettlement,
+                PaymentSettlement.payment_id == Payment.id,
+            )
+            .where(Payment.is_active.is_(True))
+            .where(
+                or_(
+                    allocated > Payment.amount,
+                    and_(
+                        PaymentSettlement.id.is_not(None),
+                        source_consumed > source_capacity,
+                    ),
+                )
+            )
+        ).all()
+        payment_overallocated = 0
+        negative_payment_credit_source_availability = 0
+        for row in payment_invariant_rows:
+            if round_money(row.allocated) > round_money(row.amount):
+                payment_overallocated += 1
+            if row.settlement_id is not None and round_money(
+                row.source_consumed
+            ) > round_money(row.source_capacity):
+                negative_payment_credit_source_availability += 1
+
+        effective_payment_amount = case(
+            (
+                Payment.status == PaymentStatus.succeeded,
+                PaymentAllocation.amount,
+            ),
+            (
+                and_(
+                    Payment.status == PaymentStatus.partially_refunded,
+                    Payment.amount > zero,
+                ),
+                PaymentAllocation.amount
+                * (Payment.amount - func.coalesce(Payment.refunded_amount, zero))
+                / func.nullif(Payment.amount, zero),
+            ),
+            else_=zero,
+        )
+        payment_totals = (
+            select(
+                PaymentAllocation.invoice_id.label("invoice_id"),
+                func.coalesce(func.sum(effective_payment_amount), zero).label("amount"),
+            )
+            .join(Payment, Payment.id == PaymentAllocation.payment_id)
+            .where(
+                PaymentAllocation.is_active.is_(True),
+                Payment.is_active.is_(True),
+                Payment.status.in_(
+                    [PaymentStatus.succeeded, PaymentStatus.partially_refunded]
+                ),
+            )
+            .group_by(PaymentAllocation.invoice_id)
+            .subquery()
+        )
+        credit_totals = (
+            select(
+                CreditNoteApplication.invoice_id.label("invoice_id"),
+                func.coalesce(func.sum(CreditNoteApplication.amount), zero).label(
+                    "amount"
+                ),
+            )
+            .group_by(CreditNoteApplication.invoice_id)
+            .subquery()
+        )
+        opening_funding_totals = (
+            select(
+                PrepaidOpeningFundingConsumption.invoice_id.label("invoice_id"),
+                func.coalesce(
+                    func.sum(PrepaidOpeningFundingConsumption.amount),
+                    zero,
+                ).label("amount"),
+            )
+            .group_by(PrepaidOpeningFundingConsumption.invoice_id)
+            .subquery()
+        )
+        payments_applied = func.round(
+            func.coalesce(payment_totals.c.amount, zero),
+            2,
+        )
+        credits_applied = func.round(
+            func.coalesce(credit_totals.c.amount, zero),
+            2,
+        )
+        opening_funding_applied = func.round(
+            func.coalesce(opening_funding_totals.c.amount, zero),
+            2,
+        )
+        funded_total = func.round(
+            payments_applied + credits_applied + opening_funding_applied,
+            2,
+        )
+        paid_invoice_underfunded = int(
+            db.execute(
+                select(func.count(Invoice.id))
+                .outerjoin(
+                    payment_totals,
+                    payment_totals.c.invoice_id == Invoice.id,
+                )
+                .outerjoin(
+                    credit_totals,
+                    credit_totals.c.invoice_id == Invoice.id,
+                )
+                .outerjoin(
+                    opening_funding_totals,
+                    opening_funding_totals.c.invoice_id == Invoice.id,
+                )
+                .where(
+                    Invoice.is_active.is_(True),
+                    Invoice.status == InvoiceStatus.paid,
+                    funded_total < func.round(Invoice.total, 2),
+                )
+            ).scalar()
+            or 0
+        )
+
+        settled_deposit_without_exact_payment = int(
+            db.execute(
+                select(func.count(TopupIntent.id))
+                .outerjoin(Payment, Payment.id == TopupIntent.completed_payment_id)
+                .outerjoin(
+                    PaymentSettlement,
+                    PaymentSettlement.payment_id == Payment.id,
+                )
+                .where(
+                    TopupIntent.purpose == "account_credit_deposit",
+                    TopupIntent.status == "completed",
+                    or_(
+                        Payment.id.is_(None),
+                        PaymentSettlement.id.is_(None),
+                    ),
+                )
+            ).scalar()
+            or 0
+        )
+
+        duplicate_provider_groups = (
+            select(Payment.provider_id, Payment.external_id)
+            .where(
+                Payment.provider_id.is_not(None),
+                Payment.external_id.is_not(None),
+                Payment.is_active.is_(True),
+            )
+            .group_by(Payment.provider_id, Payment.external_id)
+            .having(func.count(Payment.id) > 1)
+            .subquery()
+        )
+        duplicate_provider_reference = int(
+            db.execute(
+                select(func.count()).select_from(duplicate_provider_groups)
+            ).scalar()
+            or 0
+        )
+
+        unresolved_receipts = db.execute(
+            select(IntegrationInbox.payload_json)
+            .join(
+                IntegrationCapabilityBinding,
+                IntegrationCapabilityBinding.id
+                == IntegrationInbox.capability_binding_id,
+            )
+            .where(
+                IntegrationCapabilityBinding.capability_id == "payments.webhook.v1",
+                IntegrationInbox.state.in_(
+                    {"verified", "processing", "retryable", "dead_letter"}
+                ),
+            )
+        ).scalars()
+        receipt_intent_ids: list[UUID] = []
+        for payload in unresolved_receipts:
+            data = (payload or {}).get("data") or {}
+            metadata = data.get("metadata") or data.get("meta") or {}
+            intent_id = metadata.get("topup_intent_id")
+            if not intent_id:
+                continue
+            try:
+                receipt_intent_ids.append(coerce_uuid(intent_id))
+            except (TypeError, ValueError):
+                continue
+
+        deposit_intent_ids: set[UUID] = set()
+        if receipt_intent_ids:
+            deposit_intent_ids = set(
+                db.execute(
+                    select(TopupIntent.id).where(
+                        TopupIntent.id.in_(set(receipt_intent_ids)),
+                        TopupIntent.purpose == "account_credit_deposit",
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        deposit_webhook_unresolved = sum(
+            1 for intent_id in receipt_intent_ids if intent_id in deposit_intent_ids
+        )
+
+        return AccountCreditInvariantSummary(
+            eligible_invoice_with_unused_credit=eligible_invoice_with_unused_credit,
+            payment_overallocated=payment_overallocated,
+            negative_payment_credit_source_availability=(
+                negative_payment_credit_source_availability
+            ),
+            paid_invoice_underfunded=paid_invoice_underfunded,
+            settled_deposit_without_exact_payment=(
+                settled_deposit_without_exact_payment
+            ),
+            duplicate_provider_reference=duplicate_provider_reference,
+            deposit_webhook_unresolved=deposit_webhook_unresolved,
+        )
+
 
 __all__ = [
+    "AccountCreditApplicationError",
+    "AccountCreditInvoiceFundingPreview",
     "AccountCreditApplicationResult",
     "AccountCreditApplications",
+    "AccountCreditInvariantSummary",
     "AccountCreditInvariantViolation",
     "ELIGIBLE_INVOICE_STATUSES",
     "eligible_invoices",

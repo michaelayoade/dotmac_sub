@@ -13,16 +13,19 @@ from __future__ import annotations
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import referral_account_conversion
+from app.services import referrals as referral_program
 from app.services import web_referrals as web_referrals_service
 from app.services.auth_dependencies import require_permission
-from app.services.referrals import referrals as referrals_service
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/referrals", tags=["web-admin-referrals"])
@@ -58,6 +61,21 @@ def _conversion_source(request: Request) -> str:
     actor = str(auth.get("principal_id") or auth.get("id") or "unknown").strip()
     principal_type = str(auth.get("principal_type") or "system_user").strip()
     return f"admin_referral_attach:{principal_type}:{actor}"[:80]
+
+
+def _program_context(
+    request: Request,
+    *,
+    action: str,
+    reason: str,
+    idempotency_key: str,
+) -> CommandContext:
+    return CommandContext.system(
+        actor=f"{action}:{_conversion_source(request)}"[:80],
+        scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.get(
@@ -127,9 +145,22 @@ def referral_detail(
 )
 def referral_qualify(request: Request, referral_id: str, db: Session = Depends(get_db)):
     try:
-        referrals_service.qualify_override(db, referral_id)
-    except HTTPException as exc:
-        return _redirect(referral_id, error=str(exc.detail))
+        resolved_referral_id = UUID(referral_id)
+        db_session_adapter.release_read_transaction(db)
+        referral_program.qualify_referral_override(
+            db,
+            referral_program.QualifyReferralOverrideCommand(
+                context=_program_context(
+                    request,
+                    action="admin_referral_qualify",
+                    reason="Operator reviewed and overrode referral qualification",
+                    idempotency_key=f"referral-qualify-override:{resolved_referral_id}",
+                ),
+                referral_id=resolved_referral_id,
+            ),
+        )
+    except (ValueError, DomainError) as exc:
+        return _redirect(referral_id, error=str(exc))
     return _redirect(
         referral_id, message="Referral qualified — reward is ready to issue."
     )
@@ -144,9 +175,22 @@ def referral_issue_reward(
     request: Request, referral_id: str, db: Session = Depends(get_db)
 ):
     try:
-        referrals_service.issue_reward(db, referral_id)
-    except HTTPException as exc:
-        return _redirect(referral_id, error=str(exc.detail))
+        resolved_referral_id = UUID(referral_id)
+        db_session_adapter.release_read_transaction(db)
+        referral_program.issue_referral_reward(
+            db,
+            referral_program.IssueReferralRewardCommand(
+                context=_program_context(
+                    request,
+                    action="admin_referral_reward",
+                    reason="Operator requested referral reward issuance",
+                    idempotency_key=f"referral-reward:{resolved_referral_id}",
+                ),
+                referral_id=resolved_referral_id,
+            ),
+        )
+    except (ValueError, DomainError) as exc:
+        return _redirect(referral_id, error=str(exc))
     return _redirect(
         referral_id, message="Reward issued as an auditable account credit."
     )
@@ -164,9 +208,24 @@ def referral_reject(
     db: Session = Depends(get_db),
 ):
     try:
-        referrals_service.reject(db, referral_id, reason.strip() or "Rejected by admin")
-    except HTTPException as exc:
-        return _redirect(referral_id, error=str(exc.detail))
+        resolved_referral_id = UUID(referral_id)
+        resolved_reason = reason.strip() or "Rejected by admin"
+        db_session_adapter.release_read_transaction(db)
+        referral_program.reject_referral(
+            db,
+            referral_program.RejectReferralCommand(
+                context=_program_context(
+                    request,
+                    action="admin_referral_reject",
+                    reason="Operator rejected the referral",
+                    idempotency_key=f"referral-reject:{resolved_referral_id}",
+                ),
+                referral_id=resolved_referral_id,
+                reason=resolved_reason,
+            ),
+        )
+    except (ValueError, DomainError) as exc:
+        return _redirect(referral_id, error=str(exc))
     return _redirect(referral_id, message="Referral rejected.")
 
 
@@ -190,14 +249,28 @@ def referral_attach_subscriber(
     """Attach an existing account only after exact Party-context review."""
 
     try:
+        resolved_referral_id = UUID(referral_id)
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
         result = referral_account_conversion.attach_existing_account(
             db,
-            referral_id=UUID(referral_id),
-            referred_party_id=UUID(referred_party_id),
-            referred_lead_id=UUID(referred_lead_id),
-            subscriber_id=UUID(subscriber_id),
-            source=_conversion_source(request),
-            reason=reason,
+            referral_account_conversion.AttachExistingReferralAccountCommand(
+                context=CommandContext.system(
+                    actor=_conversion_source(request),
+                    scope=(
+                        referral_account_conversion.REFERRAL_ACCOUNT_CONVERSION_SCOPE
+                    ),
+                    reason=reason,
+                    idempotency_key=(
+                        f"referral-account-attach:{resolved_referral_id}:"
+                        f"{resolved_subscriber_id}"
+                    ),
+                ),
+                referral_id=resolved_referral_id,
+                referred_party_id=UUID(referred_party_id),
+                referred_lead_id=UUID(referred_lead_id),
+                subscriber_id=resolved_subscriber_id,
+            ),
         )
     except (
         ValueError,

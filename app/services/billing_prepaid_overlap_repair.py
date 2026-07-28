@@ -523,7 +523,9 @@ def repair_prepaid_overlapping_invoices(
             from app.services.radius import reconcile_subscription_connectivity
 
             for subscription_id in restored_subscription_ids:
-                reconcile_subscription_connectivity(db, subscription_id)
+                reconcile_subscription_connectivity(
+                    db, subscription_id
+                ).require_projected()
 
     return {
         "apply": apply,

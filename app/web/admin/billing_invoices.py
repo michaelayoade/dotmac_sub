@@ -9,7 +9,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.billing import InvoiceStatus
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services import web_billing_documents as web_billing_documents_service
 from app.services import (
     web_billing_invoice_bulk_actions as web_billing_invoice_bulk_actions_service,
 )
@@ -356,6 +358,7 @@ def invoice_create(
     line_unit_price: list[str] = Form([]),
     line_tax_rate_id: list[str] = Form([]),
     line_items_json: str | None = Form(None),
+    draft_idempotency_key: str | None = Form(None),
     issue_immediately: str | None = Form(None),
     send_notification: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -379,6 +382,7 @@ def invoice_create(
             line_unit_price=line_unit_price,
             line_tax_rate_id=line_tax_rate_id,
             line_items_json=line_items_json,
+            draft_idempotency_key=draft_idempotency_key,
             issue_immediately=issue_immediately,
             send_notification=send_notification,
         )
@@ -466,6 +470,15 @@ def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_d
             {"request": request, "message": "Invoice not found"},
             status_code=404,
         )
+    if getattr(state["invoice"], "status", None) != InvoiceStatus.draft:
+        return templates.TemplateResponse(
+            "admin/errors/409.html",
+            {
+                "request": request,
+                "message": "Only draft invoices can be edited.",
+            },
+            status_code=409,
+        )
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
@@ -501,6 +514,7 @@ def invoice_update(
     memo: str | None = Form(None),
     proforma_invoice: str | None = Form(None),
     line_items_json: str | None = Form(None),
+    draft_idempotency_key: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     try:
@@ -518,6 +532,7 @@ def invoice_update(
             memo=memo,
             proforma_invoice=proforma_invoice,
             line_items_json=line_items_json,
+            draft_idempotency_key=draft_idempotency_key,
         )
     except Exception as exc:
         state = web_billing_invoice_forms_service.edit_form_state(
@@ -564,3 +579,30 @@ def invoice_search(request: Request, db: Session = Depends(get_db)):
 )
 def invoice_filter(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("")
+
+
+@router.get(
+    "/documents",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("billing:invoice:read")),
+        Depends(require_permission("billing:payment:read")),
+        Depends(require_permission("billing:credit_note:read")),
+    ],
+)
+def billing_documents(
+    request: Request,
+    facet: str = Query(default="invoices"),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    context = {
+        "request": request,
+        "active_page": "billing",
+        "active_menu": "billing",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+    }
+    context.update(web_billing_documents_service.billing_documents_data(db, facet))
+    return templates.TemplateResponse("admin/billing/documents.html", context)

@@ -66,7 +66,6 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
                 "type": str(item.get("type") or "attachment"),
                 "url": payload.get("url"),
                 "title": item.get("title"),
-                "raw": item,
             }
         )
     return normalized
@@ -110,11 +109,10 @@ def _iter_meta_social_messages(payload: dict[str, Any]):
                 "external_message_id": external_message_id,
                 "received_at": _event_timestamp(event.get("timestamp")),
                 "metadata": {
-                    "provider": "meta",
+                    "provider": "meta_social",
                     "platform": channel_type,
                     "page_or_account_id": page_or_account_id,
                     "attachments": _message_attachments(message),
-                    "raw": event,
                 },
             }
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import TypeVar
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -8,6 +11,24 @@ from app.db import get_db
 from app.services import team_inbox_widget
 
 router = APIRouter(prefix="/widget", tags=["chat-widget"])
+ResultT = TypeVar("ResultT")
+
+
+def _widget_call(action: Callable[[], ResultT]) -> ResultT:
+    try:
+        return action()
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        suffix = exc.code.rsplit(".", 1)[-1]
+        status_code = {
+            "invalid_token": 401,
+            "session_mismatch": 403,
+            "disabled": 503,
+            "subscriber_not_found": 404,
+            "reseller_not_found": 404,
+            "conversation_not_found": 404,
+            "message_required": 400,
+        }.get(suffix, 400)
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 class WidgetMessageCreate(BaseModel):
@@ -24,7 +45,9 @@ def _principal(
     db: Session,
     x_visitor_token: str | None,
 ) -> team_inbox_widget.WidgetPrincipal:
-    return team_inbox_widget.decode_widget_token(db, x_visitor_token or "")
+    return _widget_call(
+        lambda: team_inbox_widget.decode_widget_token(db, x_visitor_token or "")
+    )
 
 
 @router.get("/session/{session_id}/messages")
@@ -37,10 +60,12 @@ def widget_session_messages(
     principal = _principal(db, x_visitor_token)
     if principal.session_id != session_id:
         raise HTTPException(status_code=403, detail="Session mismatch")
-    return team_inbox_widget.list_session_messages(
-        db,
-        principal=principal,
-        limit=limit,
+    return _widget_call(
+        lambda: team_inbox_widget.list_session_messages(
+            db,
+            principal=principal,
+            limit=limit,
+        )
     )
 
 
@@ -52,12 +77,14 @@ def widget_session_message_create(
     db: Session = Depends(get_db),
 ) -> dict:
     principal = _principal(db, x_visitor_token)
-    return team_inbox_widget.add_visitor_message_committed(
-        db,
-        session_id=session_id,
-        principal=principal,
-        body=payload.body,
-        client_message_id=payload.client_message_id,
+    return _widget_call(
+        lambda: team_inbox_widget.add_visitor_message_committed(
+            db,
+            session_id=session_id,
+            principal=principal,
+            body=payload.body,
+            client_message_id=payload.client_message_id,
+        )
     )
 
 
@@ -68,10 +95,12 @@ def widget_session_read(
     db: Session = Depends(get_db),
 ) -> dict:
     principal = _principal(db, x_visitor_token)
-    return team_inbox_widget.mark_session_read_committed(
-        db,
-        session_id=session_id,
-        principal=principal,
+    return _widget_call(
+        lambda: team_inbox_widget.mark_session_read_committed(
+            db,
+            session_id=session_id,
+            principal=principal,
+        )
     )
 
 
@@ -83,10 +112,12 @@ def widget_session_satisfaction(
     db: Session = Depends(get_db),
 ) -> dict:
     principal = _principal(db, x_visitor_token)
-    return team_inbox_widget.record_session_satisfaction_committed(
-        db,
-        session_id=session_id,
-        principal=principal,
-        rating=payload.rating,
-        comment=payload.comment,
+    return _widget_call(
+        lambda: team_inbox_widget.record_session_satisfaction_committed(
+            db,
+            session_id=session_id,
+            principal=principal,
+            rating=payload.rating,
+            comment=payload.comment,
+        )
     )

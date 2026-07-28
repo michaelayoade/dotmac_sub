@@ -25,9 +25,11 @@ from app.models.billing import (
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    Payment,
     PaymentChannelType,
     PaymentProviderType,
     PaymentStatus,
+    ServiceEntitlement,
     TaxApplication,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -50,27 +52,40 @@ from app.schemas.billing import (
     PaymentCreate,
     PaymentMethodCreate,
     PaymentMethodUpdate,
-    PaymentProviderCreate,
-    PaymentProviderUpdate,
     PaymentUpdate,
     TaxRateCreate,
     TaxRateUpdate,
 )
 from app.services import billing as billing_service
+from app.services import payment_gateway_finance
 from app.services.billing import _common as billing_common
 from app.services.billing._common import (
     _calculate_tax_amount,
     _validate_invoice_line_amount,
     _validate_invoice_totals,
 )
-from app.services.billing.configuration import _parse_bool, _parse_json
+from app.services.billing.configuration import _parse_json
 from app.services.billing.reporting import BillingReporting
+from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
+from app.services.events.types import Event, EventType
 from app.services.settings_cache import SettingsCache
 from app.services.settings_spec import get_spec
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _deliver_prepaid_renewal(db_session: Session, payment: Payment) -> None:
+    """Deliver the deferred payment consequence inside the nested test session."""
+    PrepaidRenewalHandler().handle(
+        db_session,
+        Event(
+            event_type=EventType.payment_received,
+            payload={"payment_id": str(payment.id)},
+            account_id=payment.account_id,
+        ),
+    )
 
 
 def _make_subscriber(db_session: object) -> Subscriber:
@@ -896,30 +911,19 @@ class TestLedgerEntryCRUD:
 
 
 # ============================================================================
-# Payment Provider CRUD
+# Payment Provider Directory
 # ============================================================================
 
 
-class TestPaymentProviderCRUD:
-    def test_create_payment_provider(self, db_session):
-        provider = billing_service.payment_providers.create(
+class TestPaymentProviderDirectory:
+    def _identity(self, db_session):
+        return payment_gateway_finance.ensure_gateway_identity(
             db_session,
-            PaymentProviderCreate(
-                name=f"Stripe-{uuid.uuid4().hex[:6]}",
-                provider_type=PaymentProviderType.stripe,
-            ),
+            provider_type=PaymentProviderType.paystack,
         )
-        assert provider.id is not None
-        assert provider.provider_type == PaymentProviderType.stripe
 
     def test_get_payment_provider(self, db_session):
-        provider = billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"PayPal-{uuid.uuid4().hex[:6]}",
-                provider_type=PaymentProviderType.paypal,
-            ),
-        )
+        provider = self._identity(db_session).provider
         fetched = billing_service.payment_providers.get(db_session, str(provider.id))
         assert fetched.id == provider.id
 
@@ -929,12 +933,7 @@ class TestPaymentProviderCRUD:
         assert exc.value.status_code == 404
 
     def test_list_payment_providers(self, db_session):
-        billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"Prov-{uuid.uuid4().hex[:6]}",
-            ),
-        )
+        self._identity(db_session)
         results = billing_service.payment_providers.list(
             db_session,
             is_active=None,
@@ -945,44 +944,12 @@ class TestPaymentProviderCRUD:
         )
         assert len(results) >= 1
 
-    def test_update_payment_provider(self, db_session):
-        provider = billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"UpdProv-{uuid.uuid4().hex[:6]}",
-            ),
-        )
-        updated = billing_service.payment_providers.update(
-            db_session,
-            str(provider.id),
-            PaymentProviderUpdate(notes="Updated note"),
-        )
-        assert updated.notes == "Updated note"
+    def test_gateway_identity_is_idempotent(self, db_session):
+        first = self._identity(db_session)
+        second = self._identity(db_session)
 
-    def test_update_payment_provider_not_found(self, db_session):
-        with pytest.raises(HTTPException) as exc:
-            billing_service.payment_providers.update(
-                db_session,
-                str(uuid.uuid4()),
-                PaymentProviderUpdate(notes="nope"),
-            )
-        assert exc.value.status_code == 404
-
-    def test_delete_payment_provider_soft(self, db_session):
-        provider = billing_service.payment_providers.create(
-            db_session,
-            PaymentProviderCreate(
-                name=f"DelProv-{uuid.uuid4().hex[:6]}",
-            ),
-        )
-        billing_service.payment_providers.delete(db_session, str(provider.id))
-        db_session.refresh(provider)
-        assert provider.is_active is False
-
-    def test_delete_payment_provider_not_found(self, db_session):
-        with pytest.raises(HTTPException) as exc:
-            billing_service.payment_providers.delete(db_session, str(uuid.uuid4()))
-        assert exc.value.status_code == 404
+        assert second.provider.id == first.provider.id
+        assert second.channel.id == first.channel.id
 
 
 # ============================================================================
@@ -998,10 +965,22 @@ class TestCollectionAccountCRUD:
                 name=f"Primary-{uuid.uuid4().hex[:6]}",
                 account_type=CollectionAccountType.bank,
                 currency="USD",
+                bank_name="Example Bank",
+                account_name="Dotmac Technologies Ltd",
+                account_number="0123 456 789",
+                sort_code="12-34-56",
+                accounting_code="BANK-USD-01",
+                presentment_priority=200,
             ),
         )
         assert account.id is not None
         assert account.currency == "USD"
+        assert account.bank_name == "EXAMPLE BANK"
+        assert account.account_number == "0123456789"
+        assert account.account_last4 == "6789"
+        assert account.accounting_code == "BANK-USD-01"
+        assert account.presentment_priority == 200
+        assert account.is_active is False
 
     def test_get_collection_account(self, db_session):
         account = billing_service.collection_accounts.create(
@@ -1020,13 +999,15 @@ class TestCollectionAccountCRUD:
         assert exc.value.status_code == 404
 
     def test_list_collection_accounts(self, db_session):
-        billing_service.collection_accounts.create(
+        account = billing_service.collection_accounts.create(
             db_session,
             CollectionAccountCreate(
                 name=f"List-{uuid.uuid4().hex[:6]}",
                 currency="USD",
             ),
         )
+        billing_service.collection_accounts.stage_active(account, active=True)
+        db_session.commit()
         results = billing_service.collection_accounts.list(
             db_session,
             is_active=None,
@@ -1052,17 +1033,94 @@ class TestCollectionAccountCRUD:
         )
         assert updated.notes == "Updated"
 
-    def test_delete_collection_account_soft(self, db_session):
+    def test_update_account_number_rederives_last4(self, db_session):
         account = billing_service.collection_accounts.create(
             db_session,
             CollectionAccountCreate(
-                name=f"Del-{uuid.uuid4().hex[:6]}",
-                currency="USD",
+                name=f"Derive-{uuid.uuid4().hex[:6]}",
+                bank_name="Example Bank",
+                account_name="Dotmac Technologies Ltd",
+                account_number="1111111111",
             ),
         )
-        billing_service.collection_accounts.delete(db_session, str(account.id))
-        db_session.refresh(account)
-        assert account.is_active is False
+
+        updated = billing_service.collection_accounts.update(
+            db_session,
+            str(account.id),
+            CollectionAccountUpdate(
+                account_number="2222 222 345",
+            ),
+        )
+
+        assert updated.account_number == "2222222345"
+        assert updated.account_last4 == "2345"
+
+    def test_duplicate_bank_destination_is_rejected_case_insensitively(
+        self, db_session
+    ):
+        number = f"77{uuid.uuid4().int % 100000000:08d}"
+        billing_service.collection_accounts.create(
+            db_session,
+            CollectionAccountCreate(
+                name=f"Unique-A-{uuid.uuid4().hex[:6]}",
+                bank_name="Example Bank",
+                account_name="Dotmac Technologies Ltd",
+                account_number=number,
+                currency="NGN",
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            billing_service.collection_accounts.create(
+                db_session,
+                CollectionAccountCreate(
+                    name=f"Unique-B-{uuid.uuid4().hex[:6]}",
+                    bank_name="example bank",
+                    account_name="Dotmac Technologies Ltd",
+                    account_number=number,
+                    currency="NGN",
+                ),
+            )
+
+        assert exc.value.status_code == 409
+
+    def test_presentment_is_complete_currency_bound_and_explicitly_ordered(
+        self, db_session
+    ):
+        suffix = uuid.uuid4().hex[:6]
+        for name, priority, complete, currency in (
+            (f"First-{suffix}", 200, True, "NGN"),
+            (f"Second-{suffix}", 100, True, "NGN"),
+            (f"Incomplete-{suffix}", 500, False, "NGN"),
+            (f"USD-{suffix}", 900, True, "USD"),
+        ):
+            account = billing_service.collection_accounts.create(
+                db_session,
+                CollectionAccountCreate(
+                    name=name,
+                    bank_name="Example Bank",
+                    account_name="Dotmac Technologies Ltd" if complete else None,
+                    account_number=(
+                        f"{priority:010d}{suffix[:2]}" if complete else None
+                    ),
+                    presentment_priority=priority,
+                    currency=currency,
+                ),
+            )
+            billing_service.collection_accounts.stage_active(account, active=True)
+            db_session.commit()
+
+        accounts = billing_service.collection_accounts.presentment_accounts(
+            db_session, currency="NGN"
+        )
+        names_by_number = [account["account_number"] for account in accounts]
+
+        assert f"{200:010d}{suffix[:2]}" in names_by_number
+        assert f"{100:010d}{suffix[:2]}" in names_by_number
+        first_index = names_by_number.index(f"{200:010d}{suffix[:2]}")
+        second_index = names_by_number.index(f"{100:010d}{suffix[:2]}")
+        assert first_index < second_index
+        assert f"{900:010d}{suffix[:2]}" not in names_by_number
 
 
 # ============================================================================
@@ -1077,10 +1135,14 @@ class TestPaymentChannelCRUD:
             PaymentChannelCreate(
                 name=f"Card-{uuid.uuid4().hex[:6]}",
                 channel_type=PaymentChannelType.card,
+                accounting_code="  CARD-CLEARING  ",
             ),
         )
         assert channel.id is not None
         assert channel.channel_type == PaymentChannelType.card
+        assert channel.accounting_code == "CARD-CLEARING"
+        assert channel.is_active is False
+        assert channel.is_default is False
 
     def test_get_payment_channel(self, db_session):
         channel = billing_service.payment_channels.create(
@@ -1098,12 +1160,14 @@ class TestPaymentChannelCRUD:
         assert exc.value.status_code == 404
 
     def test_list_payment_channels(self, db_session):
-        billing_service.payment_channels.create(
+        channel = billing_service.payment_channels.create(
             db_session,
             PaymentChannelCreate(
                 name=f"ListCh-{uuid.uuid4().hex[:6]}",
             ),
         )
+        billing_service.payment_channels.stage_active(channel, active=True)
+        db_session.commit()
         results = billing_service.payment_channels.list(
             db_session,
             is_active=None,
@@ -1127,17 +1191,6 @@ class TestPaymentChannelCRUD:
             PaymentChannelUpdate(notes="Updated channel"),
         )
         assert updated.notes == "Updated channel"
-
-    def test_delete_payment_channel_soft(self, db_session):
-        channel = billing_service.payment_channels.create(
-            db_session,
-            PaymentChannelCreate(
-                name=f"DelCh-{uuid.uuid4().hex[:6]}",
-            ),
-        )
-        billing_service.payment_channels.delete(db_session, str(channel.id))
-        db_session.refresh(channel)
-        assert channel.is_active is False
 
 
 # ============================================================================
@@ -1404,7 +1457,7 @@ class TestPaymentCRUD:
             billing_service.payments.delete(db_session, str(uuid.uuid4()))
         assert exc.value.status_code == 404
 
-    def test_succeeded_prepaid_payment_consumes_credit_and_advances_billing(
+    def test_succeeded_due_prepaid_payment_event_renews_canonical_entitlement(
         self, db_session, subscriber, subscription
     ):
         from app.models.catalog import (
@@ -1414,16 +1467,14 @@ class TestPaymentCRUD:
             PriceType,
             SubscriptionStatus,
         )
-        from app.models.subscriber import SubscriberStatus
 
-        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
         next_billing = datetime(2026, 7, 1, tzinfo=UTC)
+        paid_at = next_billing
         subscription.status = SubscriptionStatus.active
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
         subscription.next_billing_at = next_billing
         subscription.unit_price = Decimal("37625.00")
-        subscriber.status = SubscriberStatus.blocked
         db_session.add(
             OfferPrice(
                 offer_id=subscription.offer_id,
@@ -1446,6 +1497,7 @@ class TestPaymentCRUD:
                 paid_at=paid_at,
             ),
         )
+        _deliver_prepaid_renewal(db_session, payment)
 
         credit = (
             db_session.query(LedgerEntry)
@@ -1454,21 +1506,23 @@ class TestPaymentCRUD:
             .filter(LedgerEntry.source == LedgerSource.payment)
             .one()
         )
-        debit = (
-            db_session.query(LedgerEntry)
-            .filter(LedgerEntry.payment_id == payment.id)
-            .filter(LedgerEntry.invoice_id.is_(None))
-            .filter(LedgerEntry.source == LedgerSource.invoice)
+        entitlement = (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
             .one()
         )
+        debit = db_session.get(LedgerEntry, entitlement.source_ledger_entry_id)
+        assert debit is not None
         assert credit.entry_type == LedgerEntryType.credit
         assert credit.amount == Decimal("37625.00")
         assert debit.entry_type == LedgerEntryType.debit
+        assert debit.source == LedgerSource.adjustment
+        assert debit.payment_id is None
         assert debit.amount == Decimal("37625.00")
+        application = billing_service.payments.application_summary(db_session, payment)
+        assert application.prepaid_amount_applied == Decimal("37625.00")
         db_session.refresh(subscription)
-        db_session.refresh(subscriber)
         assert subscription.next_billing_at == datetime(2026, 8, 1)
-        assert subscriber.status == SubscriberStatus.active
 
     def test_succeeded_prepaid_payment_refuses_catalog_fallback_without_contract_price(
         self, db_session, subscriber, subscription
@@ -1520,7 +1574,7 @@ class TestPaymentCRUD:
         db_session.refresh(subscription)
         assert subscription.next_billing_at == datetime(2026, 7, 1)
 
-    def test_succeeded_prepaid_payment_preserves_credit_when_paid_coverage_exists(
+    def test_succeeded_prepaid_payment_ignores_paid_invoice_without_entitlement(
         self, db_session, subscriber, subscription
     ):
         from app.models.billing import InvoiceLine
@@ -1532,9 +1586,9 @@ class TestPaymentCRUD:
             SubscriptionStatus,
         )
 
-        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
         period_start = datetime(2026, 7, 1, tzinfo=UTC)
         period_end = datetime(2026, 8, 1, tzinfo=UTC)
+        paid_at = period_start
         subscription.status = SubscriptionStatus.active
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
@@ -1591,15 +1645,19 @@ class TestPaymentCRUD:
                 paid_at=paid_at,
             ),
         )
+        _deliver_prepaid_renewal(db_session, payment)
 
-        debit = (
-            db_session.query(LedgerEntry)
-            .filter(LedgerEntry.payment_id == payment.id)
-            .filter(LedgerEntry.invoice_id.is_(None))
-            .filter(LedgerEntry.source == LedgerSource.invoice)
-            .first()
+        entitlement = (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .one()
         )
-        assert debit is None
+        debit = db_session.get(LedgerEntry, entitlement.source_ledger_entry_id)
+        assert debit is not None
+        assert debit.amount == Decimal("37625.00")
+        assert debit.entry_type == LedgerEntryType.debit
+        assert debit.source == LedgerSource.adjustment
+        assert debit.payment_id is None
         db_session.refresh(subscription)
         assert subscription.next_billing_at == period_end.replace(tzinfo=None)
 
@@ -2051,23 +2109,6 @@ class TestPureFunctions:
 
 
 class TestConfigurationHelpers:
-    def test_parse_bool_on(self):
-        assert _parse_bool("on") is True
-
-    def test_parse_bool_true(self):
-        assert _parse_bool("true") is True
-
-    def test_parse_bool_one(self):
-        assert _parse_bool("1") is True
-
-    def test_parse_bool_yes(self):
-        assert _parse_bool("yes") is True
-
-    def test_parse_bool_false(self):
-        assert _parse_bool("off") is False
-        assert _parse_bool("false") is False
-        assert _parse_bool(None) is False
-
     def test_parse_json_valid(self):
         result = _parse_json('{"key": "value"}')
         assert result == {"key": "value"}

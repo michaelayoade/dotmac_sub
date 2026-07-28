@@ -1,6 +1,7 @@
 """Tests for the suspend dimension + idempotent-sync signature (shadow slice).
 
-Covers the design-doc invariants (CONNECTIVITY_STATE_MACHINE.md §2 INV-1..5),
+Covers the service/network projection invariants in
+FINANCIAL_ACCESS_ENFORCEMENT.md,
 the desired-state signature used as the RADIUS-sync idempotency key, and the
 Redis-backed enqueue gate. Everything here is shadow: nothing mutates live
 connectivity.

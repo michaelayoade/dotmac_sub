@@ -125,7 +125,7 @@ void main() {
 
     if (subs.items.isNotEmpty) {
       final opts = await catalog.planChangeOptions(subs.items.first.id);
-      print('✅ /me/.../plan-change — current=${opts.currentOffer?.name} '
+      print('✅ /me/.../service-change — current=${opts.currentOffer?.name} '
           'available=${opts.availableOffers.length}');
 
       final addons = await catalog.addons(subs.items.first.id);

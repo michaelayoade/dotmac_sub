@@ -4,7 +4,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
-from app.services.billing_settings import billing_enabled
 from app.services.catalog import subscriptions as subscriptions_service
 
 # Outage/ticket suppression predicates live in the shared customer-service-state
@@ -33,11 +32,6 @@ def expire_subscriptions() -> dict:
     """Expire subscriptions that have passed their end_at date."""
     logger.info("Starting expire_subscriptions")
     with db_session_adapter.session() as session:
-        if not billing_enabled(session):
-            logger.info(
-                "expire_subscriptions skipped: local billing disabled (billing_enabled)"
-            )
-            return {"skipped": "billing_disabled"}
         result = subscriptions_service.expire_subscriptions(session)
         logger.info("Completed expire_subscriptions: %s", result)
         return result
@@ -48,19 +42,12 @@ def apply_due_subscription_changes() -> dict:
     """Apply admin-scheduled next-cycle plan changes whose date has arrived.
 
     Swaps the offer for every ``approved`` (scheduled) SubscriptionChangeRequest
-    with ``effective_date <= today``. Gated by ``billing_enabled`` because
-    applying a plan change touches the recurring price and billing mode.
+    with ``effective_date <= today``.
     """
     logger.info("Starting apply_due_subscription_changes")
     from app.services.subscription_changes import subscription_change_requests
 
     with db_session_adapter.session() as session:
-        if not billing_enabled(session):
-            logger.info(
-                "apply_due_subscription_changes skipped: local billing disabled "
-                "(billing_enabled)"
-            )
-            return {"skipped": "billing_disabled"}
         result = subscription_change_requests.apply_due_changes(session)
         logger.info("Completed apply_due_subscription_changes: %s", result)
         return result

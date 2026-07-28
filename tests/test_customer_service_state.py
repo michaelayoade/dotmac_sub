@@ -10,10 +10,8 @@ from types import SimpleNamespace
 from app.models.catalog import AccessState, BillingMode, SubscriptionStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import Ticket, TicketStatus
-from app.services.customer_service_state import (
-    get_customer_service_state,
-    resolve_customer_billing_access_state,
-)
+from app.services.access_resolution import resolve_customer_access
+from app.services.customer_service_state import get_customer_service_state
 from app.services.topology.connection_status import Assessment
 from tests.test_customer_plan_change_prepaid import _make_offer, _make_subscription
 
@@ -82,7 +80,7 @@ def _resolver_objects(
 def test_billing_access_resolver_active_postpaid_is_invoice_and_radius_eligible():
     _subscriber, subscription = _resolver_objects()
 
-    state = resolve_customer_billing_access_state(subscription)
+    state = resolve_customer_access(subscription).state
 
     assert state.active_customer_service is True
     assert state.counts_for_customer_impact is True
@@ -98,7 +96,7 @@ def test_billing_access_resolver_active_postpaid_is_invoice_and_radius_eligible(
 def test_billing_access_resolver_active_prepaid_uses_prepaid_enforcement_path():
     _subscriber, subscription = _resolver_objects(billing_mode=BillingMode.prepaid)
 
-    state = resolve_customer_billing_access_state(subscription)
+    state = resolve_customer_access(subscription).state
 
     assert state.active_customer_service is True
     assert state.postpaid_invoice_eligible is False
@@ -112,7 +110,7 @@ def test_billing_access_resolver_parent_hard_block_overrides_active_subscription
         subscriber_status=SubscriberStatus.disabled
     )
 
-    state = resolve_customer_billing_access_state(subscription)
+    state = resolve_customer_access(subscription).state
 
     assert state.active_customer_service is False
     assert state.billable_account is False
@@ -130,7 +128,7 @@ def test_billing_access_resolver_delinquent_is_billable_but_radius_permissive():
         subscriber_status=SubscriberStatus.delinquent
     )
 
-    state = resolve_customer_billing_access_state(subscription)
+    state = resolve_customer_access(subscription).state
 
     assert state.active_customer_service is False
     assert state.counts_for_customer_impact is False

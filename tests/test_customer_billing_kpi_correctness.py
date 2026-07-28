@@ -17,7 +17,11 @@ from decimal import Decimal
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import BillingMode
 from app.models.subscriber import Subscriber
-from app.services import customer_portal_context, customer_portal_flow_billing
+from app.services import (
+    customer_portal_context,
+    customer_portal_flow_billing,
+    portal_account_health,
+)
 from app.services.customer_financial_position import get_customer_billing_summary
 
 
@@ -147,24 +151,31 @@ def test_dashboard_unknown_balance_is_not_reported_as_zero(db_session, monkeypat
     def _boom(*_a, **_k):
         raise RuntimeError("balance source unavailable")
 
-    monkeypatch.setattr(customer_portal_context, "get_available_balance", _boom)
+    monkeypatch.setattr(
+        portal_account_health,
+        "get_customer_receivable_summaries",
+        _boom,
+    )
     ctx = customer_portal_context.get_dashboard_context(
         db_session,
         {"account_id": str(sub.id), "subscriber_id": str(sub.id), "username": "Bill"},
     )
-    assert ctx["account"].balance_available is False
+    assert ctx["account_health"].financial.receivables.kind.value == "unavailable"
     assert ctx["stats_error"] is True
 
 
-def test_dashboard_service_access_comes_from_resolver(db_session, monkeypatch):
+def test_dashboard_consumes_shared_account_health_projection(db_session, monkeypatch):
     sub = _subscriber(db_session)
+    expected = type("ExpectedHealth", (), {"has_partial_data": False})()
     monkeypatch.setattr(
-        customer_portal_context, "customer_is_restricted", lambda _db, _sid: True
+        portal_account_health,
+        "build_portal_account_health",
+        lambda _db, _sid: expected,
     )
     ctx = customer_portal_context.get_dashboard_context(
         db_session,
         {"account_id": str(sub.id), "subscriber_id": str(sub.id), "username": "Bill"},
     )
-    access = ctx["service_access"]
-    assert access.known is True
-    assert access.restricted is True
+    assert ctx["account_health"] is expected
+    assert "service_access" not in ctx
+    assert "account" not in ctx

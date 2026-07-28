@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-from fastapi import HTTPException
+from uuid import UUID
 
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
+from app.models.system_user import SystemUser
 from app.services import payment_proofs as payment_proofs_service
 from app.services.action_forms import (
     ActionConfirmation,
@@ -19,6 +20,8 @@ from app.services.action_forms import (
     ActionOption,
     ActionTone,
 )
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -28,6 +31,80 @@ logger = logging.getLogger(__name__)
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 VERIFY_ACTION_KEY = "payment_proof.verify"
 REJECT_ACTION_KEY = "payment_proof.reject"
+
+
+@dataclass(frozen=True)
+class ReviewerIdentityProjection:
+    actor_id: str | None
+    display_name: str | None
+    resolved_system_user_id: UUID | None
+    identity_resolved: bool
+
+
+def _clean_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _system_user_display_name(user: SystemUser, *, actor_id: str | None) -> str:
+    display_name = _clean_text(user.display_name)
+    if display_name:
+        return display_name
+    first_name = _clean_text(user.first_name)
+    last_name = _clean_text(user.last_name)
+    combined_name = " ".join(part for part in (first_name, last_name) if part)
+    if combined_name:
+        return combined_name
+    email = _clean_text(user.email)
+    if email:
+        return email
+    return actor_id or "User"
+
+
+def _reviewer_identity(
+    db: Session,
+    *,
+    actor_id: str | None,
+) -> ReviewerIdentityProjection:
+    cleaned_actor_id = _clean_text(actor_id)
+    if cleaned_actor_id is None:
+        return ReviewerIdentityProjection(
+            actor_id=None,
+            display_name=None,
+            resolved_system_user_id=None,
+            identity_resolved=False,
+        )
+
+    try:
+        actor_uuid = UUID(cleaned_actor_id)
+    except ValueError:
+        return ReviewerIdentityProjection(
+            actor_id=cleaned_actor_id,
+            display_name=cleaned_actor_id,
+            resolved_system_user_id=None,
+            identity_resolved=False,
+        )
+
+    system_user = db.get(SystemUser, actor_uuid)
+    if system_user is None:
+        return ReviewerIdentityProjection(
+            actor_id=cleaned_actor_id,
+            display_name=cleaned_actor_id,
+            resolved_system_user_id=None,
+            identity_resolved=False,
+        )
+
+    return ReviewerIdentityProjection(
+        actor_id=cleaned_actor_id,
+        display_name=_system_user_display_name(
+            system_user,
+            actor_id=cleaned_actor_id,
+        ),
+        resolved_system_user_id=system_user.id,
+        identity_resolved=True,
+    )
 
 
 def _review_actions(
@@ -174,11 +251,11 @@ def review_error_submission(
     *,
     action_key: str,
     values: dict[str, object | None],
-    error: HTTPException,
+    error: DomainError,
 ) -> ActionFormSubmission:
     """Preserve one failed command submission using the owner's typed error."""
 
-    detail = str(error.detail)
+    detail = error.message
     field = getattr(error, "field", None)
     return ActionFormSubmission.from_mapping(
         action_key,
@@ -245,7 +322,7 @@ def detail_data(
     try:
         payment_proofs_service.resolve_proof_file(proof)
         file_available = True
-    except Exception:
+    except payment_proofs_service.PaymentProofError:
         file_available = False
 
     review_actions = _review_actions(
@@ -254,11 +331,13 @@ def detail_data(
         can_review=can_review,
         submission=submission,
     )
+    reviewer = _reviewer_identity(db, actor_id=proof.verified_by)
 
     return {
         "proof": proof,
         "account": proof.account,
         "payment": proof.payment,
+        "reviewer": reviewer,
         "duplicates": duplicates,
         "file_available": file_available,
         "file_is_image": suffix in _IMAGE_SUFFIXES,
@@ -278,37 +357,37 @@ def file_response_args(db: Session, *, proof_id: str) -> tuple[Path, str] | None
 
 def verify_proof(
     db: Session,
-    request,
     *,
+    context: CommandContext,
     proof_id: str,
     verified_by: str,
     amount: str | None,
     auto_allocate: bool,
     review_notes: str | None,
-) -> dict:
+) -> dict[str, object | None]:
     return payment_proofs_service.verify_proof(
         db,
         proof_id,
+        context=context,
         verified_by=verified_by,
         amount=(amount or "").strip() or None,
         auto_allocate=auto_allocate,
         review_notes=review_notes,
-        request=request,
-    )
+    ).to_dict()
 
 
 def reject_proof(
     db: Session,
-    request,
     *,
+    context: CommandContext,
     proof_id: str,
     verified_by: str,
     review_notes: str,
-) -> dict:
+) -> dict[str, object | None]:
     return payment_proofs_service.reject_proof(
         db,
         proof_id,
+        context=context,
         verified_by=verified_by,
         review_notes=review_notes,
-        request=request,
-    )
+    ).to_dict()

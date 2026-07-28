@@ -66,6 +66,7 @@ from app.services.common import (
     to_decimal,
     validate_enum,
 )
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_classification import collectible_ar_invoice_filter
@@ -81,10 +82,15 @@ _RECONCILIATION_IDEMPOTENCY_SCOPE = "invoice_closure_reconciliation"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
 
 
+class InvoiceOwnerError(DomainError):
+    """Transport-neutral failure from an invoice-owner participant."""
+
+
 def _apply_available_account_credit(db: Session, invoice: Invoice) -> None:
     """Hand an allocatable invoice to the canonical account-credit owner."""
     if (
         invoice.is_active
+        and not invoice.is_proforma
         and invoice.status
         in {
             InvoiceStatus.issued,
@@ -115,6 +121,22 @@ class InvoiceLifecycleTransitionResult:
     invoice: Invoice
     changed: bool
     event_emitted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DraftInvoiceLineReplacement:
+    """One line in a complete admin-draft replacement request."""
+
+    payload: InvoiceLineCreate
+    line_id: UUID | None = None
+
+
+class DraftInvoiceParticipantError(ValueError):
+    """Flush-only rejection mapped by the draft-authoring coordinator."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -208,13 +230,12 @@ def reconcile_service_after_invoice_settlement(
     compute_account_status(db, str(account_id))
 
 
-def next_invoice_number(db: Session) -> str | None:
-    """Generate the next sequential invoice number (None when disabled)."""
-    return numbering.generate_number(
+def next_invoice_number(db: Session) -> str:
+    """Generate the next sequential invoice number."""
+    return numbering.generate_required_number(
         db,
         SettingDomain.billing,
         "invoice_number",
-        "invoice_number_enabled",
         "invoice_number_prefix",
         "invoice_number_padding",
         "invoice_number_start",
@@ -347,7 +368,7 @@ def _build_closure_preview(
     released_allocation_ids: tuple[UUID, ...] = ()
     derived_receivable = max(
         Decimal("0.00"),
-        round_money(to_decimal(invoice.total) - payments_applied - credits_applied),
+        round_money(to_decimal(invoice.total) - settlement.total_applied),
     )
     effects: tuple[InvoiceClosureLedgerEffect, ...]
 
@@ -402,7 +423,11 @@ def _build_closure_preview(
         release_preview = AccountCreditApplications.preview_invoice_void_release(
             db, invoice.id
         )
-        if credits_applied > 0 or release_preview.amount != payments_applied:
+        if (
+            credits_applied > 0
+            or settlement.opening_funding_applied > 0
+            or release_preview.amount != payments_applied
+        ):
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -510,6 +535,159 @@ def _stage_invoice_closure_audit(
 
 
 class Invoices(ListResponseMixin):
+    @staticmethod
+    def create_with_lines(
+        db: Session,
+        payload: InvoiceCreate,
+        lines: tuple[InvoiceLineCreate, ...],
+        *,
+        commit: bool = True,
+    ) -> Invoice:
+        """Create one complete draft or issued document atomically."""
+        if payload.status not in {InvoiceStatus.draft, InvoiceStatus.issued}:
+            raise HTTPException(
+                status_code=409,
+                detail="Invoice construction starts only as draft or issued",
+            )
+        if payload.is_proforma and payload.status != InvoiceStatus.draft:
+            raise HTTPException(
+                status_code=409,
+                detail="Proforma documents must remain drafts",
+            )
+        if not lines:
+            raise HTTPException(
+                status_code=400,
+                detail="Invoice construction requires at least one line",
+            )
+        lock_account(db, str(payload.account_id))
+        target_status = payload.status
+        draft_payload = payload.model_copy(update={"status": InvoiceStatus.draft})
+        try:
+            invoice = Invoices.stage_admin_draft(db, draft_payload)
+            InvoiceLines.replace_admin_draft_lines(
+                db,
+                invoice.id,
+                tuple(
+                    DraftInvoiceLineReplacement(
+                        payload=line.model_copy(update={"invoice_id": invoice.id})
+                    )
+                    for line in lines
+                ),
+            )
+            if target_status == InvoiceStatus.issued:
+                invoice.status = InvoiceStatus.issued
+                invoice.issued_at = payload.issued_at or datetime.now(UTC)
+            AuditEvents.stage(
+                db,
+                AuditEventCreate(
+                    action="create_invoice_with_lines",
+                    entity_type="invoice",
+                    entity_id=str(invoice.id),
+                    metadata_={
+                        "account_id": str(invoice.account_id),
+                        "status": invoice.status.value,
+                        "line_count": len(lines),
+                        "total": str(invoice.total),
+                        "financial_effect": "invoice_document_created",
+                    },
+                ),
+            )
+            emit_event(
+                db,
+                EventType.invoice_created,
+                {
+                    "invoice_id": str(invoice.id),
+                    "invoice_number": invoice.invoice_number,
+                    "amount": str(invoice.total),
+                    "total": str(invoice.total),
+                    "due_date": (
+                        invoice.due_at.date().isoformat() if invoice.due_at else None
+                    ),
+                    "currency": invoice.currency,
+                    "status": invoice.status.value,
+                    "is_proforma": bool(invoice.is_proforma),
+                },
+                account_id=invoice.account_id,
+                invoice_id=invoice.id,
+            )
+            _apply_available_account_credit(db, invoice)
+            if commit:
+                db.commit()
+                db.refresh(invoice)
+            else:
+                db.flush()
+            return invoice
+        except Exception:
+            if commit:
+                db.rollback()
+            raise
+
+    @staticmethod
+    def stage_admin_draft(db: Session, payload: InvoiceCreate) -> Invoice:
+        """Stage one draft header for the contracted authoring coordinator."""
+        if payload.status != InvoiceStatus.draft:
+            raise DraftInvoiceParticipantError(
+                "invoice_not_editable",
+                "Administrative authoring can stage only draft invoices",
+            )
+        _validate_account(db, str(payload.account_id))
+        data = payload.model_dump()
+        if not data.get("invoice_number"):
+            data["invoice_number"] = next_invoice_number(db)
+        _validate_invoice_totals(data)
+        invoice = Invoice(**data)
+        db.add(invoice)
+        db.flush()
+        return invoice
+
+    @staticmethod
+    def stage_admin_draft_header(
+        db: Session,
+        invoice_id: UUID,
+        payload: InvoiceUpdate,
+    ) -> Invoice:
+        """Stage explicit editable header fields without completing a transaction."""
+        invoice = lock_for_update(db, Invoice, invoice_id)
+        if invoice is None or not invoice.is_active:
+            raise DraftInvoiceParticipantError(
+                "invoice_not_found",
+                "Invoice not found",
+            )
+        if invoice.status != InvoiceStatus.draft:
+            raise DraftInvoiceParticipantError(
+                "invoice_not_editable",
+                "Only draft invoices can be edited",
+            )
+        data = payload.model_dump(exclude_unset=True)
+        if "account_id" in data and data["account_id"] != invoice.account_id:
+            raise DraftInvoiceParticipantError(
+                "account_mismatch",
+                "Invoice account cannot be changed",
+            )
+        if "currency" in data and data["currency"] != invoice.currency:
+            raise DraftInvoiceParticipantError(
+                "currency_mismatch",
+                "Invoice currency cannot be changed",
+            )
+        allowed = {
+            "invoice_number",
+            "issued_at",
+            "due_at",
+            "memo",
+            "is_proforma",
+        }
+        unexpected = set(data) - allowed - {"account_id", "currency"}
+        if unexpected:
+            raise DraftInvoiceParticipantError(
+                "invoice_not_editable",
+                "Draft header request contains owner-derived fields",
+            )
+        for key in allowed & set(data):
+            setattr(invoice, key, data[key])
+        invoice.updated_at = datetime.now(UTC)
+        db.flush()
+        return invoice
+
     @staticmethod
     def financial_summary(db: Session, invoice_id: str) -> InvoiceFinancialSummary:
         invoice = get_by_id(db, Invoice, invoice_id)
@@ -852,6 +1030,75 @@ class Invoices(ListResponseMixin):
         )
 
     @staticmethod
+    def void_pristine_draft_for_owner(
+        db: Session,
+        invoice_id: str,
+        *,
+        reason: str,
+        idempotency_key: str,
+    ) -> InvoiceClosureResult:
+        """Stage a pristine draft closure without ending the owner's transaction."""
+        initial = get_by_id(db, Invoice, invoice_id)
+        if initial is None:
+            raise InvoiceOwnerError(
+                code="financial.invoice.invoice_not_found",
+                message="Invoice was not found.",
+            )
+        lock_account(db, str(initial.account_id))
+        invoice = lock_for_update(db, Invoice, coerce_uuid(invoice_id))
+        if invoice is None:
+            raise InvoiceOwnerError(
+                code="financial.invoice.invoice_not_found",
+                message="Invoice was not found.",
+            )
+        try:
+            preview = _build_closure_preview(db, invoice, InvoiceClosureType.void)
+        except HTTPException as exc:
+            raise InvoiceOwnerError(
+                code="financial.invoice.void_rejected",
+                message="Invoice owner rejected the void transition.",
+                details={"reason": str(exc.detail)},
+            ) from exc
+        if (
+            preview.status_before != InvoiceStatus.draft
+            or preview.payments_applied != Decimal("0.00")
+            or preview.credits_applied != Decimal("0.00")
+            or preview.released_allocation_ids
+            or preview.ledger_effects
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.draft_not_pristine",
+                message="Only a pristine draft can use the composed void transition.",
+            )
+        closure = InvoiceClosure(
+            invoice_id=invoice.id,
+            closure_type=InvoiceClosureType.void,
+            origin=InvoiceClosureOrigin.system,
+            amount=preview.closure_amount,
+            receivable_before=preview.receivable_before,
+            receivable_after=preview.receivable_after,
+            payments_applied=preview.payments_applied,
+            credits_applied=preview.credits_applied,
+            currency=preview.currency,
+            reason=reason,
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=idempotency_key,
+        )
+        db.add(closure)
+        db.flush()
+        invoice.status = InvoiceStatus.void
+        invoice.balance_due = preview.receivable_after
+        invoice.paid_at = None
+        invoice.memo = reason
+        _stage_invoice_closure_audit(db, closure=closure, preview=preview)
+        db.flush()
+        return InvoiceClosureResult(
+            invoice=invoice,
+            closure=closure,
+            preview=preview,
+        )
+
+    @staticmethod
     def write_off_system(
         db: Session,
         invoice_id: str,
@@ -898,11 +1145,7 @@ class Invoices(ListResponseMixin):
         settlement = resolve_invoice_settlement_amounts(db, invoice.id)
         expected_amount = max(
             Decimal("0.00"),
-            round_money(
-                to_decimal(invoice.total)
-                - settlement.payments_applied
-                - settlement.credits_applied
-            ),
+            round_money(to_decimal(invoice.total) - settlement.total_applied),
         )
         entries = (
             db.query(LedgerEntry)
@@ -1254,6 +1497,11 @@ class Invoices(ListResponseMixin):
                 status_code=409,
                 detail="Only a draft invoice can be issued by automation",
             )
+        if invoice.is_proforma:
+            raise HTTPException(
+                status_code=409,
+                detail="Convert the proforma before issuing an invoice",
+            )
         invoice.status = InvoiceStatus.issued
         invoice.issued_at = issued_at
         invoice.due_at = due_at
@@ -1281,7 +1529,11 @@ class Invoices(ListResponseMixin):
                 {
                     "invoice_id": str(invoice.id),
                     "invoice_number": invoice.invoice_number,
+                    "amount": str(invoice.total),
                     "total": str(invoice.total),
+                    "due_date": (
+                        invoice.due_at.date().isoformat() if invoice.due_at else None
+                    ),
                     "currency": invoice.currency,
                     "from_status": InvoiceStatus.draft.value,
                     "to_status": InvoiceStatus.issued.value,
@@ -1303,6 +1555,36 @@ class Invoices(ListResponseMixin):
         )
 
     @staticmethod
+    def issue_draft_for_owner(
+        db: Session,
+        invoice_id: str,
+        *,
+        issued_at: datetime,
+        due_at: datetime | None,
+        reason: str,
+        announce: bool = False,
+        apply_available_credit: bool = True,
+    ) -> InvoiceLifecycleTransitionResult:
+        """Compose draft issuance inside another owner without HTTP coupling."""
+        try:
+            return Invoices.issue_draft_system(
+                db,
+                invoice_id,
+                issued_at=issued_at,
+                due_at=due_at,
+                reason=reason,
+                announce=announce,
+                apply_available_credit=apply_available_credit,
+                commit=False,
+            )
+        except HTTPException as exc:
+            raise InvoiceOwnerError(
+                code="financial.invoice.issue_rejected",
+                message="Invoice owner rejected the issue transition.",
+                details={"reason": str(exc.detail)},
+            ) from exc
+
+    @staticmethod
     def announce_issued(
         db: Session,
         invoice_id: str,
@@ -1315,7 +1597,7 @@ class Invoices(ListResponseMixin):
         invoice = lock_for_update(db, Invoice, invoice_id)
         if invoice is None or not invoice.is_active:
             raise HTTPException(status_code=404, detail="Invoice not found")
-        if invoice.status in {
+        if invoice.is_proforma or invoice.status in {
             InvoiceStatus.draft,
             InvoiceStatus.void,
             InvoiceStatus.written_off,
@@ -1330,8 +1612,12 @@ class Invoices(ListResponseMixin):
             {
                 "invoice_id": str(invoice.id),
                 "invoice_number": invoice.invoice_number,
+                "amount": str(invoice.total),
                 "total": str(invoice.total),
                 "balance_due": str(invoice.balance_due),
+                "due_date": (
+                    invoice.due_at.date().isoformat() if invoice.due_at else None
+                ),
                 "currency": invoice.currency,
                 "status": invoice.status.value,
                 "reason": reason,
@@ -1369,7 +1655,7 @@ class Invoices(ListResponseMixin):
                 detail="Only an unpaid issued prepaid invoice can return to draft",
             )
         settlement = resolve_invoice_settlement_amounts(db, invoice.id)
-        if settlement.payments_applied > 0 or settlement.credits_applied > 0:
+        if settlement.total_applied > 0:
             raise HTTPException(
                 status_code=409,
                 detail="Invoice has financial activity and cannot return to draft",
@@ -1415,6 +1701,7 @@ class Invoices(ListResponseMixin):
                     "reason": reason,
                     "payments_applied": str(settlement.payments_applied),
                     "credits_applied": str(settlement.credits_applied),
+                    "opening_funding_applied": str(settlement.opening_funding_applied),
                     "ledger_transaction_id": None,
                     "service_access_consequence": "none",
                 },
@@ -1513,7 +1800,7 @@ class Invoices(ListResponseMixin):
         )
 
     @staticmethod
-    def create(db: Session, payload: InvoiceCreate):
+    def create(db: Session, payload: InvoiceCreate, *, commit: bool = True):
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
         fields_set = payload.model_fields_set
@@ -1556,7 +1843,11 @@ class Invoices(ListResponseMixin):
             {
                 "invoice_id": str(invoice.id),
                 "invoice_number": invoice.invoice_number,
+                "amount": str(invoice.total) if invoice.total else None,
                 "total": str(invoice.total) if invoice.total else None,
+                "due_date": (
+                    invoice.due_at.date().isoformat() if invoice.due_at else None
+                ),
                 "currency": invoice.currency,
                 "status": invoice.status.value if invoice.status else None,
             },
@@ -1564,8 +1855,11 @@ class Invoices(ListResponseMixin):
             invoice_id=invoice.id,
         )
         _apply_available_account_credit(db, invoice)
-        db.commit()
-        db.refresh(invoice)
+        if commit:
+            db.commit()
+            db.refresh(invoice)
+        else:
+            db.flush()
 
         return invoice
 
@@ -1576,6 +1870,7 @@ class Invoices(ListResponseMixin):
         subscription_id: str,
         *,
         allow_prepaid: bool = False,
+        commit: bool = True,
     ) -> Invoice:
         """Create an invoice with line items auto-populated from a subscription's offer price.
 
@@ -1652,11 +1947,10 @@ class Invoices(ListResponseMixin):
         total = amount + tax_total
 
         # Create invoice
-        invoice_number = numbering.generate_number(
+        invoice_number = numbering.generate_required_number(
             db,
             SettingDomain.billing,
             "invoice_number",
-            "invoice_number_enabled",
             "invoice_number_prefix",
             "invoice_number_padding",
             "invoice_number_start",
@@ -1705,8 +1999,11 @@ class Invoices(ListResponseMixin):
             invoice_id=invoice.id,
         )
         _apply_available_account_credit(db, invoice)
-        db.commit()
-        db.refresh(invoice)
+        if commit:
+            db.commit()
+            db.refresh(invoice)
+        else:
+            db.flush()
 
         logger.info(
             "Created invoice %s for subscription %s: %s %s",
@@ -1835,6 +2132,12 @@ class Invoices(ListResponseMixin):
                 status_code=409,
                 detail="Terminal invoices are immutable financial evidence",
             )
+        documentary_fields = set(data) - {"status"}
+        if invoice.status != InvoiceStatus.draft and documentary_fields:
+            raise HTTPException(
+                status_code=409,
+                detail="Issued invoices are immutable; use an exact lifecycle action",
+            )
         if data.get("status") in {
             InvoiceStatus.partially_paid,
             InvoiceStatus.paid,
@@ -1882,7 +2185,11 @@ class Invoices(ListResponseMixin):
             payload_dict = {
                 "invoice_id": str(invoice.id),
                 "invoice_number": invoice.invoice_number,
+                "amount": str(invoice.total) if invoice.total else None,
                 "total": str(invoice.total) if invoice.total else None,
+                "due_date": (
+                    invoice.due_at.date().isoformat() if invoice.due_at else None
+                ),
                 "currency": invoice.currency,
                 "from_status": previous_status.value if previous_status else None,
                 "to_status": new_status.value if new_status else None,
@@ -2045,6 +2352,73 @@ class Invoices(ListResponseMixin):
 
 class InvoiceLines(ListResponseMixin):
     @staticmethod
+    def replace_admin_draft_lines(
+        db: Session,
+        invoice_id: UUID,
+        replacements: tuple[DraftInvoiceLineReplacement, ...],
+    ) -> None:
+        """Stage the complete active line set for an administrative draft."""
+        invoice = lock_for_update(db, Invoice, invoice_id)
+        if invoice is None or not invoice.is_active:
+            raise DraftInvoiceParticipantError(
+                "invoice_not_found",
+                "Invoice not found",
+            )
+        if invoice.status != InvoiceStatus.draft:
+            raise DraftInvoiceParticipantError(
+                "invoice_not_editable",
+                "Invoice lines can be edited only while the invoice is a draft",
+            )
+        existing = {
+            line.id: line
+            for line in db.scalars(
+                select(InvoiceLine)
+                .where(InvoiceLine.invoice_id == invoice.id)
+                .where(InvoiceLine.is_active.is_(True))
+                .with_for_update()
+            ).all()
+        }
+        seen: set[UUID] = set()
+        for replacement in replacements:
+            payload = replacement.payload
+            if payload.invoice_id != invoice.id:
+                raise DraftInvoiceParticipantError(
+                    "line_not_found",
+                    "Invoice line belongs to another invoice",
+                )
+            _resolve_tax_rate(
+                db,
+                str(payload.tax_rate_id) if payload.tax_rate_id else None,
+            )
+            amount = _validate_invoice_line_amount(
+                payload.quantity,
+                payload.unit_price,
+                payload.amount,
+            )
+            if replacement.line_id is None:
+                data = payload.model_dump(exclude={"amount"})
+                db.add(InvoiceLine(**data, amount=amount))
+                continue
+            line = existing.get(replacement.line_id)
+            if line is None:
+                raise DraftInvoiceParticipantError(
+                    "line_not_found",
+                    "Invoice line not found",
+                )
+            seen.add(line.id)
+            line.description = payload.description
+            line.quantity = payload.quantity
+            line.unit_price = payload.unit_price
+            line.amount = amount
+            line.tax_rate_id = payload.tax_rate_id
+            line.tax_application = payload.tax_application
+        for line_id, line in existing.items():
+            if line_id not in seen:
+                line.is_active = False
+        db.flush()
+        _recalculate_invoice_totals(db, invoice)
+
+    @staticmethod
     def stage_system_line(
         db: Session,
         payload: SystemInvoiceLineCreate,
@@ -2130,6 +2504,11 @@ class InvoiceLines(ListResponseMixin):
         invoice = get_by_id(db, Invoice, payload.invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.status != InvoiceStatus.draft:
+            raise HTTPException(
+                status_code=409,
+                detail="Invoice lines can be edited only while the invoice is a draft",
+            )
         _resolve_tax_rate(db, str(payload.tax_rate_id) if payload.tax_rate_id else None)
         data = payload.model_dump(exclude={"amount"})
         fields_set = payload.model_fields_set
@@ -2194,6 +2573,12 @@ class InvoiceLines(ListResponseMixin):
         line = get_by_id(db, InvoiceLine, line_id)
         if not line:
             raise HTTPException(status_code=404, detail="Invoice line not found")
+        invoice = get_by_id(db, Invoice, line.invoice_id)
+        if invoice is None or invoice.status != InvoiceStatus.draft:
+            raise HTTPException(
+                status_code=409,
+                detail="Invoice lines can be edited only while the invoice is a draft",
+            )
         data = payload.model_dump(exclude_unset=True)
         if "tax_rate_id" in data:
             _resolve_tax_rate(
@@ -2205,7 +2590,6 @@ class InvoiceLines(ListResponseMixin):
         data["amount"] = _validate_invoice_line_amount(quantity, unit_price, amount)
         for key, value in data.items():
             setattr(line, key, value)
-        invoice = get_by_id(db, Invoice, line.invoice_id)
         try:
             if invoice:
                 db.flush()
@@ -2223,8 +2607,13 @@ class InvoiceLines(ListResponseMixin):
         line = get_by_id(db, InvoiceLine, line_id)
         if not line:
             raise HTTPException(status_code=404, detail="Invoice line not found")
-        line.is_active = False
         invoice = get_by_id(db, Invoice, line.invoice_id)
+        if invoice is None or invoice.status != InvoiceStatus.draft:
+            raise HTTPException(
+                status_code=409,
+                detail="Invoice lines can be edited only while the invoice is a draft",
+            )
+        line.is_active = False
         if invoice:
             db.flush()
             _recalculate_invoice_totals(db, invoice)

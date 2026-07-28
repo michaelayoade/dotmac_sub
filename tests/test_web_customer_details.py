@@ -1,6 +1,7 @@
 import json
 import uuid
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -27,7 +28,12 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
 
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import AccessCredential, ConnectionType, SubscriptionStatus
+from app.models.catalog import (
+    AccessCredential,
+    ConnectionType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import SubscriberAdditionalRoute
@@ -192,6 +198,92 @@ def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
         context["account_status_presentations"][str(subscriber.id)]
         == context["customer_status_presentation"]
     )
+    assert context["account_health"].account_id == subscriber.id
+
+
+def test_customer_360_rehomes_canonical_service_health() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+
+    assert (
+        'from "components/portal/account_health.html" import service_health_strip'
+        not in template
+    )
+    assert (
+        'service_health_strip(account_health, "/admin/catalog/subscriptions/")'
+        not in template
+    )
+    assert "service_health_by_subscription" in template
+    assert "{% set card_health = card.service_health %}" in template
+
+
+def test_customer_360_service_health_contains_only_active_services(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.active
+    previous_service = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.disabled,
+        billing_mode=subscription.billing_mode,
+    )
+    db_session.add(previous_service)
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert [
+        service.subscription_id for service in context["account_health"].services
+    ] == [subscription.id]
+    assert previous_service.id not in {
+        service.subscription_id for service in context["account_health"].services
+    }
+    assert context["restorable_subscription_ids"] == {str(previous_service.id)}
+
+
+def test_customer_360_places_contact_and_portal_access_side_by_side() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+
+    assert '<div class="contents">' in template
+    assert (
+        'class="order-3 rounded-2xl border border-slate-200/60 bg-white shadow-sm'
+    ) in template
+    assert (
+        'class="order-4 rounded-2xl border border-slate-200/60 bg-white shadow-sm'
+    ) in template
+    assert "lg:col-span-2" in template
+
+
+def test_customer_360_restore_action_is_permission_gated_and_reviewed() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+
+    assert (
+        "{% if can_activate_subscriptions and subscription.id|string in "
+        "restorable_subscription_ids %}"
+    ) in template
+    assert "@click=\"restoreSubscription('{{ subscription.id }}')\"" in template
+    assert (
+        "showAllSubscriptions: {{ ((stats.active_subscriptions | default(0)) == 0) "
+        "| tojson }}"
+    ) in template
+    assert "Reason for restoring this subscription:" in template
+    assert "`${lifecycleUrl}/preview`" in template
+    assert "customer access will remain blocked" in template
+    assert "preview.access_impact?.block_reason_after" in template
+    assert "body.set('expected_head', preview.expected_head)" in template
+    assert "'Idempotency-Key': idempotencyKey" in template
+    assert "`${lifecycleUrl}/execute`" in template
+
+
+def test_customer_dashboard_welcome_card_keeps_content_inset() -> None:
+    template = Path("templates/customer/dashboard/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "px-6 py-6 sm:px-8 sm:py-7" in template
+    assert "min-w-0 flex-1" in template
+    assert "break-words text-3xl" in template
+    assert "max-w-2xl leading-relaxed" in template
 
 
 def test_customer_detail_exposes_invoice_status_presentations(db_session, subscriber):
@@ -273,7 +365,7 @@ def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
     }
 
 
-def test_person_detail_hides_disabled_service_network_access(
+def test_person_detail_preserves_disabled_service_network_access(
     db_session, subscriber, subscription
 ):
     subscriber.user_type = UserType.customer
@@ -284,7 +376,10 @@ def test_person_detail_hides_disabled_service_network_access(
 
     context = build_person_detail_snapshot(db_session, str(subscriber.id))
 
-    assert context["network_access_cards"] == []
+    assert len(context["network_access_cards"]) == 1
+    assert context["network_access_cards"][0]["status"] == "disabled"
+    assert context["network_access_cards"][0]["login"] == "disabled-login"
+    assert context["network_access_cards"][0]["ipv4_address"] == "10.70.0.25"
 
 
 def test_person_detail_projects_subscription_status_for_network_access(
@@ -442,6 +537,30 @@ def test_normalize_usage_period_tolerates_trailing_punctuation():
     assert customer_routes._normalize_usage_period("unexpected") == "current"
 
 
+def test_customer_subscription_action_context_hides_unauthorized_actions(
+    monkeypatch,
+) -> None:
+    request = SimpleNamespace(
+        state=SimpleNamespace(auth={"principal_id": "operator-1"})
+    )
+    granted = {"subscription:activate"}
+    monkeypatch.setattr(
+        customer_routes,
+        "has_permission",
+        lambda auth, db, permission: permission in granted,
+    )
+
+    context = customer_routes._subscription_action_permission_context(
+        request,
+        object(),
+    )
+
+    assert context == {
+        "can_activate_subscriptions": True,
+        "can_suspend_subscriptions": False,
+    }
+
+
 def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
     captured: dict[str, object] = {}
 
@@ -463,7 +582,9 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
     monkeypatch.setattr(
         customer_routes.web_customer_details_service,
         "build_customer_detail_snapshot",
-        lambda db, customer_id: {"customer": SimpleNamespace(id=customer_id)},
+        # **kwargs absorbs include_conversations, which the route now decides
+        # from the principal's permissions and passes down.
+        lambda db, customer_id, **kwargs: {"customer": SimpleNamespace(id=customer_id)},
     )
     monkeypatch.setattr(
         customer_routes.web_notifications_service,
@@ -497,6 +618,8 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
     assert captured["context"]["customer_type"] == "person"
     assert captured["context"]["bulk_notification_channels"] == []
     assert captured["context"]["bulk_notification_templates"] == []
+    assert captured["context"]["can_activate_subscriptions"] is False
+    assert captured["context"]["can_suspend_subscriptions"] is False
     assert captured["context"]["detail_config"] == {
         "statsUrl": (
             "/admin/customers/person/cust-123/stats"

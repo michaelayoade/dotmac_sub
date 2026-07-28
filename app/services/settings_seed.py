@@ -4,7 +4,7 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
 from app.services.domain_settings import (
@@ -30,9 +30,61 @@ from app.services.domain_settings import (
     usage_settings,
 )
 from app.services.secrets import is_openbao_ref
+from app.services.settings_spec import (
+    DOMAIN_SETTINGS_SERVICE,
+    SCHEDULER_BOOLEAN_SETTING_KEYS,
+    SCHEDULER_ENV_BOOTSTRAP_SETTING_KEYS,
+    coerce_value,
+    get_spec,
+)
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
+
+
+def seed_scheduler_runtime_settings(db: Session) -> None:
+    """Materialize bootstrap values for registered scheduler inputs.
+
+    Runtime scheduling resolves the database row or registered default.
+    Environment variables are consulted only here, and ``ensure_by_key``
+    preserves an existing operator decision instead of overriding it on restart.
+    """
+
+    registered = SCHEDULER_BOOLEAN_SETTING_KEYS | SCHEDULER_ENV_BOOTSTRAP_SETTING_KEYS
+    for domain, key in sorted(
+        registered,
+        key=lambda item: (item[0].value, item[1]),
+    ):
+        spec = get_spec(domain, key)
+        if spec is None or spec.value_type not in {
+            SettingValueType.boolean,
+            SettingValueType.integer,
+            SettingValueType.string,
+        }:
+            raise RuntimeError(f"Invalid scheduler setting: {domain.value}.{key}")
+        raw = os.getenv(spec.env_var) if spec.env_var else None
+        value, error = coerce_value(spec, raw if raw is not None else spec.default)
+        if error or value is None:
+            raise RuntimeError(
+                f"Invalid scheduler bootstrap value: {domain.value}.{key}"
+            )
+        value_text = str(value)
+        value_json: bool | None = None
+        if spec.value_type is SettingValueType.boolean:
+            if not isinstance(value, bool):
+                raise RuntimeError(
+                    f"Invalid scheduler bootstrap boolean: {domain.value}.{key}"
+                )
+            value_text = "true" if value else "false"
+            value_json = value
+        service = DOMAIN_SETTINGS_SERVICE[domain]
+        service.ensure_by_key(
+            db,
+            key=key,
+            value_type=spec.value_type,
+            value_text=value_text,
+            value_json=value_json,
+        )
 
 
 def seed_auth_settings(db: Session) -> None:
@@ -489,21 +541,6 @@ def seed_notification_settings(db: Session) -> None:
             else SettingValueType.string,
             value_text=os.getenv(env_name, default),
         )
-    for key, env_name, default in [
-        (
-            "notification_quiet_hours_enabled",
-            "NOTIFICATION_QUIET_HOURS_ENABLED",
-            "false",
-        ),
-    ]:
-        raw = os.getenv(env_name, default)
-        notification_settings.ensure_by_key(
-            db,
-            key=key,
-            value_type=SettingValueType.boolean,
-            value_text=raw,
-            value_json=raw.lower() in {"1", "true", "yes", "on"},
-        )
 
 
 def _seed_missing_notification_templates(db: Session) -> int:
@@ -828,11 +865,14 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "code": "payment_received",
             "name": "Payment Received",
             "channel": NotificationChannel.email,
-            "subject": "Payment received — thank you",
+            "subject": "Payment receipt {receipt_number}",
             "body": (
                 "Dear {subscriber_name},\n\n"
                 "We have received your payment of {amount}. Thank you!\n\n"
-                "Your account balance has been updated accordingly.\n\n"
+                "Receipt: {receipt_number}\n"
+                "View or download: {receipt_url}\n\n"
+                "You can review how the payment was applied in your billing "
+                "history.\n\n"
                 "If you have questions about your billing, please contact support."
             ),
         },
@@ -841,7 +881,22 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "name": "Payment Received SMS",
             "channel": NotificationChannel.sms,
             "subject": None,
-            "body": ("We received your payment of {amount}. Thank you."),
+            "body": (
+                "We received your payment of {amount}. Receipt {receipt_number}: "
+                "{receipt_url}"
+            ),
+        },
+        {
+            "code": "prepaid_service_renewed",
+            "name": "Prepaid Service Renewed",
+            "channel": NotificationChannel.email,
+            "subject": "Your {offer_name} service is renewed",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "We applied {amount} to your {offer_name} service. "
+                "Your service is renewed through {renewed_through}.\n\n"
+                "This renewal confirmation is separate from your payment receipt."
+            ),
         },
         {
             "code": "payment_failed",
@@ -1043,6 +1098,34 @@ def _seed_missing_notification_templates(db: Session) -> int:
         },
     ]
 
+    # Refer & Earn defaults are owned by the executable event-notification
+    # policy. Seed from that canonical spec so editable database templates do
+    # not maintain a second copy of the subject/body/channel decision.
+    from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
+    from app.services.events.types import EventType
+
+    # Event specs no longer declare channels — channel selection is owned by
+    # communications.channel_policy. Seed an editable template for each channel
+    # the seeded billing-category policy can route this reward to, so a routed
+    # channel is never missing its template. Operators add more via the UI.
+    referral_reward_spec = EVENT_NOTIFICATION_SPECS[EventType.referral_reward_issued]
+    # The seeded policy routes this reward to push; seed an email template too as
+    # a usable spare if an operator adds email in the matrix.
+    referral_template_channels = (
+        NotificationChannel.push,
+        NotificationChannel.email,
+    )
+    templates.extend(
+        {
+            "code": referral_reward_spec.template_code,
+            "name": "Referral Reward Issued",
+            "channel": channel,
+            "subject": referral_reward_spec.subject,
+            "body": referral_reward_spec.body,
+        }
+        for channel in referral_template_channels
+    )
+
     created = 0
     for tmpl_data in templates:
         from sqlalchemy import select as sa_select
@@ -1094,18 +1177,6 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
-        key="prepaid_blocking_time",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("PREPAID_BLOCKING_TIME", "08:00"),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="enforcement_window_mode",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("ENFORCEMENT_WINDOW_MODE", "audit"),
-    )
-    collections_settings.ensure_by_key(
-        db,
         key="enforcement_window_start",
         value_type=SettingValueType.string,
         value_text=os.getenv("ENFORCEMENT_WINDOW_START", ""),
@@ -1115,62 +1186,6 @@ def seed_collections_settings(db: Session) -> None:
         key="enforcement_window_end",
         value_type=SettingValueType.string,
         value_text=os.getenv("ENFORCEMENT_WINDOW_END", ""),
-    )
-    enforcement_skip_weekends = os.getenv("ENFORCEMENT_SKIP_WEEKENDS", "false")
-    collections_settings.ensure_by_key(
-        db,
-        key="enforcement_skip_weekends",
-        value_type=SettingValueType.boolean,
-        value_text=enforcement_skip_weekends,
-        value_json=enforcement_skip_weekends.lower() in {"1", "true", "yes", "on"},
-    )
-    enforcement_skip_holidays_raw = os.getenv("ENFORCEMENT_SKIP_HOLIDAYS", "[]")
-    try:
-        enforcement_skip_holidays = json.loads(enforcement_skip_holidays_raw)
-    except json.JSONDecodeError:
-        enforcement_skip_holidays = []
-    collections_settings.ensure_by_key(
-        db,
-        key="enforcement_skip_holidays",
-        value_type=SettingValueType.json,
-        value_json=enforcement_skip_holidays,
-    )
-    prepaid_skip_weekends_raw = os.getenv("PREPAID_SKIP_WEEKENDS", "false")
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_skip_weekends",
-        value_type=SettingValueType.boolean,
-        value_text=prepaid_skip_weekends_raw,
-        value_json=prepaid_skip_weekends_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    prepaid_skip_holidays_raw = os.getenv("PREPAID_SKIP_HOLIDAYS", "[]")
-    try:
-        prepaid_skip_holidays_value = json.loads(prepaid_skip_holidays_raw)
-    except json.JSONDecodeError:
-        prepaid_skip_holidays_value = []
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_skip_holidays",
-        value_type=SettingValueType.json,
-        value_json=prepaid_skip_holidays_value,
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_enforcement_activation_at",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("PREPAID_ENFORCEMENT_ACTIVATION_AT", ""),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_readiness_max_age_minutes",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_READINESS_MAX_AGE_MINUTES", "60"),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_activation_max_grace_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_ACTIVATION_MAX_GRACE_DAYS", "0"),
     )
     collections_settings.ensure_by_key(
         db,
@@ -1287,28 +1302,6 @@ def seed_geocoding_settings(db: Session) -> None:
 
 
 def seed_scheduler_settings(db: Session) -> None:
-    broker = (
-        os.getenv("CELERY_BROKER_URL")
-        or os.getenv("REDIS_URL")
-        or "redis://localhost:6379/0"
-    )
-    backend = (
-        os.getenv("CELERY_RESULT_BACKEND")
-        or os.getenv("REDIS_URL")
-        or "redis://localhost:6379/1"
-    )
-    scheduler_settings.ensure_by_key(
-        db,
-        key="broker_url",
-        value_type=SettingValueType.string,
-        value_text=broker,
-    )
-    scheduler_settings.ensure_by_key(
-        db,
-        key="result_backend",
-        value_type=SettingValueType.string,
-        value_text=backend,
-    )
     scheduler_settings.ensure_by_key(
         db,
         key="timezone",
@@ -1325,21 +1318,13 @@ def seed_scheduler_settings(db: Session) -> None:
         db,
         key="beat_refresh_seconds",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("CELERY_BEAT_REFRESH_SECONDS", "30"),
+        value_text=os.getenv("CELERY_BEAT_REFRESH_SECONDS", "300"),
     )
     scheduler_settings.ensure_by_key(
         db,
         key="refresh_minutes",
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_BEAT_REFRESH_MINUTES", "5"),
-    )
-    event_dispatch_enabled = os.getenv("EVENT_DISPATCH_ENABLED", "true")
-    scheduler_settings.ensure_by_key(
-        db,
-        key="event_dispatch_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=event_dispatch_enabled,
-        value_json=event_dispatch_enabled.lower() in {"1", "true", "yes", "on"},
     )
     scheduler_settings.ensure_by_key(
         db,
@@ -1533,18 +1518,6 @@ def seed_radius_settings(db: Session) -> None:
 
 
 def seed_billing_settings(db: Session) -> None:
-    legacy_provider = (
-        db.query(DomainSetting)
-        .filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "default_payment_provider_type",
-            DomainSetting.is_active.is_(True),
-        )
-        .first()
-    )
-    legacy_primary = str(getattr(legacy_provider, "value_text", "") or "").strip()
-    if legacy_primary not in {"paystack", "flutterwave"}:
-        legacy_primary = "paystack"
     billing_settings.ensure_by_key(
         db,
         key="default_currency",
@@ -1576,32 +1549,6 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_METHOD_TYPE", "card"),
     )
-    payment_failover_enabled_raw = os.getenv(
-        "BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true"
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_failover_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=payment_failover_enabled_raw,
-        value_json=payment_failover_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_primary_provider",
-        value_type=SettingValueType.string,
-        value_text=os.getenv(
-            "BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", legacy_primary
-        ),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="payment_gateway_secondary_provider",
-        value_type=SettingValueType.string,
-        value_text=os.getenv(
-            "BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"
-        ),
-    )
     billing_settings.ensure_by_key(
         db,
         key="default_bank_account_type",
@@ -1613,22 +1560,6 @@ def seed_billing_settings(db: Session) -> None:
         key="default_payment_status",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_STATUS", "pending"),
-    )
-    billing_enabled_raw = os.getenv("BILLING_ENABLED", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="billing_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=billing_enabled_raw,
-    )
-    # Pin the expected master-switch value so the hourly check_billing_switch
-    # guard alarms if billing is ever turned OFF (drift = actual != expected).
-    # Default "true": post-cutover DotMac is the biller of record.
-    billing_settings.ensure_by_key(
-        db,
-        key="billing_enabled_expected",
-        value_type=SettingValueType.boolean,
-        value_text=os.getenv("BILLING_ENABLED_EXPECTED", "true"),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1650,17 +1581,6 @@ def seed_billing_settings(db: Session) -> None:
         key="autopay_max_consecutive_failures",
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES", "3"),
-    )
-    customer_balance_notifications_raw = os.getenv(
-        "BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED", "true"
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="customer_balance_notifications_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=customer_balance_notifications_raw,
-        value_json=customer_balance_notifications_raw.lower()
-        in {"1", "true", "yes", "on"},
     )
     billing_settings.ensure_by_key(
         db,
@@ -1758,23 +1678,52 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="subscription_billing_treatment_max_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_SUBSCRIPTION_TREATMENT_MAX_DAYS", "366"),
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="topup_preset_amounts",
         value_type=SettingValueType.string,
         value_text=os.getenv(
             "BILLING_TOPUP_PRESET_AMOUNTS", "1000,2000,5000,10000,20000,50000"
         ),
     )
-    billing_settings.ensure_by_key(
-        db,
-        key="topup_reconciliation_stale_minutes",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_STALE_MINUTES", "15"),
+    for reconciliation_key in (
+        "topup_reconciliation_stale_minutes",
+        "topup_reconciliation_max_age_days",
+        "topup_reconciliation_expiry_grace_hours",
+        "topup_reconciliation_batch_size",
+    ):
+        reconciliation_spec = get_spec(SettingDomain.billing, reconciliation_key)
+        if reconciliation_spec is None or reconciliation_spec.env_var is None:
+            raise RuntimeError(
+                f"Top-up reconciliation spec is missing: {reconciliation_key}"
+            )
+        billing_settings.ensure_by_key(
+            db,
+            key=reconciliation_spec.key,
+            value_type=reconciliation_spec.value_type,
+            value_text=os.getenv(
+                reconciliation_spec.env_var,
+                str(reconciliation_spec.default),
+            ),
+        )
+    gateway_intent_ttl_spec = get_spec(
+        SettingDomain.billing,
+        "gateway_topup_intent_ttl_minutes",
     )
+    if gateway_intent_ttl_spec is None or gateway_intent_ttl_spec.env_var is None:
+        raise RuntimeError("Gateway top-up intent TTL spec is missing")
     billing_settings.ensure_by_key(
         db,
-        key="topup_reconciliation_max_age_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_MAX_AGE_DAYS", "7"),
+        key=gateway_intent_ttl_spec.key,
+        value_type=gateway_intent_ttl_spec.value_type,
+        value_text=os.getenv(
+            gateway_intent_ttl_spec.env_var,
+            str(gateway_intent_ttl_spec.default),
+        ),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1800,14 +1749,6 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_HEALTH_PAYMENT_BASELINE_MIN_DAILY", "5.0"),
     )
-    invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="invoice_number_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=invoice_enabled_raw,
-        value_json=invoice_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
     billing_settings.ensure_by_key(
         db,
         key="invoice_number_prefix",
@@ -1826,14 +1767,6 @@ def seed_billing_settings(db: Session) -> None:
         key="invoice_number_start",
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_INVOICE_NUMBER_START", "1"),
-    )
-    credit_note_enabled_raw = os.getenv("BILLING_CREDIT_NOTE_NUMBER_ENABLED", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="credit_note_number_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=credit_note_enabled_raw,
-        value_json=credit_note_enabled_raw.lower() in {"1", "true", "yes", "on"},
     )
     billing_settings.ensure_by_key(
         db,
@@ -2038,26 +1971,6 @@ def seed_collections_policy_settings(db: Session) -> None:
     )
     for key, env_name, default in [
         (
-            "billing_enforcement_health_gates_enabled",
-            "BILLING_ENFORCEMENT_HEALTH_GATES_ENABLED",
-            "true",
-        ),
-        (
-            "billing_enforcement_require_notification_health",
-            "BILLING_ENFORCEMENT_REQUIRE_NOTIFICATION_HEALTH",
-            "false",
-        ),
-        (
-            "billing_enforcement_require_payment_health",
-            "BILLING_ENFORCEMENT_REQUIRE_PAYMENT_HEALTH",
-            "true",
-        ),
-        (
-            "billing_enforcement_settle_credit_before_dunning_enabled",
-            "BILLING_ENFORCEMENT_SETTLE_CREDIT_BEFORE_DUNNING_ENABLED",
-            "true",
-        ),
-        (
             "billing_enforcement_require_active_gateway",
             "BILLING_ENFORCEMENT_REQUIRE_ACTIVE_GATEWAY",
             "false",
@@ -2254,6 +2167,20 @@ def seed_projects_settings(db: Session) -> None:
         key="default_project_status",
         value_type=SettingValueType.string,
         value_text=os.getenv("PROJECTS_DEFAULT_PROJECT_STATUS", "active"),
+    )
+    projects_settings.ensure_by_key(
+        db,
+        key="default_project_priority",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PROJECTS_DEFAULT_PROJECT_PRIORITY", "normal"),
+    )
+    projects_settings.ensure_by_key(
+        db,
+        key="default_sales_project_type",
+        value_type=SettingValueType.string,
+        value_text=os.getenv(
+            "PROJECTS_DEFAULT_SALES_PROJECT_TYPE", "fiber_optics_installation"
+        ),
     )
 
 
@@ -2509,6 +2436,15 @@ def seed_lifecycle_settings(db: Session) -> None:
 
 
 def seed_comms_settings(db: Session) -> None:
+    campaign_processing_enabled = os.getenv("CAMPAIGN_PROCESSING_ENABLED", "false")
+    comms_settings.ensure_by_key(
+        db,
+        key="campaign_processing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=campaign_processing_enabled,
+        value_json=campaign_processing_enabled.strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
     comms_settings.ensure_by_key(
         db,
         key="default_notification_status",

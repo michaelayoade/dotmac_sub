@@ -45,6 +45,13 @@ class Skill(Base):
 
 class TechnicianProfile(Base):
     __tablename__ = "technician_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "workforce_system",
+            "workforce_employee_reference",
+            name="uq_technician_profiles_workforce_system_reference",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -61,9 +68,8 @@ class TechnicianProfile(Base):
     )
     title: Mapped[str | None] = mapped_column(String(120))
     region: Mapped[str | None] = mapped_column(String(120), index=True)
-    erp_employee_id: Mapped[str | None] = mapped_column(
-        String(100), unique=True, index=True
-    )
+    workforce_system: Mapped[str | None] = mapped_column(String(40))
+    workforce_employee_reference: Mapped[str | None] = mapped_column(String(100))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -111,6 +117,13 @@ class TechnicianSkill(Base):
 
 class Shift(Base):
     __tablename__ = "shifts"
+    __table_args__ = (
+        UniqueConstraint(
+            "workforce_system",
+            "workforce_record_reference",
+            name="uq_shifts_workforce_system_reference",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -122,7 +135,8 @@ class Shift(Base):
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     timezone: Mapped[str | None] = mapped_column(String(64))
     shift_type: Mapped[str | None] = mapped_column(String(60))
-    erp_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    workforce_system: Mapped[str | None] = mapped_column(String(40))
+    workforce_record_reference: Mapped[str | None] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -138,6 +152,13 @@ class Shift(Base):
 
 class AvailabilityBlock(Base):
     __tablename__ = "availability_blocks"
+    __table_args__ = (
+        UniqueConstraint(
+            "workforce_system",
+            "workforce_record_reference",
+            name="uq_availability_blocks_workforce_system_reference",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -150,7 +171,8 @@ class AvailabilityBlock(Base):
     reason: Mapped[str | None] = mapped_column(String(160))
     block_type: Mapped[str | None] = mapped_column(String(60))
     is_available: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    erp_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    workforce_system: Mapped[str | None] = mapped_column(String(40))
+    workforce_record_reference: Mapped[str | None] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

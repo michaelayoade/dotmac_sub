@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.services.fup import evaluate_rules, fup_policies
+from app.services.fup import evaluate_rules
 from app.services.fup_usage import FupUsageWindow, fup_window_bounds
+from tests.fup_helpers import add_fup_rule, ensure_fup_policy
 
 NOW = datetime(2026, 6, 21, 12, 0, tzinfo=UTC)
 
@@ -25,10 +26,11 @@ def _window(period: str, used_gb: float) -> FupUsageWindow:
 
 
 def _policy_daily_and_monthly(db, offer):
-    policy = fup_policies.get_or_create(db, str(offer.id))
-    fup_policies.add_rule(
+    offer_id = str(offer.id)
+    policy = ensure_fup_policy(db, offer_id)
+    add_fup_rule(
         db,
-        str(policy.id),
+        offer_id,
         name="daily-5",
         consumption_period="daily",
         direction="down",
@@ -38,9 +40,9 @@ def _policy_daily_and_monthly(db, offer):
         speed_reduction_percent=50,
         sort_order=1,
     )
-    fup_policies.add_rule(
+    add_fup_rule(
         db,
-        str(policy.id),
+        offer_id,
         name="monthly-100",
         consumption_period="monthly",
         direction="down",

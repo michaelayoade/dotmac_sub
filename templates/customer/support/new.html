@@ -15,6 +15,46 @@
         <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Describe your issue and we'll get back to you as soon as possible</p>
     </div>
 
+    {% if deflection_known_issue %}
+    {# Informational only. The form below still accepts the report — refusing it
+       would push the customer straight to WhatsApp, which is what this is for. #}
+    <div class="rounded-xl border p-5 {% if deflection.scope == 'outage' %}border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/25{% else %}border-sky-300 bg-sky-50 dark:border-sky-700 dark:bg-sky-900/25{% endif %}">
+        <div class="flex items-start gap-3">
+            <svg class="mt-0.5 h-5 w-5 shrink-0 {% if deflection.scope == 'outage' %}text-amber-600 dark:text-amber-400{% else %}text-sky-600 dark:text-sky-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div class="min-w-0 flex-1">
+                <p class="text-sm font-semibold text-stone-900 dark:text-white">{{ deflection.headline }}</p>
+                <p class="mt-1 text-sm text-stone-700 dark:text-stone-300">{{ deflection.message }}</p>
+                {% if deflection.advice %}
+                <p class="mt-2 text-sm text-stone-600 dark:text-stone-400">{{ deflection.advice }}</p>
+                {% endif %}
+
+                <div class="mt-4 flex flex-wrap items-center gap-3">
+                    {% if deflection.existing_ticket_id %}
+                    <a href="/portal/support/{{ deflection.existing_ticket_id }}" class="inline-flex items-center gap-2 rounded-lg bg-[var(--color-brand-600)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+                        Follow the existing ticket
+                    </a>
+                    <span class="text-sm text-stone-600 dark:text-stone-400">We're already tracking this &mdash; updates land there.</span>
+                    {% else %}
+                    <a href="/portal/connection" class="inline-flex items-center gap-2 rounded-lg border border-stone-300 px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-700">
+                        Check my connection status
+                    </a>
+                    {% endif %}
+                </div>
+
+                <p class="mt-4 text-xs text-stone-500 dark:text-stone-400">
+                    {% if deflection.existing_ticket_id %}
+                    You can still raise a separate ticket below if this is about something else.
+                    {% else %}
+                    You can still raise a ticket below &mdash; it helps us confirm who is affected.
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     {% if crm_error %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/30">
         <div class="flex items-center gap-3">
@@ -36,8 +76,10 @@
                 <!-- Subject / Title -->
                 <div>
                     <label for="title" class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Subject</label>
+                    {# When we already know the customer is affected, seed the
+                       subject so a report that does arrive is triageable. #}
                     <input type="text" id="title" name="title" required placeholder="Brief summary of your issue"
-                           value="{{ form_values.title if form_values is defined and form_values else '' }}"
+                           value="{{ form_values.title if form_values is defined and form_values else (deflection.suggested_title if deflection_known_issue else '') }}"
                            class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white dark:placeholder-stone-400">
                 </div>
 

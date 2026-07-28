@@ -20,6 +20,7 @@ from app.schemas.ai_operations import AIInsightCreate, AiIntakeConfigUpsert
 from app.schemas.campaigns import CampaignCreate
 from app.services import ai_operations, comms_campaigns, workqueue
 from app.tasks import notifications as notification_tasks
+from tests.staff_identity_fixtures import add_bound_staff_user
 
 
 def _subscriber(
@@ -58,6 +59,10 @@ def test_campaign_build_skips_inactive_and_sends_through_native_inbox(
     db_session,
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        "app.services.notification.quiet_hours_send_at",
+        lambda _db: None,
+    )
     team = _team(db_session)
     active = _subscriber(db_session, email="ada@example.com")
     _subscriber(
@@ -225,6 +230,10 @@ def test_ai_insight_acknowledge_expire_and_intake_config(db_session):
 
 def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     user_id = uuid.uuid4()
+    _user, person = add_bound_staff_user(
+        db_session,
+        system_user_id=user_id,
+    )
     team = _team(db_session)
     subscriber = _subscriber(db_session, email="queue@example.com")
     conversation = InboxConversation(
@@ -256,7 +265,7 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     db_session.add(
         ServiceTeamMember(
             team_id=team.id,
-            person_id=user_id,
+            person_id=person.id,
             role=ServiceTeamMemberRole.member.value,
         )
     )

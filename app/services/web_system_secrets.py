@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from urllib.parse import quote_plus
 
 MASKED_SECRET_VALUE = "••••••••"
+_SECRET_FIELD_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def build_secrets_index_context(*, status: str | None, message: str | None) -> dict:
@@ -72,23 +74,46 @@ def _updated_secret_fields(path: str, form: Mapping[str, object]) -> dict[str, s
         else:
             updated[key] = existing[key]
 
-    new_keys = str(form.get("new_field_names") or "").strip()
-    new_vals = str(form.get("new_field_values") or "").strip()
-    if new_keys:
-        for new_key, new_value in zip(
-            new_keys.split(","), new_vals.split(","), strict=False
-        ):
-            key = new_key.strip()
-            value = new_value.strip()
-            if key:
-                updated[key] = value
+    indexes = sorted(
+        {
+            int(key.removeprefix("new_key_"))
+            for key in form
+            if key.startswith("new_key_") and key.removeprefix("new_key_").isdigit()
+        }
+    )
+    for index in indexes:
+        key = str(form.get(f"new_key_{index}") or "").strip()
+        value = str(form.get(f"new_value_{index}") or "").strip()
+        if not key and not value:
+            continue
+        if not key:
+            raise ValueError("Every new secret value requires a field name")
+        if not _SECRET_FIELD_NAME.fullmatch(key):
+            raise ValueError(
+                "Secret field names may contain letters, numbers, dots, "
+                "underscores, and hyphens only"
+            )
+        if key in updated:
+            raise ValueError(f"Secret field '{key}' already exists")
+        if not value:
+            raise ValueError(f"Secret field '{key}' requires a value")
+        updated[key] = value
     return updated
 
 
 def save_secret(path: str, form: Mapping[str, object]) -> dict:
-    from app.services.secrets import write_secret
+    from app.services.secrets import list_secret_field_names, write_secret
 
-    updated = _updated_secret_fields(path, form)
+    try:
+        updated = _updated_secret_fields(path, form)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "secret_path": path,
+            "fields": dict.fromkeys(list_secret_field_names(path), MASKED_SECRET_VALUE),
+            "metadata": {},
+            "error": str(exc),
+        }
     if write_secret(path, updated):
         return {
             "ok": True,

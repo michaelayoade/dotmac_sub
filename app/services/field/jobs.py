@@ -28,6 +28,7 @@ from app.models.work_order import WorkOrder
 from app.schemas.field import (
     FieldAttachmentRead,
     FieldCustomer,
+    FieldCustomerExperienceContext,
     FieldEquipmentRead,
     FieldExpenseRequestRead,
     FieldJobDetail,
@@ -39,6 +40,9 @@ from app.schemas.field import (
     FieldMeResponse,
     FieldMovementRead,
     FieldNoteRead,
+    FieldProjectContext,
+    FieldProjectTaskContext,
+    FieldTicketContext,
     FieldWorkLogRead,
 )
 from app.services.common import apply_pagination, coerce_uuid
@@ -48,7 +52,12 @@ from app.services.field.work_order_status import (
     FIELD_OPEN_WORK_ORDER_STATUSES,
     WORK_ORDER_TERMINAL_VALUES,
 )
-from app.services.status_presentation import work_order_status_presentation
+from app.services.status_presentation import (
+    project_status_presentation,
+    project_task_status_presentation,
+    ticket_status_presentation,
+    work_order_status_presentation,
+)
 
 TERMINAL_STATUSES = WORK_ORDER_TERMINAL_VALUES
 OPEN_STATUSES = FIELD_OPEN_WORK_ORDER_STATUSES
@@ -298,6 +307,51 @@ def _summary(row: WorkOrder) -> FieldJobSummary:
     )
 
 
+def _customer_experience(row: WorkOrder) -> FieldCustomerExperienceContext:
+    project = row.project
+    project_task = row.project_task
+    origin_ticket = row.origin_ticket
+    task_ticket = project_task.ticket if project_task is not None else None
+    return FieldCustomerExperienceContext(
+        project=FieldProjectContext(
+            id=project.id,
+            number=project.number,
+            name=project.name,
+            status=project.status,
+            status_presentation=project_status_presentation(project.status),
+        )
+        if project is not None
+        else None,
+        project_task=FieldProjectTaskContext(
+            id=project_task.id,
+            number=project_task.number,
+            title=project_task.title,
+            status=project_task.status,
+            status_presentation=project_task_status_presentation(project_task.status),
+        )
+        if project_task is not None
+        else None,
+        origin_ticket=FieldTicketContext(
+            id=origin_ticket.id,
+            number=origin_ticket.number,
+            title=origin_ticket.title,
+            status=origin_ticket.status,
+            status_presentation=ticket_status_presentation(origin_ticket.status),
+        )
+        if origin_ticket is not None
+        else None,
+        project_task_ticket=FieldTicketContext(
+            id=task_ticket.id,
+            number=task_ticket.number,
+            title=task_ticket.title,
+            status=task_ticket.status,
+            status_presentation=ticket_status_presentation(task_ticket.status),
+        )
+        if task_ticket is not None
+        else None,
+    )
+
+
 class FieldJobs:
     @staticmethod
     def me(db: Session, principal: dict[str, Any]) -> FieldMeResponse:
@@ -416,8 +470,7 @@ class FieldJobs:
             completion_requirements=field_transitions.completion_requirements(db),
             customer=_customer(row, subscriber),
             location=_location(row),
-            ticket_ref=row.crm_ticket_id,
-            project_id=row.crm_project_id,
+            customer_experience=_customer_experience(row),
             access_notes=row.access_notes,
             materials=[FieldMaterialRead.model_validate(item) for item in materials],
             material_requests=[

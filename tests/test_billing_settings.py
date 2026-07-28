@@ -62,7 +62,6 @@ def test_billing_config_context_backfills_notification_defaults(db_session):
 
 def test_billing_policy_settings_have_specs():
     expected = {
-        "billing_enabled_expected": True,
         "minimum_balance": "0",
     }
 
@@ -87,7 +86,6 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
     save_billing_config(
         db_session,
         {
-            "billing_enabled": "TRUE",
             "payment_period": "Monthly",
             "billing_day": "05",
             "use_creation_date": "false",
@@ -95,7 +93,6 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
             "expiry_reminder_days": "7",
             "invoice_reminder_days": "7, 1",
             "minimum_balance": "10.50",
-            "send_billing_notifications": "false",
             "proforma_enabled": "false",
             "zero_total_invoices": "false",
             "invoice_caching": "true",
@@ -104,7 +101,6 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
 
     context = get_billing_config_context(db_session)["billing"]
 
-    assert context["billing_enabled"] == "true"
     assert context["payment_period"] == "monthly"
     assert context["billing_day"] == "5"
     assert context["invoice_reminder_days"] == "7,1"
@@ -127,7 +123,6 @@ def test_save_billing_config_rejects_invalid_policy_values(
     db_session, field, value, message
 ):
     payload = {
-        "billing_enabled": "true",
         "payment_period": "monthly",
         "billing_day": "1",
         "minimum_balance": "0",
@@ -153,5 +148,7 @@ def test_billing_settings_template_confirms_and_bounds_policy_save():
     assert 'name="dunning_escalation_days"' not in template
     assert 'name="blocking_period_days"' not in template
     assert 'name="deactivation_period_days"' not in template
+    assert 'name="billing_enabled"' not in template
+    assert 'name="send_billing_notifications"' not in template
     assert 'min="0"' in template
     assert 'max="3650"' in template

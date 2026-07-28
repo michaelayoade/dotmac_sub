@@ -4,7 +4,7 @@ from typing import Any
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from fastapi import HTTPException
-from sqlalchemy import and_, false, func, or_, select, text
+from sqlalchemy import and_, case, false, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -22,8 +22,6 @@ from app.schemas.tr069 import (
     Tr069AcsServerUpdate,
     Tr069CpeDeviceCreate,
     Tr069CpeDeviceUpdate,
-    Tr069JobCreate,
-    Tr069JobUpdate,
     Tr069ParameterCreate,
     Tr069ParameterUpdate,
     Tr069SessionCreate,
@@ -46,6 +44,11 @@ from app.services.network.effective_ont_config import resolve_effective_ont_conf
 from app.services.network.ont_desired_config import (
     desired_config,
     get_desired_config_value,
+)
+from app.services.network.ont_serials import (
+    ActiveOntSerialIndex,
+    build_active_ont_serial_index,
+    find_unique_active_ont_by_serial,
 )
 from app.services.network.ont_status import (
     apply_status_snapshot,
@@ -441,12 +444,20 @@ def _resolve_default_acs_server(db: Session) -> Tr069AcsServer | None:
     )
 
 
-def _find_matching_ont_for_serial(db: Session, serial: str | None):
+def _find_matching_ont_for_serial(
+    db: Session,
+    serial: str | None,
+    *,
+    serial_index: ActiveOntSerialIndex | None = None,
+) -> OntUnit | None:
     if not serial:
         return None
-    from app.services.network.ont_serials import find_unique_active_ont_by_serial
 
-    ont = find_unique_active_ont_by_serial(db, serial)
+    ont = (
+        serial_index.find_unique(serial)
+        if serial_index is not None
+        else find_unique_active_ont_by_serial(db, serial)
+    )
     if ont is None:
         logger.info(
             "TR-069 serial %s did not resolve to a unique active ONT; leaving unlinked",
@@ -460,11 +471,16 @@ def _link_unassigned_inform_device_to_matching_ont(
     device: Tr069CpeDevice,
     *,
     serial: str | None,
+    serial_index: ActiveOntSerialIndex | None = None,
 ) -> None:
     """Link an existing unassigned TR-069 device to a unique ONT serial match."""
     if getattr(device, "ont_unit_id", None):
         return
-    ont = _find_matching_ont_for_serial(db, serial or device.serial_number)
+    ont = _find_matching_ont_for_serial(
+        db,
+        serial or device.serial_number,
+        serial_index=serial_index,
+    )
     if ont is None:
         return
     link_tr069_device_to_ont(db, device, ont, acs_server_id=device.acs_server_id)
@@ -630,6 +646,59 @@ def refresh_ont_status_snapshot(
         online_window_minutes=resolve_acs_online_window_minutes_for_model(ont),
     )
     apply_status_snapshot(ont, snapshot)
+
+
+def _refresh_synced_ont_acs_observations(
+    db: Session,
+    *,
+    acs_server_id: str,
+) -> int:
+    """Project the latest synced ACS observation onto each linked ONT.
+
+    Build the statement with SQLAlchemy so null-safe change detection compiles
+    for both PostgreSQL (``IS DISTINCT FROM``) and SQLite (``IS NOT``). The
+    latter is the canonical unit-test database and must exercise the same
+    transaction boundary instead of rolling back the completed sync.
+    """
+    latest = (
+        select(
+            Tr069CpeDevice.ont_unit_id.label("ont_unit_id"),
+            func.max(Tr069CpeDevice.last_inform_at).label("last_inform_at"),
+        )
+        .where(
+            Tr069CpeDevice.acs_server_id == acs_server_id,
+            Tr069CpeDevice.is_active.is_(True),
+            Tr069CpeDevice.ont_unit_id.is_not(None),
+            Tr069CpeDevice.last_inform_at.is_not(None),
+        )
+        .group_by(Tr069CpeDevice.ont_unit_id)
+        .cte("latest")
+    )
+    statement = (
+        update(OntUnit)
+        .where(
+            OntUnit.id == latest.c.ont_unit_id,
+            OntUnit.acs_last_inform_at.is_distinct_from(latest.c.last_inform_at),
+        )
+        .values(
+            acs_last_inform_at=latest.c.last_inform_at,
+            last_seen_at=case(
+                (
+                    or_(
+                        OntUnit.last_seen_at.is_(None),
+                        OntUnit.last_seen_at < latest.c.last_inform_at,
+                    ),
+                    latest.c.last_inform_at,
+                ),
+                else_=OntUnit.last_seen_at,
+            ),
+            updated_at=func.current_timestamp(),
+        )
+    )
+    result = db.execute(statement)
+    # SQLAlchemy `Result` is the generic supertype; UPDATE statements return a
+    # `CursorResult`, which carries `.rowcount`.
+    return result.rowcount or 0  # type: ignore[attr-defined]
 
 
 def link_tr069_device_to_ont(
@@ -1077,6 +1146,11 @@ class CpeDevices(ListResponseMixin):
         except GenieACSError as e:
             raise HTTPException(status_code=502, detail=f"GenieACS error: {e}")
 
+        # A full ACS sync may process thousands of devices.  Resolve ONT serial
+        # identity from one authoritative snapshot instead of querying every
+        # active ONT once per CPE (and again in the auto-link pass).
+        serial_index = build_active_ont_serial_index(db)
+
         created, updated = 0, 0
         datetime.now(UTC)
 
@@ -1185,6 +1259,7 @@ class CpeDevices(ListResponseMixin):
                 db,
                 existing,
                 serial=serial_number,
+                serial_index=serial_index,
             )
 
             # Flush each batch so a large inventory doesn't hold one long write
@@ -1196,41 +1271,10 @@ class CpeDevices(ListResponseMixin):
 
         synced_ont_status = 0
         try:
-            result = db.execute(
-                text(
-                    """
-                    WITH latest AS (
-                        SELECT
-                            ont_unit_id,
-                            max(last_inform_at) AS last_inform_at
-                        FROM tr069_cpe_devices
-                        WHERE acs_server_id = :acs_server_id
-                          AND is_active = true
-                          AND ont_unit_id IS NOT NULL
-                          AND last_inform_at IS NOT NULL
-                        GROUP BY ont_unit_id
-                    )
-                    UPDATE ont_units AS ont
-                    SET
-                        acs_last_inform_at = latest.last_inform_at,
-                        last_seen_at = CASE
-                            WHEN ont.last_seen_at IS NULL
-                              OR ont.last_seen_at < latest.last_inform_at
-                            THEN latest.last_inform_at
-                            ELSE ont.last_seen_at
-                        END,
-                        updated_at = CURRENT_TIMESTAMP
-                    FROM latest
-                    WHERE ont.id = latest.ont_unit_id
-                      AND ont.acs_last_inform_at IS DISTINCT FROM latest.last_inform_at
-                    """
-                ),
-                {"acs_server_id": str(server.id)},
+            synced_ont_status = _refresh_synced_ont_acs_observations(
+                db,
+                acs_server_id=str(server.id),
             )
-            # SQLAlchemy `Result` is the generic supertype; UPDATE statements
-            # always return a `CursorResult` which carries `.rowcount`. mypy
-            # only sees the supertype on `db.execute`.
-            synced_ont_status = result.rowcount or 0  # type: ignore[attr-defined]
             db.commit()
         except SoftTimeLimitExceeded:
             # Time budget exhausted mid-refresh — don't swallow it as a generic
@@ -1248,8 +1292,6 @@ class CpeDevices(ListResponseMixin):
         serial_updated = 0
         status_snapshot_updated = 0
         try:
-            from app.models.network import OntUnit
-
             unlinked_devices = (
                 db.query(Tr069CpeDevice)
                 .filter(
@@ -1267,14 +1309,10 @@ class CpeDevices(ListResponseMixin):
                 if not cpe_dev.serial_number:
                     continue
                 cpe_serial = str(cpe_dev.serial_number).strip()
-                from app.services.network.ont_serials import (
-                    find_unique_active_ont_by_serial,
-                )
-
-                ont = find_unique_active_ont_by_serial(db, cpe_serial)
+                ont = serial_index.find_unique(cpe_serial)
 
                 if not ont and cpe_dev.ont_unit_id:
-                    ont = db.get(OntUnit, cpe_dev.ont_unit_id)
+                    ont = serial_index.get(cpe_dev.ont_unit_id)
 
                 if ont:
                     previous_ont_id = cpe_dev.ont_unit_id
@@ -1466,36 +1504,7 @@ class Parameters(ListResponseMixin):
         db.commit()
 
 
-class Jobs(ListResponseMixin):
-    SAFE_REFRESH_ROOTS: dict[str, tuple[str, ...]] = {
-        "Device.": (
-            "Device.DeviceInfo.",
-            "Device.ManagementServer.",
-            "Device.WiFi.",
-            "Device.IP.",
-            "Device.Hosts.",
-            "Device.Ethernet.",
-            "Device.PPP.",
-        ),
-        "InternetGatewayDevice.": (
-            "InternetGatewayDevice.DeviceInfo.",
-            "InternetGatewayDevice.ManagementServer.",
-            "InternetGatewayDevice.WANDevice.1.",
-            "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.",
-            "InternetGatewayDevice.LANDevice.1.Hosts.",
-            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.",
-            "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.",
-        ),
-    }
-
-    @staticmethod
-    def create(db: Session, payload: Tr069JobCreate):
-        job = Tr069Job(**payload.model_dump())
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        return job
-
+class JobProjections(ListResponseMixin):
     @staticmethod
     def get(db: Session, job_id: str):
         job = db.get(Tr069Job, job_id)
@@ -1527,223 +1536,6 @@ class Jobs(ListResponseMixin):
             {"created_at": Tr069Job.created_at, "status": Tr069Job.status},
         )
         return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, job_id: str, payload: Tr069JobUpdate):
-        job = db.get(Tr069Job, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="TR-069 job not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(job, key, value)
-        db.commit()
-        db.refresh(job)
-        return job
-
-    @staticmethod
-    def delete(db: Session, job_id: str):
-        job = db.get(Tr069Job, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="TR-069 job not found")
-        db.delete(job)
-        db.commit()
-
-    @staticmethod
-    def execute(db: Session, job_id: str) -> Tr069Job:
-        """Execute a job via GenieACS API.
-
-        Args:
-            db: Database session
-            job_id: Job ID to execute
-
-        Returns:
-            Updated job object
-        """
-        job = db.get(Tr069Job, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        if job.status not in (Tr069JobStatus.queued, Tr069JobStatus.failed):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Job cannot be executed in {job.status.value} status",
-            )
-
-        device = db.get(Tr069CpeDevice, job.device_id)
-        if not device:
-            raise HTTPException(status_code=404, detail="Device not found")
-
-        server = db.get(Tr069AcsServer, device.acs_server_id)
-        if not server:
-            raise HTTPException(status_code=404, detail="ACS server not found")
-
-        # Mark job as running
-        job.status = Tr069JobStatus.running
-        job.started_at = datetime.now(UTC)
-        job.error = None
-        db.commit()
-        logger.info(
-            "tr069_job_execute_start",
-            extra=_job_extra(job, device=device, server=server),
-        )
-
-        try:
-            client = create_genieacs_client(server.base_url)
-
-            genieacs_device_id = str(device.genieacs_device_id or "").strip()
-            if not genieacs_device_id:
-                raise GenieACSError(
-                    "TR-069 device has not informed to ACS yet; GenieACS device id is missing."
-                )
-
-            # Build task based on command
-            task = {"name": job.command}
-            if job.payload:
-                task.update(job.payload)
-
-            # Execute task via GenieACS. Root-level refreshObject tasks are
-            # unreliable on Huawei ONTs; split them into known subtrees and use
-            # the client helper so the parameter tree is seeded first.
-            if job.command == "refreshObject":
-                object_name = str(task.get("objectName") or "").strip()
-                object_names = list(
-                    Jobs.SAFE_REFRESH_ROOTS.get(object_name, (object_name,))
-                )
-                results = []
-                for object_path in object_names:
-                    if object_path:
-                        results.append(
-                            client.refresh_object(genieacs_device_id, object_path)
-                        )
-                result = {"refreshObject": results}
-            else:
-                result = client.create_task(genieacs_device_id, task)
-
-            # Check for error indicators in the response
-            # GenieACS returns HTTP 202 even when device is offline or unreachable,
-            # with error details in the response body
-            connection_request_error = None
-            if isinstance(result, dict):
-                # Check for connection request error in response
-                cr_error = result.get("connectionRequestError")
-                if cr_error:
-                    connection_request_error = cr_error
-                # Check for fault in response
-                fault = result.get("fault")
-                if fault:
-                    fault_detail: dict[str, Any] = (
-                        fault.get("detail", {}) if isinstance(fault, dict) else {}
-                    )
-                    fault_msg = (
-                        fault_detail.get("faultString")
-                        if isinstance(fault_detail, dict)
-                        else None
-                    ) or str(fault)
-                    job.status = Tr069JobStatus.failed
-                    job.error = f"Task fault: {fault_msg}"
-                    logger.error(
-                        "tr069_job_execute_fault",
-                        extra=_job_extra(
-                            job,
-                            device=device,
-                            server=server,
-                            task=task,
-                            result=result,
-                            error=fault_msg,
-                        ),
-                    )
-                elif connection_request_error:
-                    job.status = Tr069JobStatus.pending
-                    job.error = (
-                        "Task accepted by ACS, but immediate device confirmation "
-                        f"failed: {connection_request_error}"
-                    )
-                    logger.warning(
-                        "tr069_job_connection_request_pending",
-                        extra=_job_extra(
-                            job,
-                            device=device,
-                            server=server,
-                            task=task,
-                            result=result,
-                            error=str(connection_request_error),
-                        ),
-                    )
-                else:
-                    job.status = Tr069JobStatus.succeeded
-                    logger.info(
-                        "tr069_job_execute_success",
-                        extra=_job_extra(
-                            job,
-                            device=device,
-                            server=server,
-                            task=task,
-                            result=result,
-                        ),
-                    )
-            else:
-                job.status = Tr069JobStatus.succeeded
-                logger.info(
-                    "tr069_job_execute_success",
-                    extra=_job_extra(
-                        job,
-                        device=device,
-                        server=server,
-                        task=task,
-                        result=result,
-                    ),
-                )
-
-        except GenieACSError as e:
-            job.status = Tr069JobStatus.failed
-            job.error = str(e)
-            logger.error(
-                "tr069_job_execute_failed",
-                extra=_job_extra(job, device=device, server=server, error=str(e)),
-            )
-
-        except Exception as e:
-            job.status = Tr069JobStatus.failed
-            job.error = str(e)
-            logger.exception(
-                "tr069_job_execute_unexpected_error",
-                extra=_job_extra(job, device=device, server=server, error=str(e)),
-            )
-
-        job.completed_at = datetime.now(UTC)
-        db.commit()
-        db.refresh(job)
-        logger.info(
-            "tr069_job_execute_complete",
-            extra=_job_extra(job, device=device, server=server),
-        )
-        return job
-
-    @staticmethod
-    def cancel(db: Session, job_id: str) -> Tr069Job:
-        """Cancel a queued job.
-
-        Args:
-            db: Database session
-            job_id: Job ID to cancel
-
-        Returns:
-            Updated job object
-        """
-        job = db.get(Tr069Job, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        if job.status != Tr069JobStatus.queued:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Only queued jobs can be canceled, current status: {job.status.value}",
-            )
-
-        job.status = Tr069JobStatus.canceled
-        job.completed_at = datetime.now(UTC)
-        db.commit()
-        db.refresh(job)
-        return job
 
 
 def receive_inform(
@@ -2294,4 +2086,4 @@ acs_servers = AcsServers()
 cpe_devices = CpeDevices()
 sessions = Sessions()
 parameters = Parameters()
-jobs = Jobs()
+jobs = JobProjections()

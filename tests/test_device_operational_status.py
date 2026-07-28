@@ -1,140 +1,140 @@
-"""Tests for derived device operational status (Phase 1).
-
-See docs/designs/DEVICE_OPERATIONAL_STATUS.md.
-"""
+"""Behavior tests for the binary device operational owner."""
 
 from types import SimpleNamespace
 
 from app.services.device_operational_status import (
-    DEGRADED,
-    DOWN,
-    MAINTENANCE,
-    UP,
+    NOT_WORKING,
+    WORKING,
     annotate_operational_status,
     derive_operational_status,
 )
 
 
 class _Enum:
-    """Mimics a SQLAlchemy enum value (has .value)."""
-
     def __init__(self, value):
         self.value = value
 
 
 def _dev(status=None, live=None, enum=True):
-    def wrap(v):
-        if v is None:
+    def wrap(value):
+        if value is None:
             return None
-        return _Enum(v) if enum else v
+        return _Enum(value) if enum else value
 
     return SimpleNamespace(status=wrap(status), live_status=wrap(live))
 
 
-# ── precedence ladder ────────────────────────────────────────────────────────
-
-
-def test_lifecycle_maintenance_overrides_observation():
-    # even if live says down, an intentional maintenance state wins and is calm
+def test_lifecycle_maintenance_is_not_working_and_non_alarming():
     op = derive_operational_status(_dev("maintenance", "down"), warm_stale=False)
-    assert op.status == MAINTENANCE
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "admin_maintenance"
     assert op.alarming is False
-    assert op.mismatch is False
+    assert op.verification_failed is False
 
 
-def test_no_live_status_is_offline_while_retrying():
+def test_missing_observation_is_not_working_due_to_uncompleted_verification():
     op = derive_operational_status(_dev("online", None), warm_stale=False)
-    assert op.status == DOWN
-    assert op.reason == "not_warmed_retry_pending"
-    assert op.retry_pending is True
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_not_started"
+    assert op.verification_failed is True
     assert op.alarming is False
 
 
-def test_stale_warmer_retains_online_while_retrying():
+def test_expired_observation_is_not_working_without_claiming_physical_failure():
     op = derive_operational_status(_dev("online", "up"), warm_stale=True)
-    assert op.status == UP
-    assert op.reason == "stale_retry_pending"
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_expired"
+    assert op.reason_label == "Unable to verify — confirmation expired"
     assert op.alarming is False
 
 
-def test_live_unknown_is_offline_while_retrying():
+def test_unknown_observation_is_not_working_and_inconclusive():
     op = derive_operational_status(_dev("online", "unknown"), warm_stale=False)
-    assert op.status == DOWN
-    assert op.reason == "monitoring_unknown_retry_pending"
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_inconclusive"
     assert op.alarming is False
 
 
-def test_live_problem_maps_to_degraded():
+def test_problem_observation_is_working_with_separate_impairment():
     op = derive_operational_status(_dev("online", "problem"), warm_stale=False)
-    assert op.status == DEGRADED
-    assert op.alarming is True
 
-
-def test_live_down_maps_to_down():
-    op = derive_operational_status(_dev("offline", "down"), warm_stale=False)
-    assert op.status == DOWN
-    assert op.alarming is True
-
-
-def test_live_up_maps_to_up():
-    op = derive_operational_status(_dev("online", "up"), warm_stale=False)
-    assert op.status == UP
+    assert op.status == WORKING
+    assert op.reason == "active_trigger"
+    assert op.impaired is True
     assert op.alarming is False
 
 
-def test_plain_string_attributes_supported():
-    # device.status / live_status may already be plain strings on stub objects
+def test_negative_observation_is_not_working_and_alarming():
+    op = derive_operational_status(_dev("offline", "down"), warm_stale=False)
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "observed_not_working"
+    assert op.alarming is True
+
+
+def test_positive_observation_is_working():
+    op = derive_operational_status(_dev("online", "up"), warm_stale=False)
+
+    assert op.status == WORKING
+    assert op.reason == "observed_working"
+    assert op.alarming is False
+
+
+def test_plain_string_attributes_are_supported():
     op = derive_operational_status(_dev("online", "up", enum=False), warm_stale=False)
-    assert op.status == UP
+
+    assert op.status == WORKING
 
 
-def test_indeterminate_live_value_is_offline_while_retrying():
+def test_unrecognized_observation_fails_closed_as_not_working():
     op = derive_operational_status(_dev("online", "weird"), warm_stale=False)
-    assert op.status == DOWN
-    assert op.retry_pending is True
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_inconclusive"
 
 
-# ── mismatch flags (inventory hygiene) ───────────────────────────────────────
-
-
-def test_mismatch_admin_online_observed_down():
+def test_mismatch_admin_online_not_working():
     op = derive_operational_status(_dev("online", "down"), warm_stale=False)
+
     assert op.mismatch is True
-    assert op.mismatch_reason == "admin_online_observed_down"
+    assert op.mismatch_reason == "admin_online_not_working"
 
 
-def test_mismatch_admin_offline_observed_up():
+def test_mismatch_admin_offline_working():
     op = derive_operational_status(_dev("offline", "up"), warm_stale=False)
-    assert op.mismatch is True
-    assert op.mismatch_reason == "admin_offline_observed_up"
 
-
-def test_mismatch_active_retry_pending():
-    op = derive_operational_status(_dev("online", None), warm_stale=False)
     assert op.mismatch is True
-    assert op.mismatch_reason == "active_retry_pending"
+    assert op.mismatch_reason == "admin_offline_working"
 
 
 def test_no_mismatch_when_admin_agrees_with_observation():
     op = derive_operational_status(_dev("online", "up"), warm_stale=False)
+
     assert op.mismatch is False
 
 
-# ── annotate helper ──────────────────────────────────────────────────────────
-
-
-def test_annotate_sets_operational_attribute_and_is_render_safe():
+def test_annotate_sets_only_binary_public_fields(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale",
+        lambda _now=None: False,
+    )
     devices = [
         _dev("online", "up"),
         _dev("offline", "down"),
-        SimpleNamespace(),  # missing attributes entirely -> must not raise
+        SimpleNamespace(),
     ]
+
     annotate_operational_status(devices)
-    assert devices[0].operational.status == UP
-    assert devices[0].operational_status == UP
+
+    assert devices[0].operational.status == WORKING
+    assert devices[0].operational_status == WORKING
     assert devices[0].status_presentation.tone.value == "positive"
-    assert devices[1].operational.status == DOWN
-    # object with no status/live_status still gets a (safe) operational value
-    assert devices[2].operational.status == DOWN
-    assert devices[2].operational_retry_pending is True
-    assert devices[2].status_presentation.tone.value == "warning"
+    assert devices[1].operational.status == NOT_WORKING
+    assert devices[2].operational.status == NOT_WORKING
+    assert devices[2].operational.verification_failed is True
+    assert devices[2].status_presentation.tone.value == "negative"
+    assert not hasattr(devices[2], "operational_retry_pending")

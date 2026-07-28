@@ -9,7 +9,9 @@ from fastapi import HTTPException
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
+from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber, UserType
+from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.field.jobs import field_jobs
@@ -264,12 +266,33 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     user = _user(db_session)
     _profile(db_session, user, crm_person_id="crm-tech-1")
     subscriber = _subscriber(db_session)
+    project = Project(
+        name="Fiber install",
+        subscriber_id=subscriber.id,
+        status="active",
+    )
+    ticket = Ticket(
+        title="Customer reported no light",
+        subscriber_id=subscriber.id,
+        status="open",
+    )
+    db_session.add_all([project, ticket])
+    db_session.flush()
+    task = ProjectTask(
+        project_id=project.id,
+        title="Restore optical signal",
+        ticket_id=ticket.id,
+        status="in_progress",
+    )
+    db_session.add(task)
+    db_session.flush()
     _work_order(
         db_session,
         subscriber,
         crm_work_order_id="wo-detail",
-        crm_ticket_id="ticket-1",
-        crm_project_id="project-1",
+        project_id=project.id,
+        project_task_id=task.id,
+        origin_ticket_id=ticket.id,
         assigned_to_crm_person_id="crm-tech-1",
         access_notes="Call on arrival",
         metadata_={"location": {"lat": 9.07, "lng": 7.49}},
@@ -285,8 +308,14 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     assert detail.location.latitude == 9.07
     assert detail.location.longitude == 7.49
     assert detail.location.source == "cached"
-    assert detail.ticket_ref == "ticket-1"
-    assert detail.project_id == "project-1"
+    assert detail.customer_experience.project is not None
+    assert detail.customer_experience.project.id == project.id
+    assert detail.customer_experience.project_task is not None
+    assert detail.customer_experience.project_task.id == task.id
+    assert detail.customer_experience.origin_ticket is not None
+    assert detail.customer_experience.origin_ticket.id == ticket.id
+    assert detail.customer_experience.project_task_ticket is not None
+    assert detail.customer_experience.project_task_ticket.id == ticket.id
     assert detail.access_notes == "Call on arrival"
     assert detail.completion_requirements.evidence_required is True
     assert detail.completion_requirements.minimum_photo_count == 1

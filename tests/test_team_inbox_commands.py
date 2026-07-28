@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import Mock
 
 import pytest
-from sqlalchemy.orm import Session
 
 from app.models.team_inbox import (
     InboxConversation,
@@ -59,7 +57,7 @@ def test_status_command_owns_history_and_no_op_behavior(db_session):
     ]
 
 
-def test_rejected_reply_rolls_back_the_command_transaction(monkeypatch):
+def test_rejected_reply_rolls_back_the_command_transaction(monkeypatch, db_session):
     conversation = InboxConversation(
         channel_type="email",
         subject="Need help",
@@ -68,25 +66,26 @@ def test_rejected_reply_rolls_back_the_command_transaction(monkeypatch):
         is_active=True,
     )
     conversation.id = uuid.uuid4()
-    db = Mock(spec=Session)
-    db.get.return_value = conversation
+    conversation_id = conversation.id
+    db_session.add(conversation)
+    db_session.commit()
     monkeypatch.setattr(
         team_inbox_commands.team_inbox_outbound,
         "send_inbox_reply",
         lambda *args, **kwargs: team_inbox_outbound.InboxReplyResult(
             kind="failed",
-            conversation_id=str(conversation.id),
+            conversation_id=str(conversation_id),
             reason="Provider rejected reply.",
         ),
     )
 
     with pytest.raises(team_inbox_commands.InboxCommandRejected):
         team_inbox_commands.reply(
-            db,
-            conversation_id=conversation.id,
+            db_session,
+            conversation_id=conversation_id,
             body_text="We are checking this.",
             actor_person_id=uuid.uuid4(),
         )
 
-    db.rollback.assert_called_once_with()
-    db.commit.assert_not_called()
+    assert db_session.get(InboxConversation, conversation_id) is not None
+    assert db_session.query(InboxConversation).count() == 1

@@ -1,6 +1,6 @@
 """Connectivity reconciler — step 2 of the lifecycle hardening (IP dimension).
 
-The strategic spine (see docs/designs/SERVICE_LIFECYCLE_BUNDLE_INTEGRITY.md):
+The strategic spine (see docs/FINANCIAL_ACCESS_ENFORCEMENT.md):
 
 > Status transitions set desired state only. One idempotent reconciler is the
 > sole writer of connectivity state, run on every transition and on audit.
@@ -70,7 +70,7 @@ _CONVERGE_STATUS = SubscriptionStatus.active
 
 # ---------------------------------------------------------------------------
 # Step 2c — desired-state derivation + observability (shadow only, NO writes).
-# See docs/designs/CONNECTIVITY_STATE_MACHINE.md §2 (transition table, INV-1..5)
+# See docs/FINANCIAL_ACCESS_ENFORCEMENT.md (service/network projection contract).
 # and §5 (guardrails). This increment proves the desired-state function and the
 # shadow/legacy-write observability; it migrates no writers.
 # ---------------------------------------------------------------------------
@@ -100,11 +100,11 @@ def derive_desired_connectivity(
 
     - pending/hidden/archived → not provisioned (no RADIUS row, no IP).
     - active → full access, IP active AND retained, don't kick.
-    - blocked family (suspended/blocked/stopped) → ``suspended`` by default;
+    - blocked family (suspended/blocked/stopped/disabled) → ``suspended`` by default;
       ``captive`` only for the explicit effective captive tier. Credentials stay
       active and the IP is RETAINED (INV-1 paid→offline / INV-3 reversible),
       and the live session is kicked once (INV-5).
-    - terminal (canceled/expired/disabled) → ``terminated``; credentials
+    - terminal (canceled/expired) → ``terminated``; credentials
       inactive, IP released and cache cleared (INV-3/INV-4), kick once.
     """
     access = derive_access_state(
@@ -223,8 +223,8 @@ def connectivity_shadow_diff(
         # ipv4_cache (INV-4 / R2): the served column is a PROJECTION of the
         # active assignment, not a second source of truth. When an IP is
         # retained (active/suspended), the column must equal the assignment IP;
-        # divergence is the drift that the reconciler will own. Report-only —
-        # this gauge sizes the cutover that removes the accounting dual-write.
+        # divergence is repairable projection drift. Report-only: the lifecycle
+        # owner performs the write through its guarded command path.
         col_ip = _norm(sub.ipv4_address)
         assign_ip = _active_assignment_ip(db, sub)
         cache_match = (not desired.ip_retained) or (col_ip == assign_ip)

@@ -157,6 +157,11 @@ class Vendor(Base):
             name="ck_vendors_party_binding_evidence",
         ),
         UniqueConstraint("party_id", name="uq_vendors_party_id"),
+        UniqueConstraint(
+            "supplier_system",
+            "supplier_reference",
+            name="uq_vendors_supplier_system_reference",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -177,7 +182,8 @@ class Vendor(Base):
     service_area: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
-    erp_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    supplier_system: Mapped[str | None] = mapped_column(String(40))
+    supplier_reference: Mapped[str | None] = mapped_column(String(100))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -253,7 +259,15 @@ class InstallationProject(Base):
     )
     bidding_open_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bidding_close_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    erp_purchase_order_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    procurement_system: Mapped[str | None] = mapped_column(String(40))
+    procurement_order_reference: Mapped[str | None] = mapped_column(
+        String(100), index=True
+    )
+    procurement_delivery_status: Mapped[str | None] = mapped_column(String(40))
+    procurement_delivery_error: Mapped[str | None] = mapped_column(String(500))
+    procurement_delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     approved_quote_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         # Mutual FK with project_quotes.project_id — break the create_all cycle.
@@ -320,10 +334,13 @@ class InstallationProjectLifecycleEvent(Base):
         ForeignKey("installation_projects.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    vendor_id: Mapped[uuid.UUID] = mapped_column(
+    # NULL only for intake decisions taken before a vendor exists — publishing
+    # a project for competitive bidding is exactly that. Every transition from
+    # ``assigned``/``approved`` onward carries the vendor it was decided about.
+    vendor_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("vendors.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
@@ -496,29 +513,30 @@ class VendorPurchaseInvoice(Base):
     attachment_stored_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stored_files.id")
     )
-    erp_purchase_order_id: Mapped[str | None] = mapped_column(String(100), index=True)
-    erp_purchase_invoice_id: Mapped[str | None] = mapped_column(String(100), index=True)
-    erp_purchase_invoice_creation_status: Mapped[str | None] = mapped_column(String(40))
-    erp_purchase_invoice_status: Mapped[str | None] = mapped_column(String(40))
-    erp_purchase_invoice_total_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 6)
+    payables_system: Mapped[str | None] = mapped_column(String(40))
+    procurement_order_reference: Mapped[str | None] = mapped_column(
+        String(100), index=True
     )
-    erp_purchase_invoice_amount_paid: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 6)
+    payables_document_reference: Mapped[str | None] = mapped_column(
+        String(100), index=True
     )
-    erp_purchase_invoice_balance_due: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 6)
-    )
-    erp_purchase_invoice_status_observed_at: Mapped[datetime | None] = mapped_column(
+    payables_document_status: Mapped[str | None] = mapped_column(String(40))
+    payment_status: Mapped[str | None] = mapped_column(String(40))
+    payment_total_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    payment_amount_paid: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    payment_balance_due: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    payment_observed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
-    erp_purchase_invoice_status_source_updated_at: Mapped[datetime | None] = (
-        mapped_column(DateTime(timezone=True))
+    payment_source_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
-    erp_purchase_invoice_status_error: Mapped[str | None] = mapped_column(String(500))
-    erp_sync_error: Mapped[str | None] = mapped_column(String(500))
-    erp_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    erp_attachment_synced_at: Mapped[datetime | None] = mapped_column(
+    payment_observation_error: Mapped[str | None] = mapped_column(String(500))
+    payables_submission_error: Mapped[str | None] = mapped_column(String(500))
+    payables_submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    payables_attachment_submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -615,6 +633,90 @@ class ProposedRouteRevision(Base):
 
     quote = relationship("ProjectQuote", back_populates="route_revisions")
     fiber_segment = relationship("FiberSegment")
+    review_events = relationship(
+        "ProposedRouteRevisionReviewEvent",
+        back_populates="revision",
+        order_by="ProposedRouteRevisionReviewEvent.occurred_at",
+    )
+
+
+class ProposedRouteRevisionReviewEvent(Base):
+    """Append-only official evidence for staff proposed-route decisions."""
+
+    __tablename__ = "proposed_route_revision_review_events"
+    __table_args__ = (
+        CheckConstraint(
+            "from_status <> to_status",
+            name="ck_proposed_route_review_event_status_change",
+        ),
+        Index(
+            "ix_proposed_route_review_event_revision_occurred",
+            "revision_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True, index=True
+    )
+    revision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("proposed_route_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    quote_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("project_quotes.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("installation_projects.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    vendor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vendors.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    from_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    to_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+
+    revision = relationship("ProposedRouteRevision", back_populates="review_events")
+    quote = relationship("ProjectQuote")
+    project = relationship("InstallationProject")
+    vendor = relationship("Vendor")
+
+
+class ProposedRouteRevisionReviewEventImmutableError(RuntimeError):
+    pass
+
+
+@event.listens_for(ProposedRouteRevisionReviewEvent, "before_update")
+def _reject_proposed_route_review_event_update(*_args: object) -> None:
+    raise ProposedRouteRevisionReviewEventImmutableError(
+        "Proposed-route review evidence is append-only"
+    )
+
+
+@event.listens_for(ProposedRouteRevisionReviewEvent, "before_delete")
+def _reject_proposed_route_review_event_delete(*_args: object) -> None:
+    raise ProposedRouteRevisionReviewEventImmutableError(
+        "Proposed-route review evidence is append-only"
+    )
 
 
 class AsBuiltRoute(Base):
@@ -655,9 +757,11 @@ class AsBuiltRoute(Base):
     variation_reason: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     work_order_ref: Mapped[str | None] = mapped_column(String(120))
-    erp_sync_status: Mapped[str | None] = mapped_column(String(40))
-    erp_reference: Mapped[str | None] = mapped_column(String(120))
-    erp_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backoffice_sync_status: Mapped[str | None] = mapped_column(String(40))
+    backoffice_reference: Mapped[str | None] = mapped_column(String(120))
+    backoffice_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(

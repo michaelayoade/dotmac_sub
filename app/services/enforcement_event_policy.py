@@ -1,47 +1,178 @@
-"""Policy helpers for event-driven access enforcement."""
+"""Typed policy owner for event-driven access enforcement."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.services import settings_spec
+from app.services.domain_errors import DomainError
 
 
-def _setting_bool(db: Session, domain: SettingDomain, key: str, default: bool) -> bool:
+class AccessEventPolicyError(DomainError):
+    """Stable failures at the access event-policy boundary."""
+
+
+class FupEnforcementAction(StrEnum):
+    THROTTLE = "throttle"
+    SUSPEND = "suspend"
+    BLOCK = "block"
+    NONE = "none"
+
+
+@dataclass(frozen=True, slots=True)
+class GroupRoutingPolicy:
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRefreshPolicy:
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveFupEventPolicy:
+    requested_action: FupEnforcementAction | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FupEventPolicyDecision:
+    action: FupEnforcementAction
+    throttle_profile_id: UUID | None
+    refresh_sessions: bool
+
+    def required_throttle_profile_id(self) -> UUID:
+        if (
+            self.action is not FupEnforcementAction.THROTTLE
+            or self.throttle_profile_id is None
+        ):
+            raise _error(
+                "invalid_throttle_decision",
+                "The resolved FUP policy is not an executable throttle decision.",
+            )
+        return self.throttle_profile_id
+
+
+def _error(suffix: str, message: str) -> AccessEventPolicyError:
+    return AccessEventPolicyError(
+        code=f"access.event_policy.{suffix}",
+        message=message,
+    )
+
+
+def _boolean_setting(db: Session, domain: SettingDomain, key: str) -> bool:
     value = settings_spec.resolve_value(db, domain, key)
-    if value is None:
-        return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def group_routing_enabled(db: Session) -> bool:
-    return _setting_bool(db, SettingDomain.radius, "group_routing_enabled", False)
-
-
-def refresh_sessions_on_profile_change_enabled(db: Session) -> bool:
-    return _setting_bool(
-        db, SettingDomain.radius, "refresh_sessions_on_profile_change", True
+    normalized = str(value).strip().lower() if value is not None else ""
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise _error(
+        "invalid_boolean_setting",
+        f"The canonical {domain.value}.{key} setting is not boolean.",
     )
 
 
-def fup_action(db: Session, payload_action: object | None = None) -> str:
-    action = payload_action or settings_spec.resolve_value(
-        db, SettingDomain.usage, "fup_action"
-    )
-    if action == "reduce_speed":
-        action = "throttle"
-    action = str(action or "throttle").strip().lower()
-    if action not in {"throttle", "suspend", "block", "none"}:
-        return "throttle"
-    return action
+def parse_fup_action_override(value: object | None) -> FupEnforcementAction | None:
+    """Validate optional event evidence before constructing the typed query."""
+    if value is None:
+        return None
+    normalized = str(value).strip().lower() if isinstance(value, str) else ""
+    if normalized == "reduce_speed":
+        return FupEnforcementAction.THROTTLE
+    try:
+        return FupEnforcementAction(normalized)
+    except ValueError as exc:
+        raise _error(
+            "invalid_requested_fup_action",
+            "The requested FUP action is not part of the event-policy contract.",
+        ) from exc
 
 
-def fup_throttle_radius_profile_id(db: Session) -> str | None:
-    value = settings_spec.resolve_value(
-        db, SettingDomain.usage, "fup_throttle_radius_profile_id"
+def _configured_fup_action(db: Session) -> FupEnforcementAction:
+    value = settings_spec.resolve_value(db, SettingDomain.usage, "fup_action")
+    normalized = str(value).strip().lower() if isinstance(value, str) else ""
+    try:
+        return FupEnforcementAction(normalized)
+    except ValueError as exc:
+        raise _error(
+            "invalid_configured_fup_action",
+            "The canonical usage.fup_action setting is invalid.",
+        ) from exc
+
+
+def resolve_group_routing_policy(db: Session) -> GroupRoutingPolicy:
+    return GroupRoutingPolicy(
+        enabled=_boolean_setting(
+            db,
+            SettingDomain.radius,
+            "group_routing_enabled",
+        )
     )
-    text = str(value or "").strip()
-    return text or None
+
+
+def resolve_session_refresh_policy(db: Session) -> SessionRefreshPolicy:
+    return SessionRefreshPolicy(
+        enabled=_boolean_setting(
+            db,
+            SettingDomain.radius,
+            "refresh_sessions_on_profile_change",
+        )
+    )
+
+
+def resolve_fup_event_policy(
+    db: Session,
+    query: ResolveFupEventPolicy,
+) -> FupEventPolicyDecision:
+    action = query.requested_action or _configured_fup_action(db)
+    if action is not FupEnforcementAction.THROTTLE:
+        return FupEventPolicyDecision(
+            action=action,
+            throttle_profile_id=None,
+            refresh_sessions=False,
+        )
+
+    raw_profile_id = settings_spec.resolve_value(
+        db,
+        SettingDomain.usage,
+        "fup_throttle_radius_profile_id",
+    )
+    if raw_profile_id is None or not str(raw_profile_id).strip():
+        raise _error(
+            "throttle_profile_required",
+            "FUP throttling requires a canonical RADIUS profile setting.",
+        )
+    try:
+        throttle_profile_id = UUID(str(raw_profile_id).strip())
+    except ValueError as exc:
+        raise _error(
+            "invalid_throttle_profile_id",
+            "The canonical FUP throttle RADIUS profile identifier is invalid.",
+        ) from exc
+
+    return FupEventPolicyDecision(
+        action=action,
+        throttle_profile_id=throttle_profile_id,
+        refresh_sessions=resolve_session_refresh_policy(db).enabled,
+    )
+
+
+__all__ = [
+    "AccessEventPolicyError",
+    "FupEnforcementAction",
+    "FupEventPolicyDecision",
+    "GroupRoutingPolicy",
+    "ResolveFupEventPolicy",
+    "SessionRefreshPolicy",
+    "parse_fup_action_override",
+    "resolve_fup_event_policy",
+    "resolve_group_routing_policy",
+    "resolve_session_refresh_policy",
+]

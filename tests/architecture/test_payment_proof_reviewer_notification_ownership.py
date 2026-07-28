@@ -6,6 +6,7 @@ import ast
 from pathlib import Path
 
 from app.services import sot_relationships
+from app.services.sot_manifest import TransactionMode, contract_validation_errors
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,6 +35,96 @@ def test_payment_proof_owner_requests_and_resolves_staff_review_notifications() 
     assert "resolve_permission_review_request" in calls
     assert "AdminAlert" not in referenced_names
     assert "AdminNotification" not in referenced_names
+
+
+def test_payment_proof_owner_has_a_complete_owner_managed_contract() -> None:
+    service = sot_relationships.service_relationship("financial.payment_proofs")
+    assert service.contract is not None
+    assert service.contract.transaction.mode is TransactionMode.OWNER_MANAGED
+    assert (
+        contract_validation_errors(
+            service,
+            service_names={item.name for item in sot_relationships.all_services()},
+        )
+        == ()
+    )
+
+
+def test_payment_proof_commands_are_transport_neutral_and_complete_once() -> None:
+    path = ROOT / "app/services/payment_proofs.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    public_commands = {
+        node.name: {argument.arg for argument in node.args.kwonlyargs}
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name
+        in {
+            "submit_proof",
+            "submit_direct_transfer_proof",
+            "verify_proof",
+            "reject_proof",
+        }
+    }
+
+    assert set(public_commands) == {
+        "submit_proof",
+        "submit_direct_transfer_proof",
+        "verify_proof",
+        "reject_proof",
+    }
+    assert all("context" in arguments for arguments in public_commands.values())
+    assert source.count("execute_owner_command(") == 4
+    assert "commit" not in calls
+    assert "rollback" not in calls
+    assert "begin_nested" not in calls
+    assert "HTTPException" not in source
+    assert "fastapi" not in source
+
+
+def test_payment_proof_owner_stages_named_transition_events() -> None:
+    source = (ROOT / "app/services/payment_proofs.py").read_text(encoding="utf-8")
+    event_types = (ROOT / "app/services/events/types.py").read_text(encoding="utf-8")
+
+    for event_name in (
+        "payment_proof.submitted",
+        "payment_proof.verified",
+        "payment_proof.rejected",
+        "withholding_tax.receivable_recorded",
+    ):
+        assert event_name in event_types
+    assert "emit_event(" in source
+
+
+def test_tax_owner_is_the_only_wht_source_record_writer() -> None:
+    owner = sot_relationships.owning_service_for(
+        "withholding-tax receivable source records"
+    )
+    payment_source = (ROOT / "app/services/payment_proofs.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert owner is not None
+    assert owner.name == "financial.tax_accounting"
+    assert "tax_accounting.stage_withholding_tax_receivable" in payment_source
+    assert "WithholdingTaxRecord(" not in payment_source
+
+
+def test_payment_proof_http_error_mapping_has_one_adapter_owner() -> None:
+    api_source = (ROOT / "app/api/payment_proofs.py").read_text(encoding="utf-8")
+    web_source = (ROOT / "app/web/admin/billing_payment_proofs.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from app.api.payment_proof_errors import" in api_source
+    assert "from app.api.payment_proof_errors import" in web_source
+    assert "def _payment_proof_http_error" not in api_source
+    assert "def _payment_proof_error_status" not in web_source
 
 
 def test_staff_notification_owner_is_registered_for_permission_targeting() -> None:
@@ -66,7 +157,8 @@ def test_payment_proof_escalation_is_keyed_to_the_generic_sla_owner() -> None:
         encoding="utf-8"
     )
 
-    assert 'sla_trigger="payment_proof.review_requested"' in payment_source
+    assert '_REVIEW_SLA_TRIGGER = "payment_proof.review_requested"' in payment_source
+    assert "sla_trigger=_REVIEW_SLA_TRIGGER" in payment_source
     assert "operational_escalation.matching_policies" in staff_source
     assert (
         "NotificationChannel.email"

@@ -18,7 +18,7 @@ Three responsibilities live here, structurally identical to ``material_sync`` /
   ``sync_flow_ownership``.
 * **write-back** — ``apply_erp_response`` runs on the outbox's accepted path and
   writes ERP's ``purchase_order_id`` back onto
-  ``installation_projects.erp_purchase_order_id`` (the AP vendor-invoice
+  ``installation_projects.procurement_order_reference`` (the AP vendor-invoice
   ordering guard requires it). A dropped
   write-back silently loses the AP link, so it must be repairable (see below).
 * **reconcile / repair** — ``repair_purchase_order_writebacks`` re-applies the PO
@@ -45,11 +45,11 @@ The current purchase-order owner leaves that slot explicit but unimplemented;
 see ``VARIATION_FLOW_SLOT``.
 
 VENDOR IDENTITY (design doc 32 §C): sourced from the **native ``Vendor``**
-reachable via ``approved_quote.vendor`` — which already carries ``erp_id``
-(unique) and ``code`` (unique). The mobile-auth ``FieldVendor`` mirror (no
-``erp_id``) is irrelevant here. If ``Vendor.erp_id`` is unset the PO is SKIPPED
-and surfaced (ported from CRM's ``vendor_missing`` skip): a PO must never be
-emitted to a blank supplier.
+reachable via ``approved_quote.vendor`` — which carries a provider-scoped
+``supplier_reference`` and a local ``code``. The mobile-auth ``FieldVendor``
+mirror is irrelevant here. If the Dotmac ERP supplier reference is unset the PO
+is skipped and surfaced (ported from CRM's ``vendor_missing`` skip): a PO must
+never be emitted to a blank supplier.
 
 ``approved_by_email`` is OMITTED: sub has no people table
 (``ProjectQuote.reviewed_by_person_id`` is a bare UUID), and the field is
@@ -67,6 +67,7 @@ when that flow lands (design doc 32 §C "the one genuine gap").
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.orm import Session
@@ -82,6 +83,7 @@ from app.services.dotmac_erp import outbox
 logger = logging.getLogger(__name__)
 
 ENTITY_TYPE = "installation_project"
+PROVIDER = "dotmac_erp"
 
 # The future scope-change flow (design doc 32 §D "Variations" / §F.3): a re-quote
 # supersedes the baseline PO via ERP's ``/sync/sub/purchase-orders/variations``,
@@ -193,9 +195,9 @@ def build_purchase_order_payload(installation_project: InstallationProject) -> d
         "items": _line_item_rows(quote),
     }
 
-    # Vendor → ERP supplier identity (native Vendor; guaranteed present + erp_id
-    # set by the eligibility check).
-    payload["vendor_erp_id"] = vendor.erp_id
+    # Vendor → ERP supplier identity (native Vendor; provider-scoped reference
+    # guaranteed by the eligibility check).
+    payload["vendor_erp_id"] = vendor.supplier_reference
     vendor_code = (vendor.code or "").strip()
     if vendor_code:
         payload["vendor_code"] = vendor_code[:30]
@@ -224,9 +226,9 @@ def purchase_order_eligibility_error(
 
     * the install must have an ACCEPTED (approved) quote pinned as its scope
       authority (design doc 32 §A);
-    * that quote must carry a vendor with a populated ``Vendor.erp_id`` — else the
-      PO would be emitted to a blank supplier (CRM's ``vendor_missing`` skip,
-      design doc 32 §F.4);
+    * that quote must carry a vendor with a Dotmac ERP supplier reference — else
+      the PO would be emitted to a blank supplier (CRM's ``vendor_missing``
+      skip, design doc 32 §F.4);
     * the quote must have at least one active, positive-quantity line item (ERP
       requires ``items`` min length 1, ``quantity > 0``).
     """
@@ -247,9 +249,11 @@ def purchase_order_eligibility_error(
             f"Approved quote {quote.id} has no vendor relation "
             f"(vendor_id={quote.vendor_id}) — cannot emit a PO"
         )
-    if not (vendor.erp_id or "").strip():
+    if vendor.supplier_system not in {None, PROVIDER}:
+        return "Vendor is linked to another procurement system"
+    if not (vendor.supplier_reference or "").strip():
         return (
-            f"Vendor {vendor.id} has no erp_id (never matched to an ERP supplier) "
+            f"Vendor {vendor.id} has no Dotmac ERP supplier reference "
             "— refusing to emit a PO to a blank supplier"
         )
     if not _line_item_rows(quote):
@@ -315,7 +319,7 @@ def apply_purchase_order_response(
 ) -> bool:
     """Write ERP's ``purchase_order_id`` back onto the installation project.
 
-    Records the AP back-reference (``erp_purchase_order_id``, ``String(100)``) that
+    Records the AP back-reference (``procurement_order_reference``, ``String(100)``) that
     the AP vendor-invoice ordering guard requires. Idempotent and
     write-once: an already-populated back-reference is left untouched (the PO id is
     stable, and re-writing would mask a mismatch). Returns True when it set the
@@ -323,12 +327,16 @@ def apply_purchase_order_response(
     """
     if not isinstance(response, dict):
         return False
-    if installation_project.erp_purchase_order_id:
+    if installation_project.procurement_order_reference:
         return False
     erp_id = _extract_purchase_order_id(response)
     if not erp_id:
         return False
-    installation_project.erp_purchase_order_id = erp_id[:100]
+    installation_project.procurement_system = PROVIDER
+    installation_project.procurement_order_reference = erp_id[:100]
+    installation_project.procurement_delivery_status = "accepted"
+    installation_project.procurement_delivery_error = None
+    installation_project.procurement_delivered_at = datetime.now(UTC)
     return True
 
 
@@ -371,7 +379,7 @@ def repair_purchase_order_writebacks(db: Session, *, limit: int = 100) -> dict:
     exposes no GET for a PO and its create is idempotent on the anchor id, so the
     repair needs no ERP call and no re-emit: it re-applies the ``purchase_order_id``
     already captured on the *delivered* outbox row's ``erp_response`` to any
-    installation project still missing ``erp_purchase_order_id``.
+    installation project still missing ``procurement_order_reference``.
 
     Scans terminal-accepted / sent ``purchase_order`` outbox rows carrying an ERP
     id whose install has an empty back-reference, and writes it back. Idempotent;
@@ -402,7 +410,7 @@ def repair_purchase_order_writebacks(db: Session, *, limit: int = 100) -> dict:
         if installation_project is None:
             errors.append(f"{row.id}: no InstallationProject {row.entity_id}")
             continue
-        if installation_project.erp_purchase_order_id:
+        if installation_project.procurement_order_reference:
             continue
         processed += 1
         if apply_purchase_order_response(installation_project, row.erp_response):

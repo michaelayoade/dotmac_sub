@@ -49,6 +49,9 @@ def test_plan_change_prerequisites_mirror_the_command_gates():
 
 
 def test_plan_change_contract_names_the_command_owner_and_consequences():
-    assert "apply_instant_plan_change" in PLAN_CHANGE_FORM.command_owner
+    assert (
+        PLAN_CHANGE_FORM.command_owner
+        == "service_intent.subscription_lifecycle_execution"
+    )
     keys = {c.key for c in PLAN_CHANGE_FORM.consequences}
-    assert {"proration", "reprovision", "cross_family"} <= keys
+    assert {"proration", "reprovision", "field_fulfillment"} <= keys

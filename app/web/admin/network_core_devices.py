@@ -3,7 +3,7 @@
 from urllib.parse import quote_plus
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -63,37 +63,20 @@ def _base_context(
     dependencies=[Depends(require_permission("network:device:read"))],
 )
 def network_devices_consolidated(
-    request: Request,
     tab: str = "core",
     search: str | None = None,
-    page: int = Query(default=1, ge=1),
-    olt_page: int = Query(default=1, ge=1),
-    ont_page: int = Query(default=1, ge=1),
-    cpe_page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
 ):
-    """Consolidated view of all network devices - core, OLTs, ONTs/CPE."""
-    selected_tab = tab if tab in {"core", "olts", "onts"} else "core"
-    per_page_options = [25, 50, 100, 200]
-    selected_per_page = per_page if per_page in per_page_options else 50
-    page_data = web_network_core_devices_service.consolidated_page_data(
-        selected_tab,
-        db,
-        search,
-        page=page,
-        olt_page=olt_page,
-        ont_page=ont_page,
-        cpe_page=cpe_page,
-        per_page=selected_per_page,
-    )
-    page_data["tab"] = selected_tab
-    page_data["per_page_options"] = per_page_options
-    context = _base_context(request, db, active_page="network-devices")
-    context.update(page_data)
-    return templates.TemplateResponse(
-        "admin/network/network-devices/index.html", context
-    )
+    """Folded into the unified device ledger (docs/design/NETWORK_IA_RATIONALIZATION.md).
+
+    role/site are now projected as class_facts and the projected operational
+    status supersedes this monitoring list; granular live ping/SNMP/board detail
+    lives on the device detail. This route now redirects to the one ledger.
+    """
+    type_map = {"core": "core", "olts": "olt", "onts": "ont"}
+    target = "/admin/network/devices?type=" + type_map.get(tab, "core")
+    if search:
+        target += "&search=" + quote_plus(search)
+    return RedirectResponse(target, status_code=307)
 
 
 @router.get(

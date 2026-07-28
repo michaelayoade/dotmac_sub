@@ -12,10 +12,10 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.support import Ticket, TicketAssignee, TicketChannel
 from app.services import support as support_service
+from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import (
     FilterValidationError,
     build_filter_expression,
@@ -208,16 +208,16 @@ def test_list_filters_assignee_via_assignees_table(db_session):
 
 
 def test_list_invalid_filters_raise_400(db_session):
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(DomainError) as exc_info:
         support_service.tickets.list(db_session, filters="{not json")
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "invalid_ticket_filter"
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(DomainError) as exc_info:
         support_service.tickets.list(
             db_session,
             filters=json.dumps([["Ticket", "no_such_field", "=", "x"]]),
         )
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "invalid_ticket_filter"
 
 
 # ── Service: new simple list params ──────────────────────────────────────────
@@ -386,7 +386,7 @@ def test_api_list_tickets_accepts_filters_and_new_params(db_session):
     ids = {ticket.id for ticket in response["items"]}
     assert ids == {match.id}
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(DomainError) as exc_info:
         support_api.list_tickets(
             search=None,
             status=None,
@@ -406,4 +406,4 @@ def test_api_list_tickets_accepts_filters_and_new_params(db_session):
             offset=0,
             db=db_session,
         )
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "invalid_ticket_filter"

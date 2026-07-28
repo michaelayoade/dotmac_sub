@@ -6,6 +6,10 @@ from unittest.mock import patch
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.services import enforcement
+from app.services.radius import (
+    ConnectivityProjectionDisposition,
+    SubscriptionConnectivityOutcome,
+)
 
 
 def _active_sub(db, subscriber, catalog_offer, ipv4="10.0.0.5"):
@@ -55,7 +59,16 @@ def test_reauth_reconciles_then_kicks_on_change(db_session, subscriber, catalog_
     with (
         patch(
             "app.services.radius.reconcile_subscription_connectivity",
-            side_effect=lambda *a, **k: order.append("reconcile"),
+            side_effect=lambda *a, **k: (
+                order.append("reconcile"),
+                SubscriptionConnectivityOutcome(
+                    subscription_id=str(sub.id),
+                    disposition=ConnectivityProjectionDisposition.projected,
+                    requested_logins=1,
+                    projected_logins=1,
+                    projection_targets=1,
+                ),
+            )[1],
         ),
         patch.object(
             enforcement,

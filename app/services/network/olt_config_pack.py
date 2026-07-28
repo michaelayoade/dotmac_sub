@@ -722,6 +722,12 @@ def validate_config_pack_required(
     Raises:
         ConfigPackIncompleteError: If raise_on_error=True and fields are missing
     """
+    # UISP-managed OLTs (Ubiquiti UF-OLTs) run on the UISP control plane, not
+    # TR069, so they never carry a TR069 config pack and do not require one to be
+    # active. Mirrors the ck_olt_devices_config_pack_required DB constraint.
+    if getattr(olt, "uisp_device_id", None) is not None:
+        return []
+
     pack = olt.config_pack or {}
     missing = [key for key in REQUIRED_CONFIG_PACK_KEYS if not pack.get(key)]
 

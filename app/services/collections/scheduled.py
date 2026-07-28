@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 from app.schemas.collections import BillingEnforcementRunRequest
-from app.services.billing_settings import billing_enabled
 from app.services.collections import billing_enforcement_reconciler
 from app.services.db_session_adapter import db_session_adapter
 
@@ -17,11 +16,6 @@ def run_billing_enforcement() -> dict[str, int | str]:
     logger.info("Starting unified billing enforcement run")
     session = SessionLocal()
     try:
-        if not billing_enabled(session):
-            logger.info(
-                "billing enforcement skipped: local billing disabled (billing_enabled)"
-            )
-            return {"skipped": "billing_disabled"}
         result = billing_enforcement_reconciler.run(
             session, BillingEnforcementRunRequest()
         )

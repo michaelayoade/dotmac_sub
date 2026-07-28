@@ -126,7 +126,7 @@ def test_batch_execute_rejects_state_that_changed_after_preview(
         kind=SubscriptionCommandKind.activate,
         source="admin:test",
     )
-    subscription.updated_at = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
+    subscription.next_billing_at = datetime(2026, 7, 14, 15, 0, tzinfo=UTC)
     db_session.commit()
 
     outcome = execute_subscription_batch(

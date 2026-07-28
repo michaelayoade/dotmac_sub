@@ -178,14 +178,13 @@ def _confirm_allocation(
         amount=amount,
     )
     preview = PaymentAllocations.preview(db, request)
-    result = PaymentAllocations.confirm(
+    result = PaymentAllocations.stage_confirm(
         db,
         PaymentAllocationConfirm(
             **request.model_dump(),
             preview_fingerprint=preview.fingerprint,
             idempotency_key=_allocation_key(payment, invoice),
         ),
-        commit=False,
     )
     if result.allocation.ledger_entry_id is None:
         raise RuntimeError("Allocation owner returned no invoice ledger evidence")
@@ -240,6 +239,18 @@ def settle_single_invoice_from_credit(
     Used by the prepaid draft-until-funded path so a renewal is either fully
     funded from the deposit or left entirely as a draft.
     """
+    if only_if_full:
+        from app.services.billing.account_credit import AccountCreditApplications
+
+        funding = AccountCreditApplications.preview_invoice_funding(db, invoice)
+        if not funding.fully_funded:
+            return Decimal("0.00")
+        return AccountCreditApplications.apply_invoice_fully(
+            db,
+            invoice,
+            preview_fingerprint=funding.fingerprint,
+        ).applied
+
     account_id = str(invoice.account_id)
     currency = invoice.currency or "NGN"
 

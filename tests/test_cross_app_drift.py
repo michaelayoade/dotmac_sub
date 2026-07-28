@@ -274,12 +274,13 @@ def test_recently_suspended_is_within_grace(db_session, subscriber, catalog_offe
 
 
 def test_active_and_online_is_not_flagged(db_session, subscriber, catalog_offer):
-    from app.models.catalog import SubscriptionStatus
+    from app.models.catalog import AccessState, SubscriptionStatus
 
     now = datetime.now(UTC)
     sub = _subscription(
         db_session, subscriber, catalog_offer, SubscriptionStatus.active
     )
+    sub.access_state = AccessState.active.value
     _live_session(db_session, subscriber, sub, now=now)
 
     run_detection(db_session, checks=[cross_app_drift.ServiceEnforcementCheck()])

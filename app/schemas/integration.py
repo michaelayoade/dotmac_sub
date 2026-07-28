@@ -131,6 +131,46 @@ class IntegrationLifecycleCommand(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class IntegrationManifestPin(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    connector_version: str = Field(min_length=1, max_length=32)
+    manifest_digest: str = Field(pattern="^[0-9a-f]{64}$")
+
+
+class IntegrationManifestAdoptionPreviewRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    installation_id: UUID
+    connector_key: str
+    environment: str
+    installation_state: str
+    installed_pin: IntegrationManifestPin
+    target_pin: IntegrationManifestPin | None
+    pin_state: str
+    adoption_required: bool
+    ready: bool
+    blocking_errors: tuple[str, ...]
+
+
+class IntegrationManifestAdoptionCommand(BaseModel):
+    expected_installed_pin: IntegrationManifestPin
+    target_pin: IntegrationManifestPin
+    reason: str = Field(min_length=1, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class IntegrationManifestAdoptionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    installation_id: UUID
+    connector_key: str
+    previous_pin: IntegrationManifestPin
+    adopted_pin: IntegrationManifestPin
+    installation_state: str
+    replayed: bool
+
+
 class IntegrationConfigRevisionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

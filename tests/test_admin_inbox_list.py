@@ -11,8 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from app.models.team_inbox import InboxConversation
-from app.services import team_inbox_read
-from app.web.admin.inbox import INBOX_LIST_DEFINITION
+from app.services import team_inbox_projection, team_inbox_read
 
 
 def _conv(db, *, priority, last_message_at, thread):
@@ -27,7 +26,7 @@ def _conv(db, *, priority, last_message_at, thread):
 
 
 def test_inbox_definition_declares_its_capabilities():
-    definition = INBOX_LIST_DEFINITION
+    definition = team_inbox_projection.INBOX_LIST_DEFINITION
     assert set(definition.sortable_keys) == {
         "priority",
         "last_message_at",

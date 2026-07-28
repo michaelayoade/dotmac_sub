@@ -101,12 +101,24 @@ class TestForwardFix:
 
     def test_management_ip_not_released(self, db_session, catalog_offer):
         s = _subscriber(db_session, "t4@e.com")
-        sub = _sub(db_session, s, catalog_offer, status=SubscriptionStatus.disabled)
+        sub = _sub(db_session, s, catalog_offer, status=SubscriptionStatus.canceled)
         a = _assign(db_session, s, "10.9.9.9", allocation_type="management")
         db_session.commit()
         res = release_service_ips_for_subscription(db_session, sub)
         assert res["released"] == 0
         assert res["reserved_skipped"] == 1
+        db_session.refresh(a)
+        assert a.is_active is True
+
+    def test_disabled_service_ip_is_retained(self, db_session, catalog_offer):
+        s = _subscriber(db_session, "t4-disabled@e.com")
+        sub = _sub(db_session, s, catalog_offer, status=SubscriptionStatus.disabled)
+        a = _assign(db_session, s, "10.9.9.10")
+        db_session.commit()
+
+        result = release_service_ips_for_subscription(db_session, sub)
+
+        assert result["skipped"] == "not_terminal"
         db_session.refresh(a)
         assert a.is_active is True
 

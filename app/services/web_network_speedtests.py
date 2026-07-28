@@ -18,6 +18,7 @@ from app.models.network_monitoring import (
     SpeedTestSource,
 )
 from app.models.subscriber import Subscriber, SubscriberCategory
+from app.services import service_address as service_address_service
 from app.services import settings_spec
 from app.services.audit_helpers import log_audit_event
 from app.services.common import coerce_uuid, validate_enum
@@ -310,7 +311,7 @@ def analytics_page_data(db: Session, *, days: int = 30) -> dict[str, object]:
     results = (
         db.query(SpeedTestResult)
         .options(
-            selectinload(SpeedTestResult.subscriber),
+            selectinload(SpeedTestResult.subscriber).selectinload(Subscriber.addresses),
             selectinload(SpeedTestResult.subscription).selectinload(Subscription.offer),
             selectinload(SpeedTestResult.network_device),
             selectinload(SpeedTestResult.pop_site),
@@ -341,8 +342,10 @@ def analytics_page_data(db: Session, *, days: int = 30) -> dict[str, object]:
         location = "Unknown"
         if item.pop_site and item.pop_site.name:
             location = item.pop_site.name
-        elif item.subscriber and item.subscriber.city:
-            location = item.subscriber.city
+        elif item.subscriber:
+            location = (
+                service_address_service.address_parts(item.subscriber).city or location
+            )
         loc_slot = by_location.setdefault(
             location, {"download": 0.0, "upload": 0.0, "count": 0}
         )

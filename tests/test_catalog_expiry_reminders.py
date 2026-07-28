@@ -59,7 +59,6 @@ def _make_subscriber(db_session, *, first_name: str = "Second"):
 
 
 def _run_with_test_session(monkeypatch, db_session):
-    monkeypatch.setattr(catalog_tasks, "billing_enabled", lambda session: True)
     monkeypatch.setattr(
         catalog_tasks.db_session_adapter,
         "session",

@@ -6,7 +6,7 @@ instead of stitching tools together:
 
   ① Quarterly Complaints         — native (sub tickets, ``ncc_complaints_report``)
   ② Quarterly Subscriber/Capacity — native (``ncc_subscriber_report``)
-  ③ Annual Year-End Section F/G   — dotmac_erp via the ERP API
+  ③ Annual Year-End Section F/G   — configured back-office adapter
 
 Ported from ``dotmac_crm/app/services/ncc_regulatory_pack.py`` for the CRM
 exit, with the assembler re-homed to sub. Three deliberate divergences:
@@ -19,10 +19,10 @@ double-normalisation: ``build_ncc_subscriber_report`` already applies
 not adjust the buckets a second time.
 
 **③G never fabricates.** CRM carried a hardcoded 170-person
-``_STAFF_HEADCOUNT_FALLBACK`` and substituted it whenever ERP was unreachable
-or returned an unclassified head-count — meaning an ERP outage could put
+``_STAFF_HEADCOUNT_FALLBACK`` and substituted it whenever the back-office source
+was unreachable or returned an unclassified head-count — meaning an outage could put
 invented numbers into a regulatory filing. That table is deliberately NOT
-ported. ERP is the owner of Section G; if it cannot answer, the section
+ported. The configured workforce system is the owner of Section G; if it cannot answer, the section
 degrades to ``{"available": False, ...}`` like any other unreachable upstream,
 and the officer sees a gap rather than a fiction. The "is the head-count
 actually classified?" quality check is kept — but it now degrades instead of
@@ -125,23 +125,23 @@ def subscribers_section(
         return {"available": False, "error": str(exc)}
 
 
-# ── ③ Year-End Section F/G (dotmac_erp) ─────────────────────────────────────
-def _erp_client(db: Session):
-    """An enabled ERP capability client, or ``None`` when unavailable."""
-    from app.services.integrations.erp_capability import capability_client
+# ── ③ Year-End Section F/G (replaceable back-office source) ─────────────────
+def _backoffice_client(db: Session):
+    """The configured back-office adapter, or ``None`` when unavailable."""
+    from app.services.backoffice import build_gateway
 
     try:
-        return capability_client(db)
-    except Exception:
+        return build_gateway(db)
+    except (RuntimeError, ValueError):
         return None
 
 
 def financials_section(db: Session, *, year: int | None = None) -> dict[str, Any]:
-    """Fetch the NCC year-end Section F financials (③F) from dotmac_erp."""
+    """Fetch NCC year-end Section F from the configured back-office system."""
     try:
-        client = _erp_client(db)
+        client = _backoffice_client(db)
         if client is None:
-            return {"available": False, "error": "dotmac_erp is not configured"}
+            return {"available": False, "error": "back-office source unavailable"}
         with client:
             data = client.get_ncc_financials(year=year)
     except Exception as exc:
@@ -149,12 +149,12 @@ def financials_section(db: Session, *, year: int | None = None) -> dict[str, Any
         return {"available": False, "error": str(exc)}
 
     if not data:
-        return {"available": False, "error": "erp returned empty financials"}
+        return {"available": False, "error": "back-office returned empty financials"}
     return {"available": True, "financials": data}
 
 
 def _staff_has_classified_headcount(data: dict[str, Any]) -> bool:
-    """True when ERP sent a non-zero Nigerian head-count in some category."""
+    """True when the source sent a non-zero Nigerian head-count."""
     for nationalities in (data.get("by_category") or {}).values():
         if not isinstance(nationalities, dict):
             continue
@@ -171,18 +171,18 @@ def _staff_has_classified_headcount(data: dict[str, Any]) -> bool:
 
 
 def staff_section(db: Session) -> dict[str, Any]:
-    """Fetch the NCC year-end Section G staff head-count (③G) from dotmac_erp.
+    """Fetch NCC year-end Section G from the configured workforce source.
 
-    ERP owns Section G. When it cannot answer — unreachable, unconfigured,
-    empty, or an unclassified head-count — this degrades to
+    The source owns Section G. When it cannot answer — unreachable,
+    unconfigured, empty, or unclassified — this degrades to
     ``available: False``. It never substitutes a stand-in figure: a regulatory
-    filing must carry ERP's real numbers or visibly carry none (see the module
+    filing must carry source evidence or visibly carry none (see the module
     docstring's note on CRM's removed fallback table).
     """
     try:
-        client = _erp_client(db)
+        client = _backoffice_client(db)
         if client is None:
-            return {"available": False, "error": "dotmac_erp is not configured"}
+            return {"available": False, "error": "back-office source unavailable"}
         with client:
             data = client.get_ncc_staff_headcount()
     except Exception as exc:
@@ -190,12 +190,15 @@ def staff_section(db: Session) -> dict[str, Any]:
         return {"available": False, "error": str(exc)}
 
     if not data:
-        return {"available": False, "error": "erp returned an empty staff head-count"}
+        return {
+            "available": False,
+            "error": "back-office returned an empty staff head-count",
+        }
     if not _staff_has_classified_headcount(data):
         return {
             "available": False,
             "error": (
-                "erp returned no classified Nigerian head-count; Section G "
+                "back-office returned no classified Nigerian head-count; Section G "
                 "cannot be filed from this response"
             ),
         }

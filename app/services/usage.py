@@ -180,13 +180,10 @@ def _write_subscription_ips_from_accounting(
     """Record the OBSERVED framed address from a live accounting row.
 
     The observed live IP goes to ``last_seen_framed_ipv4/ipv6`` (display /
-    diagnostics, never enforcement). It is kept SEPARATE from
+    diagnostics, never enforcement). It is separate from
     ``ipv4_address``/``ipv6_address`` — the DESIRED/served IP owned by the IP
-    assignment + connectivity reconciler — so the observed value can't overwrite
-    the desired IP and be re-emitted by the RADIUS sweep
-    (CONNECTIVITY_STATE_MACHINE.md §3.1). A legacy dual-write into the served
-    column is retained for ACTIVE subs only (the portal still reads it) until
-    the reconciler-as-sole-writer cutover."""
+    assignment and connectivity owners. Accounting observations never overwrite
+    the desired projection."""
     if not subscription_id or not (ipv4 or ipv6):
         return
     subscription = db.get(Subscription, subscription_id)
@@ -197,19 +194,6 @@ def _write_subscription_ips_from_accounting(
         subscription.last_seen_framed_ipv4 = ipv4
     if ipv6 and subscription.last_seen_framed_ipv6 != ipv6:
         subscription.last_seen_framed_ipv6 = ipv6
-
-    # LEGACY dual-write into the served-IP column, ACTIVE subs only. For a
-    # suspended/blocked/terminated sub the accounting row can carry a stale or
-    # reject-pool address; copying that into the served-IP column makes it the
-    # new "desired" IP that the RADIUS sweep then re-emits — a self-reinforcing
-    # wrong-IP loop. Removed in the sole-writer cutover once the connectivity
-    # shadow gauge shows ipv4_cache drift is ~0; behaviour unchanged until then.
-    if subscription.status != SubscriptionStatus.active:
-        return
-    if ipv4 and subscription.ipv4_address != ipv4:
-        subscription.ipv4_address = ipv4
-    if ipv6 and subscription.ipv6_address != ipv6:
-        subscription.ipv6_address = ipv6
 
 
 def _radius_accounting_target(db: Session) -> dict[str, Any] | None:

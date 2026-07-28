@@ -47,6 +47,7 @@ from app.models.catalog import (
 )
 from app.models.service_extension import (
     ServiceExtension,
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -563,6 +564,9 @@ def test_replay_service_extension_shifts_schedule_without_crediting_cash(
             subscription_id=subscription.id,
             subscriber_id=subscriber.id,
             previous_next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+            grant_starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+            grant_ends_at=datetime(2026, 7, 15, tzinfo=UTC),
+            anchor_basis=ServiceExtensionAnchorBasis.legacy_previous_anchor,
             new_next_billing_at=datetime(2026, 7, 15, tzinfo=UTC),
         )
     )

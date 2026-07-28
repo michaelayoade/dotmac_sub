@@ -48,6 +48,7 @@ from app.tasks.dotmac_erp_outbox import (
     repair_purchase_invoice_sync,
     sync_erp_operational_domains,
 )
+from app.tasks.durable_timers import fire_due_durable_timers
 from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
@@ -106,7 +107,10 @@ from app.tasks.olt_health_retry import (
     retry_single_olt,
     trigger_immediate_retry,
 )
-from app.tasks.olt_mac_harvest import run_olt_mac_harvest
+from app.tasks.olt_mac_harvest import (
+    run_olt_mac_harvest,
+    run_single_olt_mac_harvest,
+)
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_firmware import (
     apply_huawei_ont_firmware,
@@ -126,11 +130,11 @@ from app.tasks.ont_runtime_status import (
 )
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
+from app.tasks.outage_auto_notify import auto_dispatch_outage_notifications
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
-from app.tasks.projects import reconcile_project_mirror
 from app.tasks.provisioning import (
     reap_stale_provisioning_runs,
     retry_pending_compensation_failures,
@@ -180,10 +184,10 @@ from app.tasks.tr069 import (
     cleanup_tr069_records,
 )
 from app.tasks.tr069 import (
-    execute_bulk_action as tr069_execute_bulk_action,
+    execute_network_operation_job as tr069_execute_network_operation_job,
 )
 from app.tasks.tr069 import (
-    execute_pending_jobs as tr069_execute_pending_jobs,
+    reconcile_command_outcomes as tr069_reconcile_command_outcomes,
 )
 from app.tasks.tr069 import (
     refresh_ont_runtime_data as tr069_refresh_ont_runtime,
@@ -214,7 +218,6 @@ from app.tasks.wireguard import (
 from app.tasks.wireguard import (
     generate_connection_log_report as wireguard_connection_report,
 )
-from app.tasks.work_orders import reconcile_work_order_mirror
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
 
 __all__ = [
@@ -285,7 +288,9 @@ __all__ = [
     "rollback_firmware_task",
     "upgrade_firmware_task",
     "run_olt_mac_harvest",
+    "run_single_olt_mac_harvest",
     "dispatch_operational_escalation_deliveries",
+    "fire_due_durable_timers",
     "retry_failed_olt_connections",
     "retry_single_olt",
     "trigger_immediate_retry",
@@ -311,6 +316,7 @@ __all__ = [
     "run_lldp_topology_poll",
     "run_forwarding_control_observation_poll",
     "reconcile_detected_outages",
+    "auto_dispatch_outage_notifications",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",
     "apply_uisp_intent",
@@ -319,8 +325,8 @@ __all__ = [
     "run_unmatched_radio_review",
     "export_topology_metrics",
     "tr069_sync_all_acs_devices",
-    "tr069_execute_pending_jobs",
-    "tr069_execute_bulk_action",
+    "tr069_reconcile_command_outcomes",
+    "tr069_execute_network_operation_job",
     "tr069_apply_acs_config",
     "tr069_check_device_health",
     "tr069_refresh_ont_runtime",
@@ -357,9 +363,7 @@ __all__ = [
     "sync_all_interfaces",
     "sync_all_system_info",
     "run_scheduled_credential_rotation",
-    "reconcile_project_mirror",
     "reconcile_quote_mirror",
     "reconcile_referral_mirror",
     "send_scheduled_ncc_report",
-    "reconcile_work_order_mirror",
 ]

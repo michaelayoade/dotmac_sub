@@ -1,3 +1,8 @@
+from app.models.access_invitation import (  # noqa: F401
+    AccessInvitation,
+    AccessInvitationPurpose,
+    AccessInvitationStatus,
+)
 from app.models.admin_alert import AdminAlert, AdminNotification  # noqa: F401
 from app.models.admin_whats_new import AdminWhatsNewItem  # noqa: F401
 from app.models.ai_insight import (  # noqa: F401
@@ -32,7 +37,6 @@ from app.models.billing import (  # noqa: F401
     BillingAccountCreditAllocationItem,
     BillingAccountLedgerEntry,
     BillingRun,
-    BillingRunSchedule,
     BillingRunStatus,
     ConsolidatedCreditConsumptionReconciliationEvidence,
     ConsolidatedPaymentReturnDocumentReconstructionEvidence,
@@ -59,7 +63,6 @@ from app.models.billing import (  # noqa: F401
     PaymentAllocationReconciliationException,
     PaymentMethod,
     PaymentMethodType,
-    PaymentPrepaidApplication,
     PaymentProvider,
     PaymentProviderEvent,
     PaymentProviderEventStatus,
@@ -73,6 +76,32 @@ from app.models.billing import (  # noqa: F401
     TopupIntent,
     TopupIntentPurpose,
 )
+from app.models.billing_contract import (  # noqa: F401
+    AccountingTreatment,
+    BillingContract,
+    BillingContractLine,
+    BillingContractSourceKind,
+    BillingContractVersion,
+    BillingContractVersionStatus,
+    BillingObligation,
+    BillingRecordAuthority,
+    CadenceAlignment,
+    ChargeComponent,
+    CollectionTiming,
+    EndOfMonthRule,
+    IntervalUnit,
+    ObligationResolutionKind,
+    ObligationState,
+    RateBasis,
+)
+from app.models.billing_shadow_verification import (  # noqa: F401
+    BillingCutoverVerificationRun,
+    BillingShadowDeliveryEvidence,
+)
+
+# app.models.catalog also exports a legacy ProrationPolicy; the billing
+# contract's proration enum is imported from app.models.billing_contract
+# directly to avoid shadowing it here.
 from app.models.branding import BrandProfile  # noqa: F401
 from app.models.catalog import (  # noqa: F401
     AccessCredential,
@@ -133,6 +162,11 @@ from app.models.collections import (  # noqa: F401
     FinancialAccessEvidenceOperation,
     FinancialAccessOrigin,
 )
+from app.models.collections_case import (  # noqa: F401
+    CollectionsCase,
+    CollectionsCaseState,
+    CollectionsReason,
+)
 from app.models.comms import (  # noqa: F401
     CustomerNotificationEvent,
     CustomerNotificationStatus,
@@ -177,7 +211,19 @@ from app.models.cross_app_drift import (  # noqa: F401
     CrossAppDriftRun,
     CrossAppDriftWaiver,
 )
+from app.models.customer_experience import (  # noqa: F401
+    CustomerExperienceHandoff,
+    CustomerExperienceHandoffEvent,
+    CustomerExperienceHandoffStatus,
+)
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
+from app.models.customer_subledger import (  # noqa: F401
+    CustomerPositionEffect,
+    CustomerPostingGroup,
+    PositionEffectKind,
+    PostingCommandKind,
+)
+from app.models.customer_tax_policy import CustomerTaxPolicy  # noqa: F401
 from app.models.cutover import CutoverBalanceVariance  # noqa: F401
 from app.models.device_token import DeviceToken  # noqa: F401
 from app.models.dispatch import (  # noqa: F401
@@ -194,10 +240,19 @@ from app.models.domain_settings import (  # noqa: F401
     DomainSetting,
     SettingDomain,
 )
+from app.models.durable_timer import (  # noqa: F401
+    DurableTimer,
+    TimerStatus,
+)
 from app.models.enforcement_lock import (  # noqa: F401
     AccessRestrictionMode,
     EnforcementLock,
     EnforcementReason,
+)
+from app.models.erp_billing_export import (  # noqa: F401
+    ErpBillingExport,
+    ErpBillingFlow,
+    ErpExportStatus,
 )
 from app.models.erp_domain_sync import ErpDomainSyncCursor  # noqa: F401
 from app.models.event_store import (  # noqa: F401
@@ -557,6 +612,10 @@ from app.models.organization import (  # noqa: F401
     OrganizationMembership,
     OrganizationMembershipRole,
 )
+from app.models.owner_output import (  # noqa: F401
+    OwnerOutputReceipt,
+    ReceiptOutcome,
+)
 from app.models.party import (  # noqa: F401
     PartnerRoleKey,
     Party,
@@ -601,10 +660,16 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessageStatus,
     PortalMessageType,
 )
+from app.models.prepaid_coverage import (  # noqa: F401
+    PrepaidCoverageReconciliationItem,
+    PrepaidCoverageReconciliationRun,
+)
 from app.models.prepaid_enforcement import PrepaidEnforcementReadiness  # noqa: F401
 from app.models.prepaid_funding import (  # noqa: F401
+    PrepaidDraftReconciliationException,
     PrepaidFundingBaseline,
     PrepaidFundingReconstructionBatch,
+    PrepaidOpeningFundingConsumption,
 )
 from app.models.project import (  # noqa: F401
     Project,
@@ -623,12 +688,13 @@ from app.models.project import (  # noqa: F401
     ProjectTemplateTaskDependency,
     ProjectType,
 )
-from app.models.project_mirror import (  # noqa: F401
-    ProjectMirror,
-    ProjectSyncState,
-)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
+    ProvisioningReadinessCheck,
+    ProvisioningReadinessCheckKind,
+    ProvisioningReadinessCheckResult,
+    ProvisioningReadinessDecision,
+    ProvisioningReadinessDecisionStatus,
     ProvisioningRun,
     ProvisioningRunStatus,
     ProvisioningStep,
@@ -723,10 +789,16 @@ from app.models.sales import (  # noqa: F401
     SalesOrderPaymentStatus,
     SalesOrderStatus,
 )
+from app.models.sales_order_funding import (  # noqa: F401
+    FundingGateState,
+    SalesOrderFundingGate,
+    SalesOrderFundingObligation,
+)
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
 from app.models.sequence import DocumentSequence  # noqa: F401
 from app.models.service_extension import (  # noqa: F401
     ServiceExtension,
+    ServiceExtensionAnchorBasis,
     ServiceExtensionEntry,
     ServiceExtensionScope,
     ServiceExtensionStatus,
@@ -770,6 +842,13 @@ from app.models.subscriber import (  # noqa: F401
 )
 from app.models.subscriber_field_verification import (  # noqa: F401
     SubscriberFieldVerification,
+)
+from app.models.subscription_billing_treatment import (  # noqa: F401
+    BillingTreatmentReason,
+    BillingTreatmentStatus,
+    SubscriptionBillingArrangement,
+    SubscriptionBillingGrant,
+    SubscriptionBillingTreatment,
 )
 from app.models.subscription_change import (  # noqa: F401
     SubscriptionChangeRequest,
@@ -883,6 +962,8 @@ from app.models.vendor_routes import (  # noqa: F401
     ProjectQuoteLineItem,
     ProjectQuoteStatus,
     ProposedRouteRevision,
+    ProposedRouteRevisionReviewEvent,
+    ProposedRouteRevisionReviewEventImmutableError,
     ProposedRouteRevisionStatus,
     VariationType,
     Vendor,
@@ -891,6 +972,13 @@ from app.models.vendor_routes import (  # noqa: F401
     VendorPurchaseInvoiceLineItem,
     VendorPurchaseInvoiceStatus,
     VendorUser,
+)
+from app.models.vendor_supply import (  # noqa: F401
+    VendorAdvance,
+    VendorAdvanceStatus,
+    VendorMaterialRelease,
+    VendorMaterialReleaseItem,
+    VendorMaterialReleaseStatus,
 )
 from app.models.wireguard import (  # noqa: F401
     WireGuardConnectionLog,
@@ -903,8 +991,5 @@ from app.models.work_link import (  # noqa: F401
     WorkLink,
     WorkLinkType,
 )
-from app.models.work_order import (  # noqa: F401
-    WorkOrder,
-    WorkOrderSyncState,
-)
+from app.models.work_order import WorkOrder  # noqa: F401
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401

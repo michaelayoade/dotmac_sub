@@ -25,6 +25,7 @@ from app.schemas.service_status import ServiceStatusActionKind
 from app.services import billing as billing_service
 from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.service_status import build_service_status
+from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
 
 
 def _n(dt):
@@ -36,6 +37,12 @@ def _n(dt):
 def _activate(db, subscription, mode):
     subscription.status = SubscriptionStatus.active
     subscription.billing_mode = mode
+    if mode == BillingMode.prepaid:
+        ensure_test_prepaid_contract(
+            db,
+            subscription,
+            amount=subscription.unit_price or Decimal("100.00"),
+        )
     db.commit()
 
 
@@ -173,7 +180,7 @@ def test_prepaid_insufficient_wallet_without_paid_coverage_is_low_balance(
     assert resp.services[0].action.restores_service is False
 
 
-def test_prepaid_low_wallet_with_paid_current_period_is_ok(
+def test_prepaid_low_wallet_with_paid_invoice_still_requires_projection(
     db_session, subscriber_account, subscription
 ):
     subscriber_account.billing_mode = BillingMode.prepaid
@@ -211,9 +218,9 @@ def test_prepaid_low_wallet_with_paid_current_period_is_ok(
     resp = build_service_status(db_session, str(subscriber_account.id))
 
     assert resp.balance == Decimal("0.00")
-    assert resp.min_balance == Decimal("0.00")
-    assert resp.low_balance is False
-    assert resp.services[0].reason == "ok"
+    assert resp.min_balance == Decimal("17500.00")
+    assert resp.low_balance is True
+    assert resp.services[0].reason == "low_balance"
 
 
 def test_prepaid_low_wallet_with_active_entitlement_is_ok(

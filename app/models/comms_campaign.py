@@ -35,6 +35,7 @@ class CampaignChannel(enum.StrEnum):
 
 class CampaignStatus(enum.StrEnum):
     draft = "draft"
+    paused = "paused"
     scheduled = "scheduled"
     sending = "sending"
     completed = "completed"

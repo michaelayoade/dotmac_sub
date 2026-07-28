@@ -4,9 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/project.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/status_chip.dart';
 
 /// Installation Progress — the customer's install lifecycle (stage timeline +
-/// progress %), served from the sub's local project mirror.
+/// progress %, field visits and resolution), served from Sub's native projection.
 class InstallationTrackerScreen extends ConsumerWidget {
   const InstallationTrackerScreen({super.key});
 
@@ -59,17 +60,9 @@ class _ProjectCard extends StatelessWidget {
 
   final ProjectItem project;
 
-  static const _statusColors = {
-    'active': Colors.blue,
-    'on_hold': Colors.orange,
-    'completed': Colors.green,
-    'canceled': Colors.red,
-  };
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = _statusColors[project.status] ?? Colors.grey;
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
@@ -82,20 +75,12 @@ class _ProjectCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     project.name,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-                Chip(
-                  label: Text(
-                    project.status.replaceAll('_', ' '),
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  backgroundColor: color.withValues(alpha: 0.15),
-                  side: BorderSide.none,
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+                StatusChip.fromPresentation(project.statusPresentation),
               ],
             ),
             if (project.customerAddress != null)
@@ -114,8 +99,9 @@ class _ProjectCard extends StatelessWidget {
                 ),
                 Text(
                   '${project.progressPct}%',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ),
@@ -148,11 +134,17 @@ class _StageRow extends StatelessWidget {
     final theme = Theme.of(context);
     final done = stage.status == 'done';
     final inProgress = stage.status == 'in_progress';
+    final blocked = stage.status == 'blocked';
     final IconData icon = done
         ? Icons.check_circle
-        : (inProgress ? Icons.radio_button_checked : Icons.circle_outlined);
-    final Color color =
-        done ? Colors.green : (inProgress ? Colors.blue : Colors.grey);
+        : (blocked
+            ? Icons.block_outlined
+            : (inProgress
+                ? Icons.radio_button_checked
+                : Icons.circle_outlined));
+    final Color color = done
+        ? Colors.green
+        : (blocked ? Colors.orange : (inProgress ? Colors.blue : Colors.grey));
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -161,12 +153,28 @@ class _StageRow extends StatelessWidget {
           Icon(icon, size: 18, color: color),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              stage.title,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: stage.status == 'pending' ? theme.disabledColor : null,
-                fontWeight: inProgress ? FontWeight.w600 : null,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  stage.title,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color:
+                        stage.status == 'pending' ? theme.disabledColor : null,
+                    fontWeight: inProgress || blocked ? FontWeight.w600 : null,
+                  ),
+                ),
+                if (stage.workOrders.isNotEmpty)
+                  Text(
+                    '${stage.workOrders.length} field visit${stage.workOrders.length == 1 ? '' : 's'} · ${stage.workOrders.last.status.replaceAll('_', ' ')}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                if (stage.ticket != null)
+                  Text(
+                    'Ticket ${stage.ticket!.number ?? stage.ticket!.id.substring(0, 8)} · ${stage.ticket!.status.replaceAll('_', ' ')}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+              ],
             ),
           ),
         ],

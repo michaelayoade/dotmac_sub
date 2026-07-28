@@ -34,7 +34,232 @@ class ConnectorRegistryEntry:
     file_size_bytes: int
 
 
+def _paystack_manifest(
+    *,
+    version: str,
+    include_safe_defaults: bool,
+    require_public_key: bool,
+) -> ConnectorManifest:
+    """Build one immutable Paystack manifest retained by exact version/digest.
+
+    Paystack 1.0.0 was changed in place by the payment control-plane cutover.
+    Both deployed 1.0.0 digests remain executable during the bounded adoption
+    window; 1.0.1 is the first correctly versioned definition.
+    """
+
+    base_url: dict[str, object] = {
+        "type": "string",
+        **({"default": "https://api.paystack.co"} if include_safe_defaults else {}),
+    }
+    timeout_seconds: dict[str, object] = {
+        "type": "integer",
+        **({"default": 30} if include_safe_defaults else {}),
+    }
+    default_currency: dict[str, object] = {
+        "type": "string",
+        **({"default": "NGN"} if include_safe_defaults else {}),
+    }
+    return ConnectorManifest(
+        key="paystack",
+        name="Paystack",
+        version=version,
+        connector_type="payment",
+        description="Online payment gateway integration.",
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.payment_gateway",
+        ),
+        capabilities=(
+            CapabilityManifest(
+                id="payments.intent.v1",
+                modes=(CapabilityMode.interactive, CapabilityMode.event),
+            ),
+            CapabilityManifest(
+                id="payments.webhook.v1",
+                modes=(CapabilityMode.inbound,),
+            ),
+            CapabilityManifest(
+                id="payments.reconcile.v1",
+                modes=(CapabilityMode.scheduled, CapabilityMode.reconcile),
+            ),
+            CapabilityManifest(
+                id="payments.refund.v1",
+                modes=(CapabilityMode.event, CapabilityMode.manual),
+            ),
+        ),
+        config_schema={
+            "type": "object",
+            "properties": {
+                "base_url": base_url,
+                "timeout_seconds": timeout_seconds,
+                "default_currency": default_currency,
+            },
+            "required": ["base_url"],
+            "additionalProperties": False,
+        },
+        secrets=(
+            SecretBindingManifest(name="gateway_credentials"),
+            SecretBindingManifest(name="public_key", required=require_public_key),
+        ),
+        data_access=DataAccessManifest(
+            reads=("financial.payment_intent",),
+            emits=("financial.payment_provider_observation",),
+            classifications=("financial", "customer_contact"),
+        ),
+        egress=EgressManifest(hosts=("api.paystack.co",)),
+        health=HealthManifest(operation="connection.validate.v1"),
+    )
+
+
+def _dotmac_crm_manifest(
+    *,
+    version: str,
+    include_chat_session: bool,
+) -> ConnectorManifest:
+    """Build the current CRM manifest and its bounded pre-chat predecessor."""
+
+    capabilities = [
+        CapabilityManifest(
+            id="crm.subscriber_observation.v1",
+            modes=(
+                CapabilityMode.scheduled,
+                CapabilityMode.manual,
+                CapabilityMode.reconcile,
+            ),
+        ),
+        CapabilityManifest(
+            id="crm.ticket_observation.v1",
+            modes=(
+                CapabilityMode.scheduled,
+                CapabilityMode.manual,
+                CapabilityMode.reconcile,
+            ),
+        ),
+        CapabilityManifest(
+            id="crm.operational_observation.v1",
+            modes=(
+                CapabilityMode.scheduled,
+                CapabilityMode.interactive,
+                CapabilityMode.reconcile,
+            ),
+        ),
+        CapabilityManifest(
+            id="crm.portal_session.v1",
+            modes=(CapabilityMode.interactive,),
+        ),
+    ]
+    if include_chat_session:
+        capabilities.append(
+            CapabilityManifest(
+                id="crm.chat_session.v1",
+                modes=(CapabilityMode.interactive,),
+            )
+        )
+    capabilities.extend(
+        (
+            CapabilityManifest(
+                id="crm.quote_command.v1",
+                modes=(CapabilityMode.interactive,),
+            ),
+            CapabilityManifest(
+                id="crm.events.receive.v1",
+                modes=(CapabilityMode.inbound,),
+            ),
+        )
+    )
+    properties: dict[str, dict[str, object]] = {
+        "base_url": {"type": "string"},
+        "timeout_seconds": {"type": "number"},
+        "public_portal_api_base": {"type": "string"},
+    }
+    if include_chat_session:
+        properties.update(
+            {
+                "chat_widget_config_id": {"type": "string"},
+                "chat_ws_url": {"type": "string"},
+            }
+        )
+    return ConnectorManifest(
+        key="dotmac.crm",
+        name="DotMac CRM",
+        version=version,
+        connector_type="crm",
+        description="First-party CRM observations, commands, sessions, and inbound events.",
+        catalogue_visible=False,
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.dotmac_crm",
+        ),
+        capabilities=tuple(capabilities),
+        config_schema={
+            "type": "object",
+            "properties": properties,
+            "required": ["base_url"],
+            "additionalProperties": False,
+        },
+        secrets=(
+            SecretBindingManifest(name="service_credentials"),
+            SecretBindingManifest(name="webhook_signing_secret", required=False),
+        ),
+        data_access=DataAccessManifest(
+            reads=(
+                "subscriber.external_identity",
+                "portal.command_request",
+                *(("portal.chat_session_request",) if include_chat_session else ()),
+            ),
+            emits=(
+                "crm.external_observation",
+                "crm.inbound_event_observation",
+                *(("crm.chat_session",) if include_chat_session else ()),
+            ),
+            classifications=("customer_contact", "support_content", "operations"),
+        ),
+        egress=EgressManifest(hosts=("crm.dotmac.io",)),
+        health=HealthManifest(operation="connection.validate.v1"),
+    )
+
+
 _DEFINITIONS: tuple[ConnectorManifest, ...] = (
+    ConnectorManifest(
+        key="lead.capture.http",
+        name="Lead Capture Webhook",
+        version="1.0.0",
+        connector_type="sales",
+        description=(
+            "Provider-neutral signed ingress for canonical lead-capture payloads."
+        ),
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.lead_capture_http",
+        ),
+        capabilities=(
+            CapabilityManifest(
+                id="sales.lead_capture.v1",
+                modes=(CapabilityMode.inbound,),
+            ),
+        ),
+        config_schema={
+            "type": "object",
+            "properties": {
+                "signature_header": {"type": "string", "minLength": 1},
+                "delivery_id_header": {"type": "string", "minLength": 1},
+                "signature_prefix": {"type": "string"},
+            },
+            "required": [
+                "signature_header",
+                "delivery_id_header",
+                "signature_prefix",
+            ],
+            "additionalProperties": False,
+        },
+        secrets=(SecretBindingManifest(name="webhook_signing_secret"),),
+        data_access=DataAccessManifest(
+            emits=("sales.lead_capture_observation",),
+            classifications=("customer_contact", "marketing_attribution"),
+        ),
+        egress=EgressManifest(),
+        health=HealthManifest(operation="connection.validate.v1"),
+    ),
     ConnectorManifest(
         key="webhook.http",
         name="HTTP Webhook",
@@ -75,76 +300,9 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         egress=EgressManifest(allow_installation_hosts=True),
         health=HealthManifest(operation="connection.validate.v1"),
     ),
-    ConnectorManifest(
-        key="dotmac.crm",
-        name="DotMac CRM",
-        version="1.0.0",
-        connector_type="crm",
-        description="First-party CRM observations, commands, sessions, and inbound events.",
-        catalogue_visible=False,
-        runtime=RuntimeManifest(
-            type=ConnectorRuntimeType.builtin_worker,
-            module="app.services.integrations.connectors.dotmac_crm",
-        ),
-        capabilities=(
-            CapabilityManifest(
-                id="crm.subscriber_observation.v1",
-                modes=(
-                    CapabilityMode.scheduled,
-                    CapabilityMode.manual,
-                    CapabilityMode.reconcile,
-                ),
-            ),
-            CapabilityManifest(
-                id="crm.ticket_observation.v1",
-                modes=(
-                    CapabilityMode.scheduled,
-                    CapabilityMode.manual,
-                    CapabilityMode.reconcile,
-                ),
-            ),
-            CapabilityManifest(
-                id="crm.operational_observation.v1",
-                modes=(
-                    CapabilityMode.scheduled,
-                    CapabilityMode.interactive,
-                    CapabilityMode.reconcile,
-                ),
-            ),
-            CapabilityManifest(
-                id="crm.portal_session.v1",
-                modes=(CapabilityMode.interactive,),
-            ),
-            CapabilityManifest(
-                id="crm.quote_command.v1",
-                modes=(CapabilityMode.interactive,),
-            ),
-            CapabilityManifest(
-                id="crm.events.receive.v1",
-                modes=(CapabilityMode.inbound,),
-            ),
-        ),
-        config_schema={
-            "type": "object",
-            "properties": {
-                "base_url": {"type": "string"},
-                "timeout_seconds": {"type": "number"},
-                "public_portal_api_base": {"type": "string"},
-            },
-            "required": ["base_url"],
-            "additionalProperties": False,
-        },
-        secrets=(
-            SecretBindingManifest(name="service_credentials"),
-            SecretBindingManifest(name="webhook_signing_secret", required=False),
-        ),
-        data_access=DataAccessManifest(
-            reads=("subscriber.external_identity", "portal.command_request"),
-            emits=("crm.external_observation", "crm.inbound_event_observation"),
-            classifications=("customer_contact", "support_content", "operations"),
-        ),
-        egress=EgressManifest(hosts=("crm.dotmac.io",)),
-        health=HealthManifest(operation="connection.validate.v1"),
+    _dotmac_crm_manifest(
+        version="1.1.0",
+        include_chat_session=True,
     ),
     ConnectorManifest(
         key="whatsapp",
@@ -254,55 +412,10 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         egress=EgressManifest(hosts=("erp.dotmac.io",)),
         health=HealthManifest(operation="connection.validate.v1"),
     ),
-    ConnectorManifest(
-        key="paystack",
-        name="Paystack",
-        version="1.0.0",
-        connector_type="payment",
-        description="Online payment gateway integration.",
-        runtime=RuntimeManifest(
-            type=ConnectorRuntimeType.builtin_worker,
-            module="app.services.integrations.connectors.payment_gateway",
-        ),
-        capabilities=(
-            CapabilityManifest(
-                id="payments.intent.v1",
-                modes=(CapabilityMode.interactive, CapabilityMode.event),
-            ),
-            CapabilityManifest(
-                id="payments.webhook.v1",
-                modes=(CapabilityMode.inbound,),
-            ),
-            CapabilityManifest(
-                id="payments.reconcile.v1",
-                modes=(CapabilityMode.scheduled, CapabilityMode.reconcile),
-            ),
-            CapabilityManifest(
-                id="payments.refund.v1",
-                modes=(CapabilityMode.event, CapabilityMode.manual),
-            ),
-        ),
-        config_schema={
-            "type": "object",
-            "properties": {
-                "base_url": {"type": "string"},
-                "timeout_seconds": {"type": "integer"},
-                "default_currency": {"type": "string"},
-            },
-            "required": ["base_url"],
-            "additionalProperties": False,
-        },
-        secrets=(
-            SecretBindingManifest(name="gateway_credentials"),
-            SecretBindingManifest(name="public_key", required=False),
-        ),
-        data_access=DataAccessManifest(
-            reads=("financial.payment_intent",),
-            emits=("financial.payment_provider_observation",),
-            classifications=("financial", "customer_contact"),
-        ),
-        egress=EgressManifest(hosts=("api.paystack.co",)),
-        health=HealthManifest(operation="connection.validate.v1"),
+    _paystack_manifest(
+        version="1.0.1",
+        include_safe_defaults=True,
+        require_public_key=True,
     ),
     ConnectorManifest(
         key="flutterwave",
@@ -335,9 +448,12 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         config_schema={
             "type": "object",
             "properties": {
-                "base_url": {"type": "string"},
-                "timeout_seconds": {"type": "integer"},
-                "default_currency": {"type": "string"},
+                "base_url": {
+                    "type": "string",
+                    "default": "https://api.flutterwave.com/v3",
+                },
+                "timeout_seconds": {"type": "integer", "default": 30},
+                "default_currency": {"type": "string", "default": "NGN"},
             },
             "required": ["base_url"],
             "additionalProperties": False,
@@ -345,7 +461,7 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         secrets=(
             SecretBindingManifest(name="gateway_credentials"),
             SecretBindingManifest(name="public_key", required=False),
-            SecretBindingManifest(name="webhook_signing_secret", required=False),
+            SecretBindingManifest(name="webhook_signing_secret"),
         ),
         data_access=DataAccessManifest(
             reads=("financial.payment_intent",),
@@ -373,15 +489,50 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
     ),
 )
 
+_HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
+    # CRM 1.0.0 remains executable while production adopts the explicit
+    # temporary chat-session capability in 1.1.0.
+    _dotmac_crm_manifest(version="1.0.0", include_chat_session=False),
+    # Pre-#1567 Paystack 1.0.0. Production installations created before the
+    # payment control-plane cutover pin this exact digest.
+    _paystack_manifest(
+        version="1.0.0",
+        include_safe_defaults=False,
+        require_public_key=False,
+    ),
+    # #1567 changed 1.0.0 in place. Retain the transitional digest too so a
+    # reviewed emergency adoption made before 1.0.1 remains executable.
+    _paystack_manifest(
+        version="1.0.0",
+        include_safe_defaults=True,
+        require_public_key=True,
+    ),
+)
+
 _DEFINITION_BY_KEY = {definition.key: definition for definition in _DEFINITIONS}
 if len(_DEFINITION_BY_KEY) != len(_DEFINITIONS):  # pragma: no cover - import guard
     raise RuntimeError("connector definition keys must be unique")
+_SUPPORTED_DEFINITIONS = _DEFINITIONS + _HISTORICAL_DEFINITIONS
+_DEFINITION_BY_PIN = {
+    (definition.key, definition.version, definition.digest): definition
+    for definition in _SUPPORTED_DEFINITIONS
+}
+if len(_DEFINITION_BY_PIN) != len(
+    _SUPPORTED_DEFINITIONS
+):  # pragma: no cover - import guard
+    raise RuntimeError("connector definition pins must be unique")
 
 
 def connector_definitions() -> tuple[ConnectorManifest, ...]:
-    """Return the deterministic, validated deployed connector catalogue."""
+    """Return the deterministic current connector catalogue."""
 
     return _DEFINITIONS
+
+
+def supported_connector_definitions() -> tuple[ConnectorManifest, ...]:
+    """Return current and bounded historical executable definitions."""
+
+    return _SUPPORTED_DEFINITIONS
 
 
 def connector_definition(key: str) -> ConnectorManifest | None:
@@ -392,6 +543,42 @@ def require_connector_definition(key: str) -> ConnectorManifest:
     definition = connector_definition(key)
     if definition is None:
         raise KeyError(f"unknown connector definition: {key}")
+    return definition
+
+
+def pinned_connector_definition(
+    key: str,
+    *,
+    version: str,
+    manifest_digest: str,
+) -> ConnectorManifest | None:
+    """Resolve only an exact deployed version/digest installation pin."""
+
+    return _DEFINITION_BY_PIN.get(
+        (
+            key.strip().lower(),
+            version.strip(),
+            manifest_digest.strip().lower(),
+        )
+    )
+
+
+def require_pinned_connector_definition(
+    key: str,
+    *,
+    version: str,
+    manifest_digest: str,
+) -> ConnectorManifest:
+    definition = pinned_connector_definition(
+        key,
+        version=version,
+        manifest_digest=manifest_digest,
+    )
+    if definition is None:
+        raise KeyError(
+            "unknown connector definition pin: "
+            f"{key.strip().lower()}@{version.strip()}#{manifest_digest.strip().lower()}"
+        )
     return definition
 
 

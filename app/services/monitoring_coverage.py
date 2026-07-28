@@ -7,9 +7,9 @@ an outage (see DEVICE_OPERATIONAL_STATUS.md / INFRASTRUCTURE_SLA_PERFORMANCE.md)
 
 This materialises the set of currently-reachable management CIDRs (from the
 allowed-IPs of *up* WireGuard peers) and caches it. The operational-status
-reader and the SLA availability bridge both consult it: an uncovered device
-reads ``down(no_path_retry_pending)`` without alarming, and the SLA bridge
-records no downtime for it.
+owner and the SLA availability bridge both consult it: an uncovered device
+reads ``not_working(verification_path_unavailable)`` without claiming a
+physical failure, and the SLA bridge records no downtime for it.
 
 Safety: if ``wg`` is unavailable or returns nothing (dev/test, or a transient
 failure), coverage is ``loaded=False`` and ``covers()`` returns ``True`` for

@@ -9,12 +9,18 @@ dedicated pipeline key). The native sales RBAC contract owns seeding these
 keys; until they exist, the permissions resolve for admins only.
 """
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_permission
+from app.api.deps import get_current_user, get_db, require_permission
 from app.schemas.common import ListResponse
 from app.schemas.sales import (
+    LeadAccountConversionRead,
+    LeadAccountConversionRequest,
+    LeadCaptureRead,
+    LeadCaptureRequest,
     LeadCreate,
     LeadRead,
     LeadUpdate,
@@ -32,8 +38,36 @@ from app.schemas.sales import (
     QuoteUpdate,
 )
 from app.services import sales as sales_service
+from app.services.sales import account_conversion, capture
 
 router = APIRouter(prefix="/crm", tags=["crm-sales"])
+
+
+def _actor(principal: dict) -> str:
+    return str(
+        principal.get("user_id")
+        or principal.get("subscriber_id")
+        or principal.get("principal_id")
+        or "authenticated-user"
+    )
+
+
+def _capture_error(exc: capture.LeadCaptureError):
+    status_code = {"not_found": 404, "invalid": 422}.get(exc.kind, 409)
+    from fastapi import HTTPException
+
+    raise HTTPException(
+        status_code=status_code, detail={"code": exc.code, "message": str(exc)}
+    ) from exc
+
+
+def _conversion_error(exc: account_conversion.LeadAccountConversionError):
+    status_code = {"not_found": 404, "invalid": 422}.get(exc.kind, 409)
+    from fastapi import HTTPException
+
+    raise HTTPException(
+        status_code=status_code, detail={"code": exc.code, "message": str(exc)}
+    ) from exc
 
 
 @router.post(
@@ -144,6 +178,79 @@ def update_pipeline_stage(
 )
 def create_lead(payload: LeadCreate, db: Session = Depends(get_db)):
     return sales_service.leads.create(db, payload)
+
+
+@router.post(
+    "/leads/capture",
+    response_model=LeadCaptureRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("crm:lead:write"))],
+)
+def capture_lead(
+    payload: LeadCaptureRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(get_current_user),
+):
+    try:
+        result = capture.capture_lead(db, payload, actor_id=_actor(principal))
+    except capture.LeadCaptureError as exc:
+        return _capture_error(exc)
+    return LeadCaptureRead(
+        lead_id=result.lead.id,
+        party_id=result.party_id,
+        origin_capture_id=result.origin.id,
+        replayed=result.replayed,
+    )
+
+
+@router.post(
+    "/leads/capture/integration/{receipt_id}",
+    response_model=LeadCaptureRead,
+    dependencies=[Depends(require_permission("crm:lead:write"))],
+)
+def capture_verified_lead_receipt(
+    receipt_id: UUID,
+    payload: LeadCaptureRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(get_current_user),
+):
+    try:
+        result = capture.capture_verified_receipt(
+            db, receipt_id=receipt_id, payload=payload, actor_id=_actor(principal)
+        )
+    except capture.LeadCaptureError as exc:
+        return _capture_error(exc)
+    return LeadCaptureRead(
+        lead_id=result.lead.id,
+        party_id=result.party_id,
+        origin_capture_id=result.origin.id,
+        replayed=result.replayed,
+    )
+
+
+@router.post(
+    "/leads/{lead_id}/account",
+    response_model=LeadAccountConversionRead,
+    dependencies=[Depends(require_permission("crm:lead:write"))],
+)
+def convert_lead_account(
+    lead_id: UUID,
+    payload: LeadAccountConversionRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(get_current_user),
+):
+    try:
+        result = account_conversion.convert_lead_account(
+            db,
+            lead_id=lead_id,
+            party_id=payload.party_id,
+            subscriber_id=payload.subscriber_id,
+            new_account=payload.new_account,
+            actor_id=_actor(principal),
+        )
+    except account_conversion.LeadAccountConversionError as exc:
+        return _conversion_error(exc)
+    return LeadAccountConversionRead(**result.__dict__)
 
 
 @router.get(

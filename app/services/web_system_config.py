@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import uuid
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -16,6 +14,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import settings_spec
+from app.services.billing import collection_account_directory
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.domain_settings import DomainSettings
 
@@ -197,16 +196,13 @@ def save_portal_config(db: Session, data: Mapping[str, Any]) -> None:
 # 8.12 Billing & Invoice Settings
 # ---------------------------------------------------------------------------
 BILLING_KEYS = [
-    "billing_enabled",
     "payment_period",
     "billing_day",
     "use_creation_date",
     "payment_due_days",
-    "customer_balance_notifications_enabled",
     "expiry_reminder_days",
     "invoice_reminder_days",
     "minimum_balance",
-    "send_billing_notifications",
     "invoice_number_format",
     "receipt_number_format",
     "credit_note_format",
@@ -229,12 +225,7 @@ BILLING_KEYS = [
 ]
 
 DIRECT_BANK_TRANSFER_KEYS = [
-    "direct_bank_transfer_bank_name",
-    "direct_bank_transfer_account_name",
-    "direct_bank_transfer_account_number",
-    "direct_bank_transfer_sort_code",
     "direct_bank_transfer_instructions",
-    "direct_bank_transfer_accounts",
 ]
 
 
@@ -340,10 +331,7 @@ def _normalize_csv_days(data: dict[str, Any], key: str, label: str) -> None:
 def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(data)
     for key, label in (
-        ("billing_enabled", "Billing Enabled"),
         ("use_creation_date", "Use Customer Creation Date"),
-        ("customer_balance_notifications_enabled", "Customer Balance Notifications"),
-        ("send_billing_notifications", "Send Billing Notifications"),
         ("proforma_enabled", "Proforma Invoices"),
         ("zero_total_invoices", "Zero-Total Invoices"),
         ("invoice_caching", "Invoice PDF Caching"),
@@ -397,7 +385,7 @@ def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
     # casing enum choices, formatting decimals, validating CSV day-lists) and
     # ``use_specs`` layers spec-based type coercion/validation on top for the
     # keys that have a registered spec. Keys without a spec (payment_period,
-    # billing_day, use_creation_date, send_billing_notifications, the
+    # billing_day, use_creation_date, the
     # invoice/receipt/credit-note number formats, and the proforma_* / zero_
     # total_invoices / invoice_caching toggles) are intentionally NOT spec'd:
     # nothing in the app reads them, so registering specs would create orphans.
@@ -412,143 +400,42 @@ def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
 
 
 def get_direct_bank_transfer_context(db: Session) -> dict:
+    """Instructions copy from settings; accounts from their owner, read-only.
+
+    The accounts are shown here so staff can see what customers will be told,
+    but they are edited at /admin/settings/billing/collection-accounts. Editing them in
+    two places is what produced four divergent copies of the same bank account.
+    """
     settings = _read_settings(db, SettingDomain.billing, DIRECT_BANK_TRANSFER_KEYS)
     return {
         "direct_bank_transfer": settings,
-        "direct_bank_transfer_accounts": _parse_direct_transfer_accounts(settings),
+        "collection_accounts": collection_account_directory.enabled_transfer_accounts(
+            db
+        ),
+        "collection_accounts_url": "/admin/settings/billing/collection-accounts",
     }
 
 
 def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> None:
-    accounts = _direct_transfer_accounts_from_form(data)
-    primary = accounts[0] if accounts else {}
+    """Persist the instructions copy only.
+
+    This used to also write `direct_bank_transfer_accounts` and the legacy
+    singular `direct_bank_transfer_*` keys. Nothing reads them any more —
+    presentment resolves through `collection_accounts` — so continuing to write
+    them would silently accept staff edits that never reach a customer.
+    """
     payload = {
         "direct_bank_transfer_instructions": data.get(
             "direct_bank_transfer_instructions", ""
         ),
-        "direct_bank_transfer_accounts": json.dumps(accounts),
-        # Preserve the legacy single-account keys for older callers and as a
-        # readable fallback in the settings table.
-        "direct_bank_transfer_bank_name": primary.get("bank_name", ""),
-        "direct_bank_transfer_account_name": primary.get("account_name", ""),
-        "direct_bank_transfer_account_number": primary.get("account_number", ""),
-        "direct_bank_transfer_sort_code": primary.get("sort_code", ""),
     }
     _save_settings(
         db,
         SettingDomain.billing,
         payload,
-        DIRECT_BANK_TRANSFER_KEYS,
+        ["direct_bank_transfer_instructions"],
         use_specs=True,
     )
-
-
-def _parse_direct_transfer_accounts(
-    settings: Mapping[str, str],
-) -> list[dict[str, str]]:
-    raw = settings.get("direct_bank_transfer_accounts") or ""
-    accounts: list[dict[str, str]] = []
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = []
-        if isinstance(parsed, list):
-            for item in parsed:
-                if not isinstance(item, Mapping):
-                    continue
-                account = {
-                    "id": str(item.get("id") or uuid.uuid4().hex),
-                    "enabled": "true"
-                    if str(item.get("enabled", "")).lower()
-                    in {"1", "true", "yes", "on"}
-                    else "false",
-                    "bank_name": str(item.get("bank_name") or "").strip(),
-                    "account_name": str(item.get("account_name") or "").strip(),
-                    "account_number": str(item.get("account_number") or "").strip(),
-                    "sort_code": str(item.get("sort_code") or "").strip(),
-                }
-                if (
-                    account["bank_name"]
-                    and account["account_name"]
-                    and account["account_number"]
-                ):
-                    accounts.append(account)
-    if accounts:
-        return accounts
-
-    bank_name = (settings.get("direct_bank_transfer_bank_name") or "").strip()
-    account_name = (settings.get("direct_bank_transfer_account_name") or "").strip()
-    account_number = (settings.get("direct_bank_transfer_account_number") or "").strip()
-    sort_code = (settings.get("direct_bank_transfer_sort_code") or "").strip()
-    if bank_name and account_name and account_number:
-        accounts.append(
-            {
-                "id": uuid.uuid4().hex,
-                "enabled": "true",
-                "bank_name": bank_name,
-                "account_name": account_name,
-                "account_number": account_number,
-                "sort_code": sort_code,
-            }
-        )
-    return accounts
-
-
-def _form_list(data: Mapping[str, Any], key: str) -> list[str]:
-    getlist = getattr(data, "getlist", None)
-    if callable(getlist):
-        return [str(value) for value in getlist(key)]
-    value = data.get(key)
-    if value is None:
-        return []
-    if isinstance(value, list | tuple):
-        return [str(item) for item in value]
-    return [str(value)]
-
-
-def _direct_transfer_accounts_from_form(
-    data: Mapping[str, Any],
-) -> list[dict[str, str]]:
-    ids = _form_list(data, "account_id")
-    enabled_ids = set(_form_list(data, "account_enabled"))
-    bank_names = _form_list(data, "account_bank_name")
-    account_names = _form_list(data, "account_account_name")
-    account_numbers = _form_list(data, "account_account_number")
-    sort_codes = _form_list(data, "account_sort_code")
-    accounts: list[dict[str, str]] = []
-    row_count = max(
-        len(ids),
-        len(bank_names),
-        len(account_names),
-        len(account_numbers),
-        len(sort_codes),
-    )
-    for index in range(row_count):
-        account_id = (
-            ids[index] if index < len(ids) else ""
-        ).strip() or uuid.uuid4().hex
-        bank_name = (bank_names[index] if index < len(bank_names) else "").strip()
-        account_name = (
-            account_names[index] if index < len(account_names) else ""
-        ).strip()
-        account_number = (
-            account_numbers[index] if index < len(account_numbers) else ""
-        ).strip()
-        sort_code = (sort_codes[index] if index < len(sort_codes) else "").strip()
-        if not (bank_name and account_name and account_number):
-            continue
-        accounts.append(
-            {
-                "id": account_id,
-                "enabled": "true" if account_id in enabled_ids else "false",
-                "bank_name": bank_name,
-                "account_name": account_name,
-                "account_number": account_number,
-                "sort_code": sort_code,
-            }
-        )
-    return accounts
 
 
 # ---------------------------------------------------------------------------
@@ -590,9 +477,11 @@ def get_tax_config_context(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 # 8.16 Billing Reminders
 # ---------------------------------------------------------------------------
+# Delivery channels are NOT configured here. ``notification_channel_policy`` is
+# the single owner of channel selection; these keys only carry scheduling,
+# copy and filtering.
 REMINDER_KEYS = [
     "reminders_enabled",
-    "reminder_channel",
     "reminder_send_time",
     "wave1_days",
     "wave1_subject",
@@ -626,21 +515,20 @@ def save_reminders(db: Session, data: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # 8.17 Billing Notifications
 # ---------------------------------------------------------------------------
+# As with REMINDER_KEYS: no channel keys here. See
+# ``app.services.notification_channel_policy``.
 BILLING_NOTIF_KEYS = [
     "billing_notif_send_hour",
     "blocking_wave_enabled",
-    "blocking_wave_channel",
     "blocking_wave_email_template",
     "blocking_wave_sms_template",
     "blocking_wave_bcc",
     "pre_block_wave1_enabled",
     "pre_block_wave1_days",
-    "pre_block_wave1_channel",
     "pre_block_wave1_email_template",
     "pre_block_wave1_sms_template",
     "pre_block_wave2_enabled",
     "pre_block_wave2_days",
-    "pre_block_wave2_channel",
     "pre_block_wave2_email_template",
     "pre_block_wave2_sms_template",
 ]
@@ -991,3 +879,78 @@ def get_templates_context(db: Session) -> dict:
         "templates_list": templates,
         "channels": [channel.value for channel in NotificationChannel],
     }
+
+
+# ---------------------------------------------------------------------------
+# Automated outage notification (ADR 0004)
+# ---------------------------------------------------------------------------
+# One consolidated config: the master enable/disable first, then the tuning
+# knobs it governs. Presenting them together is the point — the thresholds are
+# meaningless without knowing whether automation is armed, and an operator
+# reaching for the kill switch mid-incident should not have to hunt for it.
+OUTAGE_AUTO_NOTIFY_KEYS = [
+    "outage_auto_notify_enabled",
+    "outage_auto_notify_dry_run",
+    "outage_auto_notify_settle_minutes",
+    "outage_auto_notify_min_affected",
+    "outage_auto_notify_max_incidents_per_run",
+    "outage_auto_notify_interval_seconds",
+]
+
+
+def get_outage_auto_notify_context(db: Session) -> dict:
+    """Resolved values plus the operating state the page leads with."""
+    resolved = {
+        key: settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
+        for key in OUTAGE_AUTO_NOTIFY_KEYS
+    }
+    enabled = bool(resolved.get("outage_auto_notify_enabled"))
+    dry_run = bool(resolved.get("outage_auto_notify_dry_run"))
+    if not enabled:
+        state, tone = "Disabled", "muted"
+        summary = "Automation is off. Outage notifications are operator-only."
+    elif dry_run:
+        state, tone = "Dry run", "warning"
+        summary = (
+            "Automation selects and logs recipients but sends nothing. "
+            "This is the verification phase from ADR 0004."
+        )
+    else:
+        state, tone = "Live", "active"
+        summary = "Automation is sending outage notifications to customers."
+    return {
+        "outage_auto_notify": resolved,
+        "outage_auto_notify_state": state,
+        "outage_auto_notify_tone": tone,
+        "outage_auto_notify_summary": summary,
+    }
+
+
+def save_outage_auto_notify(db: Session, data: Mapping[str, Any]) -> None:
+    """Persist the consolidated config through the registered specs.
+
+    Every key has a spec, so bounds (minimum settling window, minimum interval)
+    are enforced by ``settings_spec`` rather than re-implemented here. Unchecked
+    HTML checkboxes are absent from the payload, so they are normalized to
+    ``false`` instead of being read as "leave as-is".
+    """
+    payload = dict(data)
+    for key in ("outage_auto_notify_enabled", "outage_auto_notify_dry_run"):
+        payload[key] = (
+            "true"
+            if str(payload.get(key, "")).lower()
+            in {
+                "true",
+                "1",
+                "on",
+                "yes",
+            }
+            else "false"
+        )
+    _save_settings(
+        db,
+        SettingDomain.network_monitoring,
+        payload,
+        OUTAGE_AUTO_NOTIFY_KEYS,
+        use_specs=True,
+    )

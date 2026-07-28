@@ -10,6 +10,7 @@ subscriber-backed path is unchanged.
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pyotp
@@ -18,17 +19,19 @@ from cryptography.fernet import Fernet
 from starlette.requests import Request
 
 from app.config import settings
-from app.models.auth import MFAMethod, MFAMethodType
+from app.models.auth import MFAMethod, MFAMethodType, UserCredential
 from app.models.subscriber import Reseller
 from app.services import (
     auth_flow as auth_flow_service,
 )
 from app.services import (
+    reseller_onboarding,
     reseller_portal,
     web_reseller_billing,
     web_reseller_contacts,
     web_reseller_routes,
 )
+from app.services.owner_commands import CommandContext
 
 
 def _request():
@@ -59,16 +62,38 @@ def reseller_user_ctx(db_session, env):
     """A real reseller portal context for a subscriber-less reseller_user."""
     r = Reseller(name="ABC Networks", code="ABCP1B")
     db_session.add(r)
+    db_session.flush()
+    reseller_id = r.id
     db_session.commit()
-    db_session.refresh(r)
-    reseller_portal.create_reseller_user_principal(
+    command_id = uuid.uuid4()
+    outcome = reseller_onboarding.provision_reseller_user(
         db_session,
-        reseller_id=str(r.id),
-        username="abc-admin",
-        password="secret",  # noqa: S106
-        email="owner@abcnetworks.com",
-        full_name="ABC Owner",
+        reseller_onboarding.ProvisionResellerUserCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor="user:reseller-phase1b-test",
+                scope=reseller_onboarding.RESELLER_WRITE_SCOPE,
+                reason="create first-class reseller page test principal",
+            ),
+            reseller_id=reseller_id,
+            portal_user=reseller_onboarding.ResellerPortalUserSpec(
+                first_name="ABC",
+                last_name="Owner",
+                email="owner@abcnetworks.com",
+                username="abc-admin",
+                password="secret",  # noqa: S106
+                send_invite=False,
+            ),
+        ),
     )
+    credential = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.reseller_user_id == outcome.reseller_user_id)
+        .one()
+    )
+    credential.must_change_password = False
+    db_session.commit()
     result = reseller_portal.login(
         db_session, "abc-admin", "secret", _request(), remember=False
     )

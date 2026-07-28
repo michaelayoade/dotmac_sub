@@ -23,6 +23,52 @@ def _system_user_principal():
     return {"principal_type": "system_user", "subscriber_id": str(uuid.uuid4())}
 
 
+def test_customer_service_change_routes_are_canonical_without_plan_change_alias():
+    paths = {getattr(route, "path", "") for route in me_api.router.routes}
+    assert "/me/subscriptions/{subscription_id}/service-change" in paths
+    assert "/me/subscriptions/{subscription_id}/service-change/quote" in paths
+    assert "/me/subscriptions/{subscription_id}/plan-change" not in paths
+    assert "/me/subscriptions/{subscription_id}/plan-change/quote" not in paths
+
+
+def test_customer_device_command_routes_are_self_scoped():
+    paths = {getattr(route, "path", "") for route in me_api.router.routes}
+    assert "/me/subscriptions/{subscription_id}/device/reboot" in paths
+    assert "/me/subscriptions/{subscription_id}/device/wifi" in paths
+
+
+def test_reboot_device_forces_principal_scope(monkeypatch):
+    from app.services import customer_device_commands
+
+    principal = _subscriber_principal()
+    subscription_id = uuid.uuid4()
+    captured = {}
+
+    def fake(db, *, subscriber_id, subscription_id, actor_id):
+        captured.update(
+            subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
+            actor_id=actor_id,
+        )
+        return customer_device_commands.CustomerDeviceCommandOutcome(
+            command=customer_device_commands.CustomerDeviceCommandKind.reboot,
+            status=customer_device_commands.CustomerDeviceCommandStatus.succeeded,
+            subscription_id=subscription_id,
+            device_id=uuid.uuid4(),
+            operation_id=uuid.uuid4(),
+            message="Restart completed",
+        )
+
+    monkeypatch.setattr(customer_device_commands, "reboot_subscription_device", fake)
+    outcome = me_api.reboot_my_subscription_device(
+        subscription_id, db=None, principal=principal
+    )
+
+    assert outcome.message == "Restart completed"
+    assert captured["subscriber_id"] == uuid.UUID(principal["subscriber_id"])
+    assert captured["subscription_id"] == subscription_id
+
+
 def test_subscriber_id_helper_rejects_non_subscriber():
     with pytest.raises(HTTPException) as exc:
         me_api._subscriber_id(_system_user_principal())
@@ -192,7 +238,7 @@ def test_topup_initiate_403_for_non_subscriber():
 
     with pytest.raises(HTTPException) as exc:
         me_api.my_topup_initiate(
-            TopupInitiateRequest(amount=5000),
+            TopupInitiateRequest(amount=5000, preview_fingerprint="x" * 64),
             db=None,
             principal=_system_user_principal(),
         )
@@ -231,7 +277,7 @@ def test_topup_initiate_translates_value_error(monkeypatch):
     monkeypatch.setattr(me_api.customer_payments, "create_topup_intent", _boom)
     with pytest.raises(HTTPException) as exc:
         me_api.my_topup_initiate(
-            TopupInitiateRequest(amount=1),
+            TopupInitiateRequest(amount=1, preview_fingerprint="x" * 64),
             db=None,
             principal=_subscriber_principal(),
         )
@@ -262,6 +308,7 @@ def test_topup_initiate_400_with_friendly_saved_card_charge_error(monkeypatch):
                 amount=Decimal("5000"),
                 payment_method_id=uuid.uuid4(),
                 idempotency_key="idem-1",
+                preview_fingerprint="x" * 64,
             ),
             db=None,
             principal=_subscriber_principal(),

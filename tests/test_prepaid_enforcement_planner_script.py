@@ -1,27 +1,13 @@
-"""The operator planner cannot substitute a parallel funding source."""
+"""The operator planner is read-only and cannot mutate runtime activation."""
 
-from __future__ import annotations
-
-from datetime import UTC
 from pathlib import Path
 
-import pytest
 
-from scripts.one_off.plan_prepaid_balance_sweep import _parse_datetime
-
-
-def test_activation_timestamp_requires_timezone() -> None:
-    with pytest.raises(ValueError, match="timezone"):
-        _parse_datetime("2026-07-20T08:00:00", field="activation_at")
-
-
-def test_activation_timestamp_is_preserved() -> None:
-    parsed = _parse_datetime("2026-07-20T08:00:00+01:00", field="activation_at")
-
-    assert parsed.astimezone(UTC).isoformat() == "2026-07-20T07:00:00+00:00"
-
-
-def test_recorded_readiness_uses_the_displayed_plan_timestamp() -> None:
+def test_planner_has_no_activation_or_readiness_writer_options() -> None:
     script = Path("scripts/one_off/plan_prepaid_balance_sweep.py").read_text()
 
-    assert "now=plan.generated_at" in script
+    assert "--activation-at" not in script
+    assert "--record-readiness" not in script
+    assert "activated_at" not in script
+    assert ".commit(" not in script
+    assert "run_prepaid_balance_sweep" not in script

@@ -8,9 +8,9 @@ time so stale flags or broken network configuration fail closed.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from enum import StrEnum
 from ipaddress import ip_network
-from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -29,6 +29,19 @@ from app.models.subscriber import (
 from app.services import settings_spec
 
 
+class WalledGardenReason(StrEnum):
+    USER_TYPE_NOT_CUSTOMER = "user_type_not_customer"
+    ACCOUNT_NOT_SERVICE_ELIGIBLE = "account_not_service_eligible"
+    CATEGORY_NOT_EXPLICIT_RESIDENTIAL = "category_not_explicit_residential"
+    NOT_DIRECT_HOUSE_ACCOUNT = "not_direct_house_account"
+    CAPTIVE_GLOBALLY_DISABLED = "captive_globally_disabled"
+    CAPTIVE_PORTAL_IP_INVALID = "captive_portal_ip_invalid"
+    CAPTIVE_PORTAL_URL_INVALID = "captive_portal_url_invalid"
+    HARD_REJECT_REQUESTED = "hard_reject_requested"
+    CAPTIVE_NOT_OPTED_IN = "captive_not_opted_in"
+    CAPTIVE_READY = "captive_ready"
+
+
 @dataclass(frozen=True, slots=True)
 class WalledGardenDecision:
     requested_mode: AccessRestrictionMode
@@ -36,13 +49,17 @@ class WalledGardenDecision:
     explicit_opt_in: bool
     eligible: bool
     network_ready: bool
-    reason: str
+    reason: WalledGardenReason
 
-    def as_dict(self) -> dict[str, Any]:
-        result = asdict(self)
-        result["requested_mode"] = self.requested_mode.value
-        result["effective_mode"] = self.effective_mode.value
-        return result
+    def as_dict(self) -> dict[str, str | bool]:
+        return {
+            "requested_mode": self.requested_mode.value,
+            "effective_mode": self.effective_mode.value,
+            "explicit_opt_in": self.explicit_opt_in,
+            "eligible": self.eligible,
+            "network_ready": self.network_ready,
+            "reason": self.reason.value,
+        }
 
 
 def _raw_subscriber_category(account: Subscriber) -> str | None:
@@ -70,29 +87,31 @@ def captive_account_eligible(account: Subscriber) -> bool:
     )
 
 
-def captive_eligibility_reason(db: Session, account: Subscriber) -> str | None:
+def captive_eligibility_reason(
+    db: Session, account: Subscriber
+) -> WalledGardenReason | None:
     """Return why captive is forbidden, or ``None`` when account-eligible."""
 
     if account.user_type != UserType.customer:
-        return "user_type_not_customer"
+        return WalledGardenReason.USER_TYPE_NOT_CUSTOMER
     if not account.is_active or account.status not in {
         SubscriberStatus.active,
         SubscriberStatus.delinquent,
         SubscriberStatus.blocked,
         SubscriberStatus.suspended,
     }:
-        return "account_not_service_eligible"
+        return WalledGardenReason.ACCOUNT_NOT_SERVICE_ELIGIBLE
     if _raw_subscriber_category(account) != SubscriberCategory.residential.value:
-        return "category_not_explicit_residential"
+        return WalledGardenReason.CATEGORY_NOT_EXPLICIT_RESIDENTIAL
     reseller = account.reseller
     if reseller is None and account.reseller_id is not None:
         reseller = db.get(Reseller, account.reseller_id)
     if reseller is None or not reseller.is_active or not reseller.is_house:
-        return "not_direct_house_account"
+        return WalledGardenReason.NOT_DIRECT_HOUSE_ACCOUNT
     return None
 
 
-def _network_readiness_reason(db: Session) -> str | None:
+def _network_readiness_reason(db: Session) -> WalledGardenReason | None:
     enabled = settings_spec.resolve_value(
         db, SettingDomain.radius, "captive_redirect_enabled"
     )
@@ -100,7 +119,7 @@ def _network_readiness_reason(db: Session) -> str | None:
         enabled is True
         or str(enabled or "").strip().lower() in {"1", "true", "yes", "on"}
     ):
-        return "captive_globally_disabled"
+        return WalledGardenReason.CAPTIVE_GLOBALLY_DISABLED
 
     portal_ip = settings_spec.resolve_value(
         db, SettingDomain.radius, "captive_portal_ip"
@@ -108,7 +127,7 @@ def _network_readiness_reason(db: Session) -> str | None:
     try:
         ip_network(str(portal_ip or "").strip(), strict=False)
     except ValueError:
-        return "captive_portal_ip_invalid"
+        return WalledGardenReason.CAPTIVE_PORTAL_IP_INVALID
 
     portal_url = str(
         settings_spec.resolve_value(db, SettingDomain.radius, "captive_portal_url")
@@ -116,7 +135,7 @@ def _network_readiness_reason(db: Session) -> str | None:
     ).strip()
     parsed = urlparse(portal_url)
     if parsed.scheme != "https" or not parsed.hostname:
-        return "captive_portal_url_invalid"
+        return WalledGardenReason.CAPTIVE_PORTAL_URL_INVALID
     return None
 
 
@@ -139,10 +158,10 @@ def resolve_walled_garden_decision(
             explicit_opt_in=explicit_opt_in,
             eligible=eligible,
             network_ready=False,
-            reason="hard_reject_requested",
+            reason=WalledGardenReason.HARD_REJECT_REQUESTED,
         )
     if not explicit_opt_in:
-        reason = "captive_not_opted_in"
+        reason = WalledGardenReason.CAPTIVE_NOT_OPTED_IN
     elif eligibility_reason:
         reason = eligibility_reason
     else:
@@ -154,7 +173,7 @@ def resolve_walled_garden_decision(
                 explicit_opt_in=True,
                 eligible=True,
                 network_ready=True,
-                reason="captive_ready",
+                reason=WalledGardenReason.CAPTIVE_READY,
             )
         reason = readiness_reason
     return WalledGardenDecision(
@@ -219,3 +238,13 @@ def resolve_subscription_restriction(
         subscriber,
         requested_mode=requested,
     )
+
+
+__all__ = [
+    "WalledGardenDecision",
+    "WalledGardenReason",
+    "captive_account_eligible",
+    "captive_eligibility_reason",
+    "resolve_subscription_restriction",
+    "resolve_walled_garden_decision",
+]

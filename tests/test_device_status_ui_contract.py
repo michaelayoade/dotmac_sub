@@ -51,8 +51,10 @@ def test_network_device_api_declares_operational_projection() -> None:
     schema = (ROOT / "app/schemas/network_monitoring.py").read_text()
     api = (ROOT / "app/api/domains_monitoring.py").read_text()
 
-    assert "operational_status: str | None = None" in schema
+    assert (
+        'operational_status: Literal["working", "not_working"] | None = None' in schema
+    )
     assert "operational_reason: str | None = None" in schema
-    assert "operational_retry_pending: bool = False" in schema
+    assert "operational_retry_pending" not in schema
     assert "status_presentation: StatusPresentation | None = None" in schema
     assert "_with_device_operational_status" in api

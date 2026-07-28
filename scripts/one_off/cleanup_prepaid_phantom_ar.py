@@ -1,10 +1,11 @@
 """Reclassify legacy prepaid advance invoices that became phantom AR.
 
-Item 5 of docs/designs/PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md. Before Item 1, the
-runner issued prepaid renewal invoices due-on-issue; they aged to ``overdue``,
-counted as AR, suppressed the wallet, and (with the flag on) opened dunning
-cases — while the deposit was ALSO drawn down (double-count). Prod carried ~938
-such prepaid ``issued``/``overdue`` invoices (₦25.9M).
+This is historical repair tooling under the archive/reconciliation boundary in
+``docs/FINANCIAL_ACCESS_ENFORCEMENT.md``. The retired runner issued prepaid
+renewal invoices due-on-issue; they aged to ``overdue``, counted as AR, and
+suppressed available funding while the same service value could also be drawn
+down (double-count). Prod carried ~938 such prepaid ``issued``/``overdue``
+invoices (₦25.9M).
 
 This one-off brings each surviving prepaid AR invoice into the deposit-is-truth
 model, per account (oldest invoice first):

@@ -19,10 +19,16 @@ from app.models.billing import (
 )
 from app.models.catalog import BillingMode
 from app.models.subscriber import Reseller, Subscriber
-from app.services.account_credit_deposits import AccountCreditDeposits
+from app.services.account_credit_deposits import (
+    SETTLEMENT_SCOPE,
+    AccountCreditDeposits,
+    AccountCreditDepositSettlementSource,
+    SettleAccountCreditDepositCommand,
+)
 from app.services.billing._common import get_account_credit_balance
 from app.services.billing.account_credit import AccountCreditApplications
-from app.services.payment_gateway_adapter import PaymentGatewayTransaction
+from app.services.owner_commands import CommandContext
+from app.services.topup_intents import TopupIntentChannel
 
 
 def test_two_applicators_cannot_spend_one_credit_source_twice(engine):
@@ -52,7 +58,7 @@ def test_two_applicators_cannot_spend_one_credit_source_twice(engine):
         )
         setup.add_all([reseller, account, provider])
         setup.commit()
-        intent, _preview, _replayed = AccountCreditDeposits.create_intent(
+        intent, _preview, _replayed = AccountCreditDeposits.stage_intent(
             setup,
             account_id=account.id,
             amount="10000.00",
@@ -64,19 +70,25 @@ def test_two_applicators_cannot_spend_one_credit_source_twice(engine):
             provider_id=provider.id,
             expires_at=datetime.now(UTC) + timedelta(minutes=30),
             idempotency_key=f"pg-credit-intent-{suffix}",
-            channel="postgres_integration_test",
+            channel=TopupIntentChannel.customer_selfcare,
             created_by="pytest",
         )
+        setup.commit()
         AccountCreditDeposits.settle_verified(
             setup,
-            intent_id=intent.id,
-            transaction=PaymentGatewayTransaction(
+            SettleAccountCreditDepositCommand(
+                intent_id=intent.id,
                 provider_type="paystack",
-                external_id=f"pg-credit-payment-{suffix}",
+                external_transaction_id=f"pg-credit-payment-{suffix}",
                 amount=Decimal("10000.00"),
                 currency="NGN",
-                metadata={"topup_intent_id": str(intent.id)},
-                memo_prefix="Postgres test",
+                provider_intent_id=intent.id,
+                source=(AccountCreditDepositSettlementSource.customer_gateway_verify),
+            ),
+            context=CommandContext.system(
+                actor="pytest:postgres-account-credit",
+                scope=SETTLEMENT_SCOPE,
+                reason="PostgreSQL account-credit concurrency setup",
             ),
         )
         invoice = Invoice(

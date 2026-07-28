@@ -1076,16 +1076,16 @@ def test_smtp_connection(
                 logger.debug("SMTP quit failed after connection test", exc_info=True)
 
 
-def send_password_reset_email(
+def render_password_reset_email(
     db: Session,
     to_email: str,
     reset_token: str,
     person_name: str | None = None,
     next_login_path: str | None = None,
     expires_minutes: int | None = None,
-) -> bool:
-    """
-    Send a password reset email.
+    token_in_fragment: bool = False,
+) -> RenderedEmail:
+    """Render a password reset email without sending or persisting it.
 
     Args:
         db: Database session
@@ -1094,14 +1094,14 @@ def send_password_reset_email(
         person_name: Optional name to personalize the email
         expires_minutes: Actual token TTL; falls back to the configured setting
 
-    Returns:
-        True if email was sent successfully, False otherwise
+        token_in_fragment: Keep the bearer out of HTTP request/access logs
     """
     app_url = _get_app_url(db, next_login_path=next_login_path)
     query = {"token": reset_token}
     if next_login_path and next_login_path.startswith("/"):
         query["next_login"] = next_login_path
-    reset_url = f"{app_url}/auth/reset-password?{urlencode(query)}"
+    token_separator = "#" if token_in_fragment else "?"
+    reset_url = f"{app_url}/auth/reset-password{token_separator}{urlencode(query)}"
 
     # Prefer the actual token TTL; fall back to the configured setting
     expiry_minutes = expires_minutes or (
@@ -1163,12 +1163,39 @@ If you didn't request a password reset, you can safely ignore this email.
 This is an automated message. Please do not reply to this email.
 """
 
+    return RenderedEmail(
+        subject=subject,
+        body_html=body_html,
+        body_text=body_text,
+    )
+
+
+def send_password_reset_email(
+    db: Session,
+    to_email: str,
+    reset_token: str,
+    person_name: str | None = None,
+    next_login_path: str | None = None,
+    expires_minutes: int | None = None,
+    token_in_fragment: bool = False,
+) -> bool:
+    """Compatibility sender; recovery delivery uses the durable outbox."""
+
+    rendered = render_password_reset_email(
+        db,
+        to_email=to_email,
+        reset_token=reset_token,
+        person_name=person_name,
+        next_login_path=next_login_path,
+        expires_minutes=expires_minutes,
+        token_in_fragment=token_in_fragment,
+    )
     return send_email(
         db,
         to_email,
-        subject,
-        body_html,
-        body_text,
+        rendered.subject,
+        rendered.body_html,
+        rendered.body_text,
         activity="auth_password_reset",
     )
 

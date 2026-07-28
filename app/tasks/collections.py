@@ -17,8 +17,7 @@ def run_bundle_reconcile() -> dict[str, int]:
 def prepaid_balance_sweep() -> dict[str, int | str]:
     """Balance/expiry-based prepaid enforcement (arm timers, warn, suspend).
 
-    Gated OFF by default behind the ``collections.prepaid_balance_enforcement``
-    control; the service returns ``{"skipped": "disabled"}`` when the control is
-    off, so the beat entry firing is harmless until an operator opts in.
+    Permanently scheduled. Account-scoped funding, coverage, quarantine,
+    shields, grace, and time-of-day policy decide each consequence.
     """
     return scheduled_collections.run_prepaid_balance_sweep()

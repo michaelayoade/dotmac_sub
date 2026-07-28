@@ -237,7 +237,6 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
     web_system_config_service.save_billing_config(
         db_session,
         {
-            "billing_enabled": "true",
             "payment_period": "Monthly",  # normaliser lower-cases
             "payment_due_days": "72",
             "minimum_balance": "10.50",
@@ -245,9 +244,6 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
     )
 
     rows = _billing_rows(db_session)
-    # Spec-backed boolean gets coerced + typed.
-    assert rows["billing_enabled"].value_text == "true"
-    assert rows["billing_enabled"].value_type == SettingValueType.boolean
     # Spec-backed integer keeps its whole-number text and integer type.
     assert rows["payment_due_days"].value_text == "72"
     assert rows["payment_due_days"].value_type == SettingValueType.integer
@@ -263,20 +259,28 @@ def test_billing_config_save_rejects_non_numeric_integer(db_session):
     with pytest.raises(ValueError):
         web_system_config_service.save_billing_config(
             db_session,
-            {"billing_enabled": "true", "payment_due_days": "abc"},
+            {"payment_due_days": "abc"},
         )
 
     # Nothing is committed when validation fails.
-    assert "billing_enabled" not in _billing_rows(db_session)
+    assert "payment_due_days" not in _billing_rows(db_session)
 
 
 # --- 8.12 Direct bank transfer: config owns accounts, not enablement ---
-def test_direct_bank_transfer_save_preserves_json_without_alias_toggle(db_session):
+def test_direct_bank_transfer_save_persists_instructions_only(db_session):
+    """Bank accounts are owned by `collection_accounts`, not by this form.
+
+    This used to write the `direct_bank_transfer_accounts` JSON blob *and* the
+    legacy singular keys. Nothing reads them now, so continuing to write them
+    would silently accept staff edits that never reach a customer.
+    """
     web_system_config_service.save_direct_bank_transfer_config(
         db_session,
         {
             "direct_bank_transfer_enabled": "on",
             "direct_bank_transfer_instructions": "Pay to the account below.",
+            # A stale form may still post account fields; they must be ignored,
+            # not written somewhere nothing reads.
             "account_id": "acc-1",
             "account_enabled": "acc-1",
             "account_bank_name": "GTBank",
@@ -286,14 +290,19 @@ def test_direct_bank_transfer_save_preserves_json_without_alias_toggle(db_sessio
     )
 
     rows = _billing_rows(db_session)
+    assert (
+        rows["direct_bank_transfer_instructions"].value_text
+        == "Pay to the account below."
+    )
     assert "direct_bank_transfer_enabled" not in rows
-    assert rows["direct_bank_transfer_bank_name"].value_text == "GTBank"
-    # The accounts blob is a JSON *string* held in value_text (not value_json)
-    # so the customer-portal readers keep working.
-    accounts_row = rows["direct_bank_transfer_accounts"]
-    assert accounts_row.value_type == SettingValueType.string
-    assert accounts_row.value_json is None
-    assert '"bank_name": "GTBank"' in accounts_row.value_text
+    for retired in (
+        "direct_bank_transfer_accounts",
+        "direct_bank_transfer_bank_name",
+        "direct_bank_transfer_account_name",
+        "direct_bank_transfer_account_number",
+        "direct_bank_transfer_sort_code",
+    ):
+        assert retired not in rows, f"{retired} must no longer be written"
 
 
 def test_direct_bank_transfer_save_ignores_retired_alias_field(db_session):
@@ -309,13 +318,23 @@ def test_direct_bank_transfer_save_ignores_retired_alias_field(db_session):
 def test_reminders_save_roundtrips_raw_strings(db_session):
     web_system_config_service.save_reminders(
         db_session,
-        {"reminders_enabled": "yes", "reminder_channel": "email"},
+        {"reminders_enabled": "yes", "reminder_send_time": "09:00"},
     )
 
     rows = _collections_rows(db_session)
     assert rows["reminders_enabled"].value_text == "yes"
     assert rows["reminders_enabled"].value_type == SettingValueType.string
-    assert rows["reminder_channel"].value_text == "email"
+    assert rows["reminder_send_time"].value_text == "09:00"
+
+
+def test_reminders_save_ignores_channel_selection(db_session):
+    """Channel selection belongs to the notification channel policy alone."""
+    web_system_config_service.save_reminders(
+        db_session,
+        {"reminders_enabled": "yes", "reminder_channel": "sms"},
+    )
+
+    assert "reminder_channel" not in _collections_rows(db_session)
 
 
 # --- 8.17 Billing notifications: send-hour is spec-backed ---
@@ -432,7 +451,7 @@ def test_modules_save_writes_canonical_feature_and_audit(db_session, monkeypatch
     monkeypatch.setattr(
         admin_system,
         "parse_form_data_sync",
-        lambda _request: {"control__billing.autopay": "off"},
+        lambda _request: {"control__network.ont_reconcile": "off"},
     )
     monkeypatch.setattr(
         admin_system,
@@ -445,7 +464,7 @@ def test_modules_save_writes_canonical_feature_and_audit(db_session, monkeypatch
     row = (
         db_session.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.modules)
-        .filter(DomainSetting.key == "billing_autopay")
+        .filter(DomainSetting.key == "network_ont_reconcile")
         .one()
     )
     assert response.status_code == 303

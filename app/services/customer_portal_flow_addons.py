@@ -40,12 +40,32 @@ from app.services import catalog as catalog_service
 from app.services.audit import AuditEvents
 from app.services.billing._common import get_account_credit_balance, lock_account
 from app.services.billing.adjustments import (
+    ACCOUNT_ADJUSTMENT_SCOPE,
+    AccountAdjustmentError,
+    AccountAdjustmentOrigin,
     AccountAdjustmentPreview,
-    AccountAdjustments,
+    ConfirmAccountAdjustmentCommand,
+    PreviewAccountAdjustmentQuery,
+    preview_account_adjustment,
+    stage_account_adjustment,
 )
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.customer_context import optional_customer_account_id
 from app.services.customer_financial_position import get_customer_financial_position
+from app.services.owner_commands import CommandContext
+
+
+def _adjustment_http_error(exc: AccountAdjustmentError) -> HTTPException:
+    status_code = {
+        "financial.account_adjustments.account_not_found": 404,
+        "financial.account_adjustments.invalid_configuration": 503,
+        "financial.account_adjustments.insufficient_funding": 402,
+        "financial.account_adjustments.stale_preview": 409,
+        "financial.account_adjustments.idempotency_conflict": 409,
+        "financial.account_adjustments.incomplete_evidence": 409,
+        "financial.account_adjustments.write_conflict": 409,
+    }.get(exc.code, 400)
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 def _addon_active_price(add_on: AddOn) -> tuple[Decimal, str]:
@@ -181,20 +201,25 @@ def _build_purchase_preview(
     origin_ref = f"{subscription.id}:{add_on.id}:{quantity}"
     adjustment_preview = None
     if charge > Decimal("0.00"):
-        adjustment_preview = AccountAdjustments.preview(
-            db,
-            AccountAdjustmentPreviewRequest(
-                account_id=subscription.subscriber_id,
-                category=LedgerCategory.custom_service,
-                amount=charge,
-                currency=currency,
-                memo=f"Add-on purchase: {add_on.name}"
-                + (f" x{quantity}" if quantity > 1 else ""),
-                reason="Customer-confirmed add-on purchase",
-            ),
-            origin="addon_purchase",
-            origin_ref=origin_ref,
-        )
+        try:
+            adjustment_preview = preview_account_adjustment(
+                db,
+                PreviewAccountAdjustmentQuery(
+                    request=AccountAdjustmentPreviewRequest(
+                        account_id=subscription.subscriber_id,
+                        category=LedgerCategory.custom_service,
+                        amount=charge,
+                        currency=currency,
+                        memo=f"Add-on purchase: {add_on.name}"
+                        + (f" x{quantity}" if quantity > 1 else ""),
+                        reason="Customer-confirmed add-on purchase",
+                    ),
+                    origin=AccountAdjustmentOrigin.addon_purchase,
+                    origin_ref=origin_ref,
+                ),
+            )
+        except AccountAdjustmentError as exc:
+            raise _adjustment_http_error(exc) from exc
         funding_before = adjustment_preview.prepaid_funding_before
         funding_after = adjustment_preview.prepaid_funding_after
         receivables = adjustment_preview.postpaid_receivables
@@ -479,24 +504,32 @@ def purchase_addon(
     adjustment_result = None
     if preview.adjustment_preview is not None:
         adjustment_preview = preview.adjustment_preview
-        adjustment_result = AccountAdjustments.confirm(
-            db,
-            AccountAdjustmentConfirm(
-                account_id=adjustment_preview.account_id,
-                category=adjustment_preview.category,
-                amount=adjustment_preview.amount,
-                currency=adjustment_preview.currency,
-                memo=adjustment_preview.memo,
-                reason=adjustment_preview.reason,
-                preview_fingerprint=adjustment_preview.fingerprint,
-                idempotency_key=idempotency_key,
-            ),
-            origin="addon_purchase",
-            origin_ref=f"{subscription.id}:{preview.add_on.id}:{quantity}",
-            actor_type=AuditActorType.user,
-            actor_id=account_id,
-            commit=False,
-        )
+        try:
+            adjustment_result = stage_account_adjustment(
+                db,
+                ConfirmAccountAdjustmentCommand(
+                    context=CommandContext.system(
+                        actor=f"user:{account_id}",
+                        scope=ACCOUNT_ADJUSTMENT_SCOPE,
+                        reason="Customer confirmed an add-on purchase debit",
+                        idempotency_key=idempotency_key,
+                    ),
+                    confirmation=AccountAdjustmentConfirm(
+                        account_id=adjustment_preview.account_id,
+                        category=adjustment_preview.category,
+                        amount=adjustment_preview.amount,
+                        currency=adjustment_preview.currency,
+                        memo=adjustment_preview.memo,
+                        reason=adjustment_preview.reason,
+                        preview_fingerprint=adjustment_preview.fingerprint,
+                        idempotency_key=idempotency_key,
+                    ),
+                    origin=AccountAdjustmentOrigin.addon_purchase,
+                    origin_ref=f"{subscription.id}:{preview.add_on.id}:{quantity}",
+                ),
+            )
+        except AccountAdjustmentError as exc:
+            raise _adjustment_http_error(exc) from exc
         sub_add_on.account_adjustment_id = adjustment_result.adjustment.id
 
     # Data top-up: stamp its validity window and credit the purchased GB to the

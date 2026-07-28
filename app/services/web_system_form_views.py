@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.services import rbac as rbac_service
+from app.services import rbac_catalog
 from app.services import web_system_role_forms as web_system_role_forms_service
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,10 @@ def get_permission_new_form_context() -> dict:
 def get_permission_edit_form_context(db: Session, permission_id: str) -> dict | None:
     """Return template context fragment for permission edit form, or None if missing."""
     try:
-        permission = rbac_service.permissions.get(db, permission_id)
-    except Exception:
+        permission = rbac_catalog.get_permission(db, UUID(permission_id))
+    except (TypeError, ValueError):
+        return None
+    if permission is None:
         return None
     return {
         "permission": permission,

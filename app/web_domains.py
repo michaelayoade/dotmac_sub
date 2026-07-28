@@ -55,9 +55,7 @@ from app.services import (
 from app.services import (
     radius as radius_service,
 )
-from app.services import (
-    rbac as rbac_service,
-)
+from app.services import rbac_catalog
 from app.services import (
     scheduler as scheduler_service,
 )
@@ -251,7 +249,7 @@ def subscribers_home(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/rbac", response_class=HTMLResponse)
 def rbac_home(request: Request, db: Session = Depends(get_db)):
-    items = rbac_service.roles.list(
+    items = rbac_catalog.list_roles(
         db=db,
         is_active=None,
         order_by="created_at",

@@ -8,15 +8,15 @@ from app.services import billing_automation
 from app.services.events.types import EventType
 
 
-def _enable_inline_settle(db) -> None:
-    """Opt into the runner's inline credit-settle (default OFF kill-switch)."""
+def _record_retired_inline_settle_row(db) -> None:
+    """Retain a legacy row in fixtures; the invoice owner ignores it."""
     from app.models.domain_settings import DomainSetting, SettingDomain
 
     db.add(
         DomainSetting(
             domain=SettingDomain.billing,
             key="settle_credit_on_invoice_enabled",
-            value_text="true",
+            value_text="false",
         )
     )
     db.commit()
@@ -705,6 +705,7 @@ class TestRunInvoiceCycle:
 
     def test_dry_run_no_changes(self, db_session, subscription, subscriber_account):
         """Test dry run doesn't create invoices."""
+        from app.models.billing import Invoice
         from app.models.catalog import (
             BillingCycle,
             OfferPrice,
@@ -734,6 +735,8 @@ class TestRunInvoiceCycle:
         )
         db_session.add(offer_price)
         db_session.commit()
+        original_next_billing_at = subscription.next_billing_at
+        invoice_count_before = db_session.query(Invoice).count()
 
         # Run dry mode - pass naive run_at to match SQLite
         summary = billing_automation.run_invoice_cycle(
@@ -742,7 +745,9 @@ class TestRunInvoiceCycle:
 
         assert summary["run_id"] is None
         assert summary["subscriptions_scanned"] >= 1
-        # No actual invoices created in dry_run
+        assert db_session.query(Invoice).count() == invoice_count_before
+        assert subscription.next_billing_at == original_next_billing_at
+        assert subscription not in db_session.dirty
 
     def test_creates_invoice_for_active_subscription(
         self, db_session, subscription, subscriber_account
@@ -888,7 +893,7 @@ class TestRunInvoiceCycle:
             billing_automation._period_end(period_start, BillingCycle.monthly)
         )
 
-    def test_skips_prepaid_invoice_when_paid_coverage_overlaps(
+    def test_scheduled_invoice_cycle_does_not_touch_prepaid_paid_coverage(
         self, db_session, subscription, subscriber_account
     ):
         from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
@@ -899,7 +904,6 @@ class TestRunInvoiceCycle:
             PriceType,
             SubscriptionStatus,
         )
-        from app.models.domain_settings import DomainSetting, SettingDomain
         from app.models.subscriber import AccountStatus
 
         run_at = datetime(2026, 6, 28, tzinfo=UTC).replace(tzinfo=None)
@@ -913,11 +917,6 @@ class TestRunInvoiceCycle:
         subscriber_account.status = AccountStatus.active
         db_session.add_all(
             [
-                DomainSetting(
-                    domain=SettingDomain.modules,
-                    key="billing_prepaid_monthly_invoicing",
-                    value_text="true",
-                ),
                 OfferPrice(
                     offer_id=subscription.offer_id,
                     price_type=PriceType.recurring,
@@ -969,9 +968,10 @@ class TestRunInvoiceCycle:
         )
         assert len(invoices) == 1
         assert summary["invoices_created"] == 0
-        assert summary["skipped"] == 1
+        assert summary["skipped"] == 0
+        assert summary["prepaid_skipped"] == 1
         db_session.refresh(subscription)
-        assert subscription.next_billing_at == paid_until
+        assert subscription.next_billing_at == run_at
 
     def test_applies_existing_credit_to_new_invoice(
         self, db_session, subscription, subscriber_account
@@ -1046,7 +1046,7 @@ class TestRunInvoiceCycle:
             )
         )
         db_session.commit()
-        _enable_inline_settle(db_session)
+        _record_retired_inline_settle_row(db_session)
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
@@ -1135,7 +1135,7 @@ class TestRunInvoiceCycle:
             )
         )
         db_session.commit()
-        _enable_inline_settle(db_session)
+        _record_retired_inline_settle_row(db_session)
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
@@ -1190,11 +1190,10 @@ class TestRunInvoiceCycle:
         db_session.refresh(subscription)
         assert subscription.next_billing_at.replace(tzinfo=None) > now_naive
 
-    def test_bill_backdated_periods_setting_restores_arrears(
+    def test_retired_bill_backdated_periods_row_cannot_restore_arrears(
         self, db_session, subscription, subscriber_account
     ):
-        """billing.bill_backdated_periods=true opts back into arrears billing
-        of the oldest unbilled period."""
+        """Historical arrears require reviewed repair, not a stale setting row."""
         from app.models.billing import Invoice
         from app.models.catalog import (
             BillingCycle,
@@ -1240,7 +1239,7 @@ class TestRunInvoiceCycle:
             .one()
         )
         period_start = invoice.billing_period_start.replace(tzinfo=None)
-        assert period_start < now_naive - timedelta(days=150)
+        assert period_start > now_naive - timedelta(days=31)
 
     def test_bills_recurring_addon_on_invoice(
         self, db_session, subscription, subscriber_account
@@ -1663,15 +1662,14 @@ class TestRunInvoiceCycle:
 
         monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
         monkeypatch.setattr(
-            billing_automation, "_hourly_notifications_enabled", lambda db: False
-        )
-        monkeypatch.setattr(
             billing_automation.enforcement_window,
             "within_send_window",
             lambda db, run_at: True,
         )
 
-        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        summary = billing_automation.run_billing_notifications(
+            db_session, run_at=run_at
+        )
         db_session.refresh(invoice)
 
         assert summary["invoice_reminders_sent"] == 1
@@ -1761,15 +1759,6 @@ class TestRunInvoiceCycle:
             calls.append((args[1], args[2]))
 
         monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
-        monkeypatch.setattr(
-            billing_automation, "_hourly_notifications_enabled", lambda db: False
-        )
-        monkeypatch.setattr(
-            billing_automation.enforcement_window,
-            "within_send_window",
-            lambda db, run_at: True,
-        )
-
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         db_session.refresh(invoice)
 
@@ -2513,8 +2502,8 @@ class TestMarkOverdueReconciliationHold:
         assert result["skipped_on_hold"] >= 1
 
 
-class TestBillingKillSwitch:
-    """billing.billing_enabled=false stops the write path but not dry-run."""
+class TestPermanentBillingLifecycle:
+    """A stale billing_enabled row cannot stop the canonical invoice owner."""
 
     def _disable(self, db_session):
         from app.models.domain_settings import DomainSetting, SettingDomain
@@ -2531,7 +2520,7 @@ class TestBillingKillSwitch:
         )
         db_session.commit()
 
-    def test_disabled_blocks_invoice_creation(
+    def test_retired_false_row_does_not_block_invoice_creation(
         self, db_session, subscription, subscriber_account
     ):
         from app.models.billing import Invoice
@@ -2562,15 +2551,15 @@ class TestBillingKillSwitch:
         self._disable(db_session)
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=now)
-        assert summary.get("billing_disabled") is True
+        assert not summary.get("billing_disabled")
         assert (
             db_session.query(Invoice)
             .filter(Invoice.account_id == subscriber_account.id)
             .count()
-            == 0
+            >= 1
         )
 
-    def test_disabled_still_allows_dry_run(
+    def test_retired_false_row_does_not_block_dry_run(
         self, db_session, subscription, subscriber_account
     ):
         from app.models.catalog import (
@@ -2602,10 +2591,14 @@ class TestBillingKillSwitch:
         summary = billing_automation.run_invoice_cycle(
             db_session, run_at=now, dry_run=True
         )
-        # dry-run is exempt: it still computes would-be work (reported via
-        # subscriptions_billed / lines_created, not invoices_created).
+        # Dry-run is exempt and now returns the exact review scope consumed by
+        # the staff batch preview.
         assert not summary.get("billing_disabled")
         assert summary["subscriptions_billed"] >= 1
+        assert summary["invoices_created"] >= 1
+        assert summary["accounts_affected"] >= 1
+        assert summary["subscriptions"][0]["id"] == str(subscription.id)
+        assert summary["totals_by_currency"]["USD"] == Decimal("100.00")
 
 
 # =============================================================================
@@ -2840,11 +2833,12 @@ class TestProratedInvoiceIdempotency:
         assert len(lines) == 1
 
 
-class TestPrepaidDraftUntilFunded:
-    """Item 1 of PREPAID_INVOICE_DEPOSIT_ALIGNMENT: prepaid advance invoices stay
-    DRAFT (not AR) until the deposit funds them. This is now the only scheduled
-    runner behavior for prepaid monthly invoices; postpaid AR logic must not be
-    reused for prepaid renewals."""
+class RetiredPrepaidDraftUntilFunded:
+    """Historical tests retained as non-collected migration evidence.
+
+    This draft-invoice implementation is retired by migration 392 and must not
+    be collected or re-enabled. New prepaid periods belong exclusively to the
+    debit + entitlement renewal owner."""
 
     def _setup_prepaid_monthly(self, db_session, subscription, subscriber_account):
         from app.models.catalog import (

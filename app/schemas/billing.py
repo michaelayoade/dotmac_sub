@@ -21,6 +21,7 @@ from app.models.billing import (
     PaymentChannelType,
     PaymentMethodType,
     PaymentProviderEventFinancialEffect,
+    PaymentProviderEventSource,
     PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentRefundOrigin,
@@ -481,6 +482,7 @@ class PaymentBase(BaseModel):
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     provider_id: UUID | None = None
+    provider_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
     # Bound is create-only (see InvoiceBase); base stays unbounded for *Read.
     amount: Decimal
     currency: str = Field(default="NGN", min_length=3, max_length=3)
@@ -519,16 +521,6 @@ class PaymentCreationAllocationEffectRead(BaseModel):
     ledger_source: LedgerSource
 
 
-class PaymentPrepaidServiceEffectRead(BaseModel):
-    subscription_id: UUID
-    charge_amount: Decimal
-    period_start: datetime
-    period_end: datetime
-    ledger_entry_type: LedgerEntryType | None = None
-    ledger_source: LedgerSource | None = None
-    consequence: str
-
-
 class PaymentCreationPreviewRead(BaseModel):
     account_id: UUID
     amount: Decimal
@@ -542,7 +534,6 @@ class PaymentCreationPreviewRead(BaseModel):
     unallocated_amount: Decimal
     unallocated_ledger_entry_type: LedgerEntryType | None = None
     unallocated_ledger_source: LedgerSource | None = None
-    prepaid_service_effect: PaymentPrepaidServiceEffectRead | None = None
     access_consequence: str
     fingerprint: str
 
@@ -1069,6 +1060,33 @@ class TopupEligibleInvoice(BaseModel):
     currency: str
 
 
+class TopupPreviewInvoiceApplication(BaseModel):
+    invoice_id: UUID
+    invoice_number: str | None = None
+    currency: str
+    amount_applied: Decimal
+    outstanding_after_application: Decimal
+
+
+class TopupPreviewResponse(BaseModel):
+    account_id: UUID
+    currency: str = "NGN"
+    current_account_credit: Decimal
+    requested_deposit: Decimal
+    eligible_invoice_count: int
+    invoice_applications: list[TopupPreviewInvoiceApplication] = Field(
+        default_factory=list
+    )
+    total_applied_to_invoices: Decimal = Decimal("0.00")
+    total_outstanding_after_application: Decimal = Decimal("0.00")
+    remaining_account_credit: Decimal = Decimal("0.00")
+    projected_available_credit: Decimal = Decimal("0.00")
+    allocation_policy: str = "credit_only"
+    credit_application_policy: str = "pay_eligible_invoices"
+    policy_version: int = 1
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+
+
 class TopupPageResponse(BaseModel):
     provider_type: str
     provider_public_key: str | None = None
@@ -1089,6 +1107,10 @@ class TopupPageResponse(BaseModel):
     direct_bank_transfer: DirectBankTransferConfig | None = None
 
 
+class TopupPreviewRequest(BaseModel):
+    amount: Decimal = Field(gt=0)
+
+
 class TopupInitiateRequest(BaseModel):
     amount: Decimal = Field(gt=0)
     # Which online gateway to checkout with when paying by a new card. Defaults
@@ -1099,6 +1121,7 @@ class TopupInitiateRequest(BaseModel):
     # against a double-tap (a replay returns the original intent).
     payment_method_id: UUID | None = None
     idempotency_key: str | None = None
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
 
 
 class TopupInitiateResponse(BaseModel):
@@ -1131,9 +1154,12 @@ class TopupVerifyResponse(BaseModel):
     currency: str = "NGN"
     already_recorded: bool = False
     available_balance: Decimal | None = None
+    amount_credited: Decimal | None = None
+    prepaid_amount_applied: Decimal = Decimal("0.00")
     credit_added: Decimal | None = None
     allocated_total: Decimal = Decimal("0.00")
     allocated_to_invoices: list[dict[str, Any]] = Field(default_factory=list)
+    renewed_services: list[dict[str, Any]] = Field(default_factory=list)
     card_saved: bool | None = None
     card_save_message: str | None = None
 
@@ -1209,17 +1235,6 @@ class PaymentProviderBase(BaseModel):
     notes: str | None = None
 
 
-class PaymentProviderCreate(PaymentProviderBase):
-    pass
-
-
-class PaymentProviderUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=160)
-    provider_type: PaymentProviderType | None = None
-    is_active: bool | None = None
-    notes: str | None = None
-
-
 class PaymentProviderRead(PaymentProviderBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1255,6 +1270,13 @@ class PaymentProviderEventRead(PaymentProviderEventBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    source: PaymentProviderEventSource
+    observation_digest: str | None = Field(default=None, min_length=64, max_length=64)
+    observed_payment_status: PaymentStatus | None = None
+    provider_fee: Decimal = Decimal("0.00")
+    net_amount: Decimal | None = None
+    provider_reference: str | None = None
+    error_code: str | None = None
 
 
 class PaymentProviderEventIngest(BaseModel):
@@ -1335,7 +1357,7 @@ class AccountAdjustmentPreviewRequest(BaseModel):
     account_id: UUID
     category: LedgerCategory = LedgerCategory.other
     amount: Decimal = Field(gt=0)
-    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     memo: str = Field(min_length=3, max_length=500)
     reason: str = Field(min_length=3, max_length=1000)
 
@@ -1684,23 +1706,31 @@ class CollectionAccountBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     account_type: CollectionAccountType = CollectionAccountType.bank
     bank_name: str | None = Field(default=None, max_length=120)
-    account_last4: str | None = Field(default=None, max_length=4)
+    account_name: str | None = Field(default=None, max_length=200)
+    account_number: str | None = Field(default=None, max_length=64)
+    sort_code: str | None = Field(default=None, max_length=32)
+    accounting_code: str | None = Field(default=None, max_length=64)
+    presentment_priority: int = 0
     currency: str = Field(default="NGN", min_length=3, max_length=3)
-    is_active: bool = True
     notes: str | None = None
 
 
 class CollectionAccountCreate(CollectionAccountBase):
-    pass
+    model_config = ConfigDict(extra="forbid")
 
 
 class CollectionAccountUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=160)
     account_type: CollectionAccountType | None = None
     bank_name: str | None = Field(default=None, max_length=120)
-    account_last4: str | None = Field(default=None, max_length=4)
+    account_name: str | None = Field(default=None, max_length=200)
+    account_number: str | None = Field(default=None, max_length=64)
+    sort_code: str | None = Field(default=None, max_length=32)
+    accounting_code: str | None = Field(default=None, max_length=64)
+    presentment_priority: int | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
-    is_active: bool | None = None
     notes: str | None = None
 
 
@@ -1708,6 +1738,8 @@ class CollectionAccountRead(CollectionAccountBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    account_last4: str | None
+    is_active: bool
     created_at: datetime
     updated_at: datetime
 
@@ -1716,25 +1748,23 @@ class PaymentChannelBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     channel_type: PaymentChannelType = PaymentChannelType.other
     provider_id: UUID | None = None
-    default_collection_account_id: UUID | None = None
     fee_rules: dict | None = None
-    is_active: bool = True
-    is_default: bool = False
+    accounting_code: str | None = Field(default=None, max_length=64)
     notes: str | None = None
 
 
 class PaymentChannelCreate(PaymentChannelBase):
-    pass
+    model_config = ConfigDict(extra="forbid")
 
 
 class PaymentChannelUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=160)
     channel_type: PaymentChannelType | None = None
     provider_id: UUID | None = None
-    default_collection_account_id: UUID | None = None
     fee_rules: dict | None = None
-    is_active: bool | None = None
-    is_default: bool | None = None
+    accounting_code: str | None = Field(default=None, max_length=64)
     notes: str | None = None
 
 
@@ -1742,6 +1772,8 @@ class PaymentChannelRead(PaymentChannelBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    is_active: bool
+    is_default: bool
     created_at: datetime
     updated_at: datetime
 
@@ -1751,27 +1783,27 @@ class PaymentChannelAccountBase(BaseModel):
     collection_account_id: UUID
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     priority: int = 0
-    is_default: bool = False
-    is_active: bool = True
 
 
 class PaymentChannelAccountCreate(PaymentChannelAccountBase):
-    pass
+    model_config = ConfigDict(extra="forbid")
 
 
 class PaymentChannelAccountUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     channel_id: UUID | None = None
     collection_account_id: UUID | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     priority: int | None = None
-    is_default: bool | None = None
-    is_active: bool | None = None
 
 
 class PaymentChannelAccountRead(PaymentChannelAccountBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    is_default: bool
+    is_active: bool
     created_at: datetime
     updated_at: datetime
 
@@ -1806,6 +1838,7 @@ class BillingAccountRead(BillingAccountBase):
 
 class BillingAccountConsolidatedPaymentCreate(BaseModel):
     amount: Decimal = Field(gt=0)
+    provider_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     paid_at: datetime | None = None
     memo: str | None = None

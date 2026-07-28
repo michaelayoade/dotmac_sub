@@ -180,11 +180,24 @@
                     </div>
 
                     <div>
-                        <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">Lifecycle State</span>
+                        <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Lifecycle State</label>
+                        {% if is_new %}
+                        {% set selected_status = subscription.requested_status or subscription.status or 'pending' %}
+                        <select name="status" id="status"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="pending" {% if selected_status == 'pending' %}selected{% endif %}>Pending</option>
+                            <option value="active" {% if selected_status == 'active' %}selected{% endif %}>Active</option>
+                            <option value="suspended" {% if selected_status == 'suspended' %}selected{% endif %}>Suspended</option>
+                            <option value="disabled" {% if selected_status == 'disabled' %}selected{% endif %}>Disabled</option>
+                            <option value="canceled" {% if selected_status == 'canceled' %}selected{% endif %}>Canceled</option>
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500">Pending creates the subscription without starting service or billing.</p>
+                        {% else %}
                         <div class="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900/40 dark:text-slate-300">
-                            {{ subscription.status | title if subscription.id else 'Pending' }}
+                            {{ subscription.status | title }}
                         </div>
-                        <input type="hidden" name="status" value="{{ subscription.status if subscription.id else 'pending' }}">
+                        <input type="hidden" name="status" value="{{ subscription.status }}">
+                        {% endif %}
                     </div>
 
                     <div>
@@ -596,14 +609,6 @@
                 <h2 class="font-semibold text-slate-900 dark:text-white">Quick Options</h2>
             </div>
             <div class="p-6 space-y-4">
-                <label class="flex items-start gap-3 cursor-pointer">
-                    <input type="checkbox" name="activate_immediately" value="1"
-                           class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                    <div>
-                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Activate after creation</span>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Pending to Active; billing starts; access authorized</p>
-                    </div>
-                </label>
                 <label class="flex items-start gap-3 cursor-pointer">
                     <input type="checkbox" name="generate_invoice" value="1"
                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">

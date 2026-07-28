@@ -50,26 +50,19 @@ else:
     celery_app.conf.update(get_celery_config())
     celery_app.conf.beat_schedule = build_beat_schedule()
 celery_app.conf.beat_scheduler = "app.celery_scheduler.DbScheduler"
-# How often DbScheduler rebuilds the schedule from the DB. The default 30s
-# meant ~2,880 full build_beat_schedule() passes/day (dozens of settings
-# queries each) against the cross-host Postgres. Schedule changes are rare;
-# 5 min is plenty responsive.
-celery_app.conf.beat_refresh_seconds = int(
-    os.getenv("CELERY_BEAT_REFRESH_SECONDS", "300")
-)
 celery_app.autodiscover_tasks(["app.tasks"])
 
 # Route critical OLT authorization and ACS/TR-069 tasks to dedicated queues.
 # This prevents ACS work from being starved by slow SNMP/polling/default tasks.
 celery_app.conf.task_routes = {
     "app.tasks.tr069.sync_all_acs_devices": {"queue": "acs"},
-    "app.tasks.tr069.execute_pending_jobs": {"queue": "acs"},
+    "app.tasks.tr069.reconcile_command_outcomes": {"queue": "acs"},
+    "app.tasks.tr069.execute_network_operation_job": {"queue": "acs"},
     "app.tasks.tr069.check_device_health": {"queue": "acs"},
     "app.tasks.tr069.refresh_ont_runtime_data": {"queue": "acs"},
     "app.tasks.tr069.cleanup_tr069_records": {"queue": "acs"},
     "app.tasks.tr069.cleanup_stale_genieacs_tasks": {"queue": "acs"},
     "app.tasks.tr069.scrape_genieacs_metrics": {"queue": "acs"},
-    "app.tasks.tr069.execute_bulk_action": {"queue": "acs"},
     "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "acs"},
     "app.tasks.tr069.apply_saved_ont_service_config": {"queue": "acs"},
     "app.tasks.tr069.apply_acs_config": {"queue": "acs"},
@@ -81,9 +74,12 @@ celery_app.conf.task_routes = {
     "app.tasks.bandwidth.process_bandwidth_stream": {"queue": "bandwidth"},
     "app.tasks.bandwidth.aggregate_to_metrics": {"queue": "bandwidth"},
     "app.tasks.bandwidth.flush_bandwidth_buffer": {"queue": "bandwidth"},
+    # Reachability observations and their status projection need reserved
+    # capacity: stale health data is customer-visible and must not wait behind
+    # long-running inventory/SSH collection on the ingestion queue.
+    "app.tasks.topology_sync.warm_topology_status": {"queue": "monitoring"},
+    "app.tasks.infrastructure_polling.run_infrastructure_poll": {"queue": "monitoring"},
     # High-volume ingestion tasks - dedicated queue
-    "app.tasks.topology_sync.warm_topology_status": {"queue": "ingestion"},
-    "app.tasks.infrastructure_polling.run_infrastructure_poll": {"queue": "ingestion"},
     "app.tasks.radius_health.run_radius_health_check": {"queue": "ingestion"},
     "app.tasks.customer_impact_metrics.export_customer_impact_metrics": {
         "queue": "ingestion"
@@ -94,6 +90,9 @@ celery_app.conf.task_routes = {
         "queue": "ingestion"
     },
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
+    "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications": {
+        "queue": "ingestion"
+    },
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
     # Operator-triggered writes must not wait behind long inventory and
@@ -105,6 +104,7 @@ celery_app.conf.task_routes = {
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
     "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},
+    "app.tasks.olt_mac_harvest.run_single_olt_mac_harvest": {"queue": "ingestion"},
     "app.tasks.ont_signal_observations.record_ont_observations": {"queue": "ingestion"},
     "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": {"queue": "ingestion"},
     "app.tasks.ont_runtime_status.refresh_huawei_olt_status": {"queue": "ingestion"},
@@ -163,14 +163,11 @@ celery_app.conf.task_queues = (
     Queue("tr069"),  # Dedicated OLT/TR-069 operations queue
     Queue("acs"),  # Dedicated GenieACS/TR-069 queue
     Queue("bandwidth"),  # High-volume bandwidth processing
+    Queue("monitoring"),  # Reserved device reachability/status processing
     Queue("ingestion"),  # High-volume data ingestion (usage, topology)
     Queue("crm"),  # CRM ticket/comment pull (external API paced)
     Queue("billing"),  # Daily business runners (billing/dunning/expiry/FUP)
 )
-
-# Ensure all tasks are registered by importing the tasks package
-import app.tasks  # noqa: E402, F401
-import app.tasks.nin_tasks  # noqa: E402, F401
 
 
 def _release_metadata() -> dict[str, str | None]:
@@ -467,3 +464,11 @@ def _log_task_retry(request=None, reason=None, einfo=None, **_kwargs):
         ),
         exc_info=einfo.exc_info if einfo is not None else None,
     )
+
+
+# Import task modules only after the Celery application's public helpers and
+# signal handlers are defined. Task modules import both ``celery_app`` and, in
+# some cases, ``enqueue_celery_task``; importing them earlier leaves those
+# helpers unavailable while this module is still initializing.
+import app.tasks  # noqa: E402, F401
+import app.tasks.nin_tasks  # noqa: E402, F401

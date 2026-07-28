@@ -19,8 +19,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.vendor_routes import InstallationProjectStatus
 from app.services import web_vendors as web_vendors_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import can, require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendors", tags=["web-admin-vendors"])
@@ -129,10 +130,28 @@ def vendor_create(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("inventory:read"))],
 )
-def vendor_detail(request: Request, vendor_id: str, db: Session = Depends(get_db)):
+def vendor_detail(
+    request: Request,
+    vendor_id: str,
+    project_search: str | None = Query(default=None, max_length=120),
+    project_status: InstallationProjectStatus | None = Query(default=None),
+    project_page: int = Query(default=1, ge=1),
+    project_per_page: int = Query(default=25, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
     context = _ctx(request, db, "vendors")
     context.update(
-        web_vendors_service.build_vendor_detail_context(db, vendor_id=vendor_id)
+        web_vendors_service.build_vendor_detail_context(
+            db,
+            vendor_id=vendor_id,
+            project_search=project_search,
+            project_status=project_status,
+            project_page=project_page,
+            project_per_page=project_per_page,
+            can_read_operations=can(request, "inventory:read"),
+            can_read_routes=can(request, "network:fiber:read"),
+            can_read_financials=can(request, "finance:ap:read"),
+        )
     )
     return templates.TemplateResponse("admin/vendors/detail.html", context)
 
@@ -199,11 +218,81 @@ def vendor_update(
     )
 
 
+def _detail_with_error(request: Request, db: Session, vendor_id: str, error: str):
+    context = _ctx(request, db, "vendors")
+    context.update(
+        web_vendors_service.build_vendor_detail_context(
+            db,
+            vendor_id=vendor_id,
+            can_read_operations=can(request, "inventory:read"),
+            can_read_routes=can(request, "network:fiber:read"),
+            can_read_financials=can(request, "finance:ap:read"),
+        )
+    )
+    context["error"] = error
+    return templates.TemplateResponse(
+        "admin/vendors/detail.html", context, status_code=400
+    )
+
+
+@router.post(
+    "/{vendor_id}/users",
+    dependencies=[Depends(require_permission("inventory:write"))],
+)
+def vendor_user_create(
+    request: Request,
+    vendor_id: str,
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    email: str = Form(...),
+    role: str = Form(default="field"),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_vendors_service.add_vendor_user_from_form(
+            db,
+            vendor_id=vendor_id,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            role=role,
+        )
+    except ValueError as exc:
+        # The owner rejects before writing, so nothing to roll back here.
+        return _detail_with_error(request, db, vendor_id, _error_detail(exc))
+    return RedirectResponse(url=f"/admin/vendors/{vendor_id}", status_code=303)
+
+
+@router.post(
+    "/{vendor_id}/users/{membership_id}/revoke",
+    dependencies=[Depends(require_permission("inventory:write"))],
+)
+def vendor_user_revoke(
+    request: Request,
+    vendor_id: str,
+    membership_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        web_vendors_service.revoke_vendor_user(db, membership_id=membership_id)
+    except ValueError as exc:
+        return _detail_with_error(request, db, vendor_id, _error_detail(exc))
+    return RedirectResponse(url=f"/admin/vendors/{vendor_id}", status_code=303)
+
+
 @router.post(
     "/{vendor_id}/delete",
     dependencies=[Depends(require_permission("inventory:write"))],
 )
-def vendor_delete(vendor_id: str, db: Session = Depends(get_db)):
+def vendor_delete(request: Request, vendor_id: str, db: Session = Depends(get_db)):
     # Soft delete -- quotes and purchase invoices FK against the vendor.
-    web_vendors_service.deactivate_vendor(db, vendor_id)
+    try:
+        web_vendors_service.deactivate_vendor(db, vendor_id)
+    except ValueError as exc:
+        # The owner refuses a deactivation it cannot make stick (an unlinked
+        # field-vendor login would keep working). It rejects before touching
+        # the row, so there is nothing for this adapter to roll back — and
+        # owning a transaction here is exactly what the adapter boundary
+        # forbids. Just render the refusal.
+        return _detail_with_error(request, db, vendor_id, _error_detail(exc))
     return RedirectResponse(url="/admin/vendors", status_code=303)

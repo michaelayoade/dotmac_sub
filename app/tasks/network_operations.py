@@ -10,7 +10,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.engine import CursorResult
 
 from app.celery_app import celery_app
-from app.models.network_operation import NetworkOperation, NetworkOperationStatus
+from app.models.network_operation import (
+    NetworkOperation,
+    NetworkOperationStatus,
+    NetworkOperationType,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.network_operations import (
     _mark_operation_stale_failed,
@@ -77,6 +81,7 @@ def cleanup_old_operations() -> dict[str, int]:
                 ]
             ),
             NetworkOperation.completed_at < cutoff,
+            NetworkOperation.operation_type != NetworkOperationType.cpe_tr069_command,
             ~has_active_children,
             ~has_redrive_attempts,
         )
@@ -88,13 +93,14 @@ def cleanup_old_operations() -> dict[str, int]:
         # only non-terminal statuses are selected, so _check_not_terminal
         # is redundant. We skip the service layer for batch efficiency.
         stale_stmt = select(NetworkOperation).where(
+            NetworkOperation.operation_type != NetworkOperationType.cpe_tr069_command,
             NetworkOperation.status.in_(
                 [
                     NetworkOperationStatus.running,
                     NetworkOperationStatus.pending,
                     NetworkOperationStatus.waiting,
                 ]
-            )
+            ),
         )
         stale_ops = list(db.scalars(stale_stmt).all())
         stale_marked = 0

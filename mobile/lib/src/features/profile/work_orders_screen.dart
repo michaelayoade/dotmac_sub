@@ -4,10 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/work_order.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
+import '../../widgets/status_chip.dart';
 import 'technician_track_screen.dart';
 
 /// Technician Visits — the customer's field-service work orders (status,
-/// schedule, ETA, technician), served from the sub's local work-order mirror.
+/// schedule, ETA, technician and native project/task/ticket relationships).
 class WorkOrdersScreen extends StatelessWidget {
   const WorkOrdersScreen({super.key});
 
@@ -72,14 +73,6 @@ class _WorkOrderCard extends ConsumerWidget {
 
   final WorkOrderItem workOrder;
 
-  static const _statusColors = {
-    'scheduled': Colors.blue,
-    'dispatched': Colors.indigo,
-    'in_progress': Colors.orange,
-    'completed': Colors.green,
-    'canceled': Colors.red,
-  };
-
   static String _fmt(DateTime? dt) {
     if (dt == null) return '';
     final d =
@@ -92,9 +85,6 @@ class _WorkOrderCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final color = _statusColors[workOrder.status] ?? Colors.grey;
-    final terminal =
-        workOrder.status == 'completed' || workOrder.status == 'canceled';
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
@@ -112,19 +102,32 @@ class _WorkOrderCard extends ConsumerWidget {
                     ),
                   ),
                 ),
-                Chip(
-                  label: Text(
-                    workOrder.status.replaceAll('_', ' '),
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  backgroundColor: color.withValues(alpha: 0.15),
-                  side: BorderSide.none,
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+                StatusChip.fromPresentation(workOrder.statusPresentation),
               ],
             ),
             const SizedBox(height: 8),
+            if (workOrder.projectName != null)
+              _row(
+                theme,
+                Icons.account_tree_outlined,
+                'Project',
+                workOrder.projectName!,
+              ),
+            if (workOrder.projectTaskTitle != null)
+              _row(
+                theme,
+                Icons.task_alt_outlined,
+                'Task',
+                workOrder.projectTaskTitle!,
+              ),
+            if (workOrder.originTicketId != null)
+              _row(
+                theme,
+                Icons.support_agent_outlined,
+                'Ticket',
+                workOrder.originTicketNumber ??
+                    workOrder.originTicketId!.substring(0, 8),
+              ),
             if (workOrder.scheduledStart != null)
               _row(
                 theme,
@@ -132,7 +135,8 @@ class _WorkOrderCard extends ConsumerWidget {
                 'Scheduled',
                 _fmt(workOrder.scheduledStart),
               ),
-            if (workOrder.estimatedArrivalAt != null && !terminal)
+            if (workOrder.estimatedArrivalAt != null &&
+                workOrder.canTrackTechnician)
               _row(
                 theme,
                 Icons.schedule,
@@ -153,17 +157,17 @@ class _WorkOrderCard extends ConsumerWidget {
                 'Completed',
                 _fmt(workOrder.completedAt),
               ),
-            if (workOrder.status == 'in_progress' ||
-                workOrder.status == 'completed') ...[
+            if (workOrder.canTrackTechnician ||
+                workOrder.canRateTechnician) ...[
               const SizedBox(height: 8),
               Align(
                 alignment: Alignment.centerRight,
-                child: workOrder.status == 'in_progress'
+                child: workOrder.canTrackTechnician
                     ? FilledButton.tonalIcon(
                         onPressed: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
                             builder: (_) => TechnicianTrackScreen(
-                              workOrderId: workOrder.id,
+                              workOrderId: workOrder.publicId,
                             ),
                           ),
                         ),
@@ -199,7 +203,7 @@ class _WorkOrderCard extends ConsumerWidget {
     try {
       final res = await ref
           .read(workOrderRepositoryProvider)
-          .rateTechnician(wo.id, rating: rating, comment: comment);
+          .rateTechnician(wo.publicId, rating: rating, comment: comment);
       messenger.showSnackBar(
         SnackBar(
           content: Text(

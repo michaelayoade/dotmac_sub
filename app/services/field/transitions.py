@@ -213,20 +213,56 @@ class FieldTransitions:
             event_payload,
         )
         if event_value in {"complete", "unable_to_complete"}:
-            # The handoff projection shares this transaction: field outcome
-            # evidence and the official ticket timeline cannot drift apart.
+            # The field outcome is this owner's committed output. It stages
+            # atomically with the transition; the support lifecycle
+            # projection handler delivers it to the handoff owner's receipted
+            # consumer, which appends the ticket timeline evidence. Field
+            # completion never changes ticket status.
             db.flush()
-            from app.services import ticket_work_order_handoff
+            from app.services.events import EventType, emit_event
 
-            ticket_work_order_handoff.stage_field_outcome(
+            emit_event(
+                db,
+                EventType.work_order_field_outcome_recorded,
+                {
+                    "work_order_id": str(row.id),
+                    "origin_ticket_id": str(row.origin_ticket_id)
+                    if row.origin_ticket_id
+                    else None,
+                    "field_event_id": str(event_row.id),
+                    "outcome": event_value,
+                    "occurred_at": occurred.isoformat(),
+                    "note": event_row.note,
+                    "actor_id": str(profile.system_user_id or profile.person_id),
+                },
+                actor=str(profile.system_user_id or profile.person_id),
+                subscriber_id=row.subscriber_id,
+            )
+        if event_value in {"en_route", "arrived", "complete", "unable_to_complete"}:
+            from app.services import customer_experience_communications
+
+            db.flush()
+            customer_experience_communications.request_field_event(
                 db,
                 work_order=row,
-                field_event_id=event_row.id,
                 event=event_value,
-                occurred_at=occurred,
-                note=event_row.note,
-                actor_id=profile.system_user_id or profile.person_id,
+                field_event_id=event_row.id,
             )
+        if event_value in {"en_route", "complete", "unable_to_complete"}:
+            # The customer's chat opens when their technician sets off and
+            # closes when the visit ends, so it shares this transaction: a job
+            # that departed must not be missing the chat that departure grants.
+            from app.services import team_inbox_field_job
+
+            db.flush()
+            if event_value == "en_route":
+                team_inbox_field_job.open_for_departure(
+                    db, work_order=row, profile=profile, now=occurred
+                )
+            else:
+                team_inbox_field_job.close_for_work_order(
+                    db, work_order=row, reason=event_value, now=occurred
+                )
         try:
             db.commit()
         except IntegrityError:

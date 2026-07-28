@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy.orm import Session
@@ -12,7 +13,11 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.enforcement_lock import EnforcementReason
+from app.models.enforcement_lock import (
+    AccessRestrictionMode,
+    EnforcementLock,
+    EnforcementReason,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import (
     ALLOWED_RESTORERS,
@@ -26,6 +31,7 @@ from app.services.account_lifecycle import (
     transition_account_status,
 )
 from app.services.events import emit_event
+from app.services.events.dispatcher import EventDispatcher
 from app.services.events.types import EventType
 
 
@@ -67,6 +73,7 @@ def _make_subscription(
         "offer_id": offer.id,
         "status": SubscriptionStatus.active,
         "billing_mode": BillingMode.prepaid,
+        "unit_price": Decimal("100.00"),
     }
     defaults.update(kwargs)
     sub = Subscription(**defaults)
@@ -668,7 +675,10 @@ class TestComputeAccountStatus:
 
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
-        _make_subscription(db_session, subscriber, offer)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
+
+        ensure_test_prepaid_contract(db_session, subscription)
         self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=8000)
         db_session.add(
             DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
@@ -686,7 +696,10 @@ class TestComputeAccountStatus:
 
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
-        _make_subscription(db_session, subscriber, offer)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
+
+        ensure_test_prepaid_contract(db_session, subscription)
         self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=2000)
         db_session.add(
             DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
@@ -819,6 +832,107 @@ class TestDuplicateLockPrevention:
         )
 
         assert lock1.id == lock2.id  # Same lock returned
+
+    def test_existing_lock_repairs_active_subscription_and_parent(self, db_session):
+        """Lock idempotency must not preserve active service-state drift."""
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        existing = EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.prepaid,
+            access_mode=AccessRestrictionMode.captive,
+            source="legacy-drift",
+            is_active=True,
+        )
+        db_session.add(existing)
+        db_session.flush()
+
+        lock = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            access_mode=AccessRestrictionMode.hard_reject,
+            emit=False,
+        )
+
+        assert lock.id == existing.id
+        assert lock.access_mode == AccessRestrictionMode.hard_reject
+        assert subscription.status == SubscriptionStatus.suspended
+        assert subscriber.status == SubscriberStatus.suspended
+        assert (
+            db_session.query(EnforcementLock)
+            .filter(EnforcementLock.subscription_id == subscription.id)
+            .count()
+            == 1
+        )
+
+        repeated = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            access_mode=AccessRestrictionMode.hard_reject,
+            emit=False,
+        )
+
+        assert repeated.id == existing.id
+        assert subscription.status == SubscriptionStatus.suspended
+        assert subscriber.status == SubscriberStatus.suspended
+        assert (
+            db_session.query(EnforcementLock)
+            .filter(EnforcementLock.subscription_id == subscription.id)
+            .count()
+            == 1
+        )
+
+    def test_existing_lock_status_repair_emits_suspension_once(
+        self, db_session, monkeypatch
+    ):
+        """A repaired status emits its consequence, but never a duplicate lock."""
+        emitted: list[EventType] = []
+
+        def record_event(_db, event_type, _payload, **_kwargs):  # noqa: ANN001
+            emitted.append(event_type)
+            return None
+
+        monkeypatch.setattr("app.services.account_lifecycle.emit_event", record_event)
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        existing = EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.prepaid,
+            access_mode=AccessRestrictionMode.hard_reject,
+            source="legacy-drift",
+            is_active=True,
+        )
+        db_session.add(existing)
+        db_session.flush()
+
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            emit=True,
+        )
+
+        assert emitted == [EventType.subscription_suspended]
+
+        emitted.clear()
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.prepaid,
+            source="prepaid_balance_sweep",
+            emit=True,
+        )
+
+        assert emitted == []
 
 
 class TestRestoreWithReasonFilter:
@@ -988,6 +1102,97 @@ class TestEventEmission:
         event_types = [e[0] for e in emitted]
         assert EventType.enforcement_lock_resolved in event_types
         assert EventType.subscription_resumed in event_types
+
+    def test_suspend_delivery_waits_for_commit(self, db_session, monkeypatch):
+        """Lifecycle consequences cannot escape before the lock transaction."""
+        dispatched: list[uuid.UUID] = []
+
+        def record_dispatch(_self, _db, event_store_id):  # noqa: ANN001
+            dispatched.append(event_store_id)
+            return True
+
+        monkeypatch.setattr(
+            EventDispatcher,
+            "dispatch_pending_event",
+            record_dispatch,
+        )
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:post-commit-suspend",
+            emit=True,
+        )
+
+        assert dispatched == []
+        db_session.commit()
+        assert len(dispatched) == 2
+
+    def test_rolled_back_suspend_has_no_delivery(self, db_session, monkeypatch):
+        dispatched: list[uuid.UUID] = []
+
+        def record_dispatch(_self, _db, event_store_id):  # noqa: ANN001
+            dispatched.append(event_store_id)
+            return True
+
+        monkeypatch.setattr(
+            EventDispatcher,
+            "dispatch_pending_event",
+            record_dispatch,
+        )
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:rollback-suspend",
+            emit=True,
+        )
+        db_session.rollback()
+
+        assert dispatched == []
+
+    def test_rolled_back_restore_has_no_delivery(self, db_session, monkeypatch):
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:restore-setup",
+            emit=False,
+        )
+        db_session.commit()
+        dispatched: list[uuid.UUID] = []
+
+        def record_dispatch(_self, _db, event_store_id):  # noqa: ANN001
+            dispatched.append(event_store_id)
+            return True
+
+        monkeypatch.setattr(
+            EventDispatcher,
+            "dispatch_pending_event",
+            record_dispatch,
+        )
+
+        assert restore_subscription(
+            db_session,
+            str(subscription.id),
+            trigger="payment",
+            resolved_by="test:rollback-restore",
+            emit=True,
+        )
+        db_session.rollback()
+
+        assert dispatched == []
 
 
 class TestAllowedRestorers:

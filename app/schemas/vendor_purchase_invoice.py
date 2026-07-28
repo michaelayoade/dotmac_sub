@@ -42,7 +42,7 @@ class VendorPurchaseInvoiceLineRead(BaseModel):
 class VendorPurchaseInvoiceCreate(BaseModel):
     project_id: UUID
     invoice_number: str | None = Field(default=None, max_length=80)
-    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     tax_rate_percent: Decimal = Field(default=Decimal("0.00"), ge=0, le=100)
 
 
@@ -76,12 +76,20 @@ class VendorPurchaseInvoiceRead(BaseModel):
     attachment_file_name: str | None = None
     attachment_content_type: str | None = None
     attachment_file_size: int | None = None
-    erp_purchase_order_id: str | None = None
-    erp_purchase_invoice_id: str | None = None
-    erp_purchase_invoice_status: str | None = None
-    erp_sync_error: str | None = None
-    erp_synced_at: datetime | None = None
-    erp_attachment_synced_at: datetime | None = None
+    payables_system: str | None = None
+    procurement_order_reference: str | None = None
+    payables_document_reference: str | None = None
+    payables_document_status: str | None = None
+    payment_status: str | None = None
+    payment_total_amount: Decimal | None = None
+    payment_amount_paid: Decimal | None = None
+    payment_balance_due: Decimal | None = None
+    payment_observed_at: datetime | None = None
+    payment_source_updated_at: datetime | None = None
+    payment_observation_error: str | None = None
+    payables_submission_error: str | None = None
+    payables_submitted_at: datetime | None = None
+    payables_attachment_submitted_at: datetime | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime

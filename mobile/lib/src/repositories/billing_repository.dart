@@ -177,6 +177,14 @@ class BillingRepository {
     return TopupPage.fromJson(data as Map<String, dynamic>);
   }
 
+  /// POST /me/topup/preview — server-owned allocation preview for a deposit.
+  Future<TopupPreview> previewTopup(num amount) async {
+    final data = await guard(() => dio.post('/me/topup/preview', data: {
+          'amount': amount,
+        }));
+    return TopupPreview.fromJson(data as Map<String, dynamic>);
+  }
+
   /// POST /me/topup/initiate — start a prepaid top-up checkout.
   ///
   /// When [paymentMethodId] is given the server charges that saved card
@@ -186,12 +194,14 @@ class BillingRepository {
   /// new-card checkout; ignored for saved-card charges.
   Future<TopupInitiation> initiateTopup(
     num amount, {
+    required String previewFingerprint,
     String? provider,
     String? paymentMethodId,
     String? idempotencyKey,
   }) async {
     final data = await guard(() => dio.post('/me/topup/initiate', data: {
           'amount': amount,
+          'preview_fingerprint': previewFingerprint,
           if (provider != null) 'provider': provider,
           if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
           if (idempotencyKey != null) 'idempotency_key': idempotencyKey,

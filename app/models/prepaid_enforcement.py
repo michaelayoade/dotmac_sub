@@ -40,6 +40,12 @@ class PrepaidEnforcementReadiness(Base):
     reconstruction_evidence_sha256: Mapped[str] = mapped_column(
         String(64), nullable=False
     )
+    coverage_evidence_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="0" * 64
+    )
+    coverage_blocker_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     blocker_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     verified_by: Mapped[str] = mapped_column(String(120), nullable=False)
     verified_at: Mapped[datetime] = mapped_column(

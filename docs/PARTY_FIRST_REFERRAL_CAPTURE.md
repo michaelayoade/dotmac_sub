@@ -2,8 +2,11 @@
 
 ## Decision
 
-`referrals.program` owns Refer & Earn capture, conversion, qualification, and
-reward decisions. It uses `party.registry` for identity and reachability facts,
+`referrals.program` owns Refer & Earn capture policy, the canonical ReferralCode
+and Referral records, the Referral-to-Subscriber attachment record,
+qualification and reward policy, and atomic program-transition orchestration.
+`referrals.account_conversion` owns the cross-domain conversion command. It
+uses `party.registry` for identity and reachability facts,
 `sales.lead_lifecycle` for Lead identity and immutable origin, Subscriber
 services for accounts, and `financial.credit_notes` for reward issuance. CRM is
 not a decision owner or runtime participant.
@@ -49,9 +52,33 @@ not merge Parties, attach accounts, or deduplicate people across referrers.
 Shared or ambiguous contact values therefore never silently establish who a
 person is.
 
+## Command and transaction boundary
+
+Referral-code issuance, public capture, customer refer-a-friend, activation
+qualification, operator qualification, rejection, and reward issuance are
+typed commands. Each enters `execute_owner_command` once on a
+transaction-free adapter session. The owner locks the canonical row before a
+check-then-write decision:
+
+- code issuance locks the exact Subscriber;
+- capture locks the exact active ReferralCode before comparing a retry;
+- lifecycle transitions lock the Referral before Subscriber or financial
+  account state; and
+- the database code constraint arbitrates the vanishingly rare generated-code
+  collision.
+
+Party, Lead, Referral, credit-note, audit, and domain-event changes commit or
+roll back together. Exact replays return the canonical outcome without another
+Party, Lead, Referral, credit, audit row, or transition event. Events and audit
+metadata contain only canonical identifiers, state, bounded financial
+evidence, and command tracing; submitted contact/name/address/notes and the
+shareable referral code are excluded.
+
 ## Reviewed account conversion
 
-`Referrals.attach_subscriber` is the account-conversion command. It requires:
+`referrals.account_conversion` is the account-conversion command owner. Its
+transaction-neutral `Referrals.attach_subscriber_for_conversion` collaborator
+writes the canonical Referral attachment record and requires:
 
 - a Referral with complete Party-binding evidence;
 - a Subscriber with its own reviewed Party binding;
@@ -72,13 +99,14 @@ one transaction. Subscriber fields come only from an explicit account payload;
 Party contact points are never copied or matched automatically. See
 `docs/REFERRAL_ACCOUNT_CONVERSION.md`.
 
-Public capture also mints a 24-hour, PII-free signed continuation containing
-that exact UUID triple. Public signup verifies the signed envelope through
-`auth.token_signing`, revalidates canonical Referral state, and accepts only a
-narrow account payload with no status, reseller, billing, verification,
-numbering, authorization, or marketing-consent controls. The capability is
-continuity evidence, not contact or identity verification; the resulting Party
-stays quarantined.
+Public capture also mints a PII-free signed continuation containing that exact
+UUID triple. Public signup verifies the signed envelope through
+`auth.token_signing`, resolves its bounded lifetime only through
+`subscriber.referral_signup_context_expiry_minutes`, revalidates canonical
+Referral state, and accepts only a narrow account payload with no status,
+reseller, billing, verification, numbering, authorization, or
+marketing-consent controls. The capability is continuity evidence, not contact
+or identity verification; the resulting Party stays quarantined.
 
 Signup then requests a separate credential-enrollment email from
 `auth.customer_credential_enrollment`. The account is already committed before
@@ -97,6 +125,32 @@ cannot bypass Party-first account conversion. The reviewed Subscriber must be
 attached first; reward qualification cannot turn an unconverted contact into a
 customer fact.
 
+## Reward and communication consequence
+
+`financial.credit_notes` remains the money owner. Reward issuance uses its
+transaction-neutral preview, account lock, idempotency reservation, issued
+CreditNote, audit, and funding-ledger evidence. The exact historical
+`referral:<UUID>` reference remains the idempotency namespace, so replay can
+repair a Referral whose legacy credit was already issued without posting money
+again. A normal new payout emits `referral.reward_issued`; recovery of existing
+financial evidence emits `referral.reward_reconciled` and deliberately does not
+send another customer message.
+
+The reward owner never calls push or another delivery SDK. The versioned event
+flows through `communications.event_policy`, whose canonical editable template
+and channel policy create a deduplicated communication intent per event and
+channel. Transport retries therefore cannot repeat the reward decision or
+create a second intent.
+
+## Runtime policy
+
+Program enablement, reward amount/currency, qualification window,
+auto-approval, and share-base URL resolve only through `control.settings_spec`.
+Their defaults and bounds are declared only in the settings registry;
+`referrals.program`, API/web adapters, and documentation do not repeat runtime
+fallbacks. The code alphabet/length, field-size limits, exact lifecycle
+transition set, and event schema version remain protocol/model invariants.
+
 ## Legacy compatibility and rollout
 
 Revision 356 is additive. Existing Subscriber-only referrals and legacy
@@ -106,14 +160,16 @@ active-referred-Party guard.
 
 Before deploying the new capture path in an environment:
 
-1. deploy revisions 339 through 346 in order;
+1. deploy revisions 339 through 356 in order;
 2. verify new captures create no Subscriber rows and always have Party, Lead,
    binding evidence, and immutable referral origin;
 3. verify exact-Party conversion and mismatched-Party refusal;
 4. verify activation qualifies exact account links and never contact matches;
-5. measure legacy Subscriber-only and PII-in-metadata debt with the PII-free
+5. verify command replay, transaction rollback, legacy reward-credit recovery,
+   and deduplicated event notification evidence;
+6. measure legacy Subscriber-only and PII-in-metadata debt with the PII-free
    customer lifecycle audit; and
-6. plan any legacy cleanup as a separate reviewed, receipt-producing change.
+7. plan any legacy cleanup as a separate reviewed, receipt-producing change.
 
 This document authorizes no production migration, backfill,
 deployment, identity merge, or legacy metadata deletion.

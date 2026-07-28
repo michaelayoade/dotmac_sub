@@ -68,6 +68,114 @@ class SettingSpec(ListResponseMixin):
     is_secret: bool = False
 
 
+SCHEDULER_BOOLEAN_SETTING_KEYS = frozenset(
+    {
+        (SettingDomain.auth, "credential_rotation_enabled"),
+        (SettingDomain.audit, "cross_app_drift_detection_enabled"),
+        (SettingDomain.billing, "cutover_balance_audit_enabled"),
+        (SettingDomain.billing, "funded_inactive_exposure_audit_enabled"),
+        (SettingDomain.billing, "stale_overdue_lock_detect_enabled"),
+        (SettingDomain.catalog, "nas_backup_retention_enabled"),
+        (SettingDomain.comms, "oauth_token_refresh_enabled"),
+        (SettingDomain.network_monitoring, "infra_availability_prune_enabled"),
+        (SettingDomain.network_monitoring, "infra_availability_snapshot_enabled"),
+        (SettingDomain.notification, "ncc_report_email_enabled"),
+        (SettingDomain.notification, "operational_escalation_delivery_enabled"),
+        (SettingDomain.radius, "connectivity_shadow_audit_enabled"),
+        (SettingDomain.radius, "ip_consistency_audit_enabled"),
+        (SettingDomain.radius, "radius_sync_enabled"),
+        (SettingDomain.radius, "suspension_audit_enabled"),
+        (SettingDomain.scheduler, "event_old_cleanup_enabled"),
+        (SettingDomain.scheduler, "stale_infrastructure_check_enabled"),
+        (SettingDomain.usage, "bandwidth_processing_enabled"),
+        (SettingDomain.usage, "usage_rating_enabled"),
+    }
+)
+
+SCHEDULER_ENV_BOOTSTRAP_SETTING_KEYS = frozenset(
+    {
+        (SettingDomain.billing, "autopay_interval_seconds"),
+        (SettingDomain.billing, "billing_interval_seconds"),
+        (SettingDomain.billing, "cutover_balance_audit_interval_seconds"),
+        (SettingDomain.billing, "funded_inactive_exposure_audit_interval_seconds"),
+        (SettingDomain.billing, "overdue_check_interval_seconds"),
+        (SettingDomain.billing, "topup_reconciliation_interval_seconds"),
+        (SettingDomain.catalog, "scheduled_plan_change_interval_seconds"),
+        (SettingDomain.catalog, "scheduled_status_change_interval_seconds"),
+        (SettingDomain.catalog, "subscription_expiration_interval_seconds"),
+        (SettingDomain.catalog, "vacation_hold_resume_interval_seconds"),
+        (SettingDomain.collections, "arrangement_check_interval_seconds"),
+        (SettingDomain.collections, "billing_notifications_interval_seconds"),
+        (SettingDomain.collections, "dunning_interval_seconds"),
+        (SettingDomain.comms, "campaign_processing_interval_seconds"),
+        (SettingDomain.gis, "sync_interval_minutes"),
+        (
+            SettingDomain.integration,
+            "dotmac_erp_expense_status_refresh_interval_seconds",
+        ),
+        (
+            SettingDomain.integration,
+            "dotmac_erp_material_status_refresh_interval_seconds",
+        ),
+        (SettingDomain.integration, "dotmac_erp_outbox_interval_seconds"),
+        (
+            SettingDomain.integration,
+            "dotmac_erp_purchase_invoice_status_refresh_interval_seconds",
+        ),
+        (SettingDomain.network, "olt_profile_sync_interval_seconds"),
+        (SettingDomain.network_monitoring, "channel_health_interval_seconds"),
+        (
+            SettingDomain.network_monitoring,
+            "device_projection_reconcile_interval_seconds",
+        ),
+        (
+            SettingDomain.network_monitoring,
+            "infra_availability_prune_interval_seconds",
+        ),
+        (
+            SettingDomain.network_monitoring,
+            "infra_availability_snapshot_interval_seconds",
+        ),
+        (
+            SettingDomain.network_monitoring,
+            "monitoring_coverage_interval_seconds",
+        ),
+        (SettingDomain.notification, "notification_queue_interval_seconds"),
+        (
+            SettingDomain.notification,
+            "operational_escalation_delivery_interval_seconds",
+        ),
+        (SettingDomain.provisioning, "compensation_retry_interval_seconds"),
+        (SettingDomain.radius, "connectivity_shadow_audit_interval_seconds"),
+        (SettingDomain.radius, "ip_consistency_audit_interval_seconds"),
+        (SettingDomain.radius, "suspension_audit_interval_seconds"),
+        (SettingDomain.scheduler, "acs_task_soft_time_limit_seconds"),
+        (SettingDomain.scheduler, "acs_task_time_limit_seconds"),
+        (SettingDomain.scheduler, "beat_max_loop_interval"),
+        (SettingDomain.scheduler, "beat_refresh_seconds"),
+        (SettingDomain.scheduler, "crm_ticket_pull_interval_minutes"),
+        (SettingDomain.scheduler, "long_task_soft_time_limit_seconds"),
+        (SettingDomain.scheduler, "long_task_time_limit_seconds"),
+        (SettingDomain.scheduler, "result_expires_seconds"),
+        (SettingDomain.scheduler, "task_soft_time_limit_seconds"),
+        (SettingDomain.scheduler, "task_time_limit_seconds"),
+        (SettingDomain.scheduler, "timezone"),
+        (SettingDomain.scheduler, "worker_prefetch_multiplier"),
+        (SettingDomain.usage, "device_login_sync_interval_seconds"),
+        (SettingDomain.usage, "enforcement_reconciler_interval_seconds"),
+        (SettingDomain.usage, "fup_evaluation_interval_seconds"),
+        (SettingDomain.usage, "radius_accounting_import_interval_seconds"),
+        (
+            SettingDomain.usage,
+            "radius_active_session_reconcile_interval_seconds",
+        ),
+        (SettingDomain.usage, "radius_session_reap_interval_seconds"),
+        (SettingDomain.usage, "usage_metering_interval_seconds"),
+        (SettingDomain.usage, "usage_rating_interval_seconds"),
+    }
+)
+
+
 SETTINGS_SPECS: list[SettingSpec] = [
     SettingSpec(
         domain=SettingDomain.auth,
@@ -474,17 +582,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
-        # Hard gate: suppress customer notifications to terminal accounts
-        # (canceled/disabled get nothing) and non-actionable mail to walled
-        # accounts (suspended/blocked get only billing/account/service).
-        # Overrides per-subscriber preferences. Kill-switch, default on.
-        domain=SettingDomain.notification,
-        key="status_gate_enabled",
-        env_var="NOTIFICATION_STATUS_GATE_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
         domain=SettingDomain.notification,
         key="alert_notifications_default_channel",
         env_var="ALERT_NOTIFICATIONS_DEFAULT_CHANNEL",
@@ -580,13 +677,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.notification,
-        key="notification_queue_enabled",
-        env_var="NOTIFICATION_QUEUE_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
         key="notification_queue_interval_seconds",
         env_var="NOTIFICATION_QUEUE_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -647,13 +737,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.notification,
-        key="notification_quiet_hours_enabled",
-        env_var="NOTIFICATION_QUIET_HOURS_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
         key="notification_quiet_hours_start",
         env_var="NOTIFICATION_QUIET_HOURS_START",
         value_type=SettingValueType.string,
@@ -679,7 +762,39 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="notification_channel_policy",
         env_var=None,
         value_type=SettingValueType.json,
-        default={},
+        # Channel selection is owned here (communications.channel_policy), not in
+        # the event specs. This seeded default ships sensible multi-channel
+        # routing per category so a fresh/unconfigured deploy is not email-only;
+        # an operator edit in the admin matrix writes a DB row that overrides it.
+        # SMS is intentionally absent — it is retired and disabled; a future SMS
+        # plugin adds it back here per category. email is the always-available
+        # base; whatsapp is the approved, delivering channel.
+        # EVENT-level seed only — deliberately no global default and no category
+        # defaults. Both of those tiers outrank a caller's own default_channels,
+        # and several services pass deliberate per-call channel sets under
+        # common categories: FUP enforcement (category="fup", per-kind push),
+        # customer_experience_communications and the support resolution
+        # confirmation (category="service", whatsapp+push). A category seed
+        # silently hijacked those and dropped push.
+        #
+        # Event entries are keyed by template_code, so they can only affect the
+        # specific event-spec notifications they name and can never intercept
+        # another caller. These reproduce the exact channels those five
+        # push-native specs declared before channels moved out of the specs, so
+        # behaviour is unchanged. Every other spec event resolves to the email
+        # system fallback until an operator widens it in the admin matrix —
+        # which is where adding WhatsApp broadly belongs, as a deliberate
+        # decision rather than a blanket default. SMS appears nowhere: it is
+        # retired and disabled.
+        default={
+            "events": {
+                "referral_reward_issued": ["push"],
+                "usage_warning": ["push", "email"],
+                "usage_exhausted": ["push", "email"],
+                "service_extended": ["push", "email"],
+                "addon_expiring": ["push", "email"],
+            },
+        },
         label="Notification channel policy: {default: [], categories: {}, events: {}}",
     ),
     SettingSpec(
@@ -710,7 +825,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="fup_evaluation_interval_seconds",
         env_var="FUP_EVALUATION_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
-        default=900,
+        default=60,
         min_value=60,
     ),
     SettingSpec(
@@ -769,16 +884,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="dunning_enabled",
-        env_var="DUNNING_ENABLED",
-        value_type=SettingValueType.boolean,
-        # Compatibility name for the unified billing-enforcement runner. This
-        # is the single scheduled writer for dunning policy actions and
-        # subscription enforcement locks.
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="dunning_interval_seconds",
         env_var="DUNNING_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -796,26 +901,12 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="prepaid_blocking_time",
-        env_var="PREPAID_BLOCKING_TIME",
-        value_type=SettingValueType.string,
-        default="08:00",
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="billing_notif_send_hour",
         env_var="BILLING_NOTIF_SEND_HOUR",
         value_type=SettingValueType.integer,
         default=8,
         min_value=0,
         max_value=23,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="billing_notifications_hourly_enabled",
-        env_var="BILLING_NOTIFICATIONS_HOURLY_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -827,31 +918,19 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="billing_enforcement_health_gates_enabled",
-        env_var="BILLING_ENFORCEMENT_HEALTH_GATES_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
+        key="default_prepaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Prepaid Collections Policy Set",
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="billing_enforcement_require_notification_health",
-        env_var="BILLING_ENFORCEMENT_REQUIRE_NOTIFICATION_HEALTH",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="billing_enforcement_require_payment_health",
-        env_var="BILLING_ENFORCEMENT_REQUIRE_PAYMENT_HEALTH",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="billing_enforcement_settle_credit_before_dunning_enabled",
-        env_var="BILLING_ENFORCEMENT_SETTLE_CREDIT_BEFORE_DUNNING_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
+        key="default_postpaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Postpaid Collections Policy Set",
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -949,16 +1028,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
     ),
-    # Enforcement (suspend/block) time-of-day window. Mode is explicit so
-    # operators can validate would-gate evidence before enabling deferral.
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="enforcement_window_mode",
-        env_var="ENFORCEMENT_WINDOW_MODE",
-        value_type=SettingValueType.string,
-        default="audit",
-        allowed={"audit", "enforce"},
-    ),
+    # Enforcement (suspend/block) time-of-day window, applied every day.
     SettingSpec(
         domain=SettingDomain.collections,
         key="enforcement_window_start",
@@ -972,60 +1042,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="ENFORCEMENT_WINDOW_END",
         value_type=SettingValueType.string,
         default=None,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="enforcement_skip_weekends",
-        env_var="ENFORCEMENT_SKIP_WEEKENDS",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="enforcement_skip_holidays",
-        env_var="ENFORCEMENT_SKIP_HOLIDAYS",
-        value_type=SettingValueType.json,
-        default=[],
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_skip_weekends",
-        env_var="PREPAID_SKIP_WEEKENDS",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_skip_holidays",
-        env_var="PREPAID_SKIP_HOLIDAYS",
-        value_type=SettingValueType.json,
-        default=[],
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_enforcement_activation_at",
-        env_var="PREPAID_ENFORCEMENT_ACTIVATION_AT",
-        value_type=SettingValueType.string,
-        default="",
-        label="Prepaid enforcement activation time (ISO 8601)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_readiness_max_age_minutes",
-        env_var="PREPAID_READINESS_MAX_AGE_MINUTES",
-        value_type=SettingValueType.integer,
-        default=60,
-        min_value=1,
-        label="Prepaid funding readiness maximum age (minutes)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
-        key="prepaid_activation_max_grace_days",
-        env_var="PREPAID_ACTIVATION_MAX_GRACE_DAYS",
-        value_type=SettingValueType.integer,
-        default=0,
-        min_value=0,
-        label="Maximum prepaid grace allowed at activation (days)",
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -1119,14 +1135,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="This subscription follows dunning steps.",
     ),
     # Customer self-service
-    SettingSpec(
-        domain=SettingDomain.catalog,
-        key="customer_suspend_enabled",
-        env_var="CATALOG_CUSTOMER_SUSPEND_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Allow Customer Self-Service Vacation Hold",
-    ),
     SettingSpec(
         domain=SettingDomain.catalog,
         key="max_suspend_days",
@@ -1235,20 +1243,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
-        key="broker_url",
-        env_var="CELERY_BROKER_URL",
-        value_type=SettingValueType.string,
-        default="redis://localhost:6379/0",
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
-        key="result_backend",
-        env_var="CELERY_RESULT_BACKEND",
-        value_type=SettingValueType.string,
-        default="redis://localhost:6379/1",
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
         key="timezone",
         env_var="CELERY_TIMEZONE",
         value_type=SettingValueType.string,
@@ -1267,7 +1261,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="beat_refresh_seconds",
         env_var="CELERY_BEAT_REFRESH_SECONDS",
         value_type=SettingValueType.integer,
-        default=30,
+        default=300,
         min_value=5,
     ),
     SettingSpec(
@@ -1280,14 +1274,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
-        key="event_dispatch_enabled",
-        env_var="EVENT_DISPATCH_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Durable event outbox dispatch enabled",
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
         key="event_dispatch_interval_seconds",
         env_var="EVENT_DISPATCH_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -1295,6 +1281,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=10,
         max_value=300,
         label="Durable event outbox dispatch interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.workflow,
+        key="cx_acceptance_attention_hours",
+        env_var="CX_ACCEPTANCE_ATTENTION_HOURS",
+        value_type=SettingValueType.integer,
+        default=72,
+        min_value=1,
+        max_value=720,
+        label="CX handoff acceptance attention deadline (hours)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.scheduler,
+        key="durable_timer_dispatch_interval_seconds",
+        env_var="DURABLE_TIMER_DISPATCH_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=30,
+        max_value=600,
+        label="Durable timer due-trigger dispatch interval (seconds)",
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
@@ -1322,18 +1328,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=5,
         min_value=1,
         label="CRM Ticket Pull Interval (minutes)",
-    ),
-    SettingSpec(
-        # flip lever: gates the CRM work-order webhook branch, the
-        # work_order_mirror_reconcile beat, and the lazy mirror refresh
-        # (crm.work_order_pull in the control registry). Default ON — inert
-        # until the work-order SoT flip deliberately turns it off.
-        domain=SettingDomain.scheduler,
-        key="crm_work_order_pull_enabled",
-        env_var="CRM_WORK_ORDER_PULL_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="CRM Work-Order Pull Enabled",
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
@@ -1401,17 +1395,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Auto-generated RADIUS shared-secret length",
         min_value=16,
         max_value=64,
-    ),
-    SettingSpec(
-        domain=SettingDomain.radius,
-        key="enforce_stopped_disabled",
-        env_var="RADIUS_ENFORCE_STOPPED_DISABLED",
-        value_type=SettingValueType.boolean,
-        # Default OFF: enabling it makes a transition to stopped/disabled
-        # actively disconnect the subscriber (walled-garden / removed) instead
-        # of waiting for the orphan sweep. Roll out deliberately after checking
-        # the would-disconnect audit log + suspension audit.
-        default=False,
     ),
     SettingSpec(
         domain=SettingDomain.radius,
@@ -1502,6 +1485,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
         label="Project Subscriber Access-State Groups",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="simultaneous_use_enforcement_enabled",
+        env_var="RADIUS_SIMULTANEOUS_USE_ENFORCEMENT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Enforce Per-Login RADIUS Session Limit",
     ),
     SettingSpec(
         domain=SettingDomain.radius,
@@ -1675,34 +1666,19 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="withholding_tax_rate_percent",
+        env_var="BILLING_WITHHOLDING_TAX_RATE_PERCENT",
+        value_type=SettingValueType.string,
+        default="5.00",
+        label="Withholding tax rate percent for eligible bank-transfer invoice payments",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="default_payment_method_type",
         env_var="BILLING_DEFAULT_PAYMENT_METHOD_TYPE",
         value_type=SettingValueType.string,
         default="card",
         allowed={"card", "bank_account", "cash", "check", "transfer", "other"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="payment_gateway_failover_enabled",
-        env_var="BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="payment_gateway_primary_provider",
-        env_var="BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER",
-        value_type=SettingValueType.string,
-        default="paystack",
-        allowed={"paystack", "flutterwave"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="payment_gateway_secondary_provider",
-        env_var="BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER",
-        value_type=SettingValueType.string,
-        default="flutterwave",
-        allowed={"paystack", "flutterwave"},
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -1719,33 +1695,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="pending",
         allowed={"pending", "succeeded", "failed", "refunded", "canceled"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="billing_enabled",
-        env_var="BILLING_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="billing_enabled_expected",
-        env_var="BILLING_ENABLED_EXPECTED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Expected Billing Enabled State",
-    ),
-    SettingSpec(
-        # Kill-switch for the billing runner's inline "settle open invoices from
-        # account credit" step. DEFAULT OFF: unsafe on the migrated dataset where
-        # per-invoice balance_due/allocations aren't authoritative (deposit-paid
-        # invoices have no local allocation). Re-enable only after
-        # the account-level redesign.
-        domain=SettingDomain.billing,
-        key="settle_credit_on_invoice_enabled",
-        env_var="BILLING_SETTLE_CREDIT_ON_INVOICE_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -1783,39 +1732,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
         label="Autopay Max Consecutive Failures",
     ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="customer_balance_notifications_enabled",
-        env_var="BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Customer Balance Notifications Enabled",
-    ),
-    # Prepaid-monthly invoicing cutover flag. When ON, run_invoice_cycle can
-    # create advance invoice rows for prepaid subscriptions on MONTHLY-cycle
-    # offers, but runner-created prepaid rows stay draft until funded from the
-    # wallet. Daily/balance prepaid is never invoiced. Default OFF so deploying
-    # is inert. NOTE: this key is read by billing_automation and
-    # collections._core via resolve_value, which returns None for any key without
-    # a registered spec — so without this SettingSpec the flag was non-functional
-    # (could not be enabled at all).
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="prepaid_monthly_invoicing_enabled",
-        env_var="PREPAID_MONTHLY_INVOICING_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Enable Monthly Prepaid Invoicing",
-    ),
     # Overdue detection (independent of billing cycle)
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="overdue_check_enabled",
-        env_var="BILLING_OVERDUE_CHECK_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Enable Hourly Overdue Detection",
-    ),
     SettingSpec(
         domain=SettingDomain.billing,
         key="overdue_check_interval_seconds",
@@ -1843,6 +1760,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=500000,
         min_value=1000,
         label="Maximum Top-Up Amount",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="gateway_topup_intent_ttl_minutes",
+        env_var="BILLING_GATEWAY_TOPUP_INTENT_TTL_MINUTES",
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=5,
+        max_value=1440,
+        label="Gateway Top-Up Intent Lifetime (minutes)",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -1976,6 +1903,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="subscription_billing_treatment_max_days",
+        env_var="BILLING_SUBSCRIPTION_TREATMENT_MAX_DAYS",
+        value_type=SettingValueType.integer,
+        default=366,
+        min_value=1,
+        max_value=366,
+        label="Subscription Billing Treatment Maximum Approval Days",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="topup_reconciliation_stale_minutes",
         env_var="BILLING_TOPUP_RECONCILIATION_STALE_MINUTES",
         value_type=SettingValueType.integer,
@@ -1993,6 +1930,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
         max_value=30,
         label="Top-up Reconciliation Max Age Days",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="topup_reconciliation_expiry_grace_hours",
+        env_var="BILLING_TOPUP_RECONCILIATION_EXPIRY_GRACE_HOURS",
+        value_type=SettingValueType.integer,
+        default=24,
+        min_value=0,
+        max_value=168,
+        label="Top-up Reconciliation Expiry Grace Hours",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="topup_reconciliation_batch_size",
+        env_var="BILLING_TOPUP_RECONCILIATION_BATCH_SIZE",
+        value_type=SettingValueType.integer,
+        default=50,
+        min_value=1,
+        max_value=500,
+        label="Top-up Reconciliation Batch Size",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -2025,30 +1982,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="5.0",
         label="Billing Health Payment Baseline Minimum Daily",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="proration_enabled",
-        env_var="BILLING_PRORATION_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Enable Proration",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="auto_activate_pending_on_billing",
-        env_var="BILLING_AUTO_ACTIVATE_PENDING",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Auto-activate Pending Subscriptions on Billing",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="bill_backdated_periods",
-        env_var="BILLING_BILL_BACKDATED_PERIODS",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Bill backdated (arrears) periods instead of fast-forwarding",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -2144,51 +2077,11 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Postpaid Default Minimum Balance",
     ),
     # --- Direct bank transfer (customer-visible payment instructions) ---
-    # Consumed by app.services.customer_portal_flow_payments.direct_bank_transfer_*
-    # (plus the reseller/me variants), which read value_text directly. The
+    # Consumed through app.services.topup_intents.direct_transfer_configuration;
+    # customer, reseller, and API adapters only serialize that owner projection. The
     # ``_accounts`` value holds a JSON *string* in value_text (not value_json),
     # so it is typed ``string`` deliberately — a ``json`` type would move it to
     # value_json and the readers would see an empty transfer config.
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_enabled",
-        env_var="BILLING_DIRECT_BANK_TRANSFER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Direct Bank Transfer Enabled",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_bank_name",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Bank Name",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_account_name",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Account Name",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_account_number",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Account Number",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="direct_bank_transfer_sort_code",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default="",
-        label="Direct Bank Transfer Sort Code",
-    ),
     SettingSpec(
         domain=SettingDomain.billing,
         key="direct_bank_transfer_instructions",
@@ -2207,10 +2100,13 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="invoice_number_enabled",
-        env_var="BILLING_INVOICE_NUMBER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
+        key="direct_bank_transfer_intent_ttl_days",
+        env_var="BILLING_DIRECT_BANK_TRANSFER_INTENT_TTL_DAYS",
+        value_type=SettingValueType.integer,
+        default=7,
+        min_value=1,
+        max_value=30,
+        label="Direct Bank Transfer Intent Lifetime (days)",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -2234,13 +2130,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=1,
         min_value=1,
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="credit_note_number_enabled",
-        env_var="BILLING_CREDIT_NOTE_NUMBER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -2299,20 +2188,21 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
-        key="subscription_expiration_enabled",
-        env_var="SUBSCRIPTION_EXPIRATION_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Enable Subscription Expiration Task",
-    ),
-    SettingSpec(
-        domain=SettingDomain.catalog,
         key="subscription_expiration_interval_seconds",
         env_var="SUBSCRIPTION_EXPIRATION_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
         default=86400,  # Daily
         min_value=3600,  # Minimum 1 hour
         label="Subscription Expiration Check Interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
+        key="expiry_reminder_interval_seconds",
+        env_var="EXPIRY_REMINDER_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=86400,  # Daily
+        min_value=3600,  # Minimum 1 hour
+        label="Subscription Expiry Reminder Interval (seconds)",
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
@@ -2423,6 +2313,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
+        key="referral_signup_context_expiry_minutes",
+        env_var="REFERRAL_SIGNUP_CONTEXT_EXPIRY_MINUTES",
+        value_type=SettingValueType.integer,
+        default=1440,
+        min_value=5,
+        max_value=10080,
+        label="Referral signup context expiry (minutes)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
         key="referral_reward_amount",
         env_var="REFERRAL_REWARD_AMOUNT",
         value_type=SettingValueType.string,
@@ -2436,6 +2336,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="NGN",
         label="Referral Reward Currency",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
+        key="referral_share_base_url",
+        env_var="PORTAL_REFERRAL_SHARE_BASE",
+        value_type=SettingValueType.string,
+        default="https://app.dotmac.io",
+        label="Referral Share Base URL",
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
@@ -2849,6 +2757,62 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=60,
         label="OLT Profile Sync Interval (seconds)",
     ),
+    # Automated customer outage notification (ADR 0004). Database-authoritative
+    # so an operator can arm, disarm or re-tighten automation from the admin UI
+    # during an incident. An env-var-only flag would need a deploy to flip,
+    # which is the wrong control for something that contacts customers.
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="outage_auto_notify_enabled",
+        label="Automated Outage Notification",
+        env_var="OUTAGE_AUTO_NOTIFY_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="outage_auto_notify_dry_run",
+        label="Automated Outage Notification: Dry Run",
+        env_var="OUTAGE_AUTO_NOTIFY_DRY_RUN",
+        value_type=SettingValueType.boolean,
+        default=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="outage_auto_notify_settle_minutes",
+        label="Automated Outage Notification: Settling Window (minutes)",
+        env_var="OUTAGE_AUTO_NOTIFY_SETTLE_MINUTES",
+        value_type=SettingValueType.integer,
+        default=15,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="outage_auto_notify_min_affected",
+        label="Automated Outage Notification: Minimum Affected Customers",
+        env_var="OUTAGE_AUTO_NOTIFY_MIN_AFFECTED",
+        value_type=SettingValueType.integer,
+        default=5,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="outage_auto_notify_max_incidents_per_run",
+        label="Automated Outage Notification: Max Incidents Per Run",
+        env_var="OUTAGE_AUTO_NOTIFY_MAX_INCIDENTS_PER_RUN",
+        value_type=SettingValueType.integer,
+        default=10,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="outage_auto_notify_interval_seconds",
+        label="Automated Outage Notification: Run Interval (seconds)",
+        env_var="OUTAGE_AUTO_NOTIFY_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=300,
+        min_value=120,
+    ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,
         key="server_health_disk_warn_pct",
@@ -3129,7 +3093,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
     SettingSpec(
         domain=SettingDomain.network_monitoring,
         key="dashboard_attention_ont_offline_threshold",
-        label="Dashboard Attention: ONT Offline Threshold",
+        label="Dashboard Attention: ONT Not Working Threshold",
         env_var="DASHBOARD_ATTENTION_ONT_OFFLINE_THRESHOLD",
         value_type=SettingValueType.integer,
         default=5,
@@ -3286,11 +3250,20 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.comms,
+        key="chat_session_authority",
+        env_var="CHAT_SESSION_AUTHORITY",
+        value_type=SettingValueType.string,
+        default="selfcare",
+        allowed={"selfcare", "crm"},
+        label="Live chat authority",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
         key="campaign_processing_enabled",
         env_var="CAMPAIGN_PROCESSING_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="Scheduled campaign processing",
+        label="Scheduled campaign admission",
     ),
     SettingSpec(
         domain=SettingDomain.comms,
@@ -3557,6 +3530,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=1440,
         min_value=5,
     ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="credential_enrollment_request_limit",
+        env_var="CREDENTIAL_ENROLLMENT_REQUEST_LIMIT",
+        value_type=SettingValueType.integer,
+        default=3,
+        min_value=1,
+        max_value=10,
+        label="Credential enrollment request limit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="credential_enrollment_request_window_seconds",
+        env_var="CREDENTIAL_ENROLLMENT_REQUEST_WINDOW_SECONDS",
+        value_type=SettingValueType.integer,
+        default=900,
+        min_value=60,
+        max_value=86400,
+        label="Credential enrollment request window (seconds)",
+    ),
     # ============== Comms Domain: External API Timeouts ==============
     SettingSpec(
         domain=SettingDomain.comms,
@@ -3782,6 +3775,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=None,
         label="Default TR-069 ACS Server ID",
     ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="tr069_pending_resolution_timeout_seconds",
+        env_var="TR069_PENDING_RESOLUTION_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=3600,
+        min_value=300,
+        max_value=86400,
+        label="TR-069 Command Confirmation Window (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="tr069_command_reconciliation_interval_seconds",
+        env_var="TR069_COMMAND_RECONCILIATION_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=30,
+        max_value=3600,
+        label="TR-069 Command Reconciliation Interval (seconds)",
+    ),
     # ── Network Monitoring ─────────────────────────────────────────────
     SettingSpec(
         domain=SettingDomain.network_monitoring,
@@ -3802,6 +3815,41 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Alert Evaluation Interval (seconds)",
         min_value=10,
         max_value=600,
+    ),
+    # ── Projects lifecycle defaults ──
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="default_project_status",
+        env_var="PROJECTS_DEFAULT_PROJECT_STATUS",
+        value_type=SettingValueType.string,
+        default="active",
+        label="Default project status",
+        allowed={"open", "planned", "active", "on_hold"},
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="default_project_priority",
+        env_var="PROJECTS_DEFAULT_PROJECT_PRIORITY",
+        value_type=SettingValueType.string,
+        default="normal",
+        label="Default project priority",
+        allowed={"lower", "low", "medium", "normal", "high", "urgent"},
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="default_sales_project_type",
+        env_var="PROJECTS_DEFAULT_SALES_PROJECT_TYPE",
+        value_type=SettingValueType.string,
+        default="fiber_optics_installation",
+        label="Default implementation type for sales orders",
+        allowed={
+            "cable_rerun",
+            "fiber_optics_relocation",
+            "air_fiber_relocation",
+            "fiber_optics_installation",
+            "air_fiber_installation",
+            "cross_connect",
+        },
     ),
     # ── Self-serve installation quotes ──
     # The nine CRM ``selfserve_quote_*`` keys migrated as-is, except the
@@ -3891,6 +3939,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         ),
         min_value=0,
     ),
+    # Catalog-backed field-delivery charges. The configured offer must expose
+    # one active one-time price; a wireless relocation fails closed when this
+    # setting is empty or invalid, so neither portal can quote a free move by
+    # accident.
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="wireless_relocation_offer_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Wireless/radio relocation fee catalog offer",
+    ),
     # write-flip flag:
     # OFF = quote acceptance write-through to the CRM (mirror path); ON =
     # native accept (sales/selfserve.accept_with_deposit → native sales
@@ -3904,22 +3964,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Quotes: native write path",
     ),
-    # read-flip flags: OFF =
-    # the read surfaces (/me/*, web customer portal, reseller views) keep
-    # serving the CRM mirrors; ON = they serve the native services
-    # (projects.portal_read_for_subscriber, sales.selfserve read,
-    # referrals.read_for_subscriber). Shapes are identical (
-    # golden-payload contract), so flipping back is the cheap rollback
-    # during the sync window. Sales orders have no read surface of their
-    # own.
-    SettingSpec(
-        domain=SettingDomain.projects,
-        key="projects_native_read_enabled",
-        env_var="PROJECTS_NATIVE_READ_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Projects: native read path",
-    ),
+    # Quotes retain their independent read cutover. Project/task/work-order
+    # customer reads are unconditionally native Sub paths.
     SettingSpec(
         domain=SettingDomain.projects,
         key="quotes_native_read_enabled",
@@ -3927,6 +3973,32 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
         label="Quotes: native read path",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="vendor_quote_validity_days",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=1,
+        max_value=365,
+        label="Vendor quote validity (days)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        # Optional guard rail, not the control. Staff approval is what decides
+        # an advance; this only stops a request that is obviously out of policy
+        # before it reaches an approver. 0 means no percentage policy — the
+        # approver judges each advance on its merits. Advances can never exceed
+        # the approved quote total regardless, which is arithmetic rather than
+        # policy: you cannot advance more than the work is worth.
+        key="vendor_advance_max_percent",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+        max_value=100,
+        label="Vendor advance cap (% of approved quote, 0 = no cap)",
     ),
     # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
     # Every value defaults OFF/empty: the transport is inert until an operator
@@ -4121,6 +4193,129 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=30,
         label="Location prompt snooze (days)",
     ),
+    # Scheduler booleans are decision inputs. Every mutable task gate must be
+    # registered here or in control_registry; scheduler_config may not invent
+    # an environment/database/default precedence path of its own.
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="stale_overdue_lock_detect_enabled",
+        env_var="STALE_OVERDUE_LOCK_DETECT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Stale overdue-lock detection",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="cross_app_drift_detection_enabled",
+        env_var="CROSS_APP_DRIFT_DETECTION_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Cross-application drift detection",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="cutover_balance_audit_enabled",
+        env_var="BILLING_CUTOVER_BALANCE_AUDIT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Cutover balance invariant audit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="funded_inactive_exposure_audit_enabled",
+        env_var="BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Funded inactive exposure audit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="ip_consistency_audit_enabled",
+        env_var="RADIUS_IP_CONSISTENCY_AUDIT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="RADIUS IPv4 consistency audit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="connectivity_shadow_audit_enabled",
+        env_var="RADIUS_CONNECTIVITY_SHADOW_AUDIT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Connectivity shadow audit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="infra_availability_snapshot_enabled",
+        env_var="INFRA_AVAILABILITY_SNAPSHOT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Infrastructure availability snapshots",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="infra_availability_prune_enabled",
+        env_var="INFRA_AVAILABILITY_PRUNE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Infrastructure availability retention",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="operational_escalation_delivery_enabled",
+        env_var="OPERATIONAL_ESCALATION_DELIVERY_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Operational escalation delivery",
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
+        key="nas_backup_retention_enabled",
+        env_var="NAS_BACKUP_RETENTION_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="NAS backup retention cleanup",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="oauth_token_refresh_enabled",
+        env_var="OAUTH_TOKEN_REFRESH_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="OAuth token refresh",
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
+        key="bandwidth_processing_enabled",
+        env_var="BANDWIDTH_PROCESSING_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Bandwidth observation processing",
+    ),
+    SettingSpec(
+        domain=SettingDomain.scheduler,
+        key="stale_infrastructure_check_enabled",
+        env_var="STALE_INFRASTRUCTURE_CHECK_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Stale infrastructure observation check",
+    ),
+    SettingSpec(
+        domain=SettingDomain.scheduler,
+        key="event_old_cleanup_enabled",
+        env_var="EVENT_OLD_CLEANUP_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Completed event retention cleanup",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="radius_sync_enabled",
+        env_var="RADIUS_SYNC_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Configured RADIUS sync jobs",
+    ),
     # Weekly NCC complaints digest email — default OFF. Sends a summary + a
     # link to the filing workbook (Monday 08:00 in the celery timezone).
     SettingSpec(
@@ -4171,28 +4366,411 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
 ]
 
-# Tombstone the settings-registry surfaces whose decisions moved to canonical
-# feature controls. Keeping the identities together makes the cutover boundary
-# reviewable while ensuring forms, API validation, env fallback, and seed
-# discovery cannot expose them as a second writer. ``billing.billing_enabled``
-# is deliberately absent: it remains the independent cross-feature master.
+# These cadence and worker-tuning settings were previously resolved through
+# scheduler-local call-site defaults. Registering them here makes the schema,
+# default, coercion, and optional bootstrap environment name authoritative.
+SETTINGS_SPECS.extend(
+    [
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="autopay_interval_seconds",
+            env_var="BILLING_AUTOPAY_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=3600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="cutover_balance_audit_interval_seconds",
+            env_var="BILLING_CUTOVER_BALANCE_AUDIT_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=86400,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="funded_inactive_exposure_audit_interval_seconds",
+            env_var="BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=2592000,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="topup_reconciliation_interval_seconds",
+            env_var="BILLING_TOPUP_RECONCILIATION_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=1800,
+        ),
+        SettingSpec(
+            domain=SettingDomain.catalog,
+            key="scheduled_plan_change_interval_seconds",
+            env_var="SCHEDULED_PLAN_CHANGE_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=3600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.catalog,
+            key="scheduled_status_change_interval_seconds",
+            env_var="SCHEDULED_STATUS_CHANGE_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.catalog,
+            key="vacation_hold_resume_interval_seconds",
+            env_var="VACATION_HOLD_RESUME_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=3600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.collections,
+            key="arrangement_check_interval_seconds",
+            env_var="ARRANGEMENT_CHECK_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=86400,
+        ),
+        SettingSpec(
+            domain=SettingDomain.integration,
+            key="dotmac_erp_expense_status_refresh_interval_seconds",
+            env_var="DOTMAC_ERP_EXPENSE_STATUS_REFRESH_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.integration,
+            key="dotmac_erp_material_status_refresh_interval_seconds",
+            env_var="DOTMAC_ERP_MATERIAL_STATUS_REFRESH_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.integration,
+            key="dotmac_erp_outbox_interval_seconds",
+            env_var="DOTMAC_ERP_OUTBOX_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=60,
+        ),
+        SettingSpec(
+            domain=SettingDomain.integration,
+            key="dotmac_erp_purchase_invoice_status_refresh_interval_seconds",
+            env_var="DOTMAC_ERP_PURCHASE_INVOICE_STATUS_REFRESH_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network,
+            key="tr069_cleanup_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=86400,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network,
+            key="tr069_genieacs_stale_cleanup_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=900,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network,
+            key="tr069_health_check_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=7200,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network,
+            key="tr069_metrics_scrape_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network,
+            key="tr069_ont_runtime_refresh_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=900,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network,
+            key="tr069_sync_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=1800,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="channel_health_interval_seconds",
+            env_var="CHANNEL_HEALTH_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=60,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="device_metrics_cleanup_interval_hours",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=6,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="device_projection_reconcile_interval_seconds",
+            env_var="DEVICE_PROJECTION_RECONCILE_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=60,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="huawei_ont_status_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="infra_availability_prune_interval_seconds",
+            env_var="INFRA_AVAILABILITY_PRUNE_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=86400,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="infra_availability_snapshot_interval_seconds",
+            env_var="INFRA_AVAILABILITY_SNAPSHOT_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=86400,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="monitoring_coverage_interval_seconds",
+            env_var="MONITORING_COVERAGE_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="monitoring_inventory_sync_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="nas_config_backup_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=3600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="olt_backup_interval_hours",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=24,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="olt_health_retry_interval_minutes",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=5,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="ont_reconcile_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=900,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="router_config_backup_interval_hours",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=24,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="topology_lldp_poll_interval_minutes",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=60,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="topology_status_warm_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=180,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="topology_uisp_sync_interval_minutes",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=15,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="ufiber_onu_link_interval_minutes",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=60,
+        ),
+        SettingSpec(
+            domain=SettingDomain.notification,
+            key="operational_escalation_delivery_interval_seconds",
+            env_var="OPERATIONAL_ESCALATION_DELIVERY_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=60,
+        ),
+        SettingSpec(
+            domain=SettingDomain.provisioning,
+            key="compensation_retry_interval_seconds",
+            env_var="COMPENSATION_RETRY_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.radius,
+            key="connectivity_shadow_audit_interval_seconds",
+            env_var="RADIUS_CONNECTIVITY_SHADOW_AUDIT_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=21600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.radius,
+            key="ip_consistency_audit_interval_seconds",
+            env_var="RADIUS_IP_CONSISTENCY_AUDIT_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=21600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.radius,
+            key="radius_sync_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="acs_task_soft_time_limit_seconds",
+            env_var="CELERY_ACS_TASK_SOFT_TIME_LIMIT",
+            value_type=SettingValueType.integer,
+            default=240,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="acs_task_time_limit_seconds",
+            env_var="CELERY_ACS_TASK_TIME_LIMIT",
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="event_old_cleanup_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=86400,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="event_retry_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="event_stale_cleanup_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="long_task_soft_time_limit_seconds",
+            env_var="CELERY_LONG_TASK_SOFT_TIME_LIMIT",
+            value_type=SettingValueType.integer,
+            default=1740,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="long_task_time_limit_seconds",
+            env_var="CELERY_LONG_TASK_TIME_LIMIT",
+            value_type=SettingValueType.integer,
+            default=1800,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="result_expires_seconds",
+            env_var="CELERY_RESULT_EXPIRES",
+            value_type=SettingValueType.integer,
+            default=86400,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="stale_infrastructure_check_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=300,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="task_soft_time_limit_seconds",
+            env_var="CELERY_TASK_SOFT_TIME_LIMIT",
+            value_type=SettingValueType.integer,
+            default=840,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="task_time_limit_seconds",
+            env_var="CELERY_TASK_TIME_LIMIT",
+            value_type=SettingValueType.integer,
+            default=900,
+        ),
+        SettingSpec(
+            domain=SettingDomain.scheduler,
+            key="worker_prefetch_multiplier",
+            env_var="CELERY_WORKER_PREFETCH_MULTIPLIER",
+            value_type=SettingValueType.integer,
+            default=1,
+        ),
+        SettingSpec(
+            domain=SettingDomain.subscriber,
+            key="quote_reconcile_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=3600,
+        ),
+        SettingSpec(
+            domain=SettingDomain.usage,
+            key="device_login_sync_interval_seconds",
+            env_var="DEVICE_LOGIN_SYNC_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=900,
+        ),
+        SettingSpec(
+            domain=SettingDomain.usage,
+            key="enforcement_reconciler_interval_seconds",
+            env_var="ENFORCEMENT_RECONCILER_INTERVAL_SECONDS",
+            value_type=SettingValueType.integer,
+            default=600,
+        ),
+    ]
+)
+
+# Tombstone historical aliases whose decisions moved to canonical optional
+# feature controls. Core customer-financial lifecycle settings are deleted from
+# the registry instead of represented here.
 _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
     {
         (SettingDomain.gis, "sync_enabled"),
-        (SettingDomain.notification, "notification_queue_enabled"),
         (SettingDomain.usage, "radius_accounting_import_enabled"),
         (SettingDomain.usage, "radius_session_reap_enabled"),
         (SettingDomain.usage, "usage_warning_enabled"),
         (SettingDomain.usage, "fup_submonthly_rules_enabled"),
-        (SettingDomain.collections, "dunning_enabled"),
-        (SettingDomain.collections, "billing_notifications_hourly_enabled"),
         (SettingDomain.scheduler, "crm_ticket_pull_enabled"),
-        (SettingDomain.scheduler, "crm_work_order_pull_enabled"),
         (SettingDomain.radius, "coa_enabled"),
-        (SettingDomain.billing, "prepaid_monthly_invoicing_enabled"),
-        (SettingDomain.billing, "overdue_check_enabled"),
-        (SettingDomain.billing, "direct_bank_transfer_enabled"),
-        (SettingDomain.catalog, "subscription_expiration_enabled"),
         (SettingDomain.network, "mikrotik_session_kill_enabled"),
         (SettingDomain.network, "mikrotik_api_session_kick_enabled"),
         (SettingDomain.network, "address_list_block_enabled"),
@@ -4200,7 +4778,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.network, "wireguard_log_cleanup_enabled"),
         (SettingDomain.network, "wireguard_token_cleanup_enabled"),
         (SettingDomain.projects, "quotes_native_write_enabled"),
-        (SettingDomain.projects, "projects_native_read_enabled"),
         (SettingDomain.projects, "quotes_native_read_enabled"),
     }
 )
@@ -4304,6 +4881,48 @@ def resolve_value(db, domain: SettingDomain, key: str) -> Any:
     if value is not None:
         SettingsCache.set(domain.value, key, value)
 
+    return value
+
+
+def resolve_boolean(db, domain: SettingDomain, key: str) -> bool:
+    """Resolve a registered boolean without call-site fallback semantics."""
+
+    spec = get_spec(domain, key)
+    if spec is None or spec.value_type is not SettingValueType.boolean:
+        raise RuntimeError(f"Boolean setting must be registered: {domain.value}.{key}")
+    value = resolve_value(db, domain, key)
+    if not isinstance(value, bool):
+        raise RuntimeError(
+            f"Boolean setting resolved to a non-boolean: {domain.value}.{key}"
+        )
+    return value
+
+
+def resolve_integer(db, domain: SettingDomain, key: str) -> int:
+    """Resolve a registered integer without call-site fallback semantics."""
+
+    spec = get_spec(domain, key)
+    if spec is None or spec.value_type is not SettingValueType.integer:
+        raise RuntimeError(f"Integer setting must be registered: {domain.value}.{key}")
+    value = resolve_value(db, domain, key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(
+            f"Integer setting resolved to a non-integer: {domain.value}.{key}"
+        )
+    return value
+
+
+def resolve_string(db, domain: SettingDomain, key: str) -> str:
+    """Resolve a required registered string without call-site fallback semantics."""
+
+    spec = get_spec(domain, key)
+    if spec is None or spec.value_type is not SettingValueType.string:
+        raise RuntimeError(f"String setting must be registered: {domain.value}.{key}")
+    value = resolve_value(db, domain, key)
+    if not isinstance(value, str):
+        raise RuntimeError(
+            f"String setting resolved to a non-string: {domain.value}.{key}"
+        )
     return value
 
 

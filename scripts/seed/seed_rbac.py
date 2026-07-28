@@ -6,12 +6,10 @@ from app.db import SessionLocal
 from app.models.rbac import (
     Permission,
     Role,
-    RolePermission,
-    SubscriberRole,
-    SystemUserRole,
 )
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
+from app.services import rbac_catalog, subscriber_assignments, system_user_assignments
 
 ADMIN_ONLY_PERMISSION_KEYS = {
     "*",
@@ -29,9 +27,8 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     "catalog:write",
     "network:read",
     "network:operation:redrive",
+    "provisioning:service_change_reconcile",
     "network:write",
-    "provisioning:read",
-    "provisioning:write",
     "rbac:assign",
     "rbac:permissions:delete",
     "rbac:permissions:read",
@@ -99,6 +96,8 @@ DEFAULT_PERMISSIONS = [
     ("billing:extension:read", "View service extensions"),
     ("billing:extension:create", "Create service extensions"),
     ("billing:extension:apply", "Apply or cancel service extensions"),
+    ("billing:treatment:read", "View subscription billing treatments"),
+    ("billing:treatment:write", "Approve and revoke billing treatments"),
     ("billing:credit_note:read", "View credit notes"),
     ("billing:credit_note:create", "Create credit notes"),
     ("billing:credit_note:update", "Update credit notes"),
@@ -139,6 +138,10 @@ DEFAULT_PERMISSIONS = [
     ("subscription:activate", "Activate suspended subscriptions"),
     ("subscription:suspend", "Suspend subscriptions"),
     ("subscription:cancel", "Cancel subscriptions"),
+    (
+        "provisioning:service_change_reconcile",
+        "Review and repair interrupted service-change execution chains",
+    ),
     # Network - Devices
     ("network:hub:read", "View the network operations hub"),
     ("network:admin", "Perform restricted network administration"),
@@ -207,6 +210,11 @@ DEFAULT_PERMISSIONS = [
     # Operations - Technicians
     ("operations:technician:read", "View technicians"),
     ("operations:technician:write", "Manage technicians"),
+    ("operations:service_team:read", "View service teams and memberships"),
+    ("operations:service_team:create", "Create service teams"),
+    ("operations:service_team:update", "Update service-team identity"),
+    ("operations:service_team:membership", "Manage service-team membership"),
+    ("operations:service_team:retire", "Activate or deactivate service teams"),
     # Operations - Field Expense Requests
     ("operations:expense_request:read", "View field expense requests"),
     ("operations:expense_request:write", "Approve or reject field expense requests"),
@@ -334,6 +342,7 @@ ROLE_PERMISSIONS = {
         "billing:provider:read",
         "billing:channel:read",
         "billing:arrangement:read",
+        "billing:treatment:read",
         "billing:batch:read",
         "billing_account:read",
         "customer:read",
@@ -395,6 +404,11 @@ ROLE_PERMISSIONS = {
         "operations:work_order:read",
         "operations:work_order:update",
         "operations:technician:read",
+        "operations:service_team:read",
+        "operations:service_team:create",
+        "operations:service_team:update",
+        "operations:service_team:membership",
+        "operations:service_team:retire",
         "operations:expense_request:read",
         "operations:expense_request:write",
         "reports:network:read",
@@ -416,6 +430,7 @@ ROLE_PERMISSIONS = {
         "subscription:activate",
         "subscription:suspend",
         "support:ticket:read",
+        "operations:service_team:read",
         "support:ticket:create",
         "support:ticket:update",
         "support:automation:read",
@@ -452,6 +467,8 @@ ROLE_PERMISSIONS = {
         "billing:channel:write",
         "billing:arrangement:read",
         "billing:arrangement:write",
+        "billing:treatment:read",
+        "billing:treatment:write",
         "billing:batch:read",
         "billing:batch:write",
         "billing:import:write",
@@ -482,85 +499,41 @@ def parse_args():
 
 
 def _ensure_role(db, name, description):
-    role = db.query(Role).filter(Role.name == name).first()
-    if not role:
-        role = Role(name=name, description=description, is_active=True)
-        db.add(role)
-    else:
-        if not role.is_active:
-            role.is_active = True
-        if description and not role.description:
-            role.description = description
-    return role
+    return rbac_catalog.ensure_role(db, name=name, description=description)
 
 
 def _ensure_permission(db, key, description):
-    permission = db.query(Permission).filter(Permission.key == key).first()
-    is_ui_assignable = key not in ADMIN_ONLY_PERMISSION_KEYS
-    if not permission:
-        permission = Permission(
-            key=key,
-            description=description,
-            is_active=True,
-            is_ui_assignable=is_ui_assignable,
-        )
-        db.add(permission)
-    else:
-        if not permission.is_active:
-            permission.is_active = True
-        permission.is_ui_assignable = is_ui_assignable
-        if description and not permission.description:
-            permission.description = description
-    return permission
+    return rbac_catalog.ensure_permission(
+        db,
+        key=key,
+        description=description,
+        is_ui_assignable=key not in ADMIN_ONLY_PERMISSION_KEYS,
+    )
 
 
 def _ensure_role_permission(db, role_id, permission_id):
-    link = (
-        db.query(RolePermission)
-        .filter(RolePermission.role_id == role_id)
-        .filter(RolePermission.permission_id == permission_id)
-        .first()
+    return rbac_catalog.ensure_role_permission(
+        db,
+        role_id=role_id,
+        permission_id=permission_id,
     )
-    if not link:
-        link = RolePermission(role_id=role_id, permission_id=permission_id)
-        db.add(link)
-    return link
 
 
 def _ensure_subscriber_role(db, subscriber_id, role_id):
-    link = (
-        db.query(SubscriberRole)
-        .filter(SubscriberRole.subscriber_id == subscriber_id)
-        .filter(SubscriberRole.role_id == role_id)
-        .first()
+    return subscriber_assignments.ensure_seeded_role_grant(
+        db,
+        subscriber_id=subscriber_id,
+        role_id=role_id,
     )
-    if not link:
-        link = SubscriberRole(subscriber_id=subscriber_id, role_id=role_id)
-        db.add(link)
-    return link
 
 
 def _ensure_system_user_role(db, system_user_id, role_id):
-    link = (
-        db.query(SystemUserRole)
-        .filter(
-            SystemUserRole.system_user_id == system_user_id,
-            SystemUserRole.role_id == role_id,
-            SystemUserRole.scope_type == "",
-            SystemUserRole.scope_id == "",
-        )
-        .first()
+    return system_user_assignments.ensure_source_role_by_id(
+        db,
+        user_id=system_user_id,
+        role_id=role_id,
+        source=system_user_assignments.LOCAL_ROLE_SOURCE,
     )
-    if not link:
-        link = SystemUserRole(
-            system_user_id=system_user_id,
-            role_id=role_id,
-            scope_type="",
-            scope_id="",
-            source="local",
-        )
-        db.add(link)
-    return link
 
 
 def main():
@@ -572,7 +545,6 @@ def main():
             _ensure_role(db, name, description)
         for key, description in DEFAULT_PERMISSIONS:
             _ensure_permission(db, key, description)
-        db.commit()
 
         roles = {role.name: role for role in db.query(Role).all()}
         permissions = {perm.key: perm for perm in db.query(Permission).all()}
@@ -580,24 +552,14 @@ def main():
             role = roles.get(role_name)
             if not role:
                 continue
-            if role_name != "admin":
-                hidden_permission_ids = [
-                    permission.id
-                    for key, permission in permissions.items()
-                    if key in ADMIN_ONLY_PERMISSION_KEYS
-                ]
-                if hidden_permission_ids:
-                    (
-                        db.query(RolePermission)
-                        .filter(RolePermission.role_id == role.id)
-                        .filter(RolePermission.permission_id.in_(hidden_permission_ids))
-                        .delete(synchronize_session=False)
-                    )
-            for key in permission_keys:
-                permission = permissions.get(key)
-                if not permission:
-                    continue
-                _ensure_role_permission(db, role.id, permission.id)
+            desired_permission_ids = tuple(
+                permissions[key].id for key in permission_keys if key in permissions
+            )
+            rbac_catalog.replace_seeded_role_permissions(
+                db,
+                role=role,
+                permission_ids=desired_permission_ids,
+            )
         db.commit()
 
         admin_role = roles.get("admin")

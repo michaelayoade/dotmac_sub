@@ -7,20 +7,20 @@
         </div>
         <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
             <span class="status-tone-dot status-tone-dot-neutral h-2 w-2 rounded-full"></span>
-            Snapshot{% if now %} · {{ now | app_datetime('%H:%M:%S') }}{% endif %}
+            Operational state
         </div>
     </div>
 
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
-            <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Up</p>
-            <p class="status-foreground status-tone-positive mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_online }}</p>
-            <p class="status-foreground status-tone-positive mt-1 text-xs">Reachable infrastructure</p>
+            <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Working</p>
+            <p class="status-foreground status-tone-positive mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_working }}</p>
+            <p class="status-foreground status-tone-positive mt-1 text-xs">Operation confirmed</p>
         </div>
         <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
-            <p class="status-foreground status-tone-negative text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Offline</p>
-            <p class="status-foreground status-tone-negative mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_offline }}</p>
-            <p class="status-foreground status-tone-negative mt-1 text-xs">Hard-down infrastructure</p>
+            <p class="status-foreground status-tone-negative text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Not Working</p>
+            <p class="status-foreground status-tone-negative mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_not_working }}</p>
+            <p class="status-foreground status-tone-negative mt-1 text-xs">Failure or verification unavailable</p>
         </div>
         <div class="status-panel status-panel-warning rounded-xl border px-4 py-3">
             <p class="status-foreground status-tone-warning text-[11px] font-semibold uppercase tracking-[0.16em]">Open Alarms</p>
@@ -33,23 +33,17 @@
             <p class="status-foreground status-tone-positive mt-1 text-xs">Sessions currently up</p>
         </div>
     </div>
-    {% if stats.devices_retry_pending %}
-    <p class="status-foreground status-tone-warning text-xs font-medium">
-        {{ stats.devices_retry_pending }} device{{ '' if stats.devices_retry_pending == 1 else 's' }} awaiting fresh monitoring evidence.
-    </p>
-    {% endif %}
-
     {% if ont_service_summary and ont_service_summary.total > 0 %}
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service Online</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.online }}</p>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective status after ACS fallback</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONT Working</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.working }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Currently confirmed by OLT, ACS, or last-seen evidence</p>
         </div>
         <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service Offline</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.offline }}</p>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective service loss</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONT Not Working</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.not_working }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Confirmed failure or verification unable to confirm operation</p>
         </div>
         <div class="status-panel status-panel-warning rounded-xl border px-4 py-3">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Low Signal</p>
@@ -60,30 +54,6 @@
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Total ONTs</p>
             <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.total }}</p>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Managed inventory count</p>
-        </div>
-    </div>
-    {% endif %}
-
-    {% if ont_olt_link_summary and ont_olt_link_summary.total > 0 %}
-    <div class="rounded-2xl border border-slate-200/70 bg-white/90 px-4 py-4 dark:border-slate-700/60 dark:bg-slate-800/80">
-        <div class="flex items-start justify-between gap-3">
-            <div>
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Raw PON Link State</p>
-                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Direct OLT link view before ACS fallback or derived service resolution.</p>
-            </div>
-            <div class="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:text-slate-300">
-                Physical layer
-            </div>
-        </div>
-        <div class="mt-4 grid gap-3 md:grid-cols-2">
-            <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
-                <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">PON Online</p>
-                <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_olt_link_summary.online }}</p>
-            </div>
-            <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
-                <p class="status-foreground status-tone-negative text-[11px] font-semibold uppercase tracking-[0.16em]">PON Offline</p>
-                <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_olt_link_summary.offline }}</p>
-            </div>
         </div>
     </div>
     {% endif %}

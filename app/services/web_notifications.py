@@ -435,16 +435,17 @@ def _email_channel_ready(db: Session) -> tuple[bool, str]:
 
 
 def _sms_channel_ready(db: Session) -> tuple[bool, str]:
+    # Mirrors sms.send_sms exactly, and fails closed for the same reason: an
+    # unconfigured channel must report "not ready", never "ready".
     enabled = (
-        sms_service._get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
+        sms_service._get_setting(db, "sms_enabled", "SMS_ENABLED", "false") or "false"
     )
-    if enabled.strip().lower() in {"false", "0", "no", "disabled"}:
+    if enabled.strip().lower() not in {"true", "1", "yes", "on", "enabled"}:
         return False, "SMS is disabled"
 
-    provider = (
-        sms_service._get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook")
-        or "webhook"
-    )
+    provider = sms_service._get_setting(db, "sms_provider", "SMS_PROVIDER", "") or ""
+    if not provider:
+        return False, "No SMS provider configured"
     if provider == "twilio":
         account_sid = sms_service._get_setting(db, "sms_api_key", "SMS_API_KEY")
         auth_token = sms_service._get_setting(db, "sms_api_secret", "SMS_API_SECRET")

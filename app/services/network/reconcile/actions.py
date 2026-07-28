@@ -503,8 +503,33 @@ OltAction = (
 )
 
 
+@dataclass(frozen=True)
+class AcsArmDiagnostic:
+    """``setParameterValues`` arming a TR-143 throughput diagnostic.
+
+    Imperative rather than convergent: unlike the other ACS actions this does
+    not push a desired configuration, it asks the device to run a measurement
+    and report back on a later inform. It lives here anyway because the ACS
+    write-ownership contract (tests/architecture/test_huawei_control_plane_writes.py)
+    routes every setParameterValues through this applier, and a diagnostic that
+    wrote to the NBI directly would be a second, unaudited write path.
+
+    ``params`` is prebuilt by the caller from the device's resolved parameter
+    tree — the fleet is TR-098, so the paths differ from every other action
+    here and are not derivable from a wcd/instance index.
+    """
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    params: dict[str, object]
+    label: str
+
+
 AcsAction = (
     AcsAddObject
+    | AcsArmDiagnostic
     | AcsDeleteObject
     | AcsSetPppoe
     | AcsSetWifiSsid
@@ -527,6 +552,7 @@ __all__ = (
     "Action",
     "OltAction",
     "AcsAddObject",
+    "AcsArmDiagnostic",
     "AcsDeleteObject",
     "AcsSetDhcpServer",
     "AcsSetIpv6",

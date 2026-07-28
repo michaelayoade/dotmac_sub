@@ -8,7 +8,7 @@ OLT decommissioning.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -315,3 +315,101 @@ def set_active(
         Tuple of (success, message).
     """
     return set_status(db, olt_id, DeviceStatus.active, actor=actor)
+
+
+# ---------------------------------------------------------------------------
+# is_active drift reconciliation
+#
+# ``is_active`` is expected to track ``status == active`` (subject to
+# ``ck_olt_devices_config_pack_required``). UISP-managed OLTs were left
+# ``is_active=false`` while ``status=active`` when the Huawei/TR069-shaped
+# config-pack constraint blocked their activation. This is the auditable owner
+# path to repair that drift — preview + an ``olt.updated`` event per change,
+# idempotent, no ad-hoc SQL. The activation predicate reuses
+# ``validate_config_pack_required`` so the invariant has one definition.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OltActiveDrift:
+    olt_id: str
+    name: str
+    status: str | None
+    is_active: bool
+    uisp_managed: bool
+    can_activate: bool
+    reason: str
+
+
+def preview_active_drift(db: Session) -> list[OltActiveDrift]:
+    """Read-only: OLTs whose ``is_active`` disagrees with an active status."""
+    from app.services.network.olt_config_pack import validate_config_pack_required
+
+    rows = (
+        db.query(OLTDevice)
+        .filter(OLTDevice.status == DeviceStatus.active)
+        .filter(OLTDevice.is_active.is_(False))
+        .order_by(OLTDevice.name)
+        .all()
+    )
+    drift: list[OltActiveDrift] = []
+    for olt in rows:
+        missing = validate_config_pack_required(olt, raise_on_error=False)
+        drift.append(
+            OltActiveDrift(
+                olt_id=str(olt.id),
+                name=olt.name or str(olt.id),
+                status=olt.status.value if olt.status else None,
+                is_active=bool(olt.is_active),
+                uisp_managed=getattr(olt, "uisp_device_id", None) is not None,
+                can_activate=not missing,
+                reason="active_status_isactive_drift"
+                if not missing
+                else "config_pack_incomplete",
+            )
+        )
+    return drift
+
+
+def reconcile_active_flag(
+    db: Session, *, actor: str = "system", apply: bool = False
+) -> dict[str, object]:
+    """Repair ``is_active`` drift for OLTs whose lifecycle status is active.
+
+    Preview by default. With ``apply=True`` it sets ``is_active=true`` through
+    this owner for every reconcilable OLT and emits an ``olt.updated`` audit
+    event per change. Idempotent; blocked OLTs (active invariant not satisfiable)
+    are reported, never forced.
+    """
+    drift = preview_active_drift(db)
+    reconcilable = [d for d in drift if d.can_activate]
+    blocked = [d for d in drift if not d.can_activate]
+
+    activated = 0
+    if apply:
+        for item in reconcilable:
+            olt = db.get(OLTDevice, item.olt_id)
+            if olt is None or olt.is_active:
+                continue
+            olt.is_active = True
+            emit_event(
+                db,
+                EventType.olt_updated,
+                {
+                    "olt_id": str(olt.id),
+                    "name": olt.name,
+                    "is_active_change": {"from": False, "to": True},
+                    "reason": "reconcile_active_flag",
+                },
+                actor=actor,
+            )
+            activated += 1
+        db.commit()
+
+    return {
+        "applied": apply,
+        "candidates": len(drift),
+        "reconcilable": len(reconcilable),
+        "activated": activated,
+        "blocked": [asdict(d) for d in blocked],
+    }

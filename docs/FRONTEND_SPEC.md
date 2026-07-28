@@ -86,6 +86,19 @@ Dotmac UI standard, interaction behavior follows Carbon's data-table/filter/
 pagination patterns and WCAG 2.2 AA is the accessibility floor. This governs
 behavior and accessibility, not the product's visual theme.
 
+### Portal Account Health contract
+
+Customer dashboard, customer service detail, reseller account detail, and the
+customer mobile app consume `app.services.portal_account_health`. The first
+viewport keeps account lifecycle, billing mode, currency-separated receivables,
+prepaid funding, service access, subscription-scoped live-session evidence,
+connection/outage diagnosis, freshness, and the canonical next action together.
+Jinja surfaces share `templates/components/portal/account_health.html`; mobile
+uses `GET /api/v1/me/account-health`. Neither client derives those semantics or
+issues a parallel connection-status request. See
+`docs/designs/PORTAL_ACCOUNT_SERVICE_HEALTH.md` for ownership, query budget, and
+the retired contracts.
+
 The legacy `/api/v1/tables/customers/data` endpoint is a compatibility adapter,
 not another list owner. It maps its offset parameters and supported aliases into
 the customer `ListQuery`, delegates filtering/counting/stable ordering/paging to
@@ -175,8 +188,10 @@ Admin outage consoles consume the same badge macro, and CRM outage rows carry
 Payment list/detail/customer/reseller projections use the same contract without
 reinterpreting settlement or refund state. NOC inventory, core-device detail,
 monitoring, worklist, and map projections
-consume the same contract. `NetworkDeviceRead` carries `operational_status`,
-`operational_reason`, `operational_retry_pending`, and `status_presentation`.
+consume the same contract. `NetworkDeviceRead` carries the binary
+`operational_status`, its `operational_reason`, and `status_presentation`.
+Freshness and retry-pending evidence stay inside the verification lifecycle and
+are not client-visible device states.
 Customer connection API/portal/reseller projections carry
 `status_presentation` beside the raw verdict; customer web and mobile map only
 its tone/icon to platform-native visuals. Raw RADIUS session indicators remain
@@ -194,11 +209,12 @@ fields are read-only UI metadata. Support status settings may expose a subset of
 the ticket lifecycle vocabulary, but they do not configure semantic tones or
 platform colors.
 
-Device operational presentation does not re-derive state. `up` is positive,
-`degraded` is warning, evidenced `down` is negative, and `maintenance` is
-neutral. A retry-pending `down` remains labeled Down under the binary NOC model
-but is warning/clock and non-alarming, so missing or stale monitoring evidence
-cannot look like a confirmed failure.
+Device operational presentation does not re-derive state. `working` is
+positive and `not_working` is negative. Administrative lifecycle, impairment,
+and verification outcomes are separate reason/evidence fields; they never add
+another device badge. A `not_working` verification-failure reason is
+non-alarming and must say that operation could not be confirmed rather than
+claiming a physical failure.
 
 ---
 
@@ -328,7 +344,7 @@ Import what you need:
 | `info_row` | `label, value, icon` | Key-value detail row |
 | `metric_row` | `label, value, color, mono` | Label-value with colored dot |
 | `progress_bar` | `value, max, label, show_text, size, color` | Horizontal bar with auto-coloring |
-| `timeline_item` | `title, description, time, color, is_last` | Vertical timeline entry |
+| `timeline_item` | `title, description, time, color, tone, is_last` | Vertical timeline entry; prefer the branding-owned semantic `tone` for status activity |
 | `connection_status` | `status, label, last_seen` | Online/offline dot indicator |
 | `alert_count_badge` | `count, color` | Count pill, hidden when 0 |
 | `icon_badge` | `icon, color, color2, size` | Compact orientation icon; semantic state remains separate |
@@ -545,9 +561,9 @@ Each spec documents: URL, template path, context dict shape, and HTMX partials.
         "orders_in_progress": int,
         "orders_pending_activation": int,
         "orders_completed_today": int,
-        "olts_online": int,
+        "olts_working": int,
         "olts_total": int,
-        "onts_active": int,
+        "onts_working": int,
         "onts_total": int,
         "alarms_critical": int,
         "alarms_major": int,
@@ -570,9 +586,8 @@ Each spec documents: URL, template path, context dict shape, and HTMX partials.
     # ── Supporting Operational Summaries ──
     "online_count": int,                    # active RADIUS sessions
     "monitoring_summary": {
-        "devices_online": int,
-        "devices_offline": int,
-        "devices_degraded": int,
+        "devices_working": int,
+        "devices_not_working": int,
         "devices_total": int,
     },
     "onu_summary": {
@@ -673,6 +688,7 @@ Dashboard implementation notes:
     "subscribers": list[Subscriber],
     "accounts": list[Subscriber],
     "subscriptions": list[Subscription],
+    "restorable_subscription_ids": set[str], # lifecycle-owner restore candidates
     "account_lookup": dict[str, Subscriber],  # account_id → Subscriber
     "invoices": list[Invoice],
     "payments": list[Payment],
@@ -706,14 +722,27 @@ Dashboard implementation notes:
         "last_invoice": Invoice | None,
         "monthly_recurring": float,
     },
+    "account_health": PortalAccountHealth,  # active services only in Customer 360;
+                                            # history remains in the Service tab
 
     "has_active_subscribers": bool,
     "has_any_subscribers": bool,
     "activity_items": list[dict],       # [{type, title, description, timestamp}]
     "customer_user_access": dict,       # portal login state
+    "can_activate_subscriptions": bool, # RBAC-owned visibility for restore actions
+    "can_suspend_subscriptions": bool,  # RBAC-owned visibility for suspend actions
     "active_page": "customers",
 }
 ```
+
+The **All Subscriptions** work surface exposes one visible `Restore` row action
+for blocked, suspended, stopped, or disabled services only when the authenticated
+operator has `catalog:write` or `subscription:activate`. The action consumes the
+canonical subscription-lifecycle preview, shows the exact billing, access, and
+session impact, captures an operational reason, and confirms against the
+reviewed state head before execution. The lifecycle endpoint rechecks the
+kind-specific permission and current eligibility; the template is visibility,
+not authorization.
 
 #### `GET /admin/customers/{type}/{id}` (Organization Detail)
 Same shape as person, plus:
@@ -1021,6 +1050,48 @@ transition.
 }
 ```
 
+### Billing — Service extension detail
+
+#### `GET /admin/billing/service-extensions/{extension_id}`
+**Template:** `admin/billing/service_extension_detail.html`
+
+Page contract:
+
+- Screen: admin service-extension detail.
+- Audience: billing and operations staff.
+- Job: verify scope, ownership, lifecycle history, impact, and the available
+  transition.
+- Read owner: `ui.service_extension_detail_projection`.
+- Command owner: `financial.service_extensions`.
+- Primary entity: service-extension UUID.
+- Activity depth: L3 investigation. Raw audit evidence and metadata remain L4
+  and require `audit:read`.
+
+The route supplies one typed `ServiceExtensionDetailProjection`. Its summary
+includes server-owned `status_presentation`, created actor and application-
+timezone timestamp, scope, days, outage window, and UUID. The decision area
+receives owner-computed impact and permission-aware `can_apply`/`can_cancel`.
+Users with only `billing:extension:read` can see summarized activity but no
+action controls.
+
+“Recent activity” appears below the decision/action area and before affected-
+subscription evidence. It uses typed `ServiceExtensionActivityItem` values and
+the shared `timeline_item` macro. Each item retains its action, safe actor label,
+application-timezone timestamp, concise result, semantic tone, and explicit
+legacy provenance when reconstructed. Newest-first order is deterministic.
+
+The projection queries only exact `entity_type=service_extension` and exact
+entity UUID audit evidence. It may reconstruct historical creation and apply
+items from reliable legacy fields, de-duplicates them when canonical events
+exist, and never invents a cancellation timestamp. There is no “View all” link
+until the audit UI supports an exact entity-ID filter.
+
+The responsive timeline keeps action, actor, and timestamp visible without a
+horizontal table dependency. Status always includes text/icon semantics and is
+never communicated by color alone. The template must not contain a local status
+map, permission check, lifecycle transition rule, actor lookup, or timestamp
+conversion.
+
 #### `GET /admin/reports/tax`
 **Template:** `admin/reports/tax.html`
 
@@ -1076,9 +1147,22 @@ Page contract: this is the Sub finance-admin source-fact plane for moving WHT
 receivables through evidence-backed transitions. `financial.tax_accounting`
 owns both the read/context contract and commands; billing tax RBAC owns access.
 The WHT queue has server-side status/search filtering, newest-first ordering,
-counts, and pagination. Search covers reseller name, record ID, billing account
-ID, and certificate reference. Account mapping and journal operations belong in
-Dotmac ERP and are not presented here.
+counts, and pagination. Search covers reseller name, direct-customer identity,
+record ID, customer/billing account ID, and certificate reference. Rows may
+represent either a direct customer account or a consolidated billing account.
+Account mapping and journal operations belong in Dotmac ERP and are not
+presented here.
+
+For invoice-linked direct bank-transfer payments where the customer WHT policy
+is enabled, the customer portal receives a read-only server-owned snapshot with
+invoice total, VAT-exclusive WHT basis, VAT amount, configured WHT percentage,
+WHT deduction, exact bank-transfer amount, gross credit after verification, and
+the certificate amount that remains outstanding. Templates and clients must not
+ask the customer for a WHT rate, must not recalculate VAT-exclusive basis from
+gross or net values, and must not offer automatic WHT for arbitrary
+account-credit deposits or online/card checkout. When WHT is disabled or the
+payment method is not direct bank transfer, the portal preserves the existing
+full-value payment experience.
 
 ---
 
@@ -1522,6 +1606,9 @@ Each follows the same pattern — context dict with list data, form helpers, and
 | `/admin/system/users/{id}` | User detail | user, roles, permissions, activity |
 | `/admin/system/roles` | Role list | roles, permission_groups |
 | `/admin/system/settings` | Settings hub | domains, settings_by_domain |
+| `/admin/settings/billing/collection-accounts` | Receiving accounts and customer transfer destinations | accounts, account_types, show_inactive |
+| `/admin/settings/billing/payment-channels` | Recorded settlement-channel attribution | channels, providers, channel_types, show_inactive |
+| `/admin/settings/billing/payment-channel-accounts` | Channel-to-collection-account attribution | mappings, channels, collection_accounts, show_inactive |
 | `/admin/system/audit` | Audit log | events, filters, page |
 | `/admin/system/health` | System health | cpu, memory, disk, services |
 
@@ -1702,6 +1789,13 @@ Template listens:
 
 ### Server-owned action forms
 
+High-impact action contracts may carry owner-produced hidden values such as a
+state-preview fingerprint. The shared renderer emits those values unchanged and
+uses a required, labeled confirmation checkbox when confirmation is declared.
+Do not use `window.confirm`, `onclick`/`onsubmit` confirmation handlers, or
+template-generated fingerprints. The command owner must recheck the fingerprint
+and confirmation under its transaction lock.
+
 High-impact and lifecycle action forms use
 `app.services.action_forms.ActionForm` and the shared
 `components/forms/action_form.html` renderer. The resource projection composes
@@ -1716,6 +1810,21 @@ duplicate-reference policy, payment/WHT consequences, validation, locking, and
 execution. Unauthorized verify/reject forms are absent. An unavailable verify
 action may remain visible with the owner-provided duplicate reason when reject
 is still valid.
+
+Payment-arrangement review and dunning-case staff actions use the same
+server-owned form contract. Dunning bulk actions always preview an explicit set
+of case identifiers, disclose every eligible and skipped case, bind that exact
+scope and current owner state into a fingerprint, and revalidate it while the
+cases are locked. Templates must not infer transition eligibility or submit
+page-filter criteria as an implicit bulk scope.
+
+Invoice batch launch/retry and invoice bulk actions also use server-rendered
+review forms. A manual batch preview lists exact postpaid subscription
+membership and carries its current fingerprint; a retry is available only from
+a failed run and produces a new linked run. Invoice list and AR-aging actions
+submit explicit invoice IDs to a review page and carry the owner-produced
+resolved count and scope token. Client JavaScript may collect visible-page IDs,
+but it does not display confirmation dialogs or execute the financial command.
 
 Failed submissions re-render the detail page with the operator's declared
 values and `aria-invalid` field errors or one `role="alert"` general error.

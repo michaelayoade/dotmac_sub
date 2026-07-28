@@ -3,8 +3,8 @@
 Status: implemented and verified, 2026-07-18. The eleven denormalized child
 identifiers are retired, native work orders have no CRM provenance value,
 authority is explicit, and compatibility response fields derive from
-`public_id`. The persisted reconcile-job name remains while the CRM sync is
-active; it identifies an integration process, not authoritative storage.
+`public_id`. Migration 383 retired the CRM pull/webhook, reconcile jobs,
+sync-state table, controls, and customer mirror reads.
 
 ## Finding
 
@@ -53,11 +53,9 @@ Work orders need **re-keying, not migrating**.
 - `is_sub_authoritative` becomes `crm_work_order_id is None` (plus the
   existing `metadata.native_field_source == "sub"` marker for imported rows
   whose field activity Sub has taken over).
-- CRM reconcile/webhook ingest resolves `crm_work_order_id → work_order.id`
-  once at the boundary and operates on native identity thereafter. The
-  Celery/beat names (`reconcile_work_order_mirror`,
-  `work_order_mirror_reconcile`) are persisted identifiers of the *sync job*,
-  not the table; they retire with the CRM integration and its scheduler rows.
+- Historical CRM identifiers remain provenance on already-imported roots. No
+  runtime CRM reconcile, webhook, lazy read, task, or scheduler path writes the
+  work-order root after migration 383.
 
 ## Identity pattern (applies to every module going Sub-native)
 
@@ -96,8 +94,8 @@ of scope here, except that their native tables must conform to this pattern.
    columns and their indexes, changed compatibility response fields to derive
    `public_id`, NULLed fabricated CRM references on native rows, simplified the
    authority test, and updated `SOT_RELATIONSHIP_MAP.md`.
-   The persisted sync job/beat name remains until CRM itself retires; it names
-   an active integration job and is not an authority claim about the table.
+   Migration 383 then removed the sync state, tasks, scheduler, webhook, and
+   pull control so no integration path can reclaim authority.
 
 ## Verification gates
 
@@ -115,5 +113,4 @@ of scope here, except that their native tables must conform to this pattern.
 
 - Projects/quotes/referrals cutovers (existing plan, unchanged).
 - Quote-deposit guard and native quote write wiring (separate scoped work).
-- CRM-side changes. CRM remains a transport; its webhooks keep sending its
-  ids, which Sub records as provenance.
+- Historical import provenance already stored on native roots.

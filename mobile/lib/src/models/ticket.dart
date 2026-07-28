@@ -30,6 +30,19 @@ class TicketAttachment {
       );
 }
 
+class TicketSelfCareAction {
+  const TicketSelfCareAction({required this.key, required this.allowed});
+
+  final String key;
+  final bool allowed;
+
+  factory TicketSelfCareAction.fromJson(Map<String, dynamic> json) =>
+      TicketSelfCareAction(
+        key: (json['key'] ?? '').toString(),
+        allowed: json['allowed'] as bool? ?? false,
+      );
+}
+
 List<TicketAttachment> _toAttachments(dynamic v) {
   if (v is! List) return const [];
   return v
@@ -56,6 +69,7 @@ class Ticket {
     this.resolvedAt,
     this.closedAt,
     this.csatRating,
+    this.resolutionActions = const [],
     StatusPresentation? statusPresentation,
   }) : statusPresentation =
             statusPresentation ?? StatusPresentation.neutralFallback(status);
@@ -78,12 +92,23 @@ class Ticket {
 
   /// Support-satisfaction score (1-5) if the customer has rated this ticket.
   final int? csatRating;
+  final List<TicketSelfCareAction> resolutionActions;
 
   bool get isOpen =>
       closedAt == null && status != 'closed' && status != 'resolved';
 
-  /// A resolved/closed ticket can be rated (CSAT on the support experience).
-  bool get canRate => status == 'resolved' || status == 'closed';
+  /// The server decides whether CSAT is currently available.
+  bool get canRate => resolutionActions.any(
+        (action) => action.key == 'rate_support' && action.allowed,
+      );
+
+  bool get canConfirmResolution => resolutionActions.any(
+        (action) => action.key == 'confirm_resolution' && action.allowed,
+      );
+
+  bool get canDisputeResolution => resolutionActions.any(
+        (action) => action.key == 'dispute_resolution' && action.allowed,
+      );
 
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
         id: json['id'].toString(),
@@ -108,6 +133,13 @@ class Ticket {
         resolvedAt: _toDate(json['resolved_at']),
         closedAt: _toDate(json['closed_at']),
         csatRating: (json['csat_rating'] as num?)?.toInt(),
+        resolutionActions: ((json['resolution_actions'] as List?) ?? const [])
+            .whereType<Map>()
+            .map(
+              (item) =>
+                  TicketSelfCareAction.fromJson(item.cast<String, dynamic>()),
+            )
+            .toList(),
       );
 }
 

@@ -20,9 +20,10 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
-    # Subscriber events (5)
+    # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"
+    subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     subscriber_suspended = "subscriber.suspended"
     subscriber_reactivated = "subscriber.reactivated"
     subscriber_throttled = "subscriber.throttled"
@@ -33,6 +34,7 @@ class EventType(enum.Enum):
     subscription_activated = "subscription.activated"
     subscription_suspended = "subscription.suspended"
     subscription_resumed = "subscription.resumed"
+    subscription_disabled = "subscription.disabled"
     subscription_canceled = "subscription.canceled"
     subscription_upgraded = "subscription.upgraded"
     subscription_downgraded = "subscription.downgraded"
@@ -52,7 +54,42 @@ class EventType(enum.Enum):
     payment_failed = "payment.failed"
     payment_refunded = "payment.refunded"
     payment_reversed = "payment.reversed"
+    payment_provider_event_processed = "payment_provider_event.processed"
+    payment_provider_event_failed = "payment_provider_event.failed"
+    payment_gateway_finance_identity_ensured = (
+        "payment_gateway.finance_identity_ensured"
+    )
+    integration_installation_manifest_adopted = (
+        "integration.installation.manifest_adopted"
+    )
+    integration_installation_capability_provisioned = (
+        "integration.installation.capability_provisioned"
+    )
+    integration_job_capability_activated = "integration.job.capability_activated"
     account_credit_deposited = "account_credit.deposited"
+    prepaid_service_renewed = "prepaid_service.renewed"
+    subscription_billing_treatment_changed = "subscription_billing_treatment.changed"
+    subscription_service_granted = "subscription_service.granted"
+    billing_shadow_delivery_recorded = "billing.shadow_delivery.recorded"
+    billing_cutover_verification_recorded = "billing.cutover_verification.recorded"
+    billing_cutover_verification_approved = "billing.cutover_verification.approved"
+
+    # Billing - Bank-transfer evidence lifecycle
+    payment_proof_submitted = "payment_proof.submitted"
+    payment_proof_verified = "payment_proof.verified"
+    payment_proof_rejected = "payment_proof.rejected"
+    topup_intent_direct_transfer_created = "topup_intent.direct_transfer_created"
+    topup_intent_direct_transfer_canceled = "topup_intent.direct_transfer_canceled"
+    topup_intent_direct_transfer_submitted = "topup_intent.direct_transfer_submitted"
+    topup_intent_direct_transfer_proof_rejected = (
+        "topup_intent.direct_transfer_proof_rejected"
+    )
+    topup_intent_completed = "topup_intent.completed"
+    topup_intent_expired = "topup_intent.expired"
+    topup_intent_gateway_created = "topup_intent.gateway_created"
+    topup_intent_failed = "topup_intent.failed"
+    withholding_tax_receivable_recorded = "withholding_tax.receivable_recorded"
+    withholding_tax_status_changed = "withholding_tax.status_changed"
 
     # Billing - Consolidated billing account payment (1)
     billing_account_payment_received = "billing_account.payment_received"
@@ -60,7 +97,23 @@ class EventType(enum.Enum):
     # Billing - Payment arrangement events (1)
     arrangement_defaulted = "arrangement.defaulted"
 
-    # Billing - Outage compensation (1)
+    # Prepaid enforcement control-state evidence
+    prepaid_enforcement_timer_changed = "prepaid_enforcement.timer_changed"
+    prepaid_coverage_reconciled = "prepaid_coverage.reconciled"
+    prepaid_draft_reconciled = "prepaid_draft.reconciled"
+    ip_assignment_service_ownership_reconciled = (
+        "ip_assignment.service_ownership_reconciled"
+    )
+    ip_assignment_lifecycle_repaired = "ip_assignment.lifecycle_repaired"
+    ip_assignment_served_projection_repaired = (
+        "ip_assignment.served_projection_repaired"
+    )
+
+    # Billing - Outage compensation
+    service_extension_created = "billing.service_extension_created"
+    service_extension_applied = "billing.service_extension_applied"
+    service_extension_canceled = "billing.service_extension_canceled"
+    service_extension_anchor_repaired = "billing.service_extension_anchor_repaired"
     service_extended = "billing.service_extended"
 
     # Usage events (5)
@@ -69,20 +122,55 @@ class EventType(enum.Enum):
     usage_exhausted = "usage.exhausted"
     usage_topped_up = "usage.topped_up"
     addon_expiring = "usage.addon_expiring"
+    fup_runtime_state_changed = "fup.runtime_state_changed"
+    fup_policy_changed = "fup_policy.changed"
 
     # Operations - Provisioning events (3)
     provisioning_started = "provisioning.started"
     provisioning_completed = "provisioning.completed"
     provisioning_failed = "provisioning.failed"
 
-    # Operations - Service Order events (3)
+    # Operations - Service Order events (5)
     service_order_created = "service_order.created"
     service_order_assigned = "service_order.assigned"
+    service_order_activation_requested = "service_order.activation_requested"
     service_order_completed = "service_order.completed"
+    service_order_recovered = "service_order.recovered"
+
+    # Shared operational service-team lifecycle
+    service_team_changed = "service_team.changed"
+    service_team_membership_changed = "service_team.membership_changed"
+    workqueue_action_coordinated = "workqueue.action_coordinated"
 
     # Operations - vendor installation project lifecycle
+    # Materials / vendor / ERP chain outputs
+    # (docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md). Staged atomically with
+    # each owning transition; the materials lifecycle projection handler
+    # applies cross-owner consequences with durable receipts.
+    field_material_request_approved = "field_material_request.approved"
+    field_material_request_fulfilled = "field_material_request.fulfilled"
+    field_material_consumption_recorded = "field_material.consumption_recorded"
+    vendor_purchase_invoice_approved = "vendor_purchase_invoice.approved"
+    vendor_purchase_invoice_payment_observed = (
+        "vendor_purchase_invoice.payment_observed"
+    )
+    vendor_material_release_requested = "vendor_material_release.requested"
+    vendor_material_release_reviewed = "vendor_material_release.reviewed"
+    vendor_material_release_issued = "vendor_material_release.issued"
+    vendor_advance_requested = "vendor_advance.requested"
+    vendor_advance_reviewed = "vendor_advance.reviewed"
+    vendor_advance_settled = "vendor_advance.settled"
+    vendor_project_published = "vendor_project.published"
+    vendor_project_assigned = "vendor_project.assigned"
     vendor_project_started = "vendor_project.started"
     vendor_project_completed = "vendor_project.completed"
+    vendor_quote_changed = "vendor_quote.changed"
+    vendor_purchase_invoice_changed = "vendor_purchase_invoice.changed"
+    vendor_route_revision_changed = "vendor_route_revision.changed"
+    vendor_route_revision_accepted = "vendor_route_revision.accepted"
+    vendor_route_revision_rejected = "vendor_route_revision.rejected"
+    vendor_as_built_submitted = "vendor_as_built.submitted"
+    vendor_submission_confirmed = "vendor_submission.confirmed"
     vendor_project_verified = "vendor_project.verified"
     vendor_project_rework_requested = "vendor_project.rework_requested"
     vendor_as_built_accepted = "vendor_as_built.accepted"
@@ -96,12 +184,23 @@ class EventType(enum.Enum):
     # lead/quote lifecycle was webhook-silent in the CRM's event system;
     # automation consumes these.
     lead_created = "lead.created"
+    lead_account_converted = "lead.account_converted"
     quote_accepted = "quote.accepted"
     sales_order_paid = "sales_order.paid"
+    sales_order_funding_satisfied = "sales_order.funding_satisfied"
+    sales_order_fulfilled = "sales_order.fulfilled"
+    project_created = "project.created"
+    installation_scope_created = "installation_scope.created"
+    implementation_released = "implementation.released"
+    service_order_released = "service_order.released"
+    customer_experience_ready = "customer_experience.ready"
+    customer_experience_accepted = "customer_experience.accepted"
+    customer_experience_needs_attention = "customer_experience.needs_attention"
 
-    # Network events (4)
+    # Network events (5)
     device_offline = "device.offline"
     device_online = "device.online"
+    device_projection_reconciled = "device_projection.reconciled"
     session_started = "session.started"
     session_ended = "session.ended"
 
@@ -159,12 +258,73 @@ class EventType(enum.Enum):
     customer_login = "customer.login"
     customer_logout = "customer.logout"
     customer_ticket_created = "customer.ticket_created"
+
+    # Identity / onboarding invitation lifecycle
+    # (docs/designs/IDENTITY_ONBOARDING_CHAIN.md)
+    access_invitation_issued = "access_invitation.issued"
+    access_invitation_accepted = "access_invitation.accepted"
+    access_invitation_expired = "access_invitation.expired"
+
+    # Support ticket / work-order lifecycle outputs
+    # (docs/designs/TICKET_WORK_ORDER_HANDOFF_SOT.md). Staged atomically with
+    # each owning transition; the support lifecycle projection handler
+    # applies cross-owner consequences with durable receipts.
+    ticket_resolution_requested = "ticket.resolution_requested"
+    ticket_resolution_confirmed = "ticket.resolution_confirmed"
+    ticket_resolution_disputed = "ticket.resolution_disputed"
+    ticket_merged = "ticket.merged"
+    ticket_work_order_issued = "ticket.work_order_issued"
+    work_order_field_outcome_recorded = "work_order.field_outcome_recorded"
     customer_password_changed = "customer.password_changed"  # noqa: S105
 
-    # Reseller events (3)
+    # Reseller events (5)
+    reseller_created = "reseller.created"
+    reseller_user_provisioned = "reseller_user.provisioned"
     reseller_login = "reseller.login"
     reseller_logout = "reseller.logout"
     reseller_impersonated = "reseller.impersonated"
+
+    # Staff and subscriber identity/authorization lifecycle (6)
+    vendor_user_provisioned = "vendor_user.provisioned"
+    vendor_user_revoked = "vendor_user.revoked"
+    vendor_user_role_changed = "vendor_user.role_changed"
+    staff_account_provisioned = "staff_account.provisioned"
+    staff_account_roles_changed = "staff_account.roles_changed"
+    staff_account_activated = "staff_account.activated"
+    staff_account_deactivated = "staff_account.deactivated"
+    system_user_assignments_changed = "system_user.assignments_changed"
+    subscriber_assignments_changed = "subscriber.assignments_changed"
+
+    # Credential recovery lifecycle (2)
+    password_recovery_requested = "password_recovery.requested"
+    password_recovery_completed = "password_recovery.completed"
+
+    # Referral-created customer credential enrollment lifecycle (2)
+    customer_credential_enrollment_requested = (
+        "customer_credential_enrollment.requested"
+    )
+    customer_credential_enrollment_completed = (
+        "customer_credential_enrollment.completed"
+    )
+
+    # Referral program lifecycle (7) and account conversion lifecycle (1)
+    referral_code_issued = "referral_code.issued"
+    referral_captured = "referral.captured"
+    referral_subscriber_attached = "referral.subscriber_attached"
+    referral_qualified = "referral.qualified"
+    referral_expired = "referral.expired"
+    referral_rejected = "referral.rejected"
+    referral_reward_issued = "referral.reward_issued"
+    referral_reward_reconciled = "referral.reward_reconciled"
+    referral_account_converted = "referral_account.converted"
+
+    # Account-adjustment financial evidence lifecycle (2)
+    account_adjustment_confirmed = "account_adjustment.confirmed"
+    account_adjustment_reversed = "account_adjustment.reversed"
+
+    # RBAC catalog events (2)
+    rbac_role_catalog_changed = "rbac.role_catalog_changed"
+    rbac_permission_catalog_changed = "rbac.permission_catalog_changed"
 
     # NAS events (7)
     nas_device_created = "nas_device.created"
@@ -175,9 +335,11 @@ class EventType(enum.Enum):
     nas_provisioning_completed = "nas_provisioning.completed"
     nas_provisioning_failed = "nas_provisioning.failed"
 
-    # TR-069 events (4)
+    # TR-069 events (6)
+    tr069_job_accepted = "tr069_job.accepted"
     tr069_job_completed = "tr069_job.completed"
     tr069_job_failed = "tr069_job.failed"
+    tr069_job_unverified = "tr069_job.unverified"
     tr069_device_discovered = "tr069_device.discovered"
     tr069_device_stale = "tr069_device.stale"
 
@@ -187,8 +349,37 @@ class EventType(enum.Enum):
     outage_area = "outage.area"
     outage_last_mile = "outage.last_mile"
 
+    # Outage incident lifecycle outputs
+    # (docs/designs/NETWORK_OUTAGE_RESPONSE_LIFECYCLE.md). Staged atomically
+    # with each incident transition; the registered outage lifecycle
+    # projection handler applies cross-owner consequences. The legacy
+    # ``network.alert`` fan-out keeps its payload for external webhooks.
+    outage_created = "outage.created"
+    outage_suspected = "outage.suspected"
+    outage_confirmed = "outage.confirmed"
+    outage_clearing = "outage.clearing"
+    outage_reopened = "outage.reopened"
+    outage_rerooted = "outage.rerooted"
+    outage_discarded = "outage.discarded"
+    outage_resolved = "outage.resolved"
+
     # Custom event type for extensibility
     custom = "custom"
+
+
+class AccountCreditFundingOrigin(str, enum.Enum):
+    """Closed provenance vocabulary for account-credit funding events."""
+
+    account_credit_deposit = "account_credit_deposit"
+    verified_invoice_payment = "verified_invoice_payment"
+
+
+class AccountCreditApplicationState(str, enum.Enum):
+    """Closed application outcome carried by account-credit funding events."""
+
+    allocated = "allocated"
+    no_allocatable_balance = "no_allocatable_balance"
+    retained_as_account_credit = "retained_as_account_credit"
 
 
 # Mapping from EventType to LifecycleEventType for subscription events
@@ -196,6 +387,7 @@ SUBSCRIPTION_LIFECYCLE_MAP = {
     EventType.subscription_activated: "activate",
     EventType.subscription_suspended: "suspend",
     EventType.subscription_resumed: "resume",
+    EventType.subscription_disabled: "other",
     EventType.subscription_canceled: "cancel",
     EventType.subscription_upgraded: "upgrade",
     EventType.subscription_downgraded: "downgrade",

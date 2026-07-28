@@ -24,12 +24,11 @@ from app.models.integration_platform import (
     IntegrationInstallation,
     IntegrationInstallationState,
 )
-from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
-from app.services import billing as billing_service
 from app.services import connector as connector_service
 from app.services import integration as integration_service
+from app.services import operational_checks as operational_checks_service
 from app.services.common import validate_enum
 from app.services.integrations import installations
 from app.services.integrations import registry as integration_registry
@@ -295,7 +294,7 @@ def build_marketplace_data(db) -> dict[str, object]:
                     "/admin/integrations/whatsapp"
                     if entry.key == "whatsapp"
                     else (
-                        "/admin/billing/payment-providers"
+                        f"/admin/integrations/payment-gateways/{entry.key}"
                         if entry.key in {"paystack", "flutterwave"}
                         else None
                     )
@@ -320,7 +319,7 @@ def _installation_manage_url(installation: IntegrationInstallation) -> str:
     if installation.connector_key == "whatsapp":
         return "/admin/integrations/whatsapp"
     if installation.connector_key in {"paystack", "flutterwave"}:
-        return "/admin/billing/payment-providers"
+        return f"/admin/integrations/payment-gateways/{installation.connector_key}"
     return "/admin/integrations/jobs"
 
 
@@ -399,33 +398,38 @@ def _delivery_stats_by_installation(
     }
 
 
-def _installation_health(
+def _installation_evidence(
     last_run: tuple[str, datetime | None] | None,
     delivery_stats: tuple[int, int] | None,
-) -> tuple[str, dict[str, object]]:
-    """Health from real signals only: healthy / degraded / unknown.
-
-    Signals are the most recent completed IntegrationRun and recent webhook
-    delivery failures; a connector with neither is "unknown", never green.
-    """
+) -> dict[str, object]:
+    """Explain runtime evidence without collapsing it into a health label."""
     calls, failed = delivery_stats or (0, 0)
-    stats: dict[str, object] = {
+    last_status = last_run[0] if last_run else None
+    if last_status == "success":
+        result = "The last completed integration job succeeded."
+    elif last_status == "failed":
+        result = "The last completed integration job failed."
+    elif calls:
+        result = f"{calls} delivery attempt(s) recorded; {failed} require attention."
+    else:
+        result = "No completed job or delivery evidence has been recorded."
+    return {
+        "last_result": result,
+        "observed_at": last_run[1] if last_run else None,
         "calls": calls,
         "failed": failed,
-        "last_run_status": last_run[0] if last_run else None,
-        "last_run_at": last_run[1] if last_run else None,
+        "last_run_status": last_status,
+        "needs_attention": bool(last_status == "failed" or failed),
     }
-    degraded = bool(last_run and last_run[0] == "failed")
-    if calls and (failed / calls) >= 0.10:
-        degraded = True
-    if degraded:
-        return "degraded", stats
-    if last_run or calls:
-        return "healthy", stats
-    return "unknown", stats
 
 
 def build_installed_integrations_data(db: Session) -> dict[str, object]:
+    paystack_operational_check = operational_checks_service.paystack_payment_check(
+        db
+    ).to_dict()
+    crm_operational_check = operational_checks_service.crm_operational_check(
+        db
+    ).to_dict()
     installed = (
         db.query(IntegrationInstallation)
         .filter(
@@ -448,7 +452,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         definition = integration_registry.require_connector_definition(
             installation.connector_key
         )
-        health, health_stats = _installation_health(
+        evidence = _installation_evidence(
             last_runs.get(str(installation.id)),
             delivery_stats.get(str(installation.id)),
         )
@@ -458,8 +462,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 "title": definition.name,
                 "root": "integrations",
                 "integration_type": definition.connector_type,
-                "health": health,
-                "health_stats": health_stats,
+                "operational_evidence": evidence,
                 "manage_url": _installation_manage_url(installation),
             }
         )
@@ -539,8 +542,23 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 for installation in installed
                 if installation.state == IntegrationInstallationState.enabled.value
             ),
-            "healthy": sum(1 for row in rows if row["health"] == "healthy"),
+            "attention": sum(
+                1
+                for row in rows
+                if bool(
+                    cast(
+                        dict[str, object],
+                        row["operational_evidence"],
+                    ).get("needs_attention")
+                )
+            ),
         },
+        "integration_operational_checks": [
+            paystack_operational_check,
+            crm_operational_check,
+        ],
+        "paystack_operational_check": paystack_operational_check,
+        "crm_operational_check": crm_operational_check,
     }
 
 
@@ -922,92 +940,3 @@ def create_job(
         is_active=is_active,
     )
     return integration_service.integration_jobs.create(db, payload)
-
-
-def provider_form_options(db) -> dict[str, object]:
-    from app.models.billing import PaymentProviderType
-
-    return {"provider_types": [t.value for t in PaymentProviderType]}
-
-
-def provider_error_state(
-    db,
-    *,
-    name: str,
-    provider_type: str,
-    notes: str | None,
-    is_active: bool,
-) -> dict[str, object]:
-    return {
-        **provider_form_options(db),
-        "form": {
-            "name": name,
-            "provider_type": provider_type,
-            "notes": notes or "",
-            "is_active": is_active,
-        },
-    }
-
-
-def create_provider(
-    db,
-    *,
-    name: str,
-    provider_type: str,
-    notes: str | None,
-    is_active: bool,
-):
-    from app.models.billing import PaymentProviderType
-
-    payload = PaymentProviderCreate(
-        name=name.strip(),
-        provider_type=validate_enum(
-            provider_type, PaymentProviderType, "provider_type"
-        ),
-        notes=notes.strip() if notes else None,
-        is_active=is_active,
-    )
-    return billing_service.payment_providers.create(db, payload)
-
-
-def build_providers_list_data(db) -> dict[str, object]:
-    providers = billing_service.payment_providers.list_all(
-        db=db,
-        order_by="name",
-        order_dir="asc",
-        limit=100,
-        offset=0,
-    )
-    by_type: dict[str, int] = {}
-    stats = {
-        "total": len(providers),
-        "active": sum(1 for p in providers if p.is_active),
-        "by_type": by_type,
-    }
-    for provider in providers:
-        ptype = (
-            provider.provider_type.value
-            if hasattr(provider.provider_type, "value")
-            else str(provider.provider_type or "manual")
-        )
-        by_type[ptype] = by_type.get(ptype, 0) + 1
-    return {
-        "providers": providers,
-        "stats": stats,
-    }
-
-
-def build_provider_detail_data(db, *, provider_id: str) -> dict[str, object]:
-    provider = billing_service.payment_providers.get(db, provider_id)
-    events = billing_service.payment_provider_events.list(
-        db=db,
-        provider_id=str(provider.id),
-        payment_id=None,
-        invoice_id=None,
-        status=None,
-        order_by="received_at",
-        order_dir="desc",
-        limit=50,
-        offset=0,
-    )
-    return {"provider": provider, "events": events}

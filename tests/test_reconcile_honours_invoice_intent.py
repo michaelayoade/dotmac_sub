@@ -18,12 +18,16 @@ happy path, not a different one.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from uuid import UUID
+
+import pytest
 
 from app.models.billing import TopupIntent
-from app.services.payment_reconciliation import _intent_allocations
+from app.services.payment_reconciliation import (
+    PaymentReconciliationError,
+    _target_invoice_id,
+)
 
-_AMOUNT = Decimal("5000.00")
 _INVOICE_ID = "11111111-1111-1111-1111-111111111111"
 
 
@@ -37,34 +41,35 @@ def _intent(metadata: dict | None) -> TopupIntent:
     )
 
 
-def test_invoice_payment_allocates_to_the_invoice_the_customer_chose():
+def test_invoice_payment_targets_the_invoice_the_customer_chose():
     intent = _intent({"payment_flow": "invoice_payment", "invoice_id": _INVOICE_ID})
 
-    allocations = _intent_allocations(intent, _AMOUNT)
-
-    assert allocations is not None
-    assert len(allocations) == 1
-    assert str(allocations[0].invoice_id) == _INVOICE_ID
-    assert allocations[0].amount == _AMOUNT
+    assert _target_invoice_id(intent) == UUID(_INVOICE_ID)
 
 
-def test_a_genuine_topup_still_auto_allocates():
-    """Top-ups have no target invoice -- oldest-first auto-allocation is correct
-    for them, and must not regress."""
-    assert _intent_allocations(_intent({"payment_flow": "topup"}), _AMOUNT) is None
-    assert _intent_allocations(_intent(None), _AMOUNT) is None
-    assert _intent_allocations(_intent({}), _AMOUNT) is None
+def test_a_genuine_topup_has_no_explicit_invoice_target():
+    assert _target_invoice_id(_intent({"payment_flow": "topup"})) is None
+    assert _target_invoice_id(_intent(None)) is None
+    assert _target_invoice_id(_intent({})) is None
 
 
 def test_invoice_payment_without_an_invoice_id_does_not_guess():
-    """An invoice checkout with no recorded invoice is an upstream bug. Fall back
-    to auto-allocation rather than silently picking a bill to settle."""
+    """An invoice checkout with no recorded invoice must fail closed."""
     intent = _intent({"payment_flow": "invoice_payment"})
 
-    assert _intent_allocations(intent, _AMOUNT) is None
+    with pytest.raises(
+        PaymentReconciliationError,
+        match="no valid target invoice",
+    ) as exc_info:
+        _target_invoice_id(intent)
+
+    assert exc_info.value.code.endswith("invoice_correlation_invalid")
 
 
 def test_unparseable_invoice_id_does_not_guess():
     intent = _intent({"payment_flow": "invoice_payment", "invoice_id": "not-a-uuid"})
 
-    assert _intent_allocations(intent, _AMOUNT) is None
+    with pytest.raises(PaymentReconciliationError) as exc_info:
+        _target_invoice_id(intent)
+
+    assert exc_info.value.code.endswith("invoice_correlation_invalid")

@@ -25,7 +25,7 @@ from app.schemas.referral import (
     ReferralSelfServiceSignupRequest,
 )
 from app.services import referral_account_conversion
-from app.services.referrals import referrals
+from tests.referral_program_testkit import ensure_code
 
 
 def _email(prefix: str) -> str:
@@ -62,7 +62,7 @@ def _enable_program(db) -> None:
 def _capture(db):
     _enable_program(db)
     referrer = _subscriber(db)
-    code = referrals.ensure_code(db, str(referrer.id))
+    code = ensure_code(db, referrer.id)
     result = referral_api.capture_referral(
         ReferralCaptureRequest(
             code=code.code,
@@ -108,6 +108,24 @@ def test_capture_returns_expiring_pii_free_signed_context(db_session):
         "exp",
     }
     assert result.conversion_expires_at > datetime.now(UTC)
+
+
+def test_capture_uses_the_canonical_bounded_signup_context_lifetime(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.subscriber,
+            key="referral_signup_context_expiry_minutes",
+            value_type=SettingValueType.integer,
+            value_text="30",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    _, result = _capture(db_session)
+
+    claims = jwt.get_unverified_claims(result.conversion_token)
+    assert claims["exp"] - claims["iat"] == 30 * 60
 
 
 def test_public_signup_uses_token_not_contact_matching_and_is_idempotent(

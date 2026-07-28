@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import support as support_service
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.web.customer.branding import get_customer_templates
 
 router = APIRouter(prefix="/ticket-confirm", tags=["public-ticket-confirm"])
@@ -60,6 +62,7 @@ def confirmation_page(request: Request, token: str, db: Session = Depends(get_db
     token_row, state = _load_token(db, token)
     if state == "ok":
         assert token_row is not None
+        db_session_adapter.release_read_transaction(db)
         support_service.ticket_access_tokens.mark_accessed(db, token_row)
         return _render(request, token=token, state="ok", token_row=token_row)
     status_code = {"not_found": 404, "expired": 410, "closed": 409}.get(state, 400)
@@ -89,17 +92,17 @@ def confirm_resolution_page(
             status_code=status_code,
         )
     assert token_row is not None
+    db_session_adapter.release_read_transaction(db)
     try:
         ticket = support_service.tickets.confirm_resolution(db, token_row)
-    except HTTPException as exc:
-        db.rollback()
+    except DomainError as exc:
         return _render(
             request,
             token=token,
             state="error",
             token_row=token_row,
-            message=str(exc.detail),
-            status_code=exc.status_code,
+            message=exc.message,
+            status_code=409,
         )
     token_row.ticket = ticket
     return _render(request, token=token, state="confirmed", token_row=token_row)
@@ -123,21 +126,21 @@ def dispute_resolution_page(
             status_code=status_code,
         )
     assert token_row is not None
+    db_session_adapter.release_read_transaction(db)
     try:
         ticket = support_service.tickets.dispute_resolution(
             db,
             token_row,
             reason=reason,
         )
-    except HTTPException as exc:
-        db.rollback()
+    except DomainError as exc:
         return _render(
             request,
             token=token,
             state="error",
             token_row=token_row,
-            message=str(exc.detail),
-            status_code=exc.status_code,
+            message=exc.message,
+            status_code=409,
         )
     token_row.ticket = ticket
     return _render(request, token=token, state="disputed", token_row=token_row)

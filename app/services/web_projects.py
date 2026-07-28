@@ -20,10 +20,11 @@ import csv
 import io
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
@@ -56,16 +57,34 @@ from app.schemas.project import (
     ProjectTemplateUpdate,
     ProjectUpdate,
 )
-from app.services import project_filters
+from app.services import (
+    customer_experience_lifecycle,
+    project_filters,
+    project_vendor_delivery,
+    work_order_views,
+)
 from app.services import projects as projects_service
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.audit_helpers import build_audit_activities, log_audit_event
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import FilterValidationError
 from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
+from app.services.ui_contracts import Action
 
 logger = logging.getLogger(__name__)
+
+
+class ProjectProjectionError(DomainError):
+    """Transport-neutral project query/projection error."""
+
+
+def _projection_error(code: str, message: str) -> ProjectProjectionError:
+    return ProjectProjectionError(
+        code=f"ui.project_list_projection.{code}", message=message
+    )
+
 
 PROJECT_EXPORT_LIMIT = 10000
 
@@ -108,6 +127,90 @@ PROJECT_LIST_DEFINITION = ListDefinition(
     default_sort="created_at",
     default_sort_dir="desc",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectListProjectionQuery:
+    subscriber_id: str | None = None
+    status: str | None = None
+    project_type: str | None = None
+    priority: str | None = None
+    owner_person_id: str | None = None
+    manager_person_id: str | None = None
+    project_manager_person_id: str | None = None
+    assistant_manager_person_id: str | None = None
+    is_active: bool | None = None
+    filters: str | None = None
+    search: str | None = None
+    region: str | None = None
+    order_by: str = "created_at"
+    order_dir: str = "desc"
+    limit: int = 50
+    offset: int = 0
+    permission_scope: str = "project:read"
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectListProjectionPage:
+    items: tuple[Project, ...]
+    count: int
+    limit: int
+    offset: int
+    has_next: bool
+    allowed_actions: tuple[str, ...]
+
+    def as_response(self) -> dict[str, object]:
+        return {
+            "items": list(self.items),
+            "count": self.count,
+            "limit": self.limit,
+            "offset": self.offset,
+        }
+
+
+def query_project_list_projection(
+    db: Session, query: ProjectListProjectionQuery
+) -> ProjectListProjectionPage:
+    """Execute the complete typed Project list contract for every adapter."""
+    if query.permission_scope != "project:read":
+        raise _projection_error("unauthorized", "Project read scope is required")
+    if query.order_by not in PROJECT_LIST_DEFINITION.sortable_keys:
+        raise _projection_error("invalid_sort", "Unsupported project sort field")
+    order_dir = query.order_dir.strip().lower()
+    if order_dir not in {"asc", "desc"}:
+        raise _projection_error("invalid_sort", "Unsupported project sort direction")
+    if query.limit < 1 or query.limit > PROJECT_EXPORT_LIMIT or query.offset < 0:
+        raise _projection_error("invalid_page", "Invalid project pagination")
+    filter_clause = _build_project_filter_clause(query.filters)
+    rows = projects_service.projects.list(
+        db,
+        subscriber_id=query.subscriber_id,
+        status=query.status,
+        project_type=query.project_type,
+        priority=query.priority,
+        owner_person_id=query.owner_person_id,
+        manager_person_id=query.manager_person_id,
+        project_manager_person_id=query.project_manager_person_id,
+        assistant_manager_person_id=query.assistant_manager_person_id,
+        is_active=query.is_active,
+        order_by=query.order_by,
+        order_dir=order_dir,
+        limit=query.limit + 1,
+        offset=query.offset,
+        search=query.search,
+        filter_clause=filter_clause,
+        region=query.region,
+    )
+    has_next = len(rows) > query.limit
+    items = tuple(rows[: query.limit])
+    return ProjectListProjectionPage(
+        items=items,
+        count=len(items),
+        limit=query.limit,
+        offset=query.offset,
+        has_next=has_next,
+        allowed_actions=("view", "create", "update", "archive"),
+    )
 
 
 def build_project_list_query(
@@ -226,14 +329,14 @@ def _build_project_filter_clause(filters: str | None):
     try:
         return project_filters.build_project_filter_clause(filters)
     except FilterValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _projection_error("invalid_filter", str(exc)) from exc
 
 
 def _build_task_filter_clause(filters: str | None):
     try:
         return project_filters.build_project_task_filter_clause(filters)
     except FilterValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _projection_error("invalid_filter", str(exc)) from exc
 
 
 # ── reference resolvers (number first, UUID fallback — email deep links use
@@ -248,22 +351,25 @@ def resolve_project_reference(db: Session, project_ref: str) -> tuple[Project, b
     """
     ref = (project_ref or "").strip()
     if not ref:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise _projection_error("not_found", "Project not found")
     project = db.query(Project).filter(Project.number == ref).first()
     if project:
         return project, False
     try:
         project_uuid = coerce_uuid(ref)
     except Exception as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
-    project = projects_service.projects.get(db, str(project_uuid))
+        raise _projection_error("not_found", "Project not found") from exc
+    try:
+        project = projects_service.projects.get(db, str(project_uuid))
+    except DomainError as exc:
+        raise _projection_error("not_found", "Project not found") from exc
     return project, bool(project.number)
 
 
 def resolve_task_reference(db: Session, task_ref: str) -> tuple[ProjectTask, bool]:
     ref = (task_ref or "").strip()
     if not ref:
-        raise HTTPException(status_code=404, detail="Project task not found")
+        raise _projection_error("not_found", "Project task not found")
     query = db.query(ProjectTask).options(selectinload(ProjectTask.assignees))
     task = query.filter(ProjectTask.number == ref).first()
     if task:
@@ -271,10 +377,10 @@ def resolve_task_reference(db: Session, task_ref: str) -> tuple[ProjectTask, boo
     try:
         task_uuid = coerce_uuid(ref)
     except Exception as exc:
-        raise HTTPException(status_code=404, detail="Project task not found") from exc
+        raise _projection_error("not_found", "Project task not found") from exc
     task = query.filter(ProjectTask.id == task_uuid).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Project task not found")
+        raise _projection_error("not_found", "Project task not found")
     return task, bool(task.number)
 
 
@@ -284,6 +390,80 @@ def project_url(project: Project) -> str:
 
 def task_url(task: ProjectTask) -> str:
     return f"/admin/projects/tasks/{task.number or task.id}"
+
+
+def _task_work_order_create_url(task: ProjectTask) -> str:
+    return "/admin/dispatch/work-orders?" + urlencode({"project_task_id": str(task.id)})
+
+
+def _work_order_url(public_id: str) -> str:
+    return "/admin/dispatch/work-orders?" + urlencode({"q": public_id})
+
+
+def _task_work_order_create_action(
+    task: ProjectTask, project: Project
+) -> tuple[Action, str | None]:
+    if not task.is_active:
+        allowed, reason = False, "Archived tasks cannot create field work"
+    elif not project.is_active:
+        allowed, reason = False, "Archived projects cannot create field work"
+    elif project.subscriber_id is None:
+        allowed = False
+        reason = "Link a subscriber to the project before creating field work"
+    else:
+        allowed, reason = True, None
+    action = Action(
+        key="create_work_order",
+        label="Create Work Order",
+        allowed=allowed,
+        reason=reason,
+        permission="operations:dispatch:write",
+    )
+    return action, _task_work_order_create_url(task) if allowed else None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectTaskWorkOrderProjection:
+    """Typed zero/one/many field-work projection for one project task."""
+
+    task_id: UUID
+    work_orders: tuple[work_order_views.LinkedWorkOrderSummary, ...]
+    action: Action
+    action_url: str | None
+
+
+def _task_work_order_projection(
+    task: ProjectTask,
+    project: Project,
+    work_orders: tuple[work_order_views.LinkedWorkOrderSummary, ...],
+) -> ProjectTaskWorkOrderProjection:
+    count = len(work_orders)
+    if count == 0:
+        action, action_url = _task_work_order_create_action(task, project)
+    elif count == 1:
+        action = Action(
+            key="open_work_order",
+            label="Open Work Order",
+            allowed=True,
+            permission="operations:dispatch:read",
+            affected=1,
+        )
+        action_url = _work_order_url(work_orders[0].public_id)
+    else:
+        action = Action(
+            key="view_work_orders",
+            label=f"View {count} Work Orders",
+            allowed=True,
+            permission="operations:dispatch:read",
+            affected=count,
+        )
+        action_url = _task_work_order_create_url(task)
+    return ProjectTaskWorkOrderProjection(
+        task_id=task.id,
+        work_orders=work_orders,
+        action=action,
+        action_url=action_url,
+    )
 
 
 # ── shared option helpers ────────────────────────────────────────────────────
@@ -445,9 +625,9 @@ def build_fiber_stage_rows(tasks: list[ProjectTask]) -> list[dict]:
             {
                 "key": stage_key,
                 "title": projects_service.FIBER_INSTALLATION_STAGE_TITLES[stage_key],
-                "status": projects_service._portal_stage_status(
-                    stage_task.status if stage_task else None
-                ),
+                "status": customer_experience_lifecycle.project_task_stage_state(
+                    stage_task.status if stage_task else ProjectTaskStatus.todo.value
+                ).value,
                 "task_ref": (
                     (stage_task.number or str(stage_task.id)) if stage_task else None
                 ),
@@ -463,6 +643,23 @@ def build_fiber_stage_rows(tasks: list[ProjectTask]) -> list[dict]:
 
 
 # ── projects list / export ───────────────────────────────────────────────────
+
+
+def project_list_url(
+    query: ListQuery, *, page: int, dynamic_filters: str | None
+) -> str:
+    params: list[tuple[str, str]] = [
+        ("order_by", query.sort_by),
+        ("order_dir", query.sort_dir),
+        ("page", str(max(1, page))),
+        ("per_page", str(query.per_page)),
+    ]
+    if query.search:
+        params.append(("search", query.search))
+    params.extend(query.filters)
+    if dynamic_filters:
+        params.append(("filters", dynamic_filters))
+    return f"/admin/projects?{urlencode(params)}"
 
 
 def build_projects_list_context(
@@ -492,28 +689,24 @@ def build_projects_list_context(
     )
     order_by, order_dir = list_query.sort_by, list_query.sort_dir
     page, per_page = list_query.page, list_query.per_page
-    filter_clause = _build_project_filter_clause(filters)
-    rows_plus_one = projects_service.projects.list(
+    page_result = query_project_list_projection(
         db,
-        subscriber_id=None,
-        status=list_query.filter_value("status"),
-        project_type=list_query.filter_value("project_type"),
-        priority=list_query.filter_value("priority"),
-        owner_person_id=None,
-        manager_person_id=None,
-        project_manager_person_id=None,
-        assistant_manager_person_id=None,
-        is_active=None,
-        order_by=order_by,
-        order_dir=order_dir,
-        limit=per_page + 1,
-        offset=list_query.offset,
-        search=list_query.search,
-        filter_clause=filter_clause,
-        region=list_query.filter_value("region"),
+        ProjectListProjectionQuery(
+            status=list_query.filter_value("status"),
+            project_type=list_query.filter_value("project_type"),
+            priority=list_query.filter_value("priority"),
+            filters=filters,
+            search=list_query.search,
+            region=list_query.filter_value("region"),
+            order_by=order_by,
+            order_dir=order_dir,
+            limit=per_page,
+            offset=list_query.offset,
+        ),
     )
-    has_next_page = len(rows_plus_one) > per_page
-    rows = rows_plus_one[:per_page]
+
+    has_next_page = page_result.has_next
+    rows = list(page_result.items)
 
     assignment_ids: list[object | None] = []
     for project in rows:
@@ -543,6 +736,13 @@ def build_projects_list_context(
         "page": page,
         "per_page": per_page,
         "has_next_page": has_next_page,
+        "allowed_actions": page_result.allowed_actions,
+        "previous_page_url": project_list_url(
+            list_query, page=max(1, page - 1), dynamic_filters=filters
+        ),
+        "next_page_url": project_list_url(
+            list_query, page=page + 1, dynamic_filters=filters
+        ),
         "status_summary_cards": _status_summary_cards(db),
         "all_statuses": status_options,
         "all_priorities": priority_options,
@@ -792,17 +992,7 @@ def create_project_from_form(
     payload = ProjectCreate.model_validate(
         _project_payload_data(actor_id=actor_id, **form)
     )
-    project = projects_service.projects.create(db, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="project",
-        entity_id=str(project.id),
-        actor_id=actor_id,
-        metadata={"name": project.name},
-    )
-    return project
+    return projects_service.projects.create(db, payload)
 
 
 def update_project_from_form(
@@ -811,29 +1001,13 @@ def update_project_from_form(
     data = _project_payload_data(**form)
     # Template can be cleared from the edit form (CRM parity).
     data["project_template_id"] = parse_uuid_or_none(form.get("project_template_id"))
-    before = projects_service.projects.get(db, project_id)
     payload = ProjectUpdate.model_validate(data)
-    before_snapshot = {
-        key: getattr(before, key, None)
-        for key in payload.model_dump(exclude_unset=True)
-    }
-    project = projects_service.projects.update(db, project_id, payload)
-    after_snapshot = {key: getattr(project, key, None) for key in before_snapshot}
-    changed = {
-        key: {"from": str(before_snapshot[key]), "to": str(after_snapshot[key])}
-        for key in before_snapshot
-        if str(before_snapshot[key]) != str(after_snapshot[key])
-    }
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="project",
-        entity_id=str(project.id),
-        actor_id=actor_id,
-        metadata={"changes": changed} if changed else None,
+    return projects_service.projects.update(
+        db,
+        project_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
     )
-    return project
 
 
 def quick_update_project(
@@ -846,44 +1020,41 @@ def quick_update_project(
     value: str,
 ) -> Project:
     if field not in {"status", "priority"}:
-        raise HTTPException(status_code=400, detail="Unsupported field")
-    project = projects_service.projects.get(db, project_id)
-    old_value = getattr(project, field, None)
+        raise _projection_error("invalid_filter", "Unsupported field")
     try:
         payload = ProjectUpdate.model_validate({field: str(value or "").strip()})
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid {field}") from exc
-    project = projects_service.projects.update(db, project_id, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action=f"{field}_change",
-        entity_type="project",
-        entity_id=str(project.id),
-        actor_id=actor_id,
-        metadata={"from": old_value, "to": getattr(project, field, None)},
+        raise _projection_error("invalid_filter", f"Invalid {field}") from exc
+    return projects_service.projects.update(
+        db,
+        project_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
     )
-    return project
 
 
 def delete_project(
     db: Session, *, request, project_id: str, actor_id: str | None
 ) -> None:
-    projects_service.projects.delete(db, project_id)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="delete",
-        entity_type="project",
-        entity_id=str(project_id),
-        actor_id=actor_id,
+    projects_service.projects.delete(
+        db,
+        project_id,
+        actor_id=parse_uuid_or_none(actor_id),
     )
 
 
 # ── project detail ───────────────────────────────────────────────────────────
 
 
-def build_project_detail_context(db: Session, *, project: Project) -> dict:
+def build_project_detail_context(
+    db: Session,
+    *,
+    project: Project,
+    can_read_work_orders: bool = False,
+    can_read_vendor_operations: bool = False,
+    can_read_vendor_routes: bool = False,
+    can_read_vendor_financials: bool = False,
+) -> dict:
     tasks = projects_service.project_tasks.list(
         db,
         project_id=str(project.id),
@@ -924,12 +1095,27 @@ def build_project_detail_context(db: Session, *, project: Project) -> dict:
             template = projects_service.project_templates.get(
                 db, str(project.project_template_id)
             )
-        except HTTPException:
+        except DomainError:
             template = None
     return {
         "project": project,
         "project_url": project_url(project),
         "tasks": tasks,
+        "show_field_work": can_read_work_orders,
+        "project_work_orders": (
+            work_order_views.list_project_work_order_summaries(db, project.id)
+            if can_read_work_orders
+            else ()
+        ),
+        "vendor_delivery": project_vendor_delivery.get_project_vendor_delivery(
+            db,
+            project_vendor_delivery.ProjectVendorDeliveryQuery(
+                project_id=project.id,
+                can_read_operations=can_read_vendor_operations,
+                can_read_routes=can_read_vendor_routes,
+                can_read_financials=can_read_vendor_financials,
+            ),
+        ),
         "comments": comments,
         "activities": build_audit_activities(db, "project", str(project.id), limit=20),
         "fiber_stages": build_fiber_stage_rows(tasks),
@@ -975,16 +1161,14 @@ def update_project_comment_from_form(
 ) -> ProjectComment:
     comment = db.get(ProjectComment, coerce_uuid(comment_id))
     if not comment or str(comment.project_id) != str(coerce_uuid(project_id)):
-        raise HTTPException(status_code=404, detail="Comment not found")
+        raise _projection_error("not_found", "Comment not found")
     actor_uuid = parse_uuid_or_none(actor_id)
     if (
         not actor_uuid
         or not comment.author_person_id
         or str(comment.author_person_id) != str(actor_uuid)
     ):
-        raise HTTPException(
-            status_code=403, detail="You can only edit your own comments."
-        )
+        raise _projection_error("unauthorized", "You can only edit your own comments.")
     updated = projects_service.project_comments.update(
         db, str(comment.id), ProjectCommentUpdate(body=body)
     )
@@ -1013,14 +1197,15 @@ def build_tasks_list_context(
     filters: str | None,
     page: int,
     per_page: int,
+    can_read_work_orders: bool = False,
 ) -> dict:
     filter_clause = _build_task_filter_clause(filters)
     assigned_to_person_id = None
     if assigned_to_me:
         if not parse_uuid_or_none(actor_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Unable to resolve current user for assignment filter",
+            raise _projection_error(
+                "invalid_filter",
+                "Unable to resolve current user for assignment filter",
             )
         assigned_to_person_id = actor_id
     offset = (page - 1) * per_page
@@ -1048,6 +1233,23 @@ def build_tasks_list_context(
         if project_ids
         else []
     )
+    project_map = {project.id: project for project in project_rows}
+    linked_work_orders = (
+        work_order_views.list_task_work_order_summaries_bulk(
+            db, [task.id for task in rows]
+        )
+        if can_read_work_orders
+        else {}
+    )
+    task_work_order_projections = {
+        str(task.id): _task_work_order_projection(
+            task,
+            project_map[task.project_id],
+            linked_work_orders.get(task.id, ()),
+        )
+        for task in rows
+        if can_read_work_orders and task.project_id in project_map
+    }
     assignment_ids: list[object | None] = []
     for task in rows:
         assignment_ids.append(task.assigned_to_person_id)
@@ -1059,6 +1261,8 @@ def build_tasks_list_context(
         "tasks": rows,
         "projects": projects,
         "project_map": {str(project.id): project for project in project_rows},
+        "show_field_work": can_read_work_orders,
+        "task_work_order_projections": task_work_order_projections,
         "project_id": project_id or "",
         "status": status or "",
         "priority": priority or "",
@@ -1179,17 +1383,7 @@ def create_task_from_form(
     payload = ProjectTaskCreate.model_validate(
         _task_payload_data(actor_id=actor_id, **form)
     )
-    task = projects_service.project_tasks.create(db, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="project_task",
-        entity_id=str(task.id),
-        actor_id=actor_id,
-        metadata={"title": task.title},
-    )
-    return task
+    return projects_service.project_tasks.create(db, payload)
 
 
 def update_task_from_form(
@@ -1197,52 +1391,36 @@ def update_task_from_form(
 ) -> ProjectTask:
     data = _task_payload_data(**form)
     payload = ProjectTaskUpdate.model_validate(data)
-    task = projects_service.project_tasks.update(db, task_id, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="project_task",
-        entity_id=str(task.id),
-        actor_id=actor_id,
-        metadata={"changed_fields": sorted(data.keys())},
+    return projects_service.project_tasks.update(
+        db,
+        task_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
     )
-    return task
 
 
 def quick_update_task_status(
     db: Session, *, request, task_id: str, actor_id: str | None, status: str
 ) -> ProjectTask:
-    task = projects_service.project_tasks.get(db, task_id)
-    old_status = task.status
     try:
         payload = ProjectTaskUpdate.model_validate(
             {"status": str(status or "").strip()}
         )
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail="Invalid status") from exc
-    task = projects_service.project_tasks.update(db, task_id, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="status_change",
-        entity_type="project_task",
-        entity_id=str(task.id),
-        actor_id=actor_id,
-        metadata={"from": old_status, "to": task.status},
+        raise _projection_error("invalid_filter", "Invalid status") from exc
+    return projects_service.project_tasks.update(
+        db,
+        task_id,
+        payload,
+        actor_id=parse_uuid_or_none(actor_id),
     )
-    return task
 
 
 def delete_task(db: Session, *, request, task_id: str, actor_id: str | None) -> None:
-    projects_service.project_tasks.delete(db, task_id)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="delete",
-        entity_type="project_task",
-        entity_id=str(task_id),
-        actor_id=actor_id,
+    projects_service.project_tasks.delete(
+        db,
+        task_id,
+        actor_id=parse_uuid_or_none(actor_id),
     )
 
 
@@ -1288,7 +1466,12 @@ def _task_dependency_rows(db: Session, task: ProjectTask) -> dict[str, list[dict
     }
 
 
-def build_task_detail_context(db: Session, *, task: ProjectTask) -> dict:
+def build_task_detail_context(
+    db: Session,
+    *,
+    task: ProjectTask,
+    can_read_work_orders: bool = False,
+) -> dict:
     project = projects_service.projects.get(db, str(task.project_id))
     comments = projects_service.project_task_comments.list(
         db,
@@ -1306,11 +1489,22 @@ def build_task_detail_context(db: Session, *, task: ProjectTask) -> dict:
     ]
     staff = staff_options(db, include_ids=_non_empty_ids(assignment_ids))
     metadata = task.metadata_ if isinstance(task.metadata_, dict) else {}
+    create_work_order_action, work_order_create_url = _task_work_order_create_action(
+        task, project
+    )
     return {
         "task": task,
         "task_url": task_url(task),
         "project": project,
         "project_href": project_url(project),
+        "show_field_work": can_read_work_orders,
+        "task_work_orders": (
+            work_order_views.list_task_work_order_summaries(db, task.id)
+            if can_read_work_orders
+            else ()
+        ),
+        "create_work_order_action": create_work_order_action,
+        "work_order_create_url": work_order_create_url,
         "comments": comments,
         "activities": build_audit_activities(
             db, "project_task", str(task.id), limit=20
@@ -1697,7 +1891,7 @@ def create_template_task_from_form(db: Session, *, template_id: str, **form):
 def get_template_task_checked(db: Session, *, template_id: str, task_id: str):
     task = projects_service.project_template_tasks.get(db, task_id)
     if str(task.template_id) != str(coerce_uuid(template_id)):
-        raise HTTPException(status_code=404, detail="Project template task not found")
+        raise _projection_error("not_found", "Project template task not found")
     return task
 
 

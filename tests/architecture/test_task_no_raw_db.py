@@ -14,6 +14,7 @@ out of the baseline when that lands.
 from __future__ import annotations
 
 import re
+from functools import cache
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,7 @@ RAW_DB_PATTERNS = [
 ]
 
 
+@cache
 def _tasks_with_raw_db() -> set[str]:
     offenders: set[str] = set()
     for path in TASKS_DIR.rglob("*.py"):

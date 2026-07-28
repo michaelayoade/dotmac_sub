@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import json
 
+import pytest
+
 from app.models.billing import (
     PaymentProvider,
     PaymentProviderEvent,
@@ -11,6 +13,15 @@ from app.models.billing import (
 )
 from app.models.integration_platform import IntegrationInbox
 from app.services.api_billing_webhooks import process_paystack_webhook
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+from app.services.payment_webhook_commands import (
+    PROCESS_SCOPE,
+    PaymentWebhookError,
+    PaymentWebhookProvider,
+    ProcessClaimedPaymentWebhookCommand,
+    process_claimed_payment_webhook,
+)
 from tests.integration_platform_helpers import enable_payment_provider
 
 
@@ -60,6 +71,33 @@ def test_verified_payment_event_is_processed_once(db_session, monkeypatch):
     assert db_session.query(PaymentProviderEvent).count() == 1
 
 
+def test_processed_receipt_replay_still_validates_provider(db_session, monkeypatch):
+    _install(db_session, monkeypatch)
+    payload = {
+        "event": "transfer.success",
+        "data": {"id": 1005, "reference": "payment-provider-mismatch"},
+    }
+    assert _request(db_session, payload).status_code == 200
+    receipt_id = db_session.query(IntegrationInbox).one().id
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(PaymentWebhookError) as captured:
+        process_claimed_payment_webhook(
+            db_session,
+            ProcessClaimedPaymentWebhookCommand(
+                receipt_id=receipt_id,
+                provider=PaymentWebhookProvider.FLUTTERWAVE,
+            ),
+            context=CommandContext.system(
+                actor="pytest:payment-webhook",
+                scope=PROCESS_SCOPE,
+                reason="Verify replay provider correlation",
+            ),
+        )
+
+    assert captured.value.code == "financial.payment_webhooks.receipt_provider_mismatch"
+
+
 def test_provider_identity_collision_quarantines_installation(db_session, monkeypatch):
     binding = _install(db_session, monkeypatch)
     first = {
@@ -80,7 +118,7 @@ def test_provider_identity_collision_quarantines_installation(db_session, monkey
 def test_processing_failure_is_retained_for_replay(db_session, monkeypatch):
     _install(db_session, monkeypatch)
     monkeypatch.setattr(
-        "app.services.api_billing_webhooks.billing_service.payment_provider_events.ingest",
+        "app.services.payment_webhook_commands.billing_service.payment_provider_events.stage_verified_webhook_event",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("temporary")),
     )
 

@@ -12,6 +12,7 @@ from starlette.datastructures import MutableHeaders, UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.services.domain_errors import DomainError
 from app.services.ticket_work_order_handoff import TicketWorkOrderHandoffError
 from app.services.unit_of_work import ConcurrencyConflict
 from app.services.vendor_portal_errors import VendorPortalOperationError
@@ -333,23 +334,62 @@ def register_error_handlers(app) -> None:
             else {"code": exc.code, "message": exc.message},
         )
 
+    @app.exception_handler(DomainError)
+    async def domain_error_handler(request: Request, exc: DomainError):
+        """Map transport-neutral service failures at the shared HTTP adapter."""
+
+        code = exc.code.lower()
+        if code.endswith("not_found") or "_not_found" in code:
+            status_code = 404
+        elif "permission" in code or "forbidden" in code:
+            status_code = 403
+        elif any(
+            marker in code
+            for marker in (
+                "invalid",
+                "required",
+                "not_eligible",
+            )
+        ):
+            status_code = 422
+        elif any(
+            marker in code
+            for marker in (
+                "mismatch",
+                "command_contract_violation",
+                "nested_owner_command",
+                "nested_transaction_completion",
+            )
+        ):
+            status_code = 409 if "mismatch" in code else 500
+        else:
+            status_code = 409
+        if _is_html_request(request) and status_code == 422:
+            status_code = 400
+        return await _handle_http_exception(
+            request,
+            status_code,
+            exc.message
+            if _is_html_request(request)
+            else {"code": exc.code, "message": exc.message, "details": exc.details},
+        )
+
     @app.exception_handler(AuthenticationRequired)
     async def auth_required_handler(request: Request, exc: AuthenticationRequired):
         """Redirect to login page when authentication is required."""
         return RedirectResponse(url=exc.redirect_url, status_code=303)
 
     async def _handle_http_exception(
-        request: Request,
-        status_code: int,
-        detail: object,
-        headers: dict[str, str] | None = None,
+        request: Request, status_code: int, detail: object, headers: object = None
     ):
-        if _is_html_request(request):
-            location = None
-            if headers:
-                location = headers.get("location") or headers.get("Location")
-            if status_code in {301, 302, 303, 307, 308} and location:
+        if 300 <= status_code < 400 and isinstance(headers, dict):
+            location = headers.get("Location")
+            if location:
+                # A redirect is the whole response: an auth guard that raises
+                # 303 + Location must reach the browser as a redirect, not as
+                # an error payload that silently drops the destination.
                 return RedirectResponse(url=location, status_code=status_code)
+        if _is_html_request(request):
             if status_code == 401:
                 return RedirectResponse(
                     url=_login_redirect_for_path(request), status_code=303

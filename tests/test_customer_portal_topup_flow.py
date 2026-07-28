@@ -1,4 +1,7 @@
+import asyncio
 import importlib
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -21,6 +24,8 @@ from app.models.billing import (
     TopupIntent,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.idempotency import IdempotencyKey
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
@@ -31,11 +36,21 @@ from app.services.customer_portal_flow_payments import (
     create_invoice_payment_intent,
     create_topup_intent,
     get_topup_page,
+    preview_topup,
+    submit_direct_transfer_topup,
     verify_and_record_payment,
     verify_and_record_topup,
 )
+from app.services.integrations.runtime_execution import RuntimeExecutionError
 from app.services.settings_cache import SettingsCache
 from tests.integration_platform_helpers import enable_payment_provider
+
+
+def _run_async(coro):
+    """Run a coroutine outside pytest's already-running suite event loop."""
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def _upsert_billing_setting(db_session, key: str, value: str) -> None:
@@ -117,11 +132,51 @@ def _patch_topup_settings(
             return max_amount
         if key == "topup_preset_amounts":
             return preset_amounts
+        if key == "gateway_topup_intent_ttl_minutes":
+            return 30
         return None
 
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.resolve_value",
         _fake_resolve_value,
+    )
+    monkeypatch.setattr(
+        "app.services.gateway_topup_intents.resolve_value",
+        _fake_resolve_value,
+    )
+
+
+def _patch_direct_transfer_creation_policy(monkeypatch) -> None:
+    from app.services import direct_transfer_intents, topup_intents
+
+    monkeypatch.setattr(
+        topup_intents,
+        "direct_transfer_configuration",
+        lambda _db: topup_intents.DirectTransferConfiguration(
+            accounts=(
+                topup_intents.DirectTransferConfiguredAccount(
+                    id="bank-primary",
+                    enabled=True,
+                    bank_name="Dotmac Test Bank",
+                    account_name="Dotmac Payments",
+                    account_number="0123456789",
+                ),
+            ),
+            bank_name="Dotmac Test Bank",
+            account_name="Dotmac Payments",
+            account_number="0123456789",
+            sort_code="",
+            instructions="Use the supplied reference.",
+        ),
+    )
+    monkeypatch.setattr(
+        direct_transfer_intents,
+        "resolve_value",
+        lambda _db, _domain, key: {
+            "topup_min_amount": 1000,
+            "topup_max_amount": 500000,
+            "direct_bank_transfer_intent_ttl_days": 7,
+        }[key],
     )
 
 
@@ -141,7 +196,51 @@ def _create_intent(
         {"account_id": str(subscriber.id), "username": "customer@example.com"},
         amount,
         provider="paystack",
+        preview_fingerprint=preview_topup(
+            db_session,
+            {"account_id": str(subscriber.id), "username": "customer@example.com"},
+            amount,
+        )["preview_fingerprint"],
     )
+
+
+def _preview_fingerprint(db_session, subscriber, amount: str) -> str:
+    return preview_topup(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+        amount,
+    )["preview_fingerprint"]
+
+
+def _active_direct_transfer_deposit(
+    db_session,
+    subscriber,
+    *,
+    status: str,
+    expires_at,
+) -> TopupIntent:
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        purpose="account_credit_deposit",
+        allocation_policy="credit_only",
+        credit_application_policy="pay_eligible_invoices",
+        policy_version=1,
+        preview_fingerprint="a" * 64,
+        idempotency_key=f"portal-active-deposit-{status}-{subscriber.id}",
+        channel="customer_selfcare",
+        created_by="pytest",
+        reference=f"TRF-ACTIVE-{status.upper()}",
+        provider_type="direct_bank_transfer",
+        currency="NGN",
+        requested_amount=Decimal("20000.00"),
+        status=status,
+        expires_at=expires_at,
+        metadata_={"payment_flow": "account_credit_deposit"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    db_session.refresh(intent)
+    return intent
 
 
 def test_get_topup_page_includes_limits_and_public_key(
@@ -171,6 +270,106 @@ def test_get_topup_page_includes_limits_and_public_key(
     ]
 
 
+@pytest.mark.parametrize(
+    ("status", "phase", "next_action"),
+    [
+        ("pending", "awaiting_receipt", "upload_receipt"),
+        ("submitted", "under_review", "wait_for_review"),
+    ],
+)
+def test_get_topup_page_uses_owner_active_deposit_state(
+    monkeypatch,
+    db_session,
+    subscriber,
+    status,
+    phase,
+    next_action,
+):
+    _patch_topup_settings(monkeypatch)
+    intent = _active_direct_transfer_deposit(
+        db_session,
+        subscriber,
+        status=status,
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["deposit_allowed"] is False
+    assert page["active_deposit_request"] == {
+        "intent_id": str(intent.id),
+        "phase": phase,
+        "next_action": next_action,
+        "provider_type": "direct_bank_transfer",
+        "reference": intent.reference,
+        "amount": Decimal("20000.00"),
+        "currency": "NGN",
+        "created_at": intent.created_at,
+        "expires_at": intent.expires_at,
+        "observed_at": page["active_deposit_request"]["observed_at"],
+    }
+
+
+def test_get_topup_page_ignores_expired_deposit_request(
+    monkeypatch,
+    db_session,
+    subscriber,
+):
+    _patch_topup_settings(monkeypatch)
+    _active_direct_transfer_deposit(
+        db_session,
+        subscriber,
+        status="submitted",
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["deposit_allowed"] is True
+    assert "active_deposit_request" not in page
+
+
+def test_get_topup_page_degrades_runtime_failure_to_direct_transfer(
+    monkeypatch,
+    db_session,
+    subscriber,
+):
+    def _runtime_unavailable(*_args, **_kwargs):
+        raise RuntimeExecutionError(
+            "connector manifest pin is not available in this deployment"
+        )
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        _runtime_unavailable,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    _patch_topup_settings(monkeypatch)
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["provider_type"] == "direct_bank_transfer"
+    assert page["provider_public_key"] is None
+    assert page["payment_options"] == [
+        {
+            "provider_type": "direct_bank_transfer",
+            "label": "Direct bank transfer",
+        }
+    ]
+
+
 def test_get_topup_page_uses_configured_preset_amounts_within_limits(
     monkeypatch, db_session, subscriber
 ):
@@ -195,6 +394,66 @@ def test_get_topup_page_uses_configured_preset_amounts_within_limits(
     )
 
     assert page["preset_amounts"] == [3000, 7000]
+
+
+def test_get_topup_page_keeps_deposit_available_with_existing_invoice(
+    monkeypatch, db_session, subscriber
+):
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_topup",
+            reference="unused-ref",
+        ),
+    )
+    _patch_topup_settings(monkeypatch)
+    _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="18000.00",
+        invoice_number="INV-TOPUP-PREVIEW",
+    )
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["deposit_allowed"] is True
+    assert page["eligible_unpaid_total"] == Decimal("18000.00")
+    assert len(page["eligible_unpaid_invoices"]) == 1
+
+
+def test_preview_topup_reports_invoice_application_breakdown(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="18000.00",
+        invoice_number="INV-TOPUP-BREAKDOWN",
+    )
+
+    preview = preview_topup(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+        "10000.00",
+    )
+
+    assert preview["total_applied_to_invoices"] == Decimal("10000.00")
+    assert preview["remaining_account_credit"] == Decimal("0.00")
+    assert preview["total_outstanding_after_application"] == Decimal("8000.00")
+    assert preview["invoice_applications"] == [
+        {
+            "invoice_id": str(invoice.id),
+            "invoice_number": invoice.invoice_number,
+            "currency": "NGN",
+            "amount_applied": Decimal("10000.00"),
+            "outstanding_after_application": Decimal("8000.00"),
+        }
+    ]
 
 
 def test_get_topup_page_includes_saved_payment_methods(
@@ -263,11 +522,10 @@ def test_get_topup_page_surfaces_active_flutterwave_provider(
         {"account_id": str(subscriber.id), "username": "customer@example.com"},
     )
 
-    # Paystack (the default) is listed first; an active Flutterwave provider is
-    # now surfaced too. Manual and the inactive Flutterwave row are excluded.
+    # Duplicate finance identities fail closed for that gateway. Paystack
+    # remains available because its installation and finance identity agree.
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
-        {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
     ]
 
 
@@ -531,6 +789,29 @@ def test_create_topup_intent_persists_server_owned_reference(
     assert intent.allocation_policy == "credit_only"
 
 
+def test_create_topup_intent_preserves_kobo_decimals(
+    monkeypatch, db_session, subscriber
+):
+    # Regression: the portal used parseInt(...) and |int filters, truncating
+    # 18812.50 -> 18812 before it reached the money owner. The owner keeps two
+    # decimals, so the fixed frontend must send the exact decimal string.
+    _patch_topup_settings(monkeypatch)
+    payload = _create_intent(
+        monkeypatch,
+        db_session,
+        subscriber,
+        amount="18812.50",
+        reference="topup-intent-kobo",
+    )
+
+    intent = (
+        db_session.query(TopupIntent).filter_by(reference="topup-intent-kobo").one()
+    )
+
+    assert payload["reference"] == "topup-intent-kobo"
+    assert intent.requested_amount == Decimal("18812.50")
+
+
 def test_create_topup_intent_records_selected_payment_method(
     monkeypatch, db_session, subscriber
 ):
@@ -571,6 +852,7 @@ def test_create_topup_intent_records_selected_payment_method(
         "5000.00",
         provider="paystack",
         payment_method_id=str(card.id),
+        preview_fingerprint=_preview_fingerprint(db_session, subscriber, "5000.00"),
     )
 
     intent = (
@@ -614,6 +896,7 @@ def test_create_topup_intent_initializes_flutterwave_checkout(
         "5000.00",
         provider="flutterwave",
         redirect_url="https://selfcare.test/portal/billing/topup/verify",
+        preview_fingerprint=_preview_fingerprint(db_session, subscriber, "5000.00"),
     )
 
     assert payload["provider_type"] == "flutterwave"
@@ -683,7 +966,7 @@ def test_create_invoice_payment_intent_gateway_paystack(
     assert payload["checkout_metadata"]["payment_flow"] == "invoice_payment"
 
 
-def test_create_invoice_payment_intent_issues_draft_through_lifecycle_owner(
+def test_create_invoice_payment_intent_rejects_draft_without_mutating_it(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
@@ -708,21 +991,21 @@ def test_create_invoice_payment_intent_issues_draft_through_lifecycle_owner(
         ),
     )
 
-    create_invoice_payment_intent(
-        db_session,
-        _invoice_customer(subscriber),
-        str(invoice.id),
-        provider="paystack",
-    )
+    with pytest.raises(ValueError, match="no longer payable"):
+        create_invoice_payment_intent(
+            db_session,
+            _invoice_customer(subscriber),
+            str(invoice.id),
+            provider="paystack",
+        )
 
     db_session.refresh(invoice)
-    assert invoice.status == InvoiceStatus.issued
-    assert invoice.issued_at is not None
+    assert invoice.status == InvoiceStatus.draft
+    assert invoice.issued_at is None
     intent = db_session.scalar(
         select(TopupIntent).where(TopupIntent.reference == "pay-ref-issued-draft")
     )
-    assert intent is not None
-    assert intent.metadata_["invoice_id"] == str(invoice.id)
+    assert intent is None
 
 
 def test_create_invoice_payment_intent_charges_saved_card(
@@ -832,18 +1115,68 @@ def test_create_invoice_payment_intent_saved_card_idempotent_replay(
     assert second["replayed"] is True
 
 
-def test_create_invoice_payment_intent_bank_transfer_hands_off(
+def test_create_invoice_payment_intent_saved_card_failure_is_atomic(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
     invoice = _make_invoice(
-        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-4"
+        db_session, subscriber.id, amount="3000.00", invoice_number="INV-PAY-DECLINE"
+    )
+    card = billing_service.payment_methods.create(
+        db_session,
+        PaymentMethodCreate(
+            account_id=subscriber.id,
+            label="Visa •••• 0002",
+            token="AUTH_DECLINED",
+            last4="0002",
+            brand="visa",
+            is_default=True,
+        ),
     )
     monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
-        lambda _db: True,
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk",
+            reference="pay-ref-declined",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.integrations.payment_capability.charge_authorization",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("card declined")),
     )
 
+    with pytest.raises(ValueError, match="card declined"):
+        create_invoice_payment_intent(
+            db_session,
+            _invoice_customer(subscriber),
+            str(invoice.id),
+            provider="paystack",
+            payment_method_id=str(card.id),
+            idempotency_key="declined-invoice-charge",
+        )
+
+    intent = db_session.scalar(
+        select(TopupIntent).where(TopupIntent.reference == "pay-ref-declined")
+    )
+    reservation = db_session.scalar(
+        select(IdempotencyKey).where(
+            IdempotencyKey.scope == "invoice_saved_card_charge",
+            IdempotencyKey.key == "declined-invoice-charge",
+        )
+    )
+    assert intent is not None and intent.status == "failed"
+    assert reservation is None
+
+
+def test_create_invoice_payment_intent_bank_transfer_hands_off(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    _patch_direct_transfer_creation_policy(monkeypatch)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-4"
+    )
     payload = create_invoice_payment_intent(
         db_session,
         _invoice_customer(subscriber),
@@ -863,20 +1196,74 @@ def test_create_invoice_payment_intent_bank_transfer_hands_off(
     assert intent.metadata_["payment_flow"] == "invoice_payment"
 
 
+def test_direct_transfer_topup_page_surfaces_server_calculated_wht(
+    monkeypatch, db_session, subscriber
+):
+    from app.services.customer_portal_flow_payments import (
+        get_direct_transfer_topup_page,
+    )
+    from app.services.topup_intents import DIRECT_TRANSFER_PROVIDER, TopupIntentStatus
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="TRF-WHT-PAGE",
+        provider_type=DIRECT_TRANSFER_PROVIDER,
+        currency="NGN",
+        requested_amount=Decimal("102500.00"),
+        status=TopupIntentStatus.pending.value,
+        metadata_={
+            "payment_flow": "invoice_payment",
+            "invoice_id": "11111111-1111-1111-1111-111111111111",
+            "withholding_tax": {
+                "schema_version": 1,
+                "account_id": str(subscriber.id),
+                "policy_version": 3,
+                "source_invoice_id": "11111111-1111-1111-1111-111111111111",
+                "currency": "NGN",
+                "vat_exclusive_amount": "100000.00",
+                "vat_amount": "7500.00",
+                "gross_amount": "107500.00",
+                "withholding_tax_rate_percent": "5.00",
+                "withholding_tax_amount": "5000.00",
+                "net_amount": "102500.00",
+            },
+        },
+    )
+    db_session.add(intent)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.enabled_direct_bank_transfer_accounts",
+        lambda _db: [],
+    )
+
+    page = get_direct_transfer_topup_page(
+        db_session,
+        _invoice_customer(subscriber),
+    )
+
+    assert page["intent"].reference == "TRF-WHT-PAGE"
+    assert page["withholding_tax"]["gross_amount"] == "107500.00"
+    assert page["withholding_tax"]["vat_exclusive_amount"] == "100000.00"
+    assert page["withholding_tax"]["vat_amount"] == "7500.00"
+    assert page["withholding_tax"]["withholding_tax_rate_percent"] == "5.00"
+    assert page["withholding_tax"]["withholding_tax_amount"] == "5000.00"
+    assert page["withholding_tax"]["net_amount"] == "102500.00"
+
+
 def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(
     monkeypatch, db_session, subscriber
 ):
     # A real invoice can be below the top-up minimum (e.g. a small fee); paying
     # it by transfer must not be blocked by the top-up limit.
     _patch_topup_settings(monkeypatch, min_amount=1000)
+    _patch_direct_transfer_creation_policy(monkeypatch)
     invoice = _make_invoice(
         db_session, subscriber.id, amount="500.00", invoice_number="INV-PAY-SMALL"
     )
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
-        lambda _db: True,
-    )
-
     payload = create_invoice_payment_intent(
         db_session,
         _invoice_customer(subscriber),
@@ -886,6 +1273,68 @@ def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(
 
     assert payload["requested_amount"] == Decimal("500.00")
     assert payload["redirect_url"] == "/portal/billing/topup/transfer"
+
+
+def test_direct_transfer_portal_delegates_atomic_proof_intent_submission(
+    monkeypatch, db_session, subscriber
+):
+    from app.services import payment_proofs
+    from app.services.topup_intents import (
+        DIRECT_TRANSFER_PROVIDER,
+        TopupIntentStatus,
+    )
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="TRF-PORTAL-ATOMIC",
+        provider_type=DIRECT_TRANSFER_PROVIDER,
+        currency="NGN",
+        requested_amount=Decimal("2500.00"),
+        status=TopupIntentStatus.pending.value,
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    db_session.refresh(intent)
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.direct_bank_transfer_enabled",
+        lambda _db: True,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.enabled_direct_bank_transfer_accounts",
+        lambda _db: [
+            {
+                "id": "bank-primary",
+                "enabled": "true",
+                "bank_name": "Dotmac Test Bank",
+                "account_name": "Dotmac Payments",
+                "account_number": "0123456789",
+                "sort_code": "",
+            }
+        ],
+    )
+
+    async def fake_save_proof_file(_file) -> str:
+        return "uploads/payment_proofs/portal-atomic.png"
+
+    monkeypatch.setattr(payment_proofs, "save_proof_file", fake_save_proof_file)
+
+    result = _run_async(
+        submit_direct_transfer_topup(
+            db_session,
+            _invoice_customer(subscriber),
+            made_payment=True,
+            file=SimpleNamespace(filename="portal-atomic.png"),
+        )
+    )
+
+    proof = db_session.get(PaymentProof, result["id"])
+    persisted_intent = db_session.get(TopupIntent, intent.id)
+    assert proof is not None
+    assert proof.status is PaymentProofStatus.submitted
+    assert persisted_intent is not None
+    assert persisted_intent.status == TopupIntentStatus.submitted.value
+    assert persisted_intent.metadata_["payment_proof_id"] == str(proof.id)
 
 
 def test_create_invoice_payment_intent_rejects_gateway_when_customer_email_blank(
@@ -944,6 +1393,7 @@ def test_create_invoice_payment_intent_records_and_completes_gateway_trace(
         amount=Decimal("2500.00"),
         currency="NGN",
         status=PaymentStatus.succeeded,
+        provider_id=intent.provider_id,
     )
     db_session.add(payment)
     db_session.commit()
@@ -1006,7 +1456,7 @@ def test_create_invoice_payment_intent_initializes_flutterwave(
     assert captured["currency"] == "NGN"
 
 
-def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(
+def test_create_invoice_payment_intent_resolves_saved_card_to_paystack(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
@@ -1025,14 +1475,35 @@ def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(
         ),
     )
 
-    with pytest.raises(ValueError, match="Saved cards can only be used with Paystack"):
-        create_invoice_payment_intent(
-            db_session,
-            _invoice_customer(subscriber),
-            str(invoice.id),
-            provider="flutterwave",
-            payment_method_id=str(card.id),
+    selected = {}
+
+    def fake_context(_db, **kwargs):
+        selected.update(kwargs)
+        return SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_pay",
+            reference="pay-ref-card-owner",
         )
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        fake_context,
+    )
+    monkeypatch.setattr(
+        "app.services.integrations.payment_capability.charge_authorization",
+        lambda *_args, **_kwargs: {"status": "success"},
+    )
+
+    payload = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="flutterwave",
+        payment_method_id=str(card.id),
+    )
+
+    assert selected["provider_type"] == "paystack"
+    assert payload["charged"] is True
 
 
 def test_create_invoice_payment_intent_rejects_paid_invoice(
@@ -1132,8 +1603,11 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
 
     assert result["already_recorded"] is False
     assert result["allocated_total"] == Decimal("3000.00")
+    assert result["amount_credited"] == Decimal("5000.00")
+    assert result["prepaid_amount_applied"] == Decimal("0.00")
     assert result["credit_added"] == Decimal("2000.00")
     assert result["available_balance"] == Decimal("2000.00")
+    assert result["renewed_services"] == []
     assert result["policy_warnings"] == []
     assert result["allocated_to_invoices"] == [
         {
@@ -1143,6 +1617,44 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
         }
     ]
     assert invoice.balance_due == Decimal("0.00")
+
+
+def test_verify_and_record_topup_preserves_paystack_gross_and_fee(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    intent = _create_intent(
+        monkeypatch,
+        db_session,
+        subscriber,
+        amount="5000.00",
+        reference="ref-topup-gross-fee",
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
+            amount=Decimal("5090.00"),
+            provider_fee=Decimal("90.00"),
+            currency="NGN",
+            external_id="ext-topup-gross-fee",
+            memo_prefix="Paystack",
+            metadata={"topup_intent_id": intent["intent_id"]},
+        ),
+    )
+    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
+
+    result = verify_and_record_topup(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        "ref-topup-gross-fee",
+        provider="paystack",
+    )
+
+    assert result["amount"] == Decimal("5090.00")
+    assert result["amount_credited"] == Decimal("5000.00")
+    assert result["payment"].provider_fee == Decimal("90.00")
+    assert result["payment"].settlement.amount == Decimal("5000.00")
 
 
 def test_verify_preserves_pre_migration_intent_policy(

@@ -3,7 +3,7 @@
 Second money flow to move onto sub's ``field_erp_sync_events`` outbox. Ports
 ``dotmac_crm/app/services/dotmac_erp/material_request_sync.py`` onto sub's native
 ``FieldMaterialRequest`` with its ERP mirror fields
-``erp_material_request_id`` / ``erp_material_status``). Structurally identical to
+``support_reference`` / ``support_status``). Structurally identical to
 ``expense_sync.py``.
 
 Three responsibilities live here:
@@ -48,6 +48,7 @@ from app.services.integrations.erp_capability import (
 logger = logging.getLogger(__name__)
 
 ENTITY_TYPE = "field_material_request"
+PROVIDER = "dotmac_erp"
 
 # ERP status pushed for an ISSUE material request (verbatim CRM parity: CRM sends
 # ``MaterialRequestStatus.issued.value``).
@@ -182,7 +183,7 @@ def material_request_eligibility_error(request: FieldMaterialRequest) -> str | N
 
 
 def enqueue_material_request(
-    db: Session, request: FieldMaterialRequest
+    db: Session, request: FieldMaterialRequest, *, isolate: bool = True
 ) -> FieldErpSyncEvent | None:
     """Enqueue the material-request outbox intent for an approved request.
 
@@ -206,6 +207,7 @@ def enqueue_material_request(
         entity_id=request.id,
         idempotency_key=material_request_idempotency_key(request),
         payload=payload,
+        isolate=isolate,
     )
 
 
@@ -231,6 +233,7 @@ def _extract_material_status(response: dict | None) -> str | None:
     raw = (
         response.get("material_status")
         or response.get("erp_material_status")
+        or response.get("support_status")
         or response.get("status")
     )
     if not raw:
@@ -260,8 +263,9 @@ def apply_material_response(
     return field_material_requests.apply_backoffice_outcome(
         db,
         request,
-        erp_request_id=erp_id,
-        erp_status=material_status,
+        support_system=PROVIDER,
+        support_reference=erp_id,
+        support_status=material_status,
     )
 
 
@@ -298,7 +302,7 @@ def refresh_material_request_statuses(
 ) -> dict:
     """Poll ERP for in-flight material requests and refresh their mirror fields.
 
-    Selects synced (``erp_material_request_id`` set) requests still awaiting ERP
+    Selects synced (``support_reference`` set) requests still awaiting ERP
     fulfillment (``approved`` / ``issued``), polls
     ``get_material_request_status(request.id)`` for each, and applies the response
     via ``apply_material_response``. Ports CRM's material status refresh.
@@ -313,7 +317,8 @@ def refresh_material_request_statuses(
             )
         )
         .filter(FieldMaterialRequest.is_active.is_(True))
-        .filter(FieldMaterialRequest.erp_material_request_id.isnot(None))
+        .filter(FieldMaterialRequest.support_system == PROVIDER)
+        .filter(FieldMaterialRequest.support_reference.isnot(None))
         .filter(FieldMaterialRequest.status.in_(_IN_FLIGHT_STATUSES))
         .order_by(FieldMaterialRequest.updated_at.asc())
         .limit(limit)
@@ -358,3 +363,11 @@ def refresh_material_request_statuses(
     result["processed"] = processed
     result["updated"] = updated
     return result
+
+
+def run_refresh_material_request_statuses() -> dict[str, object]:
+    """Own the background session for ERP material-outcome reconciliation."""
+    from app.db import task_session
+
+    with task_session() as db:
+        return refresh_material_request_statuses(db)

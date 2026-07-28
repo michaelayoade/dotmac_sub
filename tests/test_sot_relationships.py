@@ -18,6 +18,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "events_webhooks",
         "runtime_infrastructure",
         "observability",
+        "workforce_operations",
         "support_operations",
         "ai_advisory",
         "provisioning_operations",
@@ -44,7 +45,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "events.dispatcher",
     )
     assert sot_relationships.dependencies_for("party.registry") == (
-        "auth.rbac",
+        "auth.subscriber_assignments",
         "auth.permission_gate",
     )
     assert sot_relationships.dependencies_for("party.identity_audit") == (
@@ -71,12 +72,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("party.principal_context_audit") == (
         "party.registry",
-        "auth.rbac",
+        "auth.subscriber_assignments",
         "auth.permission_gate",
     )
     assert sot_relationships.dependencies_for("party.contact_inbox_audit") == (
         "party.registry",
-        "communications.team_inbox",
+        "communications.team_inbox_contact_resolution",
     )
     assert sot_relationships.dependencies_for("communications.campaigns") == (
         "communications.eligibility",
@@ -93,6 +94,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("sales.orders") == (
         "sales.service",
         "sales.lead_lifecycle",
+        "sales.fulfillment",
     )
     assert sot_relationships.dependencies_for("customer.lifecycle_audit") == (
         "party.registry",
@@ -100,14 +102,21 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "sales.lead_lifecycle",
         "sales.service",
         "sales.orders",
+        "sales.fulfillment",
+        "operations.service_order_lifecycle",
+        "customer.experience_handoff",
         "access.subscription_lifecycle",
         "support.ticket_lifecycle",
     )
     assert sot_relationships.dependencies_for("referrals.program") == (
+        "customer.accounts",
         "party.registry",
         "sales.lead_lifecycle",
         "access.subscription_lifecycle",
         "financial.credit_notes",
+        "control.settings_spec",
+        "events.dispatcher",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for("referrals.account_conversion") == (
         "customer.accounts",
@@ -115,6 +124,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "sales.lead_lifecycle",
         "referrals.program",
         "auth.token_signing",
+        "control.settings_spec",
+        "events.dispatcher",
+        "observability.audit_log",
     )
     lead_origin = sot_relationships.owning_service_for(
         "immutable structured Lead origin capture"
@@ -131,11 +143,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert referral_audit is not None
     assert referral_audit.name == "customer.lifecycle_audit"
-    referral_conversion = sot_relationships.owning_service_for(
-        "reviewed Referral to Subscriber account conversion"
+    referral_attachment = sot_relationships.owning_service_for(
+        "Referral Subscriber attachment record"
     )
-    assert referral_conversion is not None
-    assert referral_conversion.name == "referrals.program"
+    assert referral_attachment is not None
+    assert referral_attachment.name == "referrals.program"
     account_orchestration = sot_relationships.owning_service_for(
         "atomic referral account creation and adjudication orchestration"
     )
@@ -160,9 +172,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "auth.customer_credential_enrollment"
     ) == (
         "auth.token_signing",
+        "communications.intents",
         "customer.accounts",
         "referrals.account_conversion",
         "communications.ephemeral_actions",
+        "control.settings_spec",
+        "events.dispatcher",
         "observability.audit_log",
     )
     cleanup_worklist = sot_relationships.owning_service_for(
@@ -388,6 +403,8 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.outage_lifecycle") == (
         "network.outage_impact",
         "events.dispatcher",
+        "events.owner_outputs",
+        "operations.sla_escalation",
     )
     assert sot_relationships.dependencies_for("network.device_groups") == (
         "network.identity",
@@ -422,26 +439,33 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.access_resolution") == (
         "financial.billing_profile",
+        "financial.prepaid_currency",
         "financial.prepaid_threshold",
         "customer.financial_position",
+        "access.subscription_lifecycle",
+        "access.walled_garden_policy",
     )
     assert sot_relationships.dependencies_for("customer.financial_position") == (
+        "financial.credit_notes",
+        "financial.invoices",
         "financial.ledger",
+        "financial.payments",
         "financial.prepaid_funding_reconstruction",
     )
     assert sot_relationships.dependencies_for("financial.prepaid_enforcement") == (
+        "access.subscription_lifecycle",
+        "communications.customer_policy",
+        "control.settings_spec",
+        "customer.accounts",
         "financial.prepaid_funding_reconstruction",
         "financial.access_resolution",
         "financial.billing_profile",
+        "financial.dunning",
+        "financial.prepaid_currency",
+        "financial.prepaid_enforcement_state",
         "financial.prepaid_threshold",
         "financial.grace_policy",
-    )
-    assert sot_relationships.dependencies_for(
-        "financial.prepaid_enforcement_readiness"
-    ) == (
-        "financial.prepaid_funding_reconstruction",
-        "financial.prepaid_enforcement",
-        "financial.access_resolution",
+        "service_intent.catalog_policy",
     )
     assert sot_relationships.dependencies_for("financial.billing_scheduled") == (
         "financial.ledger",
@@ -457,23 +481,56 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.access_resolution",
         "financial.prepaid_enforcement",
         "financial.prepaid_enforcement_state",
-        "financial.prepaid_enforcement_readiness",
     )
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "integration.inbox",
+        "financial.account_credit_deposits",
         "financial.payment_provider_events",
+        "financial.topup_intents",
     )
     assert sot_relationships.dependencies_for("financial.payment_provider_events") == (
+        "events.dispatcher",
+        "financial.consolidated_payments",
+        "financial.invoices",
         "financial.payments",
+        "financial.payment_routing",
         "financial.provider_payment_settlements",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for(
         "financial.provider_payment_settlements"
-    ) == ("financial.payments", "financial.invoices")
+    ) == (
+        "financial.payments",
+        "financial.invoices",
+        "financial.prepaid_service_renewals",
+    )
+    assert sot_relationships.dependencies_for("financial.account_credit_deposits") == (
+        "customer.accounts",
+        "events.dispatcher",
+        "financial.account_credit_applications",
+        "financial.prepaid_service_renewals",
+        "financial.access_resolution",
+        "financial.invoices",
+        "financial.payments",
+        "financial.topup_intents",
+        "observability.audit_log",
+    )
+    assert sot_relationships.dependencies_for("financial.prepaid_service_renewals") == (
+        "financial.account_adjustments",
+        "financial.invoices",
+        "financial.payments",
+        "financial.prepaid_funding_reconstruction",
+        "financial.subscription_billing_grants",
+        "financial.subscription_billing_treatments",
+        "events.dispatcher",
+    )
     assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
-        "financial.ledger",
+        "control.settings_spec",
+        "integration.runtime",
+        "financial.account_credit_deposits",
+        "financial.payments",
         "financial.payment_provider_events",
-        "financial.provider_payment_settlements",
+        "financial.topup_intents",
     )
     assert sot_relationships.dependencies_for("customer.service_status") == (
         "financial.access_resolution",
@@ -491,6 +548,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert business_conversion is not None
     assert business_conversion.name == "customer.profile_commands"
+    name_remediation = sot_relationships.owning_service_for(
+        "evidence-bound legacy Subscriber name repair"
+    )
+    assert name_remediation is not None
+    assert name_remediation.name == "customer.name_repairs"
+    assert name_remediation.contract is not None
     assert sot_relationships.dependencies_for("customer.usage_summary") == (
         "sessions.radius_reconciliation",
     )
@@ -502,6 +565,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.account_adjustments") == (
         "financial.ledger",
         "customer.financial_position",
+        "customer.accounts",
+        "control.settings_spec",
+        "events.dispatcher",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for(
         "financial.import_payment_batch_reversals"
@@ -566,6 +633,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "support.ticket_bulk_commands",
     )
     assert sot_relationships.dependencies_for("ui.status_presentation") == (
+        "customer.service_status",
         "financial.invoices",
         "financial.payments",
         "network.device_state",
@@ -573,7 +641,26 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.outage_lifecycle",
         "support.ticket_lifecycle",
         "operations.work_order_status",
-        "integration.vendor_purchase_invoice_erp_projection",
+        "operations.vendor_project_lifecycle",
+        "operations.vendor_project_workspace",
+        "operations.vendor_material_release",
+        "operations.vendor_advances",
+        "integration.dotmac_erp_payables_adapter",
+    )
+    assert sot_relationships.dependencies_for("operations.material_dependencies") == (
+        "control.settings_spec",
+        "events.dispatcher",
+        "operations.work_orders",
+        "operations.work_order_status",
+    )
+    assert sot_relationships.dependencies_for(
+        "integration.dotmac_erp_payables_adapter"
+    ) == ("integration.backoffice_adapter",)
+    assert sot_relationships.dependencies_for(
+        "integration.dotmac_erp_material_support_adapter"
+    ) == (
+        "integration.backoffice_adapter",
+        "operations.material_dependencies",
     )
     subscriber_api_mapping = sot_relationships.owning_service_for(
         "legacy subscriber offset API compatibility mapping"
@@ -582,7 +669,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert subscriber_api_mapping.name == "ui.subscriber_list_projection"
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
-    ) == ("communications.channel_policy", "communications.event_policy")
+    ) == ("communications.channel_policy", "communications.customer_policy")
     assert sot_relationships.dependencies_for("communications.customer_read_state") == (
         "customer.identity_scope",
         "communications.customer_policy",
@@ -607,11 +694,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
         "observability.recording",
     )
-    assert sot_relationships.dependencies_for("communications.team_inbox") == (
-        "party.registry",
-        "customer.identity_scope",
-        "communications.channel_policy",
-        "communications.notification_service",
+    assert sot_relationships.dependencies_for("communications.team_inbox_commands") == (
+        "auth.permission_gate",
+        "communications.team_inbox_threads",
+        "communications.team_inbox_contact_resolution",
+        "communications.team_inbox_routing",
+        "communications.team_inbox_outbound_intents",
+        "communications.team_inbox_operator_state",
     )
     assert sot_relationships.dependencies_for("sessions.enforcement") == (
         "financial.access_resolution",
@@ -625,8 +714,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("operations.project_lifecycle") == (
+        "auth.permission_gate",
         "events.dispatcher",
         "communications.staff_notifications",
+        "operations.work_order_commands",
     )
     assert sot_relationships.dependencies_for("operations.work_order_commands") == (
         "customer.identity_scope",
@@ -637,7 +728,6 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "operations.work_orders",
         "operations.work_order_status",
         "control.domain_settings",
-        "support.ticket_work_order_handoff",
     )
     assert sot_relationships.dependencies_for("network.nas_lifecycle") == (
         "network.identity",
@@ -660,16 +750,20 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("scheduler.registry") == (
         "control.feature_registry",
+        "control.settings_spec",
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("access.radius_state") == (
-        "access.control_resolution",
+        "access.subscription_lifecycle",
         "access.walled_garden_policy",
+        "financial.access_resolution",
     )
     assert sot_relationships.dependencies_for("access.radius_projection") == (
+        "access.subscription_lifecycle",
         "access.radius_state",
         "access.radius_reject",
         "access.radius_target_registry",
+        "control.settings_spec",
     )
     assert sot_relationships.dependencies_for("communications.intents") == (
         "communications.channel_policy",
@@ -960,7 +1054,7 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert outage_presentation.name == "ui.status_presentation"
 
     device_state = sot_relationships.owning_service_for(
-        "device operational status vocabulary"
+        "device operational status vocabulary and reason classification"
     )
     assert device_state is not None
     assert device_state.name == "network.device_state"
@@ -996,7 +1090,7 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert cadence_owner.module == "app.services.catalog.subscriptions"
 
     project_service = sot_relationships.owning_service_for(
-        "native project field and status mutations"
+        "Project and ProjectTask identity and lifecycle"
     )
 
     assert project_service is not None
@@ -1036,15 +1130,19 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert read_state_service.module == "app.services.customer_portal_notifications"
 
     team_inbox_service = sot_relationships.owning_service_for(
-        "admin inbox mutation transactions"
+        "operator conversation and collaboration commands"
     )
 
     assert team_inbox_service is not None
-    assert team_inbox_service.name == "communications.team_inbox"
+    assert team_inbox_service.name == "communications.team_inbox_commands"
     assert team_inbox_service.module == "app.services.team_inbox_commands"
+    contact_resolution_service = sot_relationships.owning_service_for(
+        "reviewed contact association and projection repair"
+    )
+    assert contact_resolution_service is not None
     assert (
-        "InboxContactLink canonical contact-point routing projection"
-        in team_inbox_service.owns
+        contact_resolution_service.name
+        == "communications.team_inbox_contact_resolution"
     )
 
 

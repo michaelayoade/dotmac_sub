@@ -8,11 +8,10 @@ the account is funded again.
 A resolved zero-day policy suspends on the first eligible sweep; a nonzero
 configured policy arms the timer and warning first.
 
-SAFETY: this SUSPENDS customers. It is gated OFF by default behind the
-``collections.prepaid_balance_enforcement`` control. When the control is off the
-sweep is a complete no-op — no timers armed, no notices, no suspensions. Every
-account is processed in its own committed unit so one bad row cannot abort the
-batch.
+SAFETY: this can suspend customers. The owner always evaluates eligible accounts;
+safety is account-scoped: canonical funding, coverage, quarantine, profile
+validity, shields, grace, and transaction-local locking. Every account is
+processed in its own committed unit so one bad row cannot abort the batch.
 """
 
 from __future__ import annotations
@@ -24,19 +23,17 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.collections import FinancialAccessOrigin
 from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Subscriber
-from app.services import enforcement_window
 from app.services.access_resolution import PrepaidFundingDecision
-from app.services.billing_enforcement_guards import (
-    EnforcementHealth,
-    billing_enforcement_health,
-)
 from app.services.collections._core import (
     _clear_prepaid_dunning_flags,
     _get_account_email,
     _restore_prepaid_if_funded,
     _suspend_account,
+    confirm_financial_access_restoration,
+    preview_financial_access_restoration,
 )
 from app.services.common import coerce_uuid
 from app.services.prepaid_enforcement_planner import (
@@ -45,7 +42,6 @@ from app.services.prepaid_enforcement_planner import (
     candidate_prepaid_account_ids,
     candidate_prepaid_funding_account_ids,
     plan_prepaid_account,
-    prepaid_balance_enforcement_enabled,
     prepaid_notice_suppression_reasons,
     resolve_prepaid_enforcement_policy,
 )
@@ -113,32 +109,6 @@ def _send_notice(
     return True
 
 
-def _deactivation_deferred(
-    db: Session, now: datetime, cfg: PrepaidEnforcementPolicy
-) -> bool:
-    """Whether the DEACTIVATION step must wait (skip-day / outside window).
-
-    Only gates the state-changing suspension — never the warning. Reuses the
-    shared wall-clock decision helper: ``prepaid_blocking_time`` is the "act at/
-    after" gate, plus weekend/holiday skips. ``prepaid_skip_holidays`` is the
-    configured list of ISO dates (the calendar is the setting itself; no
-    external holiday source is invented).
-    """
-    local_now = enforcement_window.to_local(db, now)
-    reason = enforcement_window.window_block_reason(
-        local_now,
-        start_time=enforcement_window.parse_time(cfg.blocking_time),
-        skip_weekends=cfg.skip_weekends,
-        skip_holidays=list(cfg.skip_holidays),
-    )
-    if reason is not None:
-        logger.info(
-            "prepaid_balance_sweep deactivation deferred (%s)",
-            reason,
-        )
-    return reason is not None
-
-
 def _reconcile_funded(
     db: Session, account: Subscriber, funding: PrepaidFundingDecision
 ) -> str:
@@ -163,6 +133,30 @@ def _reconcile_funded(
         )
         return "restored"
     return "ok"
+
+
+def _reconcile_stale_prepaid_locks(db: Session, account: Subscriber) -> str:
+    """Resolve only locks proven obsolete by the canonical billing profile."""
+    preview = preview_financial_access_restoration(
+        db,
+        str(account.id),
+        origin=FinancialAccessOrigin.prepaid_enforcement,
+    )
+    result = confirm_financial_access_restoration(
+        db,
+        str(account.id),
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=(
+            f"prepaid-stale-lock-repair:{account.id}:{preview.fingerprint[:24]}"
+        ),
+        origin=FinancialAccessOrigin.prepaid_enforcement,
+        resolved_by=f"{_SOURCE}:stale_lock:{account.id}",
+    )
+    repaired = bool(
+        result.consequence.result.get("enforcement_lock_ids")
+        or preview.decision_inputs.get("clear_prepaid_timers")
+    )
+    return "restored" if repaired else "state_drift"
 
 
 def _reconcile_low(
@@ -207,9 +201,6 @@ def _reconcile_low(
     if account.prepaid_deactivation_at is not None or (just_armed and not suspend_now):
         return result
 
-    if _deactivation_deferred(db, now, cfg):
-        return "deferred"
-
     # Arm the deactivation timer ONLY on a successful suspend. _suspend_account
     # fails-closed (returns False) for shielded / dedicated-bundle / canceled
     # accounts; if we armed the timer first, _reconcile_low would short-circuit
@@ -244,16 +235,13 @@ def _process_account(
     now: datetime,
     cfg: PrepaidEnforcementPolicy,
     *,
-    enforcement_health: EnforcementHealth,
     notice_suppression_reason: str | None,
-    readiness_block_reason: str | None,
 ) -> str:
     decision = plan_prepaid_account(
         db,
         account,
         now=now,
         policy=cfg,
-        enforcement_health=enforcement_health,
         notice_suppression_reason=notice_suppression_reason,
     )
     if decision.action == PrepaidEnforcementAction.billing_profile_invalid:
@@ -266,6 +254,8 @@ def _process_account(
     if decision.action == PrepaidEnforcementAction.clear_stale_timers:
         _clear_prepaid_dunning_flags(db, str(account.id))
         return "restored"
+    if decision.action == PrepaidEnforcementAction.repair_stale_locks:
+        return _reconcile_stale_prepaid_locks(db, account)
     if decision.action == PrepaidEnforcementAction.restore:
         return _reconcile_funded(
             db,
@@ -275,14 +265,43 @@ def _process_account(
                 available_balance=decision.available_balance,
                 required_balance=decision.required_balance,
                 currency=decision.currency,
+                covered_subscription_ids=decision.covered_subscription_ids,
+                non_billable_subscription_ids=(decision.non_billable_subscription_ids),
+                actionable_uncovered_subscription_ids=(
+                    decision.actionable_uncovered_subscription_ids
+                ),
+                unresolved_projection_subscription_ids=(
+                    decision.unresolved_projection_subscription_ids
+                ),
+                unresolved_renewal_subscription_ids=(
+                    decision.unresolved_renewal_subscription_ids
+                ),
             ),
         )
+    if decision.action == PrepaidEnforcementAction.coverage_unresolved:
+        logger.error(
+            "prepaid_balance_sweep blocked adverse action for account %s: %s (%s)",
+            account.id,
+            decision.reason,
+            ",".join(
+                str(value) for value in decision.unresolved_projection_subscription_ids
+            ),
+        )
+        return "coverage_unresolved"
+    if decision.action == PrepaidEnforcementAction.renewal_terms_unresolved:
+        logger.error(
+            "prepaid_balance_sweep blocked adverse action for account %s: %s (%s)",
+            account.id,
+            decision.reason,
+            ",".join(
+                str(value) for value in decision.unresolved_renewal_subscription_ids
+            ),
+        )
+        return "renewal_terms_unresolved"
     if decision.action == PrepaidEnforcementAction.deferred:
         return "deferred"
     if decision.action == PrepaidEnforcementAction.shielded:
         return "shielded"
-    if decision.action == PrepaidEnforcementAction.health_blocked:
-        return "health_blocked"
     if decision.action == PrepaidEnforcementAction.state_drift:
         logger.warning(
             "prepaid_balance_sweep skipped account %s: enforcement state drift (%s)",
@@ -294,27 +313,6 @@ def _process_account(
         PrepaidEnforcementAction.warn,
         PrepaidEnforcementAction.suspend,
     }:
-        if readiness_block_reason:
-            logger.warning(
-                "prepaid_balance_sweep adverse action blocked for account %s: %s",
-                account.id,
-                readiness_block_reason,
-            )
-            return "readiness_blocked"
-        if cfg.activation_error is not None:
-            logger.warning(
-                "prepaid_balance_sweep adverse action blocked for account %s: %s",
-                account.id,
-                cfg.activation_error,
-            )
-            return "activation_blocked"
-        if cfg.activation_at is not None and now < cfg.activation_at:
-            logger.info(
-                "prepaid_balance_sweep adverse action blocked for account %s: "
-                "activation time not reached",
-                account.id,
-            )
-            return "activation_blocked"
         return _reconcile_low(
             db,
             account,
@@ -335,30 +333,12 @@ def run_prepaid_balance_sweep(
 ) -> dict[str, int | str]:
     """Reconcile every active prepaid account against its balance threshold.
 
-    No-op (``{"skipped": "disabled"}``) unless the enforcement control is on.
-    Commits per account so a single failure never aborts the batch.
+    The lifecycle is permanently active. Commits per account so a single
+    failure never aborts the batch; quarantine and evidence failures remain
+    account-scoped.
     """
-    if not prepaid_balance_enforcement_enabled(db):
-        logger.info("prepaid_balance_sweep skipped: enforcement disabled")
-        return {"skipped": "disabled"}
-
     run_at = now or datetime.now(UTC)
     cfg = resolve_prepaid_enforcement_policy(db)
-    from app.services.prepaid_enforcement_readiness import (
-        mark_prepaid_enforcement_activated,
-        prepaid_enforcement_readiness_block_reason,
-    )
-
-    readiness_block = prepaid_enforcement_readiness_block_reason(db, now=run_at)
-    if readiness_block:
-        logger.error(
-            "prepaid_balance_sweep adverse actions blocked: funding readiness (%s)",
-            readiness_block,
-        )
-    elif cfg.activation_at is not None and run_at >= cfg.activation_at:
-        mark_prepaid_enforcement_activated(db, activated_at=run_at)
-        db.commit()
-    health = billing_enforcement_health(db)
     stats: dict[str, int | str] = {
         "accounts_scanned": 0,
         "warned": 0,
@@ -366,10 +346,9 @@ def run_prepaid_balance_sweep(
         "restored": 0,
         "deferred": 0,
         "shielded": 0,
-        "health_blocked": 0,
-        "activation_blocked": 0,
-        "readiness_blocked": 0,
         "billing_profile_invalid": 0,
+        "coverage_unresolved": 0,
+        "renewal_terms_unresolved": 0,
         "funding_quarantined": 0,
         "notice_blocked": 0,
         "state_drift": 0,
@@ -403,9 +382,7 @@ def run_prepaid_balance_sweep(
                 account,
                 run_at,
                 cfg,
-                enforcement_health=health,
                 notice_suppression_reason=notice_reasons.get(account.id),
-                readiness_block_reason=readiness_block,
             )
             db.commit()
             stats[outcome] = int(stats.get(outcome, 0)) + 1

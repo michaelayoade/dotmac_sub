@@ -140,7 +140,10 @@ def _customer_session_revoked(session: dict) -> bool:
 
 
 def revoke_customer_sessions_for_subscriber(
-    subscriber_id: object, db: Session | None = None
+    subscriber_id: object,
+    db: Session | None = None,
+    *,
+    require_durable: bool = False,
 ) -> None:
     """Invalidate every existing customer portal session for a subscriber."""
     ttl = max(
@@ -149,7 +152,11 @@ def revoke_customer_sessions_for_subscriber(
         _absolute_ttl_seconds(db),
     )
     set_session_revocation_epoch(
-        _CUSTOMER_SESSION_PREFIX, str(subscriber_id), ttl, _CUSTOMER_SESSION_EPOCHS
+        _CUSTOMER_SESSION_PREFIX,
+        str(subscriber_id),
+        ttl,
+        _CUSTOMER_SESSION_EPOCHS,
+        require_durable=require_durable,
     )
 
 

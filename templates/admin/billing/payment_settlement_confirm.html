@@ -45,15 +45,10 @@
         <p class="mt-4 text-sm">Exact unallocated ledger: {{ preview.unallocated_ledger_entry_type.value }} / {{ preview.unallocated_ledger_source.value }} / {{ preview.currency }} {{ '{:,.2f}'.format(preview.unallocated_amount) }}</p>
         {% endif %}
     </div>
-    {% if preview.prepaid_service_effect %}
     <div class="rounded-xl border border-violet-200 bg-violet-50 p-6 dark:border-violet-900/50 dark:bg-violet-900/20">
-        <h2 class="font-semibold">Prepaid service consequence</h2>
-        <p class="mt-2 text-sm">{{ preview.prepaid_service_effect.consequence | replace('_', ' ') | title }}: {{ preview.prepaid_service_effect.period_start.date() }} to {{ preview.prepaid_service_effect.period_end.date() }}.</p>
-        {% if preview.prepaid_service_effect.charge_amount > 0 %}
-        <p class="mt-2 text-sm">Exact ledger: debit / invoice / {{ preview.currency }} {{ '{:,.2f}'.format(preview.prepaid_service_effect.charge_amount) }}</p>
-        {% else %}<p class="mt-2 text-sm">No new debit; existing paid coverage advances the billing date.</p>{% endif %}
+        <h2 class="font-semibold">Prepaid service review</h2>
+        <p class="mt-2 text-sm">After settlement, the prepaid-renewal owner will evaluate any due service from the confirmed account funding. Payment settlement does not create service debit or entitlement evidence directly.</p>
     </div>
-    {% endif %}
     <form method="post" action="/admin/billing/payments/{{ payment_id }}/settlement" class="flex justify-end gap-3">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="preview_fingerprint" value="{{ preview.fingerprint }}">

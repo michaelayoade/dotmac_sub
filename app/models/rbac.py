@@ -1,7 +1,16 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
@@ -56,6 +65,18 @@ class Permission(Base):
     )
 
     roles = relationship("RolePermission", back_populates="permission")
+
+
+Index(
+    "uq_roles_normalized_name",
+    func.lower(func.trim(Role.name)),
+    unique=True,
+)
+Index(
+    "uq_permissions_normalized_key",
+    func.lower(func.trim(Permission.key)),
+    unique=True,
+)
 
 
 class RolePermission(Base):

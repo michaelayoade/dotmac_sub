@@ -1,0 +1,8 @@
+# Minimal example connector for the external runtime integration test.
+# Runs non-root on a read-only rootfs; the transport supplies the hardening.
+FROM python:3.12-alpine
+
+RUN adduser -D -u 10001 connector
+COPY main.py /app/main.py
+USER connector
+ENTRYPOINT ["python3", "/app/main.py"]

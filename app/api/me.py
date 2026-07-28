@@ -23,6 +23,7 @@ from fastapi import (
     Query,
     Request,
     UploadFile,
+    status,
 )
 from sqlalchemy.orm import Session
 
@@ -43,6 +44,8 @@ from app.schemas.billing import (
     TopupInitiateRequest,
     TopupInitiateResponse,
     TopupPageResponse,
+    TopupPreviewRequest,
+    TopupPreviewResponse,
     TopupVerifyRequest,
     TopupVerifyResponse,
 )
@@ -60,6 +63,10 @@ from app.schemas.catalog import (
 )
 from app.schemas.chat import ChatSessionResponse
 from app.schemas.common import ListResponse
+from app.schemas.customer_device_commands import (
+    CustomerDeviceCommandOutcomeRead,
+    CustomerWifiUpdateRequest,
+)
 from app.schemas.gis import (
     MyLocationRead,
     MyLocationRequestCreate,
@@ -73,11 +80,15 @@ from app.schemas.notification import (
     PushTokenRegister,
 )
 from app.schemas.portal import (
+    CustomerFieldJobChatMessage,
+    CustomerFieldJobChatMessageCreate,
+    CustomerFieldJobChatThread,
     MyProjectsResponse,
     MyQuotesResponse,
     MyReferralsResponse,
     MyWorkOrdersResponse,
     PortalSessionResponse,
+    ProjectItem,
     QuoteDepositInitiateRequest,
     QuoteDepositInitiateResponse,
     QuoteDepositVerifyRequest,
@@ -89,8 +100,9 @@ from app.schemas.portal import (
     TechnicianLocation,
     TechnicianRatingRequest,
     TechnicianRatingResponse,
+    WorkOrderItem,
 )
-from app.schemas.service_status import ServiceStatusResponse
+from app.schemas.portal_account_health import PortalAccountHealthRead
 from app.schemas.subscriber import (
     AccountDeletionRequest,
     AccountDeletionResponse,
@@ -107,6 +119,7 @@ from app.schemas.support import (
     TicketCommentRead,
     TicketCreate,
     TicketRead,
+    TicketResolutionDisputeRequest,
     TicketSatisfactionRequest,
 )
 from app.schemas.usage import (
@@ -120,6 +133,15 @@ from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import chat_session as chat_session_service
+from app.services import (
+    customer_experience_lifecycle,
+    customer_field_job_chat,
+    customer_work_order_selfcare,
+    quote_deposits,
+    quotes_mirror,
+    team_inbox_widget,
+    web_support_tickets,
+)
 from app.services import customer_location_requests as location_service
 from app.services import customer_portal_contacts as contacts_service
 from app.services import customer_portal_flow_addons as customer_addons
@@ -130,17 +152,8 @@ from app.services import customer_portal_notifications as customer_notifications
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
-from app.services import projects as projects_service
-from app.services import (
-    projects_mirror,
-    quote_deposits,
-    quotes_mirror,
-    web_support_tickets,
-    work_orders_mirror,
-)
 from app.services import push as push_service
 from app.services import referrals as referrals_service
-from app.services import status_presentation as status_presentation_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
@@ -151,8 +164,10 @@ from app.services.bandwidth import (
     with_subscriber_directions,
 )
 from app.services.customer_context import require_customer_account_id
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.services.sales import selfserve as selfserve_service
-from app.services.topology import connection_status as connection_status_service
 
 router = APIRouter(prefix="/me", tags=["me"])
 logger = logging.getLogger(__name__)
@@ -364,26 +379,80 @@ def my_subscriptions(
     )
 
 
-@router.get("/service-status", response_model=ServiceStatusResponse)
-def my_service_status(
+@router.post(
+    "/subscriptions/{subscription_id}/device/reboot",
+    response_model=CustomerDeviceCommandOutcomeRead,
+)
+def reboot_my_subscription_device(
+    subscription_id: UUID,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Truthful "is my service good, and when does it lapse" view.
+    """Reboot the exact device currently assigned to the caller's service."""
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        reboot_subscription_device,
+    )
 
-    Service expiry is not date-driven: prepaid lapses on balance exhaustion
-    (balance + grace/deactivation timers below), postpaid only via dunning on
-    overdue invoices. `next_charge_at` is the next charge/invoice date, never an
-    expiry — clients should read this endpoint (and `status`) rather than infer
-    expiry from `next_billing_at`.
+    try:
+        return reboot_subscription_device(
+            db,
+            subscriber_id=UUID(_subscriber_id(principal)),
+            subscription_id=subscription_id,
+            actor_id=str(principal.get("id") or _subscriber_id(principal)),
+        )
+    except CustomerDeviceCommandError as exc:
+        status_code = 404 if exc.code == "subscription_not_found" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
-    `primary_action` and per-service `action` are the customer-action contract:
-    clients must not treat a blocked/suspended status as proof that payment will
-    restore service or derive a restoration amount from their invoice cache.
-    """
-    from app.services.service_status import build_service_status
 
-    return build_service_status(db, _subscriber_id(principal))
+@router.post(
+    "/subscriptions/{subscription_id}/device/wifi",
+    response_model=CustomerDeviceCommandOutcomeRead,
+)
+def update_my_subscription_wifi(
+    subscription_id: UUID,
+    payload: CustomerWifiUpdateRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Update Wi-Fi on the exact device assigned to the caller's service."""
+    from app.services.customer_device_commands import (
+        CustomerDeviceCommandError,
+        update_subscription_wifi,
+    )
+
+    try:
+        return update_subscription_wifi(
+            db,
+            subscriber_id=UUID(_subscriber_id(principal)),
+            subscription_id=subscription_id,
+            actor_id=str(principal.get("id") or _subscriber_id(principal)),
+            ssid=payload.ssid,
+            password=payload.password,
+        )
+    except CustomerDeviceCommandError as exc:
+        status_code = 404 if exc.code == "subscription_not_found" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.get("/account-health", response_model=PortalAccountHealthRead)
+def my_account_health(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Canonical financial, access, session, connection, and outage health."""
+    from app.services.portal_account_health import build_portal_account_health
+
+    return PortalAccountHealthRead.model_validate(
+        build_portal_account_health(db, UUID(_subscriber_id(principal)))
+    )
 
 
 @router.get("/quota-buckets", response_model=ListResponse[QuotaBucketRead])
@@ -413,7 +482,7 @@ def _offer_summary(offer, summary) -> PlanOfferSummary | None:
 
 
 @router.get(
-    "/subscriptions/{subscription_id}/plan-change",
+    "/subscriptions/{subscription_id}/service-change",
     response_model=PlanChangePageResponse,
 )
 def my_plan_change_options(
@@ -444,69 +513,34 @@ def my_plan_change_options(
         ),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
+        service_addresses=ctx.get("service_addresses", []),
+        current_service_address_id=ctx.get("current_service_address_id"),
     )
 
 
-@router.get("/subscriptions/{subscription_id}/plan-change/quote")
+@router.get("/subscriptions/{subscription_id}/service-change/quote")
 def my_plan_change_quote(
     subscription_id: str,
     offer_id: str,
+    target_service_address_id: str | None = None,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Prorated quote for switching this service to a single target offer."""
     quote = customer_changes.get_plan_change_quote(
-        db, _customer(db, principal), subscription_id, offer_id
+        db,
+        _customer(db, principal),
+        subscription_id,
+        offer_id,
+        target_service_address_id=target_service_address_id,
     )
     if quote is None:
         raise HTTPException(status_code=404, detail="Plan not available")
     return quote
 
 
-# Calm, non-alarming fallback when the caller has no resolvable active service
-# (mirrors the portal /connection surface so the two never disagree).
-_NO_SERVICE_CONNECTION_STATUS = {
-    "state": "connected",
-    "status_presentation": status_presentation_service.connection_health_status_presentation(
-        "connected"
-    ).model_dump(mode="json"),
-    "headline": "No active service",
-    "message": "We couldn't find an active service on your account to check.",
-    "advice": None,
-    "medium": None,
-    "area_outage": False,
-    "checked_at": None,
-}
-
-
-@router.get("/connection-status")
-def my_connection_status_detail(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-) -> dict:
-    """Richer connection status for the caller's active service (outage
-    classifier P4): the per-customer last-mile verdict with area-outage blame
-    suppression, from ``topology.connection_status``.
-
-    Bearer-auth sibling of the portal ``/portal/connection/status.json`` — same
-    customer-safe payload ``{state, status_presentation, headline, message,
-    advice, medium, area_outage, checked_at}`` (no node names / signal values /
-    internals), so the mobile app can reach the richer surface the cookie-only
-    portal route isn't reachable for. Self-scoped: only ever the caller's own
-    subscription.
-    """
-    _subscriber_id(principal)  # enforce a subscriber principal (403 otherwise)
-    try:
-        subscription = bandwidth_samples.get_user_active_subscription(db, principal)
-    except HTTPException:
-        subscription = None
-    if subscription is None:
-        return dict(_NO_SERVICE_CONNECTION_STATUS)
-    return connection_status_service.connection_status(db, subscription)
-
-
 @router.post(
-    "/subscriptions/{subscription_id}/plan-change",
+    "/subscriptions/{subscription_id}/service-change",
     response_model=PlanChangeSubmitResponse,
 )
 def my_plan_change_submit(
@@ -517,10 +551,10 @@ def my_plan_change_submit(
 ):
     """Apply a plan change for the caller's own service.
 
-    Mirrors the web portal: same-family changes apply instantly when the
-    customer is eligible (no arrears, sufficient prepaid funds); a cross-family
-    change is queued as a migration support ticket. apply_instant_plan_change
-    verifies ownership, availability, arrears, and prepaid affordability.
+    Commercial-only changes apply immediately. Remote reprovisioning and field
+    migrations persist a reviewed change intent until the appropriate delivery
+    owner records verification. Plan family never decides the branch and this
+    endpoint never creates a support ticket.
     """
     customer = _customer(db, principal)
     account_id = require_customer_account_id(db, customer)
@@ -530,45 +564,26 @@ def my_plan_change_submit(
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise HTTPException(status_code=404, detail="Service not found")
     try:
-        result = customer_changes.apply_instant_plan_change(
+        result = customer_changes.confirm_service_change(
             db=db,
             customer=customer,
             subscription_id=subscription_id,
             offer_id=str(payload.offer_id),
+            target_service_address_id=(
+                str(payload.target_service_address_id)
+                if payload.target_service_address_id
+                else None
+            ),
             notes=payload.notes,
             preview_fingerprint=payload.preview_fingerprint or "",
+            field_quote_fingerprint=payload.field_quote_fingerprint,
             preview_effective_at=payload.preview_effective_at,
             idempotency_key=payload.idempotency_key or "",
             confirmation_origin="customer_api",
         )
     except ValueError as exc:
-        message = str(exc)
-        # Cross-family changes can't apply instantly — queue a migration ticket.
-        if "same plan family" in message.lower():
-            from app.models.catalog import CatalogOffer
-            from app.services.common import coerce_uuid
-
-            offer = db.get(CatalogOffer, coerce_uuid(str(payload.offer_id)))
-            target_family = str(getattr(offer, "plan_family", "") or "").strip()
-            if target_family:
-                customer_changes.request_plan_migration(
-                    db=db,
-                    customer=customer,
-                    subscription_id=subscription_id,
-                    target_family=target_family,
-                    requested_offer_id=str(payload.offer_id),
-                    notes=payload.notes,
-                )
-                return PlanChangeSubmitResponse(
-                    success=True,
-                    status="migration_requested",
-                    message=(
-                        "This plan needs a migration. We've opened a support "
-                        "request to move you."
-                    ),
-                )
         # Arrears / validation errors → 400 with the clear message.
-        raise HTTPException(status_code=400, detail=message) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not result.get("success", False):
         # Insufficient prepaid funding for the prorated upgrade.
@@ -582,10 +597,16 @@ def my_plan_change_submit(
                 else "Insufficient prepaid funding to apply this upgrade."
             ),
         )
+    delivery_mode = str(result.get("delivery_mode") or "commercial_only")
+    status = (
+        "applied"
+        if result.get("status") in {"applied", "skipped"}
+        else f"pending_{delivery_mode}"
+    )
     return PlanChangeSubmitResponse(
         success=True,
-        status="applied",
-        message="Your plan has been changed.",
+        status=status,
+        message=str(result.get("message") or "Your service change is confirmed."),
         change_request_id=result.get("change_request_id"),
         account_adjustment_id=result.get("account_adjustment_id"),
         credit_note_id=result.get("credit_note_id"),
@@ -727,6 +748,21 @@ def my_topup_page(
     )
 
 
+@router.post("/topup/preview", response_model=TopupPreviewResponse)
+def my_topup_preview(
+    payload: TopupPreviewRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Preview a Deposit Account Credit allocation for the caller's amount."""
+    customer = _customer(db, principal)
+    try:
+        preview = customer_payments.preview_topup(db, customer, payload.amount)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TopupPreviewResponse.model_validate(preview)
+
+
 @router.post("/topup/initiate", response_model=TopupInitiateResponse)
 def my_topup_initiate(
     payload: TopupInitiateRequest,
@@ -744,6 +780,7 @@ def my_topup_initiate(
             payment_method_id=(
                 str(payload.payment_method_id) if payload.payment_method_id else None
             ),
+            preview_fingerprint=payload.preview_fingerprint,
             idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
@@ -801,9 +838,12 @@ def my_topup_verify(
         amount=Decimal(str(result.get("amount") or "0")),
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
+        amount_credited=result.get("amount_credited"),
+        prepaid_amount_applied=result.get("prepaid_amount_applied", Decimal("0.00")),
         credit_added=result.get("credit_added"),
         allocated_total=result.get("allocated_total", Decimal("0.00")),
         allocated_to_invoices=result.get("allocated_to_invoices", []),
+        renewed_services=result.get("renewed_services", []),
         card_saved=card_saved,
         card_save_message=card_save_message,
     )
@@ -853,9 +893,13 @@ def my_chat_session(
     the reference rides in the session so the agent has context.
     """
     subscriber_id = _subscriber_id(principal)
-    return chat_session_service.broker_customer_session(
-        db, subscriber_id, ticket_id=ticket_id, project_id=project_id
-    )
+    try:
+        return chat_session_service.broker_customer_session(
+            db, subscriber_id, ticket_id=ticket_id, project_id=project_id
+        )
+    except team_inbox_widget.TeamInboxWidgetError as exc:
+        status_code = 404 if exc.code.endswith("_not_found") else 503
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.post("/portal/session", response_model=PortalSessionResponse)
@@ -880,7 +924,29 @@ def my_referrals(
 ):
     """The caller's native Sub Refer & Earn summary."""
     subscriber_id = _subscriber_id(principal)
-    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+    try:
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
+        referrals_service.ensure_referral_code(
+            db,
+            referrals_service.EnsureReferralCodeCommand(
+                context=CommandContext.system(
+                    actor=f"customer_api:{resolved_subscriber_id}",
+                    scope=referrals_service.REFERRAL_PROGRAM_SCOPE,
+                    reason="Customer requested their referral summary",
+                    idempotency_key=f"referral-code:{resolved_subscriber_id}",
+                ),
+                subscriber_id=resolved_subscriber_id,
+            ),
+        )
+        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+    except DomainError as exc:
+        status_code = (
+            503
+            if exc.code.endswith(("program_disabled", "invalid_configuration"))
+            else 409
+        )
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get("/projects", response_model=MyProjectsResponse)
@@ -888,14 +954,23 @@ def my_projects(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's installations/projects — stage timeline + progress %.
-    Behind the ``projects_native_read_enabled`` read-flip flag:
-    OFF serves the local CRM mirror (refreshed lazily), ON serves the native
-    ``projects`` table — same shape and ids either way."""
+    """The caller's typed native project/task/field/support lifecycle."""
     subscriber_id = _subscriber_id(principal)
-    if projects_service.native_read_enabled(db):
-        return projects_service.portal_read_for_subscriber(db, subscriber_id)
-    return projects_mirror.read_for_subscriber(db, subscriber_id)
+    return customer_experience_lifecycle.projects_for_subscriber(db, subscriber_id)
+
+
+@router.get("/projects/{project_id}", response_model=ProjectItem)
+def my_project(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    project = customer_experience_lifecycle.project_for_subscriber(
+        db, _subscriber_id(principal), project_id
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
 
 
 @router.get("/work-orders", response_model=MyWorkOrdersResponse)
@@ -903,10 +978,23 @@ def my_work_orders(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's field-service work orders — technician, schedule, ETA,
-    status — served from the local mirror (refreshed from the CRM lazily)."""
+    """The caller's Sub-owned field visits and native lifecycle links."""
     subscriber_id = _subscriber_id(principal)
-    return work_orders_mirror.read_for_subscriber(db, subscriber_id)
+    return customer_experience_lifecycle.work_orders_for_subscriber(db, subscriber_id)
+
+
+@router.get("/work-orders/{work_order_id}", response_model=WorkOrderItem)
+def my_work_order(
+    work_order_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    work_order = customer_experience_lifecycle.work_order_for_subscriber(
+        db, _subscriber_id(principal), work_order_id
+    )
+    if work_order is None:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    return work_order
 
 
 @router.get(
@@ -922,8 +1010,53 @@ def my_work_order_technician_location(
     'where's my technician' map). Returns available=False when the map should
     be hidden."""
     subscriber_id = _subscriber_id(principal)
-    data = work_orders_mirror.technician_location(db, subscriber_id, work_order_id)
-    return TechnicianLocation.model_validate(data)
+    return customer_work_order_selfcare.technician_location(
+        db, subscriber_id, work_order_id
+    )
+
+
+@router.get(
+    "/work-orders/{work_order_id}/chat",
+    response_model=CustomerFieldJobChatThread,
+)
+def my_work_order_chat(
+    work_order_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The chat with the technician on their way to this visit.
+
+    ``available=False`` with ``reason="not_departed"`` until the technician
+    sets off — a technician holds several assigned jobs at once, and the chat
+    belongs to the one they are actually travelling to.
+    """
+    subscriber_id = _subscriber_id(principal)
+    return customer_field_job_chat.get_thread(
+        db, subscriber_id, work_order_id, limit=limit
+    )
+
+
+@router.post(
+    "/work-orders/{work_order_id}/chat/messages",
+    response_model=CustomerFieldJobChatMessage,
+    status_code=status.HTTP_201_CREATED,
+)
+def send_my_work_order_chat_message(
+    work_order_id: str,
+    payload: CustomerFieldJobChatMessageCreate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Send a message to the technician travelling to this visit."""
+    subscriber_id = _subscriber_id(principal)
+    try:
+        return customer_field_job_chat.send_message(
+            db, subscriber_id, work_order_id, body=payload.body
+        )
+    except customer_field_job_chat.FieldJobChatError as exc:
+        status_code = 404 if exc.code == "not_found" else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post(
@@ -939,7 +1072,7 @@ def my_rate_technician(
     """Rate the technician after a completed work order (1-5 + optional comment)."""
     subscriber_id = _subscriber_id(principal)
     try:
-        data = work_orders_mirror.rate_technician(
+        return customer_work_order_selfcare.rate_technician(
             db,
             subscriber_id,
             work_order_id,
@@ -952,7 +1085,6 @@ def my_rate_technician(
         raise HTTPException(
             status_code=409, detail="Work order is not completed"
         ) from exc
-    return TechnicianRatingResponse.model_validate(data)
 
 
 @router.get("/quotes", response_model=MyQuotesResponse)
@@ -1059,14 +1191,37 @@ def my_refer_a_friend(
 ):
     """Refer a friend through Sub's Party-first referral owner."""
     subscriber_id = _subscriber_id(principal)
-    return referrals_service.referrals.refer_a_friend(
-        db,
-        subscriber_id,
-        name=payload.name,
-        email=payload.email,
-        phone=payload.phone,
-        note=payload.note,
-    )
+    try:
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
+        result = referrals_service.refer_friend(
+            db,
+            referrals_service.ReferFriendCommand(
+                context=CommandContext.system(
+                    actor=f"customer_api:{resolved_subscriber_id}",
+                    scope=referrals_service.REFERRAL_PROGRAM_SCOPE,
+                    reason="Customer submitted a Refer & Earn prospect",
+                ),
+                referrer_subscriber_id=resolved_subscriber_id,
+                name=payload.name,
+                email=payload.email,
+                phone=payload.phone,
+                note=payload.note,
+            ),
+        )
+        return {
+            "id": str(result.referral_id),
+            "status": result.status,
+            "message": "Referral submitted",
+        }
+    except DomainError as exc:
+        status_code = {
+            "referrals.program.contact_required": 422,
+            "referrals.program.program_disabled": 503,
+            "referrals.program.invalid_configuration": 503,
+            "referrals.program.subscriber_not_found": 404,
+        }.get(exc.code, 409)
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get(
@@ -1335,6 +1490,7 @@ def my_create_ticket(
         channel=TicketChannel.web,
         subscriber_id=UUID(subscriber_id),
     )
+    db_session_adapter.release_read_transaction(db)
     ticket = support_service.tickets.create(
         db, ticket_payload, actor_id=subscriber_id, request=request
     )
@@ -1407,6 +1563,7 @@ def my_add_ticket_comment(
     uploaded: list[dict] = []
     if files:
         try:
+            db_session_adapter.release_read_transaction(db)
             uploaded = web_support_tickets.upload_ticket_attachments(
                 db,
                 ticket_id=ticket_id,
@@ -1419,6 +1576,7 @@ def my_add_ticket_comment(
                 status_code=400,
                 detail={"code": "invalid_attachment", "message": str(exc)},
             ) from exc
+    db_session_adapter.release_read_transaction(db)
     comment = support_service.tickets.create_comment(
         db,
         ticket_id,
@@ -1443,8 +1601,45 @@ def my_rate_ticket(
     """Rate the support experience on the caller's own resolved/closed ticket
     (CSAT, 1-5 + optional comment). Re-rating overwrites the previous score."""
     ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    db_session_adapter.release_read_transaction(db)
     return support_service.tickets.set_satisfaction(
         db, ticket, rating=payload.rating, comment=payload.comment
+    )
+
+
+@router.post(
+    "/support/tickets/{ticket_id}/confirm-resolution", response_model=TicketRead
+)
+def my_confirm_ticket_resolution(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Confirm that the owner-resolved incident is fixed."""
+    ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    db_session_adapter.release_read_transaction(db)
+    return support_service.tickets.respond_to_resolution_for_customer(
+        db, ticket, confirm=True
+    )
+
+
+@router.post(
+    "/support/tickets/{ticket_id}/dispute-resolution", response_model=TicketRead
+)
+def my_dispute_ticket_resolution(
+    ticket_id: str,
+    payload: TicketResolutionDisputeRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Reopen the incident when the reported resolution did not fix it."""
+    ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    db_session_adapter.release_read_transaction(db)
+    return support_service.tickets.respond_to_resolution_for_customer(
+        db,
+        ticket,
+        confirm=False,
+        reason=payload.reason,
     )
 
 

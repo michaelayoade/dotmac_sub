@@ -12,13 +12,30 @@ from enum import Enum
 
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import OfferStatus, SubscriptionStatus
+from app.models.fup_state import FupActionStatus
+from app.models.network import Ipv6PrefixState
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.project import ProjectStatus, ProjectTaskStatus
-from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
+from app.models.provisioning import (
+    AppointmentStatus,
+    ProvisioningRunStatus,
+    ServiceOrderStatus,
+    TaskStatus,
+)
 from app.models.sales import QuoteStatus, SalesOrderStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
-from app.models.vendor_routes import VendorPurchaseInvoiceStatus
+from app.models.vendor_routes import (
+    AsBuiltRouteStatus,
+    InstallationProjectStatus,
+    ProjectQuoteStatus,
+    ProposedRouteRevisionStatus,
+    VendorPurchaseInvoiceStatus,
+)
+from app.models.vendor_supply import (
+    VendorAdvanceStatus,
+    VendorMaterialReleaseStatus,
+)
 from app.schemas.status_presentation import (
     StatusIcon,
     StatusPresentation,
@@ -316,10 +333,8 @@ _OUTAGE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
 }
 
 _DEVICE_OPERATIONAL_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
-    "up": ("Up", StatusTone.positive, StatusIcon.check),
-    "degraded": ("Degraded", StatusTone.warning, StatusIcon.alert),
-    "down": ("Down", StatusTone.negative, StatusIcon.x),
-    "maintenance": ("Maintenance", StatusTone.neutral, StatusIcon.minus),
+    "working": ("Working", StatusTone.positive, StatusIcon.check),
+    "not_working": ("Not working", StatusTone.negative, StatusIcon.x),
 }
 
 _CONNECTION_HEALTH_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
@@ -345,6 +360,12 @@ _ACCESS_SESSION_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     "stale": ("Last seen", StatusTone.warning, StatusIcon.clock),
     "offline": ("Not connected", StatusTone.neutral, StatusIcon.x),
     "inactive": ("Not connected", StatusTone.neutral, StatusIcon.minus),
+}
+
+_SERVICE_ACCESS_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "available": ("Available", StatusTone.positive, StatusIcon.check),
+    "restricted": ("Restricted", StatusTone.warning, StatusIcon.alert),
+    "unavailable": ("Unavailable", StatusTone.neutral, StatusIcon.minus),
 }
 
 _WITHHOLDING_TAX_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
@@ -663,25 +684,10 @@ def outage_status_presentation(
 
 def device_operational_status_presentation(
     status: object | str | None,
-    *,
-    retry_pending: bool | None = None,
 ) -> StatusPresentation:
-    """Project derived NOC state while preserving retry/alarm semantics.
+    """Project the owner-resolved binary device-operation outcome."""
 
-    A retry-pending ``down`` remains visibly down under the checked-in binary
-    operational model, but uses a warning/clock treatment so a monitoring gap
-    cannot be mistaken for negative device evidence.
-    """
     value = _status_value(getattr(status, "status", status))
-    if retry_pending is None:
-        retry_pending = bool(getattr(status, "retry_pending", False))
-    if value == "down" and retry_pending:
-        return StatusPresentation(
-            value=value,
-            label="Down",
-            tone=StatusTone.warning,
-            icon=StatusIcon.clock,
-        )
     return _presentation(value, _DEVICE_OPERATIONAL_PRESENTATIONS)
 
 
@@ -695,6 +701,11 @@ def connection_health_status_presentation(
 def access_session_status_presentation(status: str | None) -> StatusPresentation:
     """Project the admin RADIUS-session observation without deriving health."""
     return _presentation(_status_value(status), _ACCESS_SESSION_PRESENTATIONS)
+
+
+def service_access_status_presentation(status: str | None) -> StatusPresentation:
+    """Project an already-resolved service-access availability state."""
+    return _presentation(_status_value(status), _SERVICE_ACCESS_PRESENTATIONS)
 
 
 def withholding_tax_status_presentation(
@@ -740,6 +751,159 @@ _VENDOR_PURCHASE_INVOICE_PRESENTATIONS: dict[
 }
 
 
+_INSTALLATION_PROJECT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    InstallationProjectStatus.draft.value: (
+        "Draft",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    InstallationProjectStatus.open_for_bidding.value: (
+        "Open for bidding",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    InstallationProjectStatus.quoted.value: (
+        "Quoted",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    InstallationProjectStatus.approved.value: (
+        "Approved",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    InstallationProjectStatus.assigned.value: (
+        "Assigned",
+        StatusTone.info,
+        StatusIcon.check,
+    ),
+    InstallationProjectStatus.in_progress.value: (
+        "In progress",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    InstallationProjectStatus.completed.value: (
+        "Completed",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    InstallationProjectStatus.verified.value: (
+        "Verified",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+}
+
+_VENDOR_QUOTE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    ProjectQuoteStatus.draft.value: (
+        "Draft",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    ProjectQuoteStatus.submitted.value: (
+        "Submitted",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    ProjectQuoteStatus.under_review.value: (
+        "Under review",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    ProjectQuoteStatus.approved.value: (
+        "Approved",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    ProjectQuoteStatus.rejected.value: (
+        "Rejected",
+        StatusTone.negative,
+        StatusIcon.x,
+    ),
+    ProjectQuoteStatus.revision_requested.value: (
+        "Revision requested",
+        StatusTone.warning,
+        StatusIcon.alert,
+    ),
+}
+
+_PROPOSED_ROUTE_REVISION_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    ProposedRouteRevisionStatus.draft.value: (
+        "Draft",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    ProposedRouteRevisionStatus.submitted.value: (
+        "Submitted",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    ProposedRouteRevisionStatus.accepted.value: (
+        "Accepted",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    ProposedRouteRevisionStatus.rejected.value: (
+        "Rejected",
+        StatusTone.negative,
+        StatusIcon.x,
+    ),
+}
+
+_AS_BUILT_ROUTE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    AsBuiltRouteStatus.submitted.value: (
+        "Submitted",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    AsBuiltRouteStatus.under_review.value: (
+        "Under review",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    AsBuiltRouteStatus.accepted.value: (
+        "Accepted",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    AsBuiltRouteStatus.rejected.value: (
+        "Rejected",
+        StatusTone.negative,
+        StatusIcon.x,
+    ),
+}
+
+
+def installation_project_status_presentation(
+    status: InstallationProjectStatus | str | None,
+) -> StatusPresentation:
+    """Project vendor-installation lifecycle status without changing it."""
+    return _presentation(_status_value(status), _INSTALLATION_PROJECT_PRESENTATIONS)
+
+
+def vendor_quote_status_presentation(
+    status: ProjectQuoteStatus | str | None,
+) -> StatusPresentation:
+    """Project vendor-quote approval status without changing it."""
+    return _presentation(_status_value(status), _VENDOR_QUOTE_PRESENTATIONS)
+
+
+def proposed_route_revision_status_presentation(
+    status: ProposedRouteRevisionStatus | str | None,
+) -> StatusPresentation:
+    """Project a proposed route revision status without changing it."""
+    return _presentation(_status_value(status), _PROPOSED_ROUTE_REVISION_PRESENTATIONS)
+
+
+def as_built_route_status_presentation(
+    status: AsBuiltRouteStatus | str | None,
+) -> StatusPresentation:
+    """Project an as-built review status without changing it."""
+    return _presentation(_status_value(status), _AS_BUILT_ROUTE_PRESENTATIONS)
+
+
 def vendor_purchase_invoice_status_presentation(
     status: VendorPurchaseInvoiceStatus | str | None,
 ) -> StatusPresentation:
@@ -747,7 +911,83 @@ def vendor_purchase_invoice_status_presentation(
     return _presentation(_status_value(status), _VENDOR_PURCHASE_INVOICE_PRESENTATIONS)
 
 
-_ERP_SUPPLIER_INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+_VENDOR_MATERIAL_RELEASE_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    VendorMaterialReleaseStatus.draft.value: (
+        "Draft",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    VendorMaterialReleaseStatus.requested.value: (
+        "Requested",
+        StatusTone.warning,
+        StatusIcon.clock,
+    ),
+    VendorMaterialReleaseStatus.approved.value: (
+        "Approved; issue pending",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    VendorMaterialReleaseStatus.rejected.value: (
+        "Rejected",
+        StatusTone.negative,
+        StatusIcon.x,
+    ),
+    VendorMaterialReleaseStatus.issued.value: (
+        "Issued",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    VendorMaterialReleaseStatus.canceled.value: (
+        "Canceled",
+        StatusTone.neutral,
+        StatusIcon.x,
+    ),
+}
+
+_VENDOR_ADVANCE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    VendorAdvanceStatus.requested.value: (
+        "Requested",
+        StatusTone.warning,
+        StatusIcon.clock,
+    ),
+    VendorAdvanceStatus.approved.value: (
+        "Approved; payment pending",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    VendorAdvanceStatus.rejected.value: (
+        "Rejected",
+        StatusTone.negative,
+        StatusIcon.x,
+    ),
+    VendorAdvanceStatus.settled.value: (
+        "Settled",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    VendorAdvanceStatus.canceled.value: (
+        "Canceled",
+        StatusTone.neutral,
+        StatusIcon.x,
+    ),
+}
+
+
+def vendor_material_release_status_presentation(
+    status: VendorMaterialReleaseStatus | str | None,
+) -> StatusPresentation:
+    return _presentation(_status_value(status), _VENDOR_MATERIAL_RELEASE_PRESENTATIONS)
+
+
+def vendor_advance_status_presentation(
+    status: VendorAdvanceStatus | str | None,
+) -> StatusPresentation:
+    return _presentation(_status_value(status), _VENDOR_ADVANCE_PRESENTATIONS)
+
+
+_SUPPLIER_INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     "draft": ("Finance draft", StatusTone.neutral, StatusIcon.archive),
     "submitted": ("Submitted to finance", StatusTone.info, StatusIcon.info),
     "pending_approval": (
@@ -766,11 +1006,18 @@ _ERP_SUPPLIER_INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon
 }
 
 
+def supplier_invoice_status_presentation(
+    status: str | None,
+) -> StatusPresentation:
+    """Project an observed AP state without inferring settlement."""
+    return _presentation(_status_value(status), _SUPPLIER_INVOICE_PRESENTATIONS)
+
+
 def erp_supplier_invoice_status_presentation(
     status: str | None,
 ) -> StatusPresentation:
-    """Project ERP's authoritative AP state without inferring settlement."""
-    return _presentation(_status_value(status), _ERP_SUPPLIER_INVOICE_PRESENTATIONS)
+    """Compatibility alias; use ``supplier_invoice_status_presentation``."""
+    return supplier_invoice_status_presentation(status)
 
 
 _FIELD_EXPENSE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
@@ -818,3 +1065,155 @@ _SYSTEM_JOB_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
 def system_job_status_presentation(status: str | None) -> StatusPresentation:
     """Project a system/background job run status without re-deriving it."""
     return _presentation(_status_value(status), _SYSTEM_JOB_PRESENTATIONS)
+
+
+# --- Fiber plant status presentations (inventory owners return raw strings) ---
+_FIBER_STRAND_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "available": ("Available", StatusTone.positive, StatusIcon.check),
+    "in_use": ("In use", StatusTone.info, StatusIcon.check),
+    "reserved": ("Reserved", StatusTone.warning, StatusIcon.clock),
+    "faulted": ("Faulted", StatusTone.negative, StatusIcon.x),
+    "retired": ("Retired", StatusTone.neutral, StatusIcon.archive),
+}
+
+_FIBER_CHANGE_REQUEST_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "pending": ("Pending", StatusTone.warning, StatusIcon.clock),
+    "applied": ("Applied", StatusTone.positive, StatusIcon.check),
+    "rejected": ("Rejected", StatusTone.negative, StatusIcon.x),
+}
+
+_FIBER_SUPPORT_LIFECYCLE_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    "planned": ("Planned", StatusTone.info, StatusIcon.clock),
+    "active": ("Active", StatusTone.positive, StatusIcon.check),
+    "suspended": ("Suspended", StatusTone.warning, StatusIcon.alert),
+    "retired": ("Retired", StatusTone.neutral, StatusIcon.archive),
+}
+
+_FIBER_SUPPORT_INSPECTION_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    "passed": ("Passed", StatusTone.positive, StatusIcon.check),
+    "due": ("Due", StatusTone.warning, StatusIcon.clock),
+    "conditional": ("Conditional", StatusTone.warning, StatusIcon.alert),
+    "failed": ("Failed", StatusTone.negative, StatusIcon.x),
+    "uninspected": ("Uninspected", StatusTone.neutral, StatusIcon.minus),
+}
+
+
+def fiber_strand_status_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a FiberStrand.status (SoT tone contract)."""
+    return _presentation(_status_value(status), _FIBER_STRAND_PRESENTATIONS)
+
+
+def fiber_change_request_status_presentation(
+    status: object | None,
+) -> StatusPresentation:
+    """Server-owned presentation for a FiberChangeRequest.status."""
+    return _presentation(_status_value(status), _FIBER_CHANGE_REQUEST_PRESENTATIONS)
+
+
+def fiber_support_lifecycle_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a FiberSupportStructure.lifecycle_status."""
+    return _presentation(_status_value(status), _FIBER_SUPPORT_LIFECYCLE_PRESENTATIONS)
+
+
+def fiber_support_inspection_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a FiberSupportStructure.inspection_status."""
+    return _presentation(_status_value(status), _FIBER_SUPPORT_INSPECTION_PRESENTATIONS)
+
+
+# --- Monitoring alarm presentations (Alert enums have no projector) ---
+_ALARM_SEVERITY_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "info": ("Info", StatusTone.info, StatusIcon.info),
+    "warning": ("Warning", StatusTone.warning, StatusIcon.alert),
+    "critical": ("Critical", StatusTone.negative, StatusIcon.alert),
+}
+
+_ALARM_STATUS_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "open": ("Open", StatusTone.warning, StatusIcon.alert),
+    "acknowledged": ("Acknowledged", StatusTone.info, StatusIcon.clock),
+    "resolved": ("Resolved", StatusTone.positive, StatusIcon.check),
+}
+
+
+def alarm_severity_presentation(severity: object | None) -> StatusPresentation:
+    """Server-owned presentation for a monitoring Alert.severity."""
+    return _presentation(_status_value(severity), _ALARM_SEVERITY_PRESENTATIONS)
+
+
+def alarm_status_presentation(status: object | None) -> StatusPresentation:
+    """Server-owned presentation for a monitoring Alert.status."""
+    return _presentation(_status_value(status), _ALARM_STATUS_PRESENTATIONS)
+
+
+_FUP_ACTION_STATUS_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    FupActionStatus.none.value: ("Normal", StatusTone.positive, StatusIcon.check),
+    FupActionStatus.notified.value: ("Notified", StatusTone.info, StatusIcon.info),
+    FupActionStatus.throttled.value: (
+        "Throttled",
+        StatusTone.warning,
+        StatusIcon.alert,
+    ),
+    FupActionStatus.blocked.value: ("Blocked", StatusTone.negative, StatusIcon.x),
+}
+
+
+def fup_action_status_presentation(
+    status: FupActionStatus | str | None,
+) -> StatusPresentation:
+    """Project the FUP enforcement action state (server-owned tone)."""
+    return _presentation(_status_value(status), _FUP_ACTION_STATUS_PRESENTATIONS)
+
+
+_IPV6_PREFIX_STATE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    Ipv6PrefixState.available.value: ("Available", StatusTone.info, StatusIcon.info),
+    Ipv6PrefixState.reserved.value: ("Reserved", StatusTone.warning, StatusIcon.clock),
+    Ipv6PrefixState.assigned.value: ("Assigned", StatusTone.positive, StatusIcon.check),
+}
+
+
+def ipv6_prefix_state_presentation(
+    status: Ipv6PrefixState | str | None,
+) -> StatusPresentation:
+    """Project the IPv6 delegated-prefix lifecycle state (server-owned tone)."""
+    return _presentation(_status_value(status), _IPV6_PREFIX_STATE_PRESENTATIONS)
+
+
+_PROVISIONING_RUN_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    ProvisioningRunStatus.pending.value: ("Pending", StatusTone.info, StatusIcon.info),
+    ProvisioningRunStatus.running.value: ("Running", StatusTone.info, StatusIcon.clock),
+    ProvisioningRunStatus.success.value: (
+        "Success",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    ProvisioningRunStatus.failed.value: ("Failed", StatusTone.negative, StatusIcon.x),
+}
+
+
+def provisioning_run_status_presentation(
+    status: ProvisioningRunStatus | str | None,
+) -> StatusPresentation:
+    """Project the provisioning-run lifecycle state (server-owned tone)."""
+    return _presentation(_status_value(status), _PROVISIONING_RUN_PRESENTATIONS)
+
+
+# ControlPlanePhase (owner: control_plane_intent) values, keyed as strings to
+# avoid importing a service-layer enum into the presentation owner.
+_CONTROL_PLANE_PHASE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "desired": ("Desired", StatusTone.neutral, StatusIcon.archive),
+    "planned": ("Planned", StatusTone.info, StatusIcon.info),
+    "queued": ("Queued", StatusTone.info, StatusIcon.clock),
+    "applying": ("Applying", StatusTone.info, StatusIcon.clock),
+    "readback_pending": ("Readback pending", StatusTone.warning, StatusIcon.clock),
+    "verified": ("Verified", StatusTone.positive, StatusIcon.check),
+    "drifted": ("Drifted", StatusTone.warning, StatusIcon.alert),
+    "failed": ("Failed", StatusTone.negative, StatusIcon.x),
+}
+
+
+def control_plane_phase_presentation(status: object) -> StatusPresentation:
+    """Project the control-plane convergence phase (server-owned tone)."""
+    return _presentation(_status_value(status), _CONTROL_PLANE_PHASE_PRESENTATIONS)

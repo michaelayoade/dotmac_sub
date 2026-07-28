@@ -98,7 +98,6 @@ def seed_rbac_catalogue(db) -> dict[str, Role]:
         seed_rbac._ensure_role(db, name, description)
     for key, description in seed_rbac.DEFAULT_PERMISSIONS:
         seed_rbac._ensure_permission(db, key, description)
-    db.commit()
 
     roles = {r.name: r for r in db.query(Role).all()}
     perms = {p.key: p for p in db.query(Permission).all()}
@@ -106,10 +105,11 @@ def seed_rbac_catalogue(db) -> dict[str, Role]:
         role = roles.get(role_name)
         if not role:
             continue
-        for key in keys:
-            perm = perms.get(key)
-            if perm:
-                seed_rbac._ensure_role_permission(db, role.id, perm.id)
+        seed_rbac.rbac_catalog.replace_seeded_role_permissions(
+            db,
+            role=role,
+            permission_ids=tuple(perms[key].id for key in keys if key in perms),
+        )
     db.commit()
     print(f"  roles: {', '.join(sorted(roles))}")
     return roles

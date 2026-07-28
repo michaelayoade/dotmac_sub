@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
@@ -36,13 +35,15 @@ from app.schemas.support import (
     TicketUpdate,
 )
 from app.services import support as support_service
-from app.services import support_automation
+from app.services import support_automation_rules
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_support_tickets as web_support_tickets_service
 from app.services.customer_identity_resolution import (
     rebuild_identity_index_for_subscriber,
 )
 from app.services.customer_support_links import ticket_customer_any_link_filter
+from app.services.domain_errors import DomainError
+from tests.staff_identity_fixtures import add_bound_staff_user
 
 
 def _ticket_payload(subscriber_id):
@@ -138,19 +139,36 @@ def test_ticket_create_uses_configured_routing_and_sla_policy(db_session, subscr
     team_id = uuid4()
     technician_id = uuid4()
     member_id = uuid4()
+    team = ServiceTeam(
+        id=team_id,
+        name="Field Operations",
+        team_type=ServiceTeamType.field_service.value,
+    )
+    member, person = add_bound_staff_user(
+        db_session,
+        system_user_id=member_id,
+    )
+    db_session.add_all(
+        [
+            team,
+            ServiceTeamMember(
+                team_id=team_id,
+                person_id=person.id,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+    assert member.id == member_id
     support_ticket_settings_service.update_options(
         db_session,
         statuses=["open", "closed", "merged"],
         priorities=["normal"],
         ticket_types=["incident"],
         regions=["north"],
-        service_team_ids=[str(team_id)],
-        service_team_labels=["Field Operations"],
         routing_regions=["north"],
         routing_technician_person_ids=[str(technician_id)],
         routing_service_team_ids=[str(team_id)],
-        team_member_team_ids=[str(team_id)],
-        team_member_person_ids=[str(member_id)],
         sla_priorities=["normal"],
         sla_response_hours=["1"],
         sla_resolution_hours=["8"],
@@ -199,14 +217,20 @@ def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subsc
     db_session.flush()
     loaded_person_id = uuid4()
     free_person_id = uuid4()
+    _loaded_user, loaded_party = add_bound_staff_user(
+        db_session,
+        system_user_id=loaded_person_id,
+    )
+    _free_user, free_party = add_bound_staff_user(
+        db_session,
+        system_user_id=free_person_id,
+    )
     db_session.add_all(
         [
             ServiceTeamMember(
-                team_id=team.id, person_id=loaded_person_id, is_active=True
+                team_id=team.id, person_id=loaded_party.id, is_active=True
             ),
-            ServiceTeamMember(
-                team_id=team.id, person_id=free_person_id, is_active=True
-            ),
+            ServiceTeamMember(team_id=team.id, person_id=free_party.id, is_active=True),
             TicketAssignmentRule(
                 name="Support default",
                 priority=100,
@@ -221,6 +245,7 @@ def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subsc
             ),
         ]
     )
+    db_session.commit()
     support_ticket_settings_service.update_options(
         db_session,
         statuses=["open", "closed", "merged"],
@@ -414,6 +439,7 @@ def test_resolution_confirmation_queues_customer_notifications(
         "+2348012345678",
         "authorized@example.com",
         "+2348099999999",
+        str(subscriber.id),
     }
     assert all(row.status == NotificationStatus.queued for row in rows)
     assert all("/ticket-confirm/" in (row.body or "") for row in rows)
@@ -426,7 +452,10 @@ def test_resolution_confirmation_queues_customer_notifications(
         row.channel
         for row in rows
         if row.recipient in {"+2348012345678", "+2348099999999"}
-    } == {NotificationChannel.sms}
+    } == {NotificationChannel.whatsapp}
+    assert {row.channel for row in rows if row.recipient == str(subscriber.id)} == {
+        NotificationChannel.push
+    }
 
 
 def test_resolution_confirmation_confirm_closes_ticket(db_session, subscriber):
@@ -510,6 +539,62 @@ def test_auto_confirm_pending_ignores_crm_provenance(db_session, subscriber):
     assert token_row.responded_at is not None
 
 
+def test_authenticated_selfcare_resolution_uses_same_confirmation_owner(
+    db_session, subscriber
+):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    confirmed = support_service.tickets.respond_to_resolution_for_customer(
+        db_session, ticket, confirm=True
+    )
+
+    assert confirmed.status == TicketStatus.closed.value
+    assert confirmed.closed_at is not None
+
+
+def test_authenticated_selfcare_dispute_reopens_with_reason(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    reopened = support_service.tickets.respond_to_resolution_for_customer(
+        db_session,
+        ticket,
+        confirm=False,
+        reason="Optical light is still red",
+    )
+
+    assert reopened.status == TicketStatus.open.value
+    assert reopened.metadata_["resolution_confirmation"]["customer_dispute_reason"] == (
+        "Optical light is still red"
+    )
+
+
+def test_authenticated_selfcare_rejects_expired_confirmation(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    _, token = support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+    token.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+
+    with pytest.raises(DomainError) as expired:
+        support_service.tickets.respond_to_resolution_for_customer(
+            db_session, ticket, confirm=True
+        )
+    assert expired.value.code == "resolution_confirmation_inactive"
+
+
 def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
@@ -521,12 +606,12 @@ def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
         actor_id=str(subscriber.id),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         support_service.tickets.request_resolution_confirmation(
             db_session, str(ticket.id), actor_id=str(subscriber.id)
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.code == "resolution_confirmation_not_eligible"
 
 
 def test_resolution_confirmation_accepts_crm_provenance(db_session, subscriber):
@@ -590,13 +675,15 @@ def test_automation_added_field_visit_tag_does_not_issue_work(db_session, subscr
     from app.models.support import AutomationActionType, AutomationTrigger
     from app.models.work_order import WorkOrder
 
-    support_automation.create_rule(
+    support_automation_rules.create_rule(
         db_session,
         name="Site visits get a work order",
         trigger=AutomationTrigger.ticket_created,
-        conditions={"ticket_type": "site_visit"},
+        conditions=support_automation_rules.TicketAutomationConditions(
+            ticket_type="site_visit"
+        ),
         action_type=AutomationActionType.add_tag,
-        action_value={"tag": "field_visit"},
+        action_value=support_automation_rules.TicketAutomationAction(tag="field_visit"),
     )
 
     ticket = support_service.tickets.create(
@@ -677,14 +764,14 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
     )
     assert any(str(row.person_id) == str(subscriber.id) for row in assignee_rows)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         support_service.tickets.update(
             db_session,
             str(source.id),
             TicketUpdate(title="forbidden"),
             actor_id=str(subscriber.id),
         )
-    assert exc.value.status_code == 409
+    assert exc.value.code == "ticket_merged_source"
 
 
 def test_assignment_notifications_wired_but_disabled(db_session, subscriber):
@@ -990,12 +1077,13 @@ def test_ticket_automation_is_suppressed_for_ambiguous_identity(db_session, subs
     db_session.flush()
     rebuild_identity_index_for_subscriber(db_session, subscriber.id)
     rebuild_identity_index_for_subscriber(db_session, other.id)
-    support_automation.create_rule(
+    db_session.commit()
+    support_automation_rules.create_rule(
         db_session,
         name="Auto high priority",
         trigger=AutomationTrigger.ticket_created,
         action_type=AutomationActionType.set_priority,
-        action_value={"priority": "high"},
+        action_value=support_automation_rules.TicketAutomationAction(priority="high"),
     )
     db_session.commit()
 
@@ -1034,12 +1122,15 @@ def test_ticket_automation_is_suppressed_for_low_confidence_identity(
         )
     )
     db_session.flush()
-    support_automation.create_rule(
+    db_session.commit()
+    support_automation_rules.create_rule(
         db_session,
         name="Auto open status",
         trigger=AutomationTrigger.ticket_created,
         action_type=AutomationActionType.set_status,
-        action_value={"status": "pending_customer"},
+        action_value=support_automation_rules.TicketAutomationAction(
+            status="pending_customer"
+        ),
     )
     db_session.commit()
 
@@ -1182,7 +1273,7 @@ def test_web_comment_edit_rejects_comment_from_other_ticket(db_session, subscrib
         actor_id=None,
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         web_support_tickets_service.update_ticket_comment_from_form(
             db_session,
             request=None,
@@ -1191,4 +1282,4 @@ def test_web_comment_edit_rejects_comment_from_other_ticket(db_session, subscrib
             actor_id=None,
             body="Should not apply",
         )
-    assert exc.value.status_code == 404
+    assert exc.value.code == "ticket_comment_not_found"

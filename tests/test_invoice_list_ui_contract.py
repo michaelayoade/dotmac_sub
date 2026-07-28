@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -91,7 +92,22 @@ def test_invoice_full_and_htmx_views_share_the_list_contract_partial():
     assert "page_meta.start_item" in table
 
 
-def test_invoice_bulk_ui_consumes_server_contract_and_preview_confirmation():
+def test_invoice_customer_typeahead_refreshes_only_after_selection():
+    list_partial = (
+        PROJECT_ROOT / "templates/admin/billing/_invoices_list.html"
+    ).read_text(encoding="utf-8")
+
+    assert '@typeahead:selected="$el.requestSubmit()"' in list_partial
+    hidden_customer_ref = re.search(
+        r'<input\s+type="hidden"\s+name="customer_ref"[^>]*>',
+        list_partial,
+        re.DOTALL,
+    )
+    assert hidden_customer_ref is not None
+    assert "hx-" not in hidden_customer_ref.group(0)
+
+
+def test_invoice_bulk_ui_consumes_server_contract_and_review_confirmation():
     page = (PROJECT_ROOT / "templates/admin/billing/invoices.html").read_text(
         encoding="utf-8"
     )
@@ -102,9 +118,11 @@ def test_invoice_bulk_ui_consumes_server_contract_and_preview_confirmation():
     assert "invoice_bulk_action_contract.actions" in page
     assert "action.eligible_ids" in page
     assert "action.ineligible_reasons" in page
-    assert "expected_count: String(preview.matched_count)" in page
-    assert "expected_scope_token: preview.scope_token" in page
-    assert "/admin/billing/invoices/bulk/preview" in page
+    assert "submitSelectionReview(actionKey)" in page
+    assert "/bulk/review/${actionKey" in page
+    assert "window.confirm" not in page
+    assert "previewAction(" not in page
+    assert "executeAction(" not in page
     assert "data-invoice-bulk-action" in page
     assert "bulkIssue()" not in page
     assert "bulkPrepareAndExportPdf" not in page

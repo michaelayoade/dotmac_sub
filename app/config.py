@@ -28,6 +28,27 @@ class Settings:
     # serve (default AnyIO limit is 40). Applied in the API
     # lifespan only; Celery sets its own concurrency.
     web_threadpool_limit: int = int(os.getenv("WEB_THREADPOOL_LIMIT", "6"))
+    # Admin overview runtime policy. Defaults preserve the existing production
+    # behavior; non-production deployments may opt into prewarming and
+    # stale-while-revalidate without introducing parallel environment readers.
+    dashboard_prewarm_enabled: bool = os.getenv(
+        "DASHBOARD_PREWARM_ENABLED", "false"
+    ).lower() in ("true", "1", "yes", "on")
+    dashboard_global_cache_ttl_seconds: float = float(
+        os.getenv("DASHBOARD_GLOBAL_CACHE_TTL_SECONDS", "60")
+    )
+    dashboard_global_stale_while_revalidate: bool = os.getenv(
+        "DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE", "false"
+    ).lower() in ("true", "1", "yes", "on")
+    dashboard_global_max_stale_seconds: float = float(
+        os.getenv("DASHBOARD_GLOBAL_MAX_STALE_SECONDS", "900")
+    )
+    dashboard_infrastructure_cache_ttl_seconds: float = float(
+        os.getenv("DASHBOARD_INFRASTRUCTURE_CACHE_TTL_SECONDS", "60")
+    )
+    infrastructure_health_skip_checks: str = os.getenv(
+        "INFRASTRUCTURE_HEALTH_SKIP_CHECKS", ""
+    )
     db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "20"))
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
     db_statement_timeout_ms: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000"))
@@ -74,6 +95,13 @@ class Settings:
         max(10, int(os.getenv("TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS", "120"))),
     )
     team_inbox_smtp_log_level: str = os.getenv("TEAM_INBOX_SMTP_LOG_LEVEL", "INFO")
+    # Owning team for inbound traffic that carries no address to route on —
+    # WhatsApp, Messenger and Instagram. Email has the routing table instead.
+    # Unset means those threads arrive team-less, which is what they did before
+    # this knob existed.
+    team_inbox_channel_fallback_service_team_id: str = os.getenv(
+        "TEAM_INBOX_CHANNEL_FALLBACK_SERVICE_TEAM_ID", ""
+    ).strip()
 
     # Avatar settings
     avatar_upload_dir: str = os.getenv("AVATAR_UPLOAD_DIR", "static/avatars")
@@ -102,6 +130,11 @@ class Settings:
 
     # DEM settings
     dem_data_dir: str = os.getenv("DEM_DATA_DIR", "data/dem/srtm")
+
+    # Tmpfs directory the external connector runtime writes short-lived secret
+    # env files into. XDG_RUNTIME_DIR is tmpfs and user-private on a rootless
+    # host, which is what keeps materialized credentials off durable storage.
+    connector_runtime_dir: str = os.getenv("XDG_RUNTIME_DIR", "")
 
     # Meta Graph API settings
     meta_graph_api_version: str = os.getenv("META_GRAPH_API_VERSION", "v21.0")
@@ -236,6 +269,12 @@ class Settings:
     outage_notify_area_min_affected: int = int(
         os.getenv("OUTAGE_NOTIFY_AREA_MIN_AFFECTED", "5")
     )
+    # Automated dispatch (ADR 0004) is NOT configured here. Its gates are
+    # database-authoritative settings under SettingDomain.network_monitoring
+    # (outage_auto_notify_*), so an operator can arm, disarm or re-tighten
+    # automation from the admin UI mid-incident instead of waiting for a
+    # deploy. Their env vars are materialized into the database by settings
+    # bootstrap, which keeps one owner for the value.
 
 
 settings = Settings()

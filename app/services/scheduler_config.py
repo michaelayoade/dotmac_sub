@@ -5,12 +5,18 @@ from datetime import UTC, datetime, timedelta
 
 from celery.schedules import crontab
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.services import control_registry
 from app.services import integration as integration_service
 from app.services.db_session_adapter import db_session_adapter
-from app.services.settings_spec import resolve_value
+from app.services.scheduler import is_event_driven_transport_task
+from app.services.settings_spec import (
+    SCHEDULER_BOOLEAN_SETTING_KEYS,
+    resolve_boolean,
+    resolve_integer,
+    resolve_string,
+)
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
@@ -18,123 +24,34 @@ SessionLocal = db_session_adapter.create_session
 
 TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.sync_all_acs_devices",
-    "app.tasks.tr069.execute_pending_jobs",
+    "app.tasks.tr069.reconcile_command_outcomes",
     "app.tasks.tr069.check_device_health",
     "app.tasks.tr069.refresh_ont_runtime_data",
     "app.tasks.tr069.cleanup_tr069_records",
     "app.tasks.tr069.cleanup_stale_genieacs_tasks",
     "app.tasks.tr069.scrape_genieacs_metrics",
-    "app.tasks.tr069.execute_bulk_action",
+    "app.tasks.tr069.execute_network_operation_job",
     "app.tasks.tr069.wait_for_ont_bootstrap",
     "app.tasks.tr069.apply_saved_ont_service_config",
     "app.tasks.tr069.apply_acs_config",
 }
 
 
-def _env_value(name: str) -> str | None:
-    value = os.getenv(name)
-    if value is None or value == "":
-        return None
-    return value
+def _scheduler_setting_enabled(db, domain: SettingDomain, key: str) -> bool:
+    """Resolve one registered DB-authoritative scheduler setting.
 
+    Optional product capabilities use ``control_registry.is_enabled`` directly.
+    This helper is only for operational scheduler controls that have an explicit
+    boolean ``SettingSpec``. Ad-hoc environment/database/default fallback is
+    deliberately forbidden so a new scheduler boolean cannot silently create a
+    second control plane.
+    """
 
-def _env_bool(name: str) -> bool | None:
-    raw = _env_value(name)
-    if raw is None:
-        return None
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name: str) -> int | None:
-    raw = _env_value(name)
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
-
-
-def _get_setting_value(db, domain: SettingDomain, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == domain)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting:
-        return None
-    if setting.value_text:
-        return str(setting.value_text)
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
-
-
-def _effective_bool(
-    db, domain: SettingDomain, key: str, env_key: str, default: bool
-) -> bool:
-    # Single control plane: if this (domain, key) is a registered control, the
-    # ONE resolver decides from the canonical row/default and owning module.
-    # ``domain``/``key`` are caller-routing metadata only; ``env_key`` and the
-    # retired domain-setting row are never consulted for registered controls.
-    from app.services import control_registry
-
-    canonical = control_registry.control_for_legacy(domain, key)
-    if canonical is not None:
-        return control_registry.is_enabled(db, canonical)
-
-    # Unregistered key: legacy env -> DB -> default.
-    env_value = _env_bool(env_key)
-    if env_value is not None:
-        return env_value
-    value = _get_setting_value(db, domain, key)
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _effective_int(
-    db, domain: SettingDomain, key: str, env_key: str, default: int
-) -> int:
-    env_value = _env_int(env_key)
-    if env_value is not None:
-        return env_value
-    value = _get_setting_value(db, domain, key)
-    if value is None:
-        return default
-    try:
-        return int(str(value))
-    except ValueError:
-        return default
-
-
-def _resolve_int(db, domain: SettingDomain, key: str, default: int) -> int:
-    raw = resolve_value(db, domain, key)
-    if raw is None:
-        return default
-    try:
-        return int(str(raw))
-    except (TypeError, ValueError):
-        return default
-
-
-def _resolve_bool(db, domain: SettingDomain, key: str, default: bool) -> bool:
-    value = resolve_value(db, domain, key)
-    return value if isinstance(value, bool) else default
-
-
-def _effective_str(
-    db, domain: SettingDomain, key: str, env_key: str, default: str | None
-) -> str | None:
-    env_value = _env_value(env_key)
-    if env_value is not None:
-        return env_value
-    value = _get_setting_value(db, domain, key)
-    if value is None:
-        return default
-    return str(value)
+    if (domain, key) not in SCHEDULER_BOOLEAN_SETTING_KEYS:
+        raise RuntimeError(
+            f"Scheduler boolean must be registered: {domain.value}.{key}"
+        )
+    return resolve_boolean(db, domain, key)
 
 
 def _sync_scheduled_task(
@@ -227,11 +144,17 @@ def find_unregistered_scheduled_tasks(
 
 
 def get_celery_config() -> dict:
-    broker = None
-    backend = None
-    timezone = None
+    # Broker endpoints are deployment transport configuration. They must be
+    # available before application bootstrap can seed database settings and are
+    # therefore environment-owned rather than mutable DomainSetting values.
+    redis_url = os.getenv("REDIS_URL")
+    broker = os.getenv("CELERY_BROKER_URL") or redis_url or "redis://localhost:6379/0"
+    backend = (
+        os.getenv("CELERY_RESULT_BACKEND") or redis_url or "redis://localhost:6379/1"
+    )
+    timezone = APP_TIMEZONE_NAME
     beat_max_loop_interval = 5
-    beat_refresh_seconds = 30
+    beat_refresh_seconds = 300
     task_soft_time_limit = 840
     task_time_limit = 900
     acs_soft_time_limit = 240
@@ -239,92 +162,45 @@ def get_celery_config() -> dict:
     long_soft_time_limit = 1740
     long_time_limit = 1800
     worker_prefetch_multiplier = 1
+    result_expires = 86400
     session = SessionLocal()
     try:
-        broker = _effective_str(
-            session, SettingDomain.scheduler, "broker_url", "CELERY_BROKER_URL", None
+        timezone = resolve_string(session, SettingDomain.scheduler, "timezone")
+        beat_max_loop_interval = resolve_integer(
+            session, SettingDomain.scheduler, "beat_max_loop_interval"
         )
-        backend = _effective_str(
-            session,
-            SettingDomain.scheduler,
-            "result_backend",
-            "CELERY_RESULT_BACKEND",
-            None,
+        beat_refresh_seconds = resolve_integer(
+            session, SettingDomain.scheduler, "beat_refresh_seconds"
         )
-        timezone = _effective_str(
-            session, SettingDomain.scheduler, "timezone", "CELERY_TIMEZONE", None
+        task_soft_time_limit = resolve_integer(
+            session, SettingDomain.scheduler, "task_soft_time_limit_seconds"
         )
-        beat_max_loop_interval = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "beat_max_loop_interval",
-            "CELERY_BEAT_MAX_LOOP_INTERVAL",
-            5,
+        task_time_limit = resolve_integer(
+            session, SettingDomain.scheduler, "task_time_limit_seconds"
         )
-        beat_refresh_seconds = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "beat_refresh_seconds",
-            "CELERY_BEAT_REFRESH_SECONDS",
-            30,
+        acs_soft_time_limit = resolve_integer(
+            session, SettingDomain.scheduler, "acs_task_soft_time_limit_seconds"
         )
-        task_soft_time_limit = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "task_soft_time_limit_seconds",
-            "CELERY_TASK_SOFT_TIME_LIMIT",
-            task_soft_time_limit,
+        acs_time_limit = resolve_integer(
+            session, SettingDomain.scheduler, "acs_task_time_limit_seconds"
         )
-        task_time_limit = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "task_time_limit_seconds",
-            "CELERY_TASK_TIME_LIMIT",
-            task_time_limit,
+        long_soft_time_limit = resolve_integer(
+            session, SettingDomain.scheduler, "long_task_soft_time_limit_seconds"
         )
-        acs_soft_time_limit = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "acs_task_soft_time_limit_seconds",
-            "CELERY_ACS_TASK_SOFT_TIME_LIMIT",
-            acs_soft_time_limit,
+        long_time_limit = resolve_integer(
+            session, SettingDomain.scheduler, "long_task_time_limit_seconds"
         )
-        acs_time_limit = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "acs_task_time_limit_seconds",
-            "CELERY_ACS_TASK_TIME_LIMIT",
-            acs_time_limit,
+        worker_prefetch_multiplier = resolve_integer(
+            session, SettingDomain.scheduler, "worker_prefetch_multiplier"
         )
-        long_soft_time_limit = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "long_task_soft_time_limit_seconds",
-            "CELERY_LONG_TASK_SOFT_TIME_LIMIT",
-            long_soft_time_limit,
-        )
-        long_time_limit = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "long_task_time_limit_seconds",
-            "CELERY_LONG_TASK_TIME_LIMIT",
-            long_time_limit,
-        )
-        worker_prefetch_multiplier = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "worker_prefetch_multiplier",
-            "CELERY_WORKER_PREFETCH_MULTIPLIER",
-            worker_prefetch_multiplier,
+        result_expires = resolve_integer(
+            session, SettingDomain.scheduler, "result_expires_seconds"
         )
     except Exception:
         logger.exception("Failed to load scheduler settings from database.")
     finally:
         session.close()
 
-    broker = broker or _env_value("REDIS_URL") or "redis://localhost:6379/0"
-    backend = backend or _env_value("REDIS_URL") or "redis://localhost:6379/1"
-    timezone = timezone or APP_TIMEZONE_NAME
     config: dict[str, object] = {
         "broker_url": broker,
         "result_backend": backend,
@@ -340,7 +216,7 @@ def get_celery_config() -> dict:
     config["task_track_started"] = True
     config["broker_connection_retry_on_startup"] = True
     config["worker_cancel_long_running_tasks_on_connection_loss"] = True
-    config["result_expires"] = _env_int("CELERY_RESULT_EXPIRES") or 86400
+    config["result_expires"] = max(60, result_expires)
 
     acs_limits = {
         "soft_time_limit": max(30, acs_soft_time_limit),
@@ -474,6 +350,15 @@ def _scheduled_row_to_entry(task) -> tuple[str, dict] | None:
     warning if malformed); ``interval`` rows use the interval anchoring. Pure (no
     DB) so it can be unit-tested against in-memory rows.
     """
+    if is_event_driven_transport_task(task.task_name):
+        logger.warning(
+            "scheduled_task_event_transport_rejected",
+            extra={
+                "task_id": str(task.id),
+                "task_name": task.task_name,
+            },
+        )
+        return None
     options: dict = {}
     if task.task_name in TR069_TASK_QUEUE_NAMES:
         options["queue"] = "acs"
@@ -508,27 +393,19 @@ def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
     session = SessionLocal()
     try:
-        enabled = _effective_bool(
-            session, SettingDomain.gis, "sync_enabled", "GIS_SYNC_ENABLED", True
-        )
-        interval_minutes = _effective_int(
-            session,
-            SettingDomain.gis,
-            "sync_interval_minutes",
-            "GIS_SYNC_INTERVAL_MINUTES",
-            60,
+        enabled = control_registry.is_enabled(session, "gis.sync")
+        interval_minutes = resolve_integer(
+            session, SettingDomain.gis, "sync_interval_minutes"
         )
         if enabled:
             schedule["gis_sync"] = {
                 "task": "app.tasks.gis.sync_gis_sources",
                 "schedule": timedelta(minutes=max(interval_minutes, 1)),
             }
-        credential_rotation_enabled = _effective_bool(
+        credential_rotation_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.auth,
             "credential_rotation_enabled",
-            "CREDENTIAL_ROTATION_ENABLED",
-            True,
         )
         _sync_scheduled_task(
             session,
@@ -537,57 +414,35 @@ def build_beat_schedule() -> dict:
             enabled=credential_rotation_enabled,
             interval_seconds=86400,
         )
-        usage_enabled = _effective_bool(
+        usage_admission_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.usage,
             "usage_rating_enabled",
-            "USAGE_RATING_ENABLED",
-            True,
         )
-        usage_interval_seconds = _effective_int(
-            session,
-            SettingDomain.usage,
-            "usage_rating_interval_seconds",
-            "USAGE_RATING_INTERVAL_SECONDS",
-            86400,
+        usage_interval_seconds = resolve_integer(
+            session, SettingDomain.usage, "usage_rating_interval_seconds"
         )
         usage_interval_seconds = max(usage_interval_seconds, 300)
-        usage_metering_interval_seconds = _effective_int(
-            session,
-            SettingDomain.usage,
-            "usage_metering_interval_seconds",
-            "USAGE_METERING_INTERVAL_SECONDS",
-            60,
+        usage_metering_interval_seconds = resolve_integer(
+            session, SettingDomain.usage, "usage_metering_interval_seconds"
         )
         usage_metering_interval_seconds = max(usage_metering_interval_seconds, 60)
-        fup_evaluation_interval_seconds = _effective_int(
-            session,
-            SettingDomain.usage,
-            "fup_evaluation_interval_seconds",
-            "FUP_EVALUATION_INTERVAL_SECONDS",
-            60,
+        fup_evaluation_interval_seconds = resolve_integer(
+            session, SettingDomain.usage, "fup_evaluation_interval_seconds"
         )
         fup_evaluation_interval_seconds = max(fup_evaluation_interval_seconds, 60)
         _sync_scheduled_task(
             session,
             name="usage_rating_runner",
             task_name="app.tasks.usage.run_usage_rating",
-            enabled=usage_enabled,
+            enabled=usage_admission_enabled,
             interval_seconds=usage_interval_seconds,
         )
-        radius_accounting_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "radius_accounting_import_enabled",
-            "RADIUS_ACCOUNTING_IMPORT_ENABLED",
-            True,
+        radius_accounting_enabled = control_registry.is_enabled(
+            session, "sessions.radius_accounting_import"
         )
-        radius_accounting_interval_seconds = _effective_int(
-            session,
-            SettingDomain.usage,
-            "radius_accounting_import_interval_seconds",
-            "RADIUS_ACCOUNTING_IMPORT_INTERVAL_SECONDS",
-            60,
+        radius_accounting_interval_seconds = resolve_integer(
+            session, SettingDomain.usage, "radius_accounting_import_interval_seconds"
         )
         radius_accounting_interval_seconds = max(radius_accounting_interval_seconds, 10)
         _sync_scheduled_task(
@@ -601,19 +456,11 @@ def build_beat_schedule() -> dict:
         # default: enable only after the importer's open-session refresh has
         # been running for at least one interim interval, so genuinely live
         # sessions have a fresh last_update_at before the first reap.
-        radius_reap_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "radius_session_reap_enabled",
-            "RADIUS_SESSION_REAP_ENABLED",
-            False,
+        radius_reap_enabled = control_registry.is_enabled(
+            session, "sessions.radius_reap_stale"
         )
-        radius_reap_interval_seconds = _effective_int(
-            session,
-            SettingDomain.usage,
-            "radius_session_reap_interval_seconds",
-            "RADIUS_SESSION_REAP_INTERVAL_SECONDS",
-            900,
+        radius_reap_interval_seconds = resolve_integer(
+            session, SettingDomain.usage, "radius_session_reap_interval_seconds"
         )
         radius_reap_interval_seconds = max(radius_reap_interval_seconds, 60)
         # Daily heads-up before a purchased data bundle lapses (push + email).
@@ -621,7 +468,7 @@ def build_beat_schedule() -> dict:
             session,
             name="data_bundle_expiry_notifier",
             task_name="app.tasks.usage.notify_expiring_data_bundles",
-            enabled=usage_enabled,
+            enabled=usage_admission_enabled,
             interval_seconds=86400,
         )
         _sync_scheduled_task(
@@ -636,21 +483,11 @@ def build_beat_schedule() -> dict:
         # backstop that actually revokes router login when staff are deactivated,
         # deleted, or renamed — populate_device_login otherwise only runs on a
         # device-login edit, so a deactivation via the normal user-admin path
-        # would never take effect in RADIUS. Default-on (a security control).
-        device_login_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "device_login_sync_enabled",
-            "DEVICE_LOGIN_SYNC_ENABLED",
-            True,
-        )
+        # would never take effect in RADIUS. This security projection repair is
+        # permanent; disabling new usage work cannot preserve stale access.
         device_login_sync_interval_seconds = max(
-            _effective_int(
-                session,
-                SettingDomain.usage,
-                "device_login_sync_interval_seconds",
-                "DEVICE_LOGIN_SYNC_INTERVAL_SECONDS",
-                900,
+            resolve_integer(
+                session, SettingDomain.usage, "device_login_sync_interval_seconds"
             ),
             60,
         )
@@ -658,7 +495,7 @@ def build_beat_schedule() -> dict:
             session,
             name="device_login_sync",
             task_name="app.tasks.radius_population.sync_device_login",
-            enabled=device_login_sync_enabled,
+            enabled=True,
             interval_seconds=device_login_sync_interval_seconds,
         )
         # Companion to the app-side reaper above: this one closes the *external*
@@ -675,16 +512,13 @@ def build_beat_schedule() -> dict:
         # Rebuild the live radius_active_sessions view from OPEN external radacct
         # sessions. The accounting-hook populator isn't firing in prod (the table
         # starved to 1 row while radacct carries ~893 open sessions), so this
-        # discover-reconcile sweep is the authoritative populator. Gated by the
-        # usage flag; refreshes often (it's a live view). Default-on so the view
-        # actually gets populated.
+        # discover-reconcile sweep is the authoritative populator. Projection
+        # repair remains permanent even when new usage/FUP work is disabled.
         radius_active_session_reconcile_interval_seconds = max(
-            _effective_int(
+            resolve_integer(
                 session,
                 SettingDomain.usage,
                 "radius_active_session_reconcile_interval_seconds",
-                "RADIUS_ACTIVE_SESSION_RECONCILE_INTERVAL_SECONDS",
-                120,
             ),
             60,
         )
@@ -692,7 +526,7 @@ def build_beat_schedule() -> dict:
             session,
             name="radius_active_session_reconcile",
             task_name="app.tasks.radius.reconcile_active_sessions",
-            enabled=usage_enabled,
+            enabled=True,
             interval_seconds=radius_active_session_reconcile_interval_seconds,
         )
         # Enforce billing suspensions at the live session (SP-1). A suspend only
@@ -700,23 +534,13 @@ def build_beat_schedule() -> dict:
         # PPPoE session survives it, so a suspended/terminated subscriber can stay
         # online for days (revenue leak). run_enforcement_reconciler CoA-kicks open
         # sessions whose user has no radcheck row or sits in a reject pool, and
-        # repairs walled-garden radreply drift. It caps kicks per run so systemic
-        # drift degrades to alerts rather than a mass disconnect — hence safe to
-        # run by default. Previously defined but never scheduled.
-        enforcement_reconciler_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "enforcement_reconciler_enabled",
-            "ENFORCEMENT_RECONCILER_ENABLED",
-            True,
-        )
+        # repairs exact RADIUS row drift. It caps disconnect attempts per run so
+        # transport failure or systemic drift degrades to alerts rather than an
+        # unbounded retry or mass disconnect — hence safe to run continuously as
+        # a mandatory lifecycle task.
         enforcement_reconciler_interval_seconds = max(
-            _effective_int(
-                session,
-                SettingDomain.usage,
-                "enforcement_reconciler_interval_seconds",
-                "ENFORCEMENT_RECONCILER_INTERVAL_SECONDS",
-                600,
+            resolve_integer(
+                session, SettingDomain.usage, "enforcement_reconciler_interval_seconds"
             ),
             120,
         )
@@ -724,37 +548,37 @@ def build_beat_schedule() -> dict:
             session,
             name="enforcement_reconciler",
             task_name="app.tasks.radius.run_enforcement_reconciler",
-            enabled=enforcement_reconciler_enabled,
+            enabled=True,
             interval_seconds=enforcement_reconciler_interval_seconds,
         )
-        # Daily status-backstop reconcilers (SP-8): the event path normally
-        # clears these, but the sweeps are the catch-up for lost events.
-        # account_status: auto-repair subscribers stuck `new`/`blocked` while
-        # all subs are active. The all-active filter is a robust guard, pure
-        # service-state, so apply mode is safe.
-        account_status_reconcile_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "account_status_reconcile_enabled",
-            "ACCOUNT_STATUS_RECONCILE_ENABLED",
-            True,
+        # Account and external access projections share this recovery loop.
+        # Keep exactly one scheduled owner for access convergence.
+        _retire_scheduled_task(
+            session, "app.tasks.enforcement.reconcile_account_status_drift"
         )
+        # Billing approval is an admission fact, not a runtime bypass. This
+        # permanent owner pass repairs the impossible active + unapproved split
+        # state through the account lifecycle coordinator.
         _sync_scheduled_task(
             session,
-            name="account_status_reconcile",
-            task_name="app.tasks.enforcement.reconcile_account_status_drift",
-            enabled=account_status_reconcile_enabled,
-            interval_seconds=86400,
+            name="billing_approval_reconcile",
+            task_name="app.tasks.enforcement.reconcile_billing_approval_drift",
+            enabled=True,
+            interval_seconds=900,
+        )
+        # The full RADIUS projection writer remains an event-driven transport.
+        # This permanent reconciler compares desired-versus-observed state and
+        # requests that writer only when repair is required.
+        _retire_scheduled_task(
+            session, "app.tasks.radius_population.refresh_radius_from_subs"
         )
         # stale overdue locks: money-adjacent, so DETECT-only (dry-run) — it
         # WARNs with the candidate count for an operator to clear after review,
         # rather than auto-clearing an overdue lock on a possibly-wrong "no debt".
-        stale_overdue_lock_detect_enabled = _effective_bool(
+        stale_overdue_lock_detect_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.billing,
             "stale_overdue_lock_detect_enabled",
-            "STALE_OVERDUE_LOCK_DETECT_ENABLED",
-            True,
         )
         _sync_scheduled_task(
             session,
@@ -768,12 +592,10 @@ def build_beat_schedule() -> dict:
         # persists findings by fingerprint and WARNs on material drift, pointing
         # at the reconciler that owns each fix; it never heals. Safe to run by
         # default (no writes to business state).
-        cross_app_drift_enabled = _effective_bool(
+        cross_app_drift_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.audit,
             "cross_app_drift_detection_enabled",
-            "CROSS_APP_DRIFT_DETECTION_ENABLED",
-            True,
         )
         _sync_scheduled_task(
             session,
@@ -790,7 +612,7 @@ def build_beat_schedule() -> dict:
             session,
             name="usage_metering_runner",
             task_name="app.tasks.usage.meter_usage_into_quota",
-            enabled=usage_enabled,
+            enabled=usage_admission_enabled,
             interval_seconds=usage_metering_interval_seconds,
         )
         # Evaluate FUP rules against the metered usage and apply / auto-lift
@@ -800,7 +622,7 @@ def build_beat_schedule() -> dict:
             session,
             name="fup_evaluation_runner",
             task_name="app.tasks.usage.evaluate_fup_rules",
-            enabled=usage_enabled,
+            enabled=usage_admission_enabled,
             interval_seconds=fup_evaluation_interval_seconds,
         )
         # Queue-independent backstop: lift FUP enforcement whose reset boundary
@@ -810,17 +632,7 @@ def build_beat_schedule() -> dict:
             session,
             name="fup_reset_safety_net",
             task_name="app.tasks.usage.lift_expired_fup_enforcement",
-            enabled=usage_enabled,
-            interval_seconds=max(usage_interval_seconds, 300),
-        )
-        # Queue-independent backstop: lift FUP enforcement whose reset boundary
-        # has passed even if the billing queue (where evaluate_fup_rules runs) is
-        # stalled, so customers aren't left throttled/blocked past their window.
-        _sync_scheduled_task(
-            session,
-            name="fup_reset_safety_net",
-            task_name="app.tasks.usage.lift_expired_fup_enforcement",
-            enabled=usage_enabled,
+            enabled=True,
             interval_seconds=max(usage_interval_seconds, 300),
         )
         # Zabbix portal-usage ingestion retired with the native monitoring
@@ -833,41 +645,19 @@ def build_beat_schedule() -> dict:
             session,
             "app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion",
         )
-        billing_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "billing_enabled",
-            "BILLING_ENABLED",
-            True,
-        )
-        billing_interval_seconds = _effective_int(
-            session,
-            SettingDomain.billing,
-            "billing_interval_seconds",
-            "BILLING_INTERVAL_SECONDS",
-            86400,
+        billing_interval_seconds = resolve_integer(
+            session, SettingDomain.billing, "billing_interval_seconds"
         )
         billing_interval_seconds = max(billing_interval_seconds, 300)
         _sync_scheduled_task(
             session,
             name="billing_runner",
             task_name="app.tasks.billing.run_invoice_cycle",
-            enabled=billing_enabled,
+            enabled=True,
             interval_seconds=billing_interval_seconds,
         )
-        compensation_retry_enabled = _effective_bool(
-            session,
-            SettingDomain.provisioning,
-            "compensation_retry_enabled",
-            "COMPENSATION_RETRY_ENABLED",
-            True,
-        )
-        compensation_retry_interval_seconds = _effective_int(
-            session,
-            SettingDomain.provisioning,
-            "compensation_retry_interval_seconds",
-            "COMPENSATION_RETRY_INTERVAL_SECONDS",
-            300,
+        compensation_retry_interval_seconds = resolve_integer(
+            session, SettingDomain.provisioning, "compensation_retry_interval_seconds"
         )
         compensation_retry_interval_seconds = max(
             compensation_retry_interval_seconds,
@@ -877,82 +667,45 @@ def build_beat_schedule() -> dict:
             session,
             name="compensation_retry_watchdog",
             task_name="app.tasks.provisioning.retry_pending_compensation_failures",
-            enabled=compensation_retry_enabled,
+            enabled=True,
             interval_seconds=compensation_retry_interval_seconds,
         )
         # Overdue invoice detection — independent of billing cycle
-        overdue_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "overdue_check_enabled",
-            "BILLING_OVERDUE_CHECK_ENABLED",
-            True,
-        )
-        overdue_interval = _effective_int(
-            session,
-            SettingDomain.billing,
-            "overdue_check_interval_seconds",
-            "BILLING_OVERDUE_CHECK_INTERVAL_SECONDS",
-            3600,
+        overdue_interval = resolve_integer(
+            session, SettingDomain.billing, "overdue_check_interval_seconds"
         )
         overdue_interval = max(overdue_interval, 300)
         _sync_scheduled_task(
             session,
             name="overdue_checker",
             task_name="app.tasks.billing.mark_invoices_overdue",
-            enabled=overdue_enabled,
+            enabled=True,
             interval_seconds=overdue_interval,
         )
-        # Dedicated hourly billing-notifications runner. Default OFF: when
-        # enabled it owns the reminder/escalation emits and honours the
-        # configured send window (billing_notif_send_hour); the daily invoice
-        # cycle then skips them. See docs/designs/BILLING_ENFORCEMENT_WINDOW.md.
-        billing_notif_hourly_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "billing_notifications_hourly_enabled",
-            "BILLING_NOTIFICATIONS_HOURLY_ENABLED",
-            False,
-        )
-        billing_notif_interval = _effective_int(
-            session,
-            SettingDomain.collections,
-            "billing_notifications_interval_seconds",
-            "BILLING_NOTIFICATIONS_INTERVAL_SECONDS",
-            3600,
+        # The permanent hourly notifications runner owns reminders and honours
+        # the configured customer-message send window.
+        billing_notif_interval = resolve_integer(
+            session, SettingDomain.collections, "billing_notifications_interval_seconds"
         )
         billing_notif_interval = max(billing_notif_interval, 300)
         _sync_scheduled_task(
             session,
             name="billing_notifications_runner",
             task_name="app.tasks.billing.run_billing_notifications",
-            enabled=billing_notif_hourly_enabled,
+            enabled=True,
             interval_seconds=billing_notif_interval,
         )
-        # Unified billing enforcement. The legacy setting/key remains
-        # ``dunning_enabled`` for operator compatibility, but the scheduled task
-        # now routes through the single billing-enforcement reconciler. Accrual
-        # remains mode-specific; suspension/restore decisions converge there.
-        dunning_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "dunning_enabled",
-            "DUNNING_ENABLED",
-            True,
-        )
-        dunning_interval_seconds = _effective_int(
-            session,
-            SettingDomain.collections,
-            "dunning_interval_seconds",
-            "DUNNING_INTERVAL_SECONDS",
-            86400,
+        # Unified billing enforcement. Accrual remains mode-specific;
+        # suspension/restore decisions converge in the owner.
+        dunning_interval_seconds = resolve_integer(
+            session, SettingDomain.collections, "dunning_interval_seconds"
         )
         dunning_interval_seconds = max(dunning_interval_seconds, 60)
         _sync_scheduled_task(
             session,
             name="dunning_runner",
             task_name="app.tasks.collections.run_billing_enforcement",
-            enabled=dunning_enabled,
+            enabled=True,
             interval_seconds=dunning_interval_seconds,
         )
         # Bundle-state reconcile: heal any divergent bundle member (base active
@@ -961,34 +714,23 @@ def build_beat_schedule() -> dict:
             session,
             name="bundle_reconcile",
             task_name="app.tasks.collections.run_bundle_reconcile",
-            enabled=dunning_enabled,
+            enabled=True,
             interval_seconds=900,
         )
-        # Balance/expiry-based prepaid enforcement sweep. DEFAULT OFF (its own
-        # control key, routed through the single control-plane resolver): it
-        # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
-        # accounts, so it stays a deliberate opt-in. The sweep also no-ops
-        # internally when the control is off. Cadence is constrained by the
-        # registered setting so the sweep reaches every configured blocking
-        # window instead of being anchored once daily before that window.
-        prepaid_balance_enforcement_enabled = control_registry.is_enabled(
-            session, "collections.prepaid_balance_enforcement"
-        )
-        prepaid_balance_sweep_interval_seconds = _resolve_int(
-            session,
-            SettingDomain.collections,
-            "prepaid_balance_sweep_interval_seconds",
-            3600,
+        # Balance/expiry-based prepaid enforcement sweep. Funding, coverage,
+        # quarantine, shields, grace, and the shared time-of-day window decide
+        # each account; there is no global enablement control.
+        prepaid_balance_sweep_interval_seconds = resolve_integer(
+            session, SettingDomain.collections, "prepaid_balance_sweep_interval_seconds"
         )
         _sync_scheduled_task(
             session,
             name="prepaid_balance_sweep",
             task_name="app.tasks.collections.prepaid_balance_sweep",
-            enabled=prepaid_balance_enforcement_enabled,
+            enabled=True,
             interval_seconds=prepaid_balance_sweep_interval_seconds,
         )
-        # Billing master-switch config guard — ALWAYS on (independent of
-        # billing_enabled) so an unexpected flip is caught, not silently armed.
+        # Customer-financial lifecycle health observation.
         _sync_scheduled_task(
             session,
             name="billing_switch_guard",
@@ -1005,19 +747,13 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=900,
         )
-        cutover_audit_enabled = _effective_bool(
+        cutover_audit_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.billing,
             "cutover_balance_audit_enabled",
-            "BILLING_CUTOVER_BALANCE_AUDIT_ENABLED",
-            True,
         )
-        cutover_audit_interval_seconds = _effective_int(
-            session,
-            SettingDomain.billing,
-            "cutover_balance_audit_interval_seconds",
-            "BILLING_CUTOVER_BALANCE_AUDIT_INTERVAL_SECONDS",
-            86400,
+        cutover_audit_interval_seconds = resolve_integer(
+            session, SettingDomain.billing, "cutover_balance_audit_interval_seconds"
         )
         _sync_scheduled_task(
             session,
@@ -1026,19 +762,15 @@ def build_beat_schedule() -> dict:
             enabled=cutover_audit_enabled,
             interval_seconds=max(cutover_audit_interval_seconds, 3600),
         )
-        funded_inactive_audit_enabled = _effective_bool(
+        funded_inactive_audit_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.billing,
             "funded_inactive_exposure_audit_enabled",
-            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_ENABLED",
-            True,
         )
-        funded_inactive_audit_interval_seconds = _effective_int(
+        funded_inactive_audit_interval_seconds = resolve_integer(
             session,
             SettingDomain.billing,
             "funded_inactive_exposure_audit_interval_seconds",
-            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_INTERVAL_SECONDS",
-            2592000,
         )
         _sync_scheduled_task(
             session,
@@ -1048,42 +780,20 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(funded_inactive_audit_interval_seconds, 86400),
         )
         # Autopay charging (idempotent; due-date gating lives in the service)
-        autopay_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "autopay_enabled",
-            "BILLING_AUTOPAY_ENABLED",
-            True,
-        )
-        autopay_interval_seconds = _effective_int(
-            session,
-            SettingDomain.billing,
-            "autopay_interval_seconds",
-            "BILLING_AUTOPAY_INTERVAL_SECONDS",
-            3600,
+        autopay_interval_seconds = resolve_integer(
+            session, SettingDomain.billing, "autopay_interval_seconds"
         )
         autopay_interval_seconds = max(autopay_interval_seconds, 300)
         _sync_scheduled_task(
             session,
             name="autopay_runner",
             task_name="app.tasks.autopay.charge_due_invoices",
-            enabled=autopay_enabled,
+            enabled=True,
             interval_seconds=autopay_interval_seconds,
         )
         # Payment arrangement installment due/overdue/default checks (daily)
-        arrangement_check_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "arrangement_check_enabled",
-            "ARRANGEMENT_CHECK_ENABLED",
-            True,
-        )
-        arrangement_check_interval_seconds = _effective_int(
-            session,
-            SettingDomain.collections,
-            "arrangement_check_interval_seconds",
-            "ARRANGEMENT_CHECK_INTERVAL_SECONDS",
-            86400,
+        arrangement_check_interval_seconds = resolve_integer(
+            session, SettingDomain.collections, "arrangement_check_interval_seconds"
         )
         arrangement_check_interval_seconds = max(
             arrangement_check_interval_seconds, 3600
@@ -1092,23 +802,12 @@ def build_beat_schedule() -> dict:
             session,
             name="arrangement_overdue_checker",
             task_name="app.tasks.arrangements.check_overdue_arrangements",
-            enabled=arrangement_check_enabled,
+            enabled=True,
             interval_seconds=arrangement_check_interval_seconds,
         )
         # Sweep stranded top-up intents against the gateway verify API
-        topup_reconciliation_enabled = _effective_bool(
-            session,
-            SettingDomain.billing,
-            "topup_reconciliation_enabled",
-            "BILLING_TOPUP_RECONCILIATION_ENABLED",
-            True,
-        )
-        topup_reconciliation_interval_seconds = _effective_int(
-            session,
-            SettingDomain.billing,
-            "topup_reconciliation_interval_seconds",
-            "BILLING_TOPUP_RECONCILIATION_INTERVAL_SECONDS",
-            1800,
+        topup_reconciliation_interval_seconds = resolve_integer(
+            session, SettingDomain.billing, "topup_reconciliation_interval_seconds"
         )
         topup_reconciliation_interval_seconds = max(
             topup_reconciliation_interval_seconds, 300
@@ -1117,24 +816,18 @@ def build_beat_schedule() -> dict:
             session,
             name="topup_reconciliation_runner",
             task_name="app.tasks.payment_reconciliation.reconcile_topups",
-            enabled=topup_reconciliation_enabled,
+            enabled=True,
             interval_seconds=topup_reconciliation_interval_seconds,
         )
         # Suspension-enforcement audit — read-only check that fully-blocked
         # subscribers are actually unreachable in the external RADIUS DB.
-        suspension_audit_enabled = _effective_bool(
+        suspension_audit_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.radius,
             "suspension_audit_enabled",
-            "RADIUS_SUSPENSION_AUDIT_ENABLED",
-            True,
         )
-        suspension_audit_interval_seconds = _effective_int(
-            session,
-            SettingDomain.radius,
-            "suspension_audit_interval_seconds",
-            "RADIUS_SUSPENSION_AUDIT_INTERVAL_SECONDS",
-            21600,  # Every 6 hours
+        suspension_audit_interval_seconds = resolve_integer(
+            session, SettingDomain.radius, "suspension_audit_interval_seconds"
         )
         suspension_audit_interval_seconds = max(suspension_audit_interval_seconds, 900)
         _sync_scheduled_task(
@@ -1146,19 +839,13 @@ def build_beat_schedule() -> dict:
         )
         # IPv4 consistency audit (read-only; quantifies column/IPAM/radreply
         # drift). Shares cadence defaults with the suspension audit.
-        ip_consistency_audit_enabled = _effective_bool(
+        ip_consistency_audit_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.radius,
             "ip_consistency_audit_enabled",
-            "RADIUS_IP_CONSISTENCY_AUDIT_ENABLED",
-            True,
         )
-        ip_consistency_audit_interval_seconds = _effective_int(
-            session,
-            SettingDomain.radius,
-            "ip_consistency_audit_interval_seconds",
-            "RADIUS_IP_CONSISTENCY_AUDIT_INTERVAL_SECONDS",
-            21600,  # Every 6 hours
+        ip_consistency_audit_interval_seconds = resolve_integer(
+            session, SettingDomain.radius, "ip_consistency_audit_interval_seconds"
         )
         ip_consistency_audit_interval_seconds = max(
             ip_consistency_audit_interval_seconds, 900
@@ -1173,19 +860,13 @@ def build_beat_schedule() -> dict:
         # Connectivity shadow audit (read-only full-base sweep; quantifies
         # desired-vs-actual drift per dimension — the cutover-readiness gauge for
         # the connectivity reconciler). Shares the audit cadence defaults.
-        connectivity_shadow_audit_enabled = _effective_bool(
+        connectivity_shadow_audit_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.radius,
             "connectivity_shadow_audit_enabled",
-            "RADIUS_CONNECTIVITY_SHADOW_AUDIT_ENABLED",
-            True,
         )
-        connectivity_shadow_audit_interval_seconds = _effective_int(
-            session,
-            SettingDomain.radius,
-            "connectivity_shadow_audit_interval_seconds",
-            "RADIUS_CONNECTIVITY_SHADOW_AUDIT_INTERVAL_SECONDS",
-            21600,  # Every 6 hours
+        connectivity_shadow_audit_interval_seconds = resolve_integer(
+            session, SettingDomain.radius, "connectivity_shadow_audit_interval_seconds"
         )
         connectivity_shadow_audit_interval_seconds = max(
             connectivity_shadow_audit_interval_seconds, 900
@@ -1198,19 +879,8 @@ def build_beat_schedule() -> dict:
             interval_seconds=connectivity_shadow_audit_interval_seconds,
         )
         # Subscription expiration enforcement (runs daily)
-        subscription_expiration_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "subscription_expiration_enabled",
-            "SUBSCRIPTION_EXPIRATION_ENABLED",
-            True,
-        )
-        subscription_expiration_interval_seconds = _effective_int(
-            session,
-            SettingDomain.catalog,
-            "subscription_expiration_interval_seconds",
-            "SUBSCRIPTION_EXPIRATION_INTERVAL_SECONDS",
-            86400,  # Daily
+        subscription_expiration_interval_seconds = resolve_integer(
+            session, SettingDomain.catalog, "subscription_expiration_interval_seconds"
         )
         subscription_expiration_interval_seconds = max(
             subscription_expiration_interval_seconds, 3600
@@ -1219,26 +889,35 @@ def build_beat_schedule() -> dict:
             session,
             name="subscription_expiration_runner",
             task_name="app.tasks.catalog.expire_subscriptions",
-            enabled=subscription_expiration_enabled,
+            enabled=True,
             interval_seconds=subscription_expiration_interval_seconds,
+        )
+        # Warn BEFORE the expiry runner above cuts service. `send_expiry_reminders`
+        # and the `expiry_reminder_days` setting have both existed for a long
+        # time, but the task was never scheduled — so subscriptions expired and
+        # suspended on time while nobody was warned first, which is the single
+        # largest source of "I paid, why am I off?" contacts. Daily is right:
+        # the task reminds on a days-before window, so a shorter interval would
+        # re-send to the same customers.
+        expiry_reminder_interval_seconds = resolve_integer(
+            session,
+            SettingDomain.catalog,
+            "expiry_reminder_interval_seconds",
+        )
+        expiry_reminder_interval_seconds = max(expiry_reminder_interval_seconds, 3600)
+        _sync_scheduled_task(
+            session,
+            name="subscription_expiry_reminder_runner",
+            task_name="app.tasks.catalog.send_expiry_reminders",
+            enabled=True,
+            interval_seconds=expiry_reminder_interval_seconds,
         )
         # Apply admin-scheduled next-cycle plan changes once their effective
         # (next-billing) date arrives. Hourly so a change lands promptly after
         # the boundary; the applier is idempotent (only picks up approved,
         # unapplied rows whose effective_date has passed).
-        scheduled_plan_change_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "scheduled_plan_change_enabled",
-            "SCHEDULED_PLAN_CHANGE_ENABLED",
-            True,
-        )
-        scheduled_plan_change_interval_seconds = _effective_int(
-            session,
-            SettingDomain.catalog,
-            "scheduled_plan_change_interval_seconds",
-            "SCHEDULED_PLAN_CHANGE_INTERVAL_SECONDS",
-            3600,  # Hourly
+        scheduled_plan_change_interval_seconds = resolve_integer(
+            session, SettingDomain.catalog, "scheduled_plan_change_interval_seconds"
         )
         scheduled_plan_change_interval_seconds = max(
             scheduled_plan_change_interval_seconds, 300
@@ -1247,25 +926,14 @@ def build_beat_schedule() -> dict:
             session,
             name="scheduled_plan_change_applier",
             task_name="app.tasks.catalog.apply_due_subscription_changes",
-            enabled=scheduled_plan_change_enabled,
+            enabled=True,
             interval_seconds=scheduled_plan_change_interval_seconds,
         )
         # Deferred status commands have their own durable queue. Keep this
-        # runner independent from plan changes so billing can disable its plan
-        # applier without stranding reviewed access/lifecycle actions.
-        scheduled_status_change_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "scheduled_status_change_enabled",
-            "SCHEDULED_STATUS_CHANGE_ENABLED",
-            True,
-        )
-        scheduled_status_change_interval_seconds = _effective_int(
-            session,
-            SettingDomain.catalog,
-            "scheduled_status_change_interval_seconds",
-            "SCHEDULED_STATUS_CHANGE_INTERVAL_SECONDS",
-            300,
+        # runner independent from plan changes so reviewed access/lifecycle
+        # actions cannot be stranded.
+        scheduled_status_change_interval_seconds = resolve_integer(
+            session, SettingDomain.catalog, "scheduled_status_change_interval_seconds"
         )
         scheduled_status_change_interval_seconds = max(
             scheduled_status_change_interval_seconds, 60
@@ -1274,7 +942,7 @@ def build_beat_schedule() -> dict:
             session,
             name="scheduled_subscription_status_applier",
             task_name=("app.tasks.catalog.apply_due_subscription_status_commands"),
-            enabled=scheduled_status_change_enabled,
+            enabled=True,
             interval_seconds=scheduled_status_change_interval_seconds,
         )
         # Infrastructure availability snapshot - daily rollup powering the
@@ -1282,19 +950,15 @@ def build_beat_schedule() -> dict:
         # Safe to run regardless of SLA_AVAILABILITY_LOG_ENABLED: it records the
         # day's per-element availability (PON ONT-online ratio + alert-derived
         # device/site uptime), accumulating trend history either way.
-        infra_availability_snapshot_enabled = _effective_bool(
+        infra_availability_snapshot_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.network_monitoring,
             "infra_availability_snapshot_enabled",
-            "INFRA_AVAILABILITY_SNAPSHOT_ENABLED",
-            True,
         )
-        infra_availability_snapshot_interval_seconds = _effective_int(
+        infra_availability_snapshot_interval_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "infra_availability_snapshot_interval_seconds",
-            "INFRA_AVAILABILITY_SNAPSHOT_INTERVAL_SECONDS",
-            86400,  # Daily
         )
         infra_availability_snapshot_interval_seconds = max(
             infra_availability_snapshot_interval_seconds, 3600
@@ -1310,19 +974,15 @@ def build_beat_schedule() -> dict:
             interval_seconds=infra_availability_snapshot_interval_seconds,
         )
         # Infrastructure availability snapshot retention prune (daily).
-        infra_availability_prune_enabled = _effective_bool(
+        infra_availability_prune_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.network_monitoring,
             "infra_availability_prune_enabled",
-            "INFRA_AVAILABILITY_PRUNE_ENABLED",
-            True,
         )
-        infra_availability_prune_interval_seconds = _effective_int(
+        infra_availability_prune_interval_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "infra_availability_prune_interval_seconds",
-            "INFRA_AVAILABILITY_PRUNE_INTERVAL_SECONDS",
-            86400,  # Daily
         )
         infra_availability_prune_interval_seconds = max(
             infra_availability_prune_interval_seconds, 3600
@@ -1337,25 +997,13 @@ def build_beat_schedule() -> dict:
             enabled=infra_availability_prune_enabled,
             interval_seconds=infra_availability_prune_interval_seconds,
         )
-        # Unified device projection reconcile - keeps device_projections fresh
-        # (one materialised row per device with pre-derived operational status)
-        # so the admin device list can page in SQL.
-        device_projection_reconcile_enabled = _effective_bool(
-            session,
-            SettingDomain.network_monitoring,
-            "device_projection_reconcile_enabled",
-            "DEVICE_PROJECTION_RECONCILE_ENABLED",
-            True,
-        )
-        device_projection_reconcile_interval_seconds = _effective_int(
+        # Permanent unified-device projection repair. The projection is the
+        # SQL read model for the device list, so accepted canonical device state
+        # must continue to converge regardless of mutable feature/settings state.
+        device_projection_reconcile_interval_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "device_projection_reconcile_interval_seconds",
-            "DEVICE_PROJECTION_RECONCILE_INTERVAL_SECONDS",
-            # Every 60s: the reconcile is ~1.75s for ~1.5k devices (measured on
-            # staging), and the admin device list reads this projection's
-            # last-known status, so a tight interval keeps that staleness small.
-            60,
         )
         device_projection_reconcile_interval_seconds = max(
             device_projection_reconcile_interval_seconds, 60
@@ -1364,45 +1012,23 @@ def build_beat_schedule() -> dict:
             session,
             name="device_projection_reconcile",
             task_name="app.tasks.device_projection.reconcile_device_projections",
-            enabled=device_projection_reconcile_enabled,
+            enabled=True,
             interval_seconds=device_projection_reconcile_interval_seconds,
         )
         # Vacation hold auto-resume - runs hourly to resume expired holds
-        vacation_hold_resume_enabled = _effective_bool(
-            session,
-            SettingDomain.catalog,
-            "vacation_hold_auto_resume_enabled",
-            "VACATION_HOLD_AUTO_RESUME_ENABLED",
-            True,
-        )
-        vacation_hold_resume_interval = _effective_int(
-            session,
-            SettingDomain.catalog,
-            "vacation_hold_resume_interval_seconds",
-            "VACATION_HOLD_RESUME_INTERVAL_SECONDS",
-            3600,  # Hourly
+        vacation_hold_resume_interval = resolve_integer(
+            session, SettingDomain.catalog, "vacation_hold_resume_interval_seconds"
         )
         vacation_hold_resume_interval = max(vacation_hold_resume_interval, 300)
         _sync_scheduled_task(
             session,
             name="vacation_hold_auto_resume",
             task_name="app.tasks.vacation_holds.resume_expired_holds",
-            enabled=vacation_hold_resume_enabled,
+            enabled=True,
             interval_seconds=vacation_hold_resume_interval,
         )
-        notification_queue_enabled = _effective_bool(
-            session,
-            SettingDomain.notification,
-            "notification_queue_enabled",
-            "NOTIFICATION_QUEUE_ENABLED",
-            True,
-        )
-        notification_queue_interval_seconds = _effective_int(
-            session,
-            SettingDomain.notification,
-            "notification_queue_interval_seconds",
-            "NOTIFICATION_QUEUE_INTERVAL_SECONDS",
-            60,
+        notification_queue_interval_seconds = resolve_integer(
+            session, SettingDomain.notification, "notification_queue_interval_seconds"
         )
         notification_queue_interval_seconds = max(
             notification_queue_interval_seconds, 30
@@ -1411,23 +1037,12 @@ def build_beat_schedule() -> dict:
             session,
             name="notification_queue_runner",
             task_name="app.tasks.notifications.deliver_notification_queue",
-            enabled=notification_queue_enabled,
+            enabled=True,
             interval_seconds=notification_queue_interval_seconds,
         )
-        campaign_processing_enabled = _effective_bool(
-            session,
-            SettingDomain.comms,
-            "campaign_processing_enabled",
-            "CAMPAIGN_PROCESSING_ENABLED",
-            False,
-        )
         campaign_processing_interval_seconds = max(
-            _effective_int(
-                session,
-                SettingDomain.comms,
-                "campaign_processing_interval_seconds",
-                "CAMPAIGN_PROCESSING_INTERVAL_SECONDS",
-                60,
+            resolve_integer(
+                session, SettingDomain.comms, "campaign_processing_interval_seconds"
             ),
             30,
         )
@@ -1435,29 +1050,25 @@ def build_beat_schedule() -> dict:
             session,
             name="campaign_due_runner",
             task_name="app.tasks.campaigns.process_due_campaigns",
-            enabled=campaign_processing_enabled,
+            enabled=True,
             interval_seconds=campaign_processing_interval_seconds,
         )
         _sync_scheduled_task(
             session,
             name="campaign_sequence_runner",
             task_name="app.tasks.campaigns.process_due_campaign_steps",
-            enabled=campaign_processing_enabled,
+            enabled=True,
             interval_seconds=campaign_processing_interval_seconds,
         )
-        operational_escalation_delivery_enabled = _effective_bool(
+        operational_escalation_delivery_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.notification,
             "operational_escalation_delivery_enabled",
-            "OPERATIONAL_ESCALATION_DELIVERY_ENABLED",
-            True,
         )
-        operational_escalation_delivery_interval_seconds = _effective_int(
+        operational_escalation_delivery_interval_seconds = resolve_integer(
             session,
             SettingDomain.notification,
             "operational_escalation_delivery_interval_seconds",
-            "OPERATIONAL_ESCALATION_DELIVERY_INTERVAL_SECONDS",
-            60,
         )
         operational_escalation_delivery_interval_seconds = max(
             operational_escalation_delivery_interval_seconds,
@@ -1473,18 +1084,13 @@ def build_beat_schedule() -> dict:
             enabled=operational_escalation_delivery_enabled,
             interval_seconds=operational_escalation_delivery_interval_seconds,
         )
-        retention_enabled = _effective_bool(
+        retention_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.catalog,
             "nas_backup_retention_enabled",
-            "NAS_BACKUP_RETENTION_ENABLED",
-            True,
         )
-        retention_interval_seconds = _resolve_int(
-            session,
-            SettingDomain.provisioning,
-            "nas_backup_retention_interval_seconds",
-            86400,
+        retention_interval_seconds = resolve_integer(
+            session, SettingDomain.provisioning, "nas_backup_retention_interval_seconds"
         )
         retention_interval_seconds = max(retention_interval_seconds, 3600)
         _sync_scheduled_task(
@@ -1495,18 +1101,13 @@ def build_beat_schedule() -> dict:
             interval_seconds=retention_interval_seconds,
         )
         # OAuth token refresh - runs daily to proactively refresh expiring tokens
-        oauth_refresh_enabled = _effective_bool(
+        oauth_refresh_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.comms,
             "oauth_token_refresh_enabled",
-            "OAUTH_TOKEN_REFRESH_ENABLED",
-            True,
         )
-        oauth_refresh_interval_seconds = _resolve_int(
-            session,
-            SettingDomain.provisioning,
-            "oauth_token_refresh_interval_seconds",
-            86400,
+        oauth_refresh_interval_seconds = resolve_integer(
+            session, SettingDomain.provisioning, "oauth_token_refresh_interval_seconds"
         )
         oauth_refresh_interval_seconds = max(
             oauth_refresh_interval_seconds, 3600
@@ -1517,6 +1118,60 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.oauth.refresh_expiring_tokens",
             enabled=oauth_refresh_enabled,
             interval_seconds=oauth_refresh_interval_seconds,
+        )
+        # Team Inbox maintenance. These tasks and their reliability policies
+        # already existed but were registered with no schedule at all, so none
+        # of them ever ran: a reply the composer reported as "scheduled" was
+        # never sent, a failed outbound message never retried itself, and an
+        # expired snooze never returned its conversation to the queue.
+        _sync_scheduled_task(
+            session,
+            name="team_inbox_scheduled_reply_release",
+            task_name="app.tasks.team_inbox.release_scheduled_replies",
+            enabled=True,
+            # A send-later reply should leave within a minute of its time; any
+            # coarser and the operator's chosen moment is visibly wrong.
+            interval_seconds=60,
+        )
+        # Shadow participant projection. Nothing reads it for a decision yet;
+        # it runs so the projection is populated and measurable before any
+        # threading or export rule is allowed to depend on it.
+        _sync_scheduled_task(
+            session,
+            name="team_inbox_participant_backfill",
+            task_name="app.tasks.team_inbox.backfill_conversation_participants",
+            enabled=True,
+            interval_seconds=900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="team_inbox_snooze_waker",
+            task_name="app.tasks.team_inbox.wake_due_snoozed_conversations",
+            enabled=True,
+            interval_seconds=300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="team_inbox_failed_outbound_retry",
+            task_name="app.tasks.team_inbox.retry_failed_outbound_messages",
+            enabled=True,
+            interval_seconds=900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="team_inbox_media_asset_promotion",
+            task_name="app.tasks.team_inbox.promote_message_media_assets",
+            enabled=True,
+            interval_seconds=900,
+        )
+        # Auto-resolve is a policy that closes customer conversations, so it
+        # stays off until it is deliberately turned on for a tenant.
+        _sync_scheduled_task(
+            session,
+            name="team_inbox_stale_auto_resolve",
+            task_name="app.tasks.team_inbox.auto_resolve_stale_conversations",
+            enabled=False,
+            interval_seconds=3600,
         )
         integration_jobs = integration_service.list_interval_jobs(session)
         if not integration_jobs:
@@ -1566,17 +1221,15 @@ def build_beat_schedule() -> dict:
             }
 
         # Bandwidth monitoring tasks
-        bandwidth_enabled = _effective_bool(
+        bandwidth_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.usage,
             "bandwidth_processing_enabled",
-            "BANDWIDTH_PROCESSING_ENABLED",
-            True,
         )
         if bandwidth_enabled:
             # Process bandwidth stream - runs every 5 seconds
-            bandwidth_stream_interval = _resolve_int(
-                session, SettingDomain.bandwidth, "stream_interval_seconds", 5
+            bandwidth_stream_interval = resolve_integer(
+                session, SettingDomain.bandwidth, "stream_interval_seconds"
             )
             _sync_scheduled_task(
                 session,
@@ -1587,8 +1240,8 @@ def build_beat_schedule() -> dict:
             )
 
             # Aggregate to VictoriaMetrics - runs every minute
-            aggregate_interval = _resolve_int(
-                session, SettingDomain.bandwidth, "aggregate_interval_seconds", 60
+            aggregate_interval = resolve_integer(
+                session, SettingDomain.bandwidth, "aggregate_interval_seconds"
             )
             _sync_scheduled_task(
                 session,
@@ -1599,8 +1252,8 @@ def build_beat_schedule() -> dict:
             )
 
             # Cleanup hot data - runs hourly
-            cleanup_interval = _resolve_int(
-                session, SettingDomain.bandwidth, "cleanup_interval_seconds", 3600
+            cleanup_interval = resolve_integer(
+                session, SettingDomain.bandwidth, "cleanup_interval_seconds"
             )
             _sync_scheduled_task(
                 session,
@@ -1611,8 +1264,8 @@ def build_beat_schedule() -> dict:
             )
 
             # Trim Redis stream - runs every 10 minutes
-            trim_interval = _resolve_int(
-                session, SettingDomain.bandwidth, "trim_interval_seconds", 600
+            trim_interval = resolve_integer(
+                session, SettingDomain.bandwidth, "trim_interval_seconds"
             )
             _sync_scheduled_task(
                 session,
@@ -1625,34 +1278,24 @@ def build_beat_schedule() -> dict:
         # Monitoring-path coverage refresh — caches the reachable-CIDR set (from
         # up WireGuard peers) so operational status + the SLA bridge can tell a
         # blind spot from a real outage without running wg on the request path.
-        coverage_enabled = _effective_bool(
-            session,
-            SettingDomain.network_monitoring,
-            "monitoring_coverage_enabled",
-            "MONITORING_COVERAGE_ENABLED",
-            True,
-        )
-        coverage_interval_seconds = _effective_int(
+        coverage_interval_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "monitoring_coverage_interval_seconds",
-            "MONITORING_COVERAGE_INTERVAL_SECONDS",
-            600,
         )
         _sync_scheduled_task(
             session,
             name="monitoring_coverage_refresh",
             task_name="app.tasks.monitoring_coverage.refresh_monitoring_coverage",
-            enabled=coverage_enabled,
+            enabled=True,
             interval_seconds=max(coverage_interval_seconds, 120),
         )
 
         # OLT health retry - auto-retry failed ping connections
-        olt_health_retry_minutes = _resolve_int(
+        olt_health_retry_minutes = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "olt_health_retry_interval_minutes",
-            5,
         )
         _sync_scheduled_task(
             session,
@@ -1689,11 +1332,10 @@ def build_beat_schedule() -> dict:
         # probes devices whose last check is older than the per-check staleness
         # settings, so a tight beat cadence is safe; overlap is single-flighted
         # by an advisory lock inside the task.
-        infrastructure_poll_seconds = _resolve_int(
+        infrastructure_poll_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "infrastructure_poll_interval_seconds",
-            60,
         )
         _sync_scheduled_task(
             session,
@@ -1702,11 +1344,8 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(infrastructure_poll_seconds, 30),
         )
-        ont_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "ont_reconcile_interval_seconds",
-            900,
+        ont_reconcile_seconds = resolve_integer(
+            session, SettingDomain.network_monitoring, "ont_reconcile_interval_seconds"
         )
         _sync_scheduled_task(
             session,
@@ -1715,11 +1354,10 @@ def build_beat_schedule() -> dict:
             enabled=control_registry.is_enabled(session, "network.ont_reconcile"),
             interval_seconds=max(ont_reconcile_seconds, 300),
         )
-        ont_status_seconds = _resolve_int(
+        ont_status_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "huawei_ont_status_interval_seconds",
-            300,
         )
         _sync_scheduled_task(
             session,
@@ -1731,11 +1369,8 @@ def build_beat_schedule() -> dict:
         # RADIUS health: accounting freshness + enforcement drift from the
         # external radacct DB and the reconciled live-session view. Customer
         # experience often fails here before any router goes down.
-        radius_health_seconds = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "radius_health_interval_seconds",
-            120,
+        radius_health_seconds = resolve_integer(
+            session, SettingDomain.network_monitoring, "radius_health_interval_seconds"
         )
         _sync_scheduled_task(
             session,
@@ -1746,11 +1381,10 @@ def build_beat_schedule() -> dict:
         )
         # Customer-impact counters (customers under outage / with infra
         # tickets / suppressed from billing comms) -> VictoriaMetrics trends.
-        customer_impact_seconds = _resolve_int(
+        customer_impact_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "customer_impact_metrics_interval_seconds",
-            300,
         )
         _sync_scheduled_task(
             session,
@@ -1761,11 +1395,10 @@ def build_beat_schedule() -> dict:
         )
         # Warm cached live status for topology nodes (read by the Network Path
         # panel). Default 180s, matching the monitoring dashboard cache TTL.
-        topology_status_seconds = _resolve_int(
+        topology_status_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "topology_status_warm_interval_seconds",
-            180,
         )
         _sync_scheduled_task(
             session,
@@ -1776,11 +1409,10 @@ def build_beat_schedule() -> dict:
         )
         # LLDP neighbor poll -> directed device graph. Physical adjacency changes
         # rarely; hourly is ample.
-        lldp_poll_minutes = _resolve_int(
+        lldp_poll_minutes = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "topology_lldp_poll_interval_minutes",
-            60,
         )
         _sync_scheduled_task(
             session,
@@ -1792,11 +1424,10 @@ def build_beat_schedule() -> dict:
         # Reviewed forwarding declarations scope a read-only RouterOS BGP/route
         # poll. The fail-closed control keeps deployment from silently starting
         # collection before operators approve the observation shadow run.
-        forwarding_observation_seconds = _resolve_int(
+        forwarding_observation_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "forwarding_control_observation_interval_seconds",
-            300,
         )
         _sync_scheduled_task(
             session,
@@ -1820,11 +1451,10 @@ def build_beat_schedule() -> dict:
         # classifier's point-in-time verdicts into the suspected/confirmed/
         # clearing/resolved lifecycle. Aligned with the topology status warmer's
         # cadence so each pass reads freshly-warmed live_status; floor 120s.
-        outage_reconcile_seconds = _resolve_int(
+        outage_reconcile_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "outage_reconcile_interval_seconds",
-            180,
         )
         _sync_scheduled_task(
             session,
@@ -1833,15 +1463,44 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(outage_reconcile_seconds, 120),
         )
+        # Automated customer outage notification (ADR 0004). Scheduling this is
+        # safe while the decision to enable it is still open: the service is
+        # gated on OUTAGE_AUTO_NOTIFY_ENABLED (off) and defaults to dry-run, so
+        # an enabled beat entry is a no-op until both are flipped. Cadence is
+        # deliberately slower than the reconcile above — the settle window, not
+        # the poll rate, decides how fast a customer hears.
+        outage_auto_notify_seconds = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "outage_auto_notify_interval_seconds",
+        )
+        # The beat entry follows the feature flag rather than being permanently
+        # scheduled: with automation off (the default) nothing is dispatched at
+        # all, instead of a task firing every few minutes only to no-op. Enable
+        # outage_auto_notify_enabled in System > Config > Automated Outage
+        # Notification and the runner starts on the next schedule rebuild.
+        outage_auto_notify_enabled = resolve_boolean(
+            session,
+            SettingDomain.network_monitoring,
+            "outage_auto_notify_enabled",
+        )
+        _sync_scheduled_task(
+            session,
+            name="outage_auto_notify",
+            task_name=(
+                "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications"
+            ),
+            enabled=outage_auto_notify_enabled,
+            interval_seconds=max(outage_auto_notify_seconds, 120),
+        )
         # UISP topology sync: import the wireless/UFiber customer-device
         # relationship layer (radios -> APs, ONUs -> UF-OLTs) into sub's
         # tables. Association churn is faster than the device graph, so it
         # runs on a 15-minute default cadence.
-        topology_uisp_minutes = _resolve_int(
+        topology_uisp_minutes = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "topology_uisp_sync_interval_minutes",
-            15,
         )
         _sync_scheduled_task(
             session,
@@ -1883,11 +1542,10 @@ def build_beat_schedule() -> dict:
         # ACTIVE-subscription MAC observations for field review. The task writes
         # neither customer assignments nor subscription MACs. It runs after the
         # UISP sync, so an hourly default (vs the 15-min importer) is ample.
-        ufiber_onu_link_minutes = _resolve_int(
+        ufiber_onu_link_minutes = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "ufiber_onu_link_interval_minutes",
-            60,
         )
         _sync_scheduled_task(
             session,
@@ -1900,11 +1558,10 @@ def build_beat_schedule() -> dict:
         # VictoriaMetrics (per-medium E2E match-rate, feeder-task staleness).
         # Default 15 minutes — matches the fastest feeder (topology_uisp_sync),
         # so every feeder run is reflected without redundant recomputation.
-        topology_metrics_seconds = _resolve_int(
+        topology_metrics_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "topology_metrics_interval_seconds",
-            900,
         )
         _sync_scheduled_task(
             session,
@@ -1913,11 +1570,10 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_metrics_seconds, 300),
         )
-        network_operation_metrics_seconds = _resolve_int(
+        network_operation_metrics_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "network_operation_metrics_interval_seconds",
-            300,
         )
         _sync_scheduled_task(
             session,
@@ -1926,11 +1582,10 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(network_operation_metrics_seconds, 60),
         )
-        network_operation_dispatch_seconds = _resolve_int(
+        network_operation_dispatch_seconds = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "network_operation_dispatch_interval_seconds",
-            10,
         )
         _sync_scheduled_task(
             session,
@@ -1967,11 +1622,8 @@ def build_beat_schedule() -> dict:
         )
 
         # OLT config backup (SSH-based running config retrieval)
-        olt_backup_hours = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "olt_backup_interval_hours",
-            24,
+        olt_backup_hours = resolve_integer(
+            session, SettingDomain.network_monitoring, "olt_backup_interval_hours"
         )
         _sync_scheduled_task(
             session,
@@ -1983,11 +1635,10 @@ def build_beat_schedule() -> dict:
         # Router config backup (REST /export snapshots). Mirrors OLT backup —
         # the keystone for DR/rollback/change-history and for reading firewall/
         # CoA posture from stored config. The task self-gates to online routers.
-        router_backup_hours = _resolve_int(
+        router_backup_hours = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "router_config_backup_interval_hours",
-            24,
         )
         _sync_scheduled_task(
             session,
@@ -1999,11 +1650,10 @@ def build_beat_schedule() -> dict:
         # NAS config backup orchestrator. The task itself honors each device's
         # backup_enabled + backup_schedule, so this just needs to run often
         # enough to catch due devices (hourly).
-        nas_backup_interval = _resolve_int(
+        nas_backup_interval = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "nas_config_backup_interval_seconds",
-            3600,
         )
         _sync_scheduled_task(
             session,
@@ -2012,51 +1662,9 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(nas_backup_interval, 900),
         )
-        # Project/installation mirror reconcile — backstop for missed project.*
-        # webhook deliveries so "where's my install?" stays accurate.
-        project_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "project_reconcile_interval_seconds",
-            3600,
-        )
-        _sync_scheduled_task(
-            session,
-            name="project_mirror_reconcile",
-            task_name="app.tasks.projects.reconcile_project_mirror",
-            enabled=True,
-            interval_seconds=max(project_reconcile_seconds, 900),
-        )
-        # Work-order/field-service mirror reconcile — backstop for missed
-        # work_order.* webhook deliveries. Gated by the crm.work_order_pull
-        # Native work-order authority kill switch: off means Sub
-        # is the work-order system-of-record and the CRM is no longer polled.
-        work_order_pull_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "crm_work_order_pull_enabled",
-            "CRM_WORK_ORDER_PULL_ENABLED",
-            True,
-        )
-        work_order_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "work_order_reconcile_interval_seconds",
-            3600,
-        )
-        _sync_scheduled_task(
-            session,
-            name="work_order_mirror_reconcile",
-            task_name="app.tasks.work_orders.reconcile_work_order_mirror",
-            enabled=work_order_pull_enabled,
-            interval_seconds=max(work_order_reconcile_seconds, 900),
-        )
         # Self-serve quote mirror reconcile — backstop for missed quote.* webhooks.
-        quote_reconcile_seconds = _resolve_int(
-            session,
-            SettingDomain.subscriber,
-            "quote_reconcile_interval_seconds",
-            3600,
+        quote_reconcile_seconds = resolve_integer(
+            session, SettingDomain.subscriber, "quote_reconcile_interval_seconds"
         )
         _sync_scheduled_task(
             session,
@@ -2065,19 +1673,11 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(quote_reconcile_seconds, 900),
         )
-        olt_profile_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "olt_profile_sync_worker_enabled",
-            "OLT_PROFILE_SYNC_WORKER_ENABLED",
-            False,
+        olt_profile_sync_enabled = control_registry.is_enabled(
+            session, "network.olt_profile_sync"
         )
-        olt_profile_sync_interval_seconds = _effective_int(
-            session,
-            SettingDomain.network,
-            "olt_profile_sync_interval_seconds",
-            "OLT_PROFILE_SYNC_INTERVAL_SECONDS",
-            300,
+        olt_profile_sync_interval_seconds = resolve_integer(
+            session, SettingDomain.network, "olt_profile_sync_interval_seconds"
         )
         _sync_scheduled_task(
             session,
@@ -2098,18 +1698,9 @@ def build_beat_schedule() -> dict:
         _retire_scheduled_task(session, "app.tasks.workflow.detect_sla_breaches")
 
         # WireGuard VPN maintenance tasks
-        wg_log_cleanup_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "wireguard_log_cleanup_enabled",
-            "WIREGUARD_LOG_CLEANUP_ENABLED",
-            True,
-        )
-        wg_log_cleanup_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "wireguard_log_cleanup_interval_seconds",
-            86400,
+        wg_log_cleanup_enabled = control_registry.is_enabled(session, "vpn.log_cleanup")
+        wg_log_cleanup_interval = resolve_integer(
+            session, SettingDomain.network, "wireguard_log_cleanup_interval_seconds"
         )
         wg_log_cleanup_interval = max(wg_log_cleanup_interval, 3600)  # Min: 1 hour
         _sync_scheduled_task(
@@ -2121,18 +1712,11 @@ def build_beat_schedule() -> dict:
         )
 
         # WireGuard token cleanup - runs hourly
-        wg_token_cleanup_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "wireguard_token_cleanup_enabled",
-            "WIREGUARD_TOKEN_CLEANUP_ENABLED",
-            True,
+        wg_token_cleanup_enabled = control_registry.is_enabled(
+            session, "vpn.token_cleanup"
         )
-        wg_token_cleanup_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "wireguard_token_cleanup_interval_seconds",
-            3600,
+        wg_token_cleanup_interval = resolve_integer(
+            session, SettingDomain.network, "wireguard_token_cleanup_interval_seconds"
         )
         wg_token_cleanup_interval = max(
             wg_token_cleanup_interval, 300
@@ -2148,18 +1732,9 @@ def build_beat_schedule() -> dict:
         _retire_scheduled_task(session, "app.tasks.wireguard.sync_peer_stats")
 
         # TR-069 ACS device sync - syncs devices from GenieACS
-        tr069_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_sync_enabled",
-            "TR069_SYNC_ENABLED",
-            True,
-        )
-        tr069_sync_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "tr069_sync_interval_seconds",
-            1800,  # 30 minutes
+        tr069_sync_enabled = control_registry.is_enabled(session, "network.tr069_sync")
+        tr069_sync_interval = resolve_integer(
+            session, SettingDomain.network, "tr069_sync_interval_seconds"
         )
         tr069_sync_interval = max(tr069_sync_interval, 300)  # Min: 5 minutes
         _sync_scheduled_task(
@@ -2170,42 +1745,28 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_sync_interval,
         )
 
-        # TR-069 job execution - executes queued jobs and retries failed
-        tr069_jobs_enabled = _effective_bool(
+        # Permanent lifecycle drainage: adopted commands must reach a terminal
+        # state even when new command admission is disabled.
+        tr069_jobs_interval = resolve_integer(
             session,
             SettingDomain.network,
-            "tr069_job_execution_enabled",
-            "TR069_JOB_EXECUTION_ENABLED",
-            True,
-        )
-        tr069_jobs_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "tr069_job_execution_interval_seconds",
-            60,  # 1 minute
+            "tr069_command_reconciliation_interval_seconds",
         )
         tr069_jobs_interval = max(tr069_jobs_interval, 30)  # Min: 30 seconds
         _sync_scheduled_task(
             session,
-            name="tr069_job_executor",
-            task_name="app.tasks.tr069.execute_pending_jobs",
-            enabled=tr069_jobs_enabled,
+            name="tr069_command_reconciler",
+            task_name="app.tasks.tr069.reconcile_command_outcomes",
+            enabled=True,
             interval_seconds=tr069_jobs_interval,
         )
 
         # TR-069 device health check - monitors last_inform freshness
-        tr069_health_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_health_check_enabled",
-            "TR069_HEALTH_CHECK_ENABLED",
-            True,
+        tr069_health_enabled = control_registry.is_enabled(
+            session, "network.tr069_health_check"
         )
-        tr069_health_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "tr069_health_check_interval_seconds",
-            7200,  # 2 hours
+        tr069_health_interval = resolve_integer(
+            session, SettingDomain.network, "tr069_health_check_interval_seconds"
         )
         tr069_health_interval = max(tr069_health_interval, 300)  # Min: 5 minutes
         _sync_scheduled_task(
@@ -2217,18 +1778,11 @@ def build_beat_schedule() -> dict:
         )
 
         # TR-069 record cleanup - deletes old sessions and jobs
-        tr069_cleanup_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_cleanup_enabled",
-            "TR069_CLEANUP_ENABLED",
-            True,
+        tr069_cleanup_enabled = control_registry.is_enabled(
+            session, "network.tr069_cleanup"
         )
-        tr069_cleanup_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "tr069_cleanup_interval_seconds",
-            86400,  # Daily
+        tr069_cleanup_interval = resolve_integer(
+            session, SettingDomain.network, "tr069_cleanup_interval_seconds"
         )
         tr069_cleanup_interval = max(tr069_cleanup_interval, 3600)  # Min: 1 hour
         _sync_scheduled_task(
@@ -2241,18 +1795,13 @@ def build_beat_schedule() -> dict:
 
         # TR-069 GenieACS stale task cleanup - deletes stuck tasks/faults older than threshold
         # This prevents inform blocking loops from permanently failing tasks
-        tr069_genieacs_cleanup_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_genieacs_stale_cleanup_enabled",
-            "TR069_GENIEACS_STALE_CLEANUP_ENABLED",
-            True,
+        tr069_genieacs_cleanup_enabled = control_registry.is_enabled(
+            session, "network.tr069_genieacs_stale_cleanup"
         )
-        tr069_genieacs_cleanup_interval = _resolve_int(
+        tr069_genieacs_cleanup_interval = resolve_integer(
             session,
             SettingDomain.network,
             "tr069_genieacs_stale_cleanup_interval_seconds",
-            900,  # 15 minutes
         )
         tr069_genieacs_cleanup_interval = max(
             tr069_genieacs_cleanup_interval, 300
@@ -2266,18 +1815,11 @@ def build_beat_schedule() -> dict:
         )
 
         # TR-069 GenieACS metrics scrape - pushes pending/faults/inform-age to VictoriaMetrics
-        tr069_metrics_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_metrics_scrape_enabled",
-            "TR069_METRICS_SCRAPE_ENABLED",
-            True,
+        tr069_metrics_enabled = control_registry.is_enabled(
+            session, "network.tr069_metrics_scrape"
         )
-        tr069_metrics_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "tr069_metrics_scrape_interval_seconds",
-            300,  # 5 minutes
+        tr069_metrics_interval = resolve_integer(
+            session, SettingDomain.network, "tr069_metrics_scrape_interval_seconds"
         )
         tr069_metrics_interval = max(tr069_metrics_interval, 60)  # Min: 1 minute
         _sync_scheduled_task(
@@ -2289,18 +1831,11 @@ def build_beat_schedule() -> dict:
         )
 
         # TR-069 ONT runtime refresh - updates observed WAN/WiFi/LAN data
-        tr069_runtime_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_ont_runtime_refresh_enabled",
-            "TR069_ONT_RUNTIME_REFRESH_ENABLED",
-            True,
+        tr069_runtime_enabled = control_registry.is_enabled(
+            session, "network.tr069_ont_runtime_refresh"
         )
-        tr069_runtime_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "tr069_ont_runtime_refresh_interval_seconds",
-            900,  # 15 minutes
+        tr069_runtime_interval = resolve_integer(
+            session, SettingDomain.network, "tr069_ont_runtime_refresh_interval_seconds"
         )
         tr069_runtime_interval = max(tr069_runtime_interval, 300)  # Min: 5 minutes
         _sync_scheduled_task(
@@ -2322,59 +1857,47 @@ def build_beat_schedule() -> dict:
 
         # Durable event outbox recovery. The normal path dispatches immediately
         # after commit; this runner claims rows left pending by a process crash.
-        event_dispatch_enabled = _resolve_bool(
-            session,
-            SettingDomain.scheduler,
-            "event_dispatch_enabled",
-            True,
+        event_dispatch_interval = resolve_integer(
+            session, SettingDomain.scheduler, "event_dispatch_interval_seconds"
         )
-        event_dispatch_interval = _resolve_int(
-            session,
-            SettingDomain.scheduler,
-            "event_dispatch_interval_seconds",
-            60,
+        # Due-timer dispatch — permanent lifecycle infrastructure (ADR 0007
+        # invariant 23). Cadence is configurable; the authority path is not.
+        timer_dispatch_interval = resolve_integer(
+            session, SettingDomain.scheduler, "durable_timer_dispatch_interval_seconds"
         )
+        timer_dispatch_interval = max(timer_dispatch_interval, 30)
+        _sync_scheduled_task(
+            session,
+            name="durable_timer_dispatch_runner",
+            task_name="app.tasks.durable_timers.fire_due_durable_timers",
+            enabled=True,
+            interval_seconds=timer_dispatch_interval,
+        )
+
         _sync_scheduled_task(
             session,
             name="event_dispatch_runner",
             task_name="app.tasks.events.dispatch_pending_events",
-            enabled=event_dispatch_enabled,
+            enabled=True,
             interval_seconds=event_dispatch_interval,
         )
 
         # Event retry - retries failed event handlers
-        event_retry_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "event_retry_enabled",
-            "EVENT_RETRY_ENABLED",
-            True,
-        )
-        event_retry_interval = _resolve_int(
-            session, SettingDomain.scheduler, "event_retry_interval_seconds", 300
+        event_retry_interval = resolve_integer(
+            session, SettingDomain.scheduler, "event_retry_interval_seconds"
         )
         event_retry_interval = max(event_retry_interval, 60)  # Min: 1 minute
         _sync_scheduled_task(
             session,
             name="event_retry_runner",
             task_name="app.tasks.events.retry_failed_events",
-            enabled=event_retry_enabled,
+            enabled=True,
             interval_seconds=event_retry_interval,
         )
 
         # Event stale processing cleanup - marks stuck events as failed
-        event_stale_cleanup_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "event_stale_cleanup_enabled",
-            "EVENT_STALE_CLEANUP_ENABLED",
-            True,
-        )
-        event_stale_cleanup_interval = _resolve_int(
-            session,
-            SettingDomain.scheduler,
-            "event_stale_cleanup_interval_seconds",
-            600,
+        event_stale_cleanup_interval = resolve_integer(
+            session, SettingDomain.scheduler, "event_stale_cleanup_interval_seconds"
         )
         event_stale_cleanup_interval = max(
             event_stale_cleanup_interval, 60
@@ -2383,22 +1906,19 @@ def build_beat_schedule() -> dict:
             session,
             name="event_stale_cleanup_runner",
             task_name="app.tasks.events.mark_stale_processing_events",
-            enabled=event_stale_cleanup_enabled,
+            enabled=True,
             interval_seconds=event_stale_cleanup_interval,
         )
 
-        stale_infra_check_enabled = _effective_bool(
+        stale_infra_check_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.scheduler,
             "stale_infrastructure_check_enabled",
-            "STALE_INFRASTRUCTURE_CHECK_ENABLED",
-            True,
         )
-        stale_infra_check_interval = _resolve_int(
+        stale_infra_check_interval = resolve_integer(
             session,
             SettingDomain.scheduler,
             "stale_infrastructure_check_interval_seconds",
-            300,
         )
         stale_infra_check_interval = max(stale_infra_check_interval, 60)
         _sync_scheduled_task(
@@ -2409,24 +1929,16 @@ def build_beat_schedule() -> dict:
             interval_seconds=stale_infra_check_interval,
         )
 
-        monitoring_inventory_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.network_monitoring,
-            "monitoring_inventory_sync_enabled",
-            "MONITORING_INVENTORY_SYNC_ENABLED",
-            True,
-        )
-        monitoring_inventory_sync_interval = _resolve_int(
+        monitoring_inventory_sync_interval = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "monitoring_inventory_sync_interval_seconds",
-            600,
         )
         _sync_scheduled_task(
             session,
             name="monitoring_inventory_sync",
             task_name="app.tasks.monitoring_cleanup.sync_inventory_to_monitoring",
-            enabled=monitoring_inventory_sync_enabled,
+            enabled=True,
             interval_seconds=max(monitoring_inventory_sync_interval, 300),
         )
 
@@ -2435,11 +1947,10 @@ def build_beat_schedule() -> dict:
         # poller now writes a row per ping probe, making it the table's
         # biggest writer. Postgres keeps current state; history belongs to
         # VictoriaMetrics (see docs/designs/OPERATIONS_MEASUREMENT_STRATEGY).
-        device_metrics_cleanup_hours = _resolve_int(
+        device_metrics_cleanup_hours = resolve_integer(
             session,
             SettingDomain.network_monitoring,
             "device_metrics_cleanup_interval_hours",
-            6,
         )
         _sync_scheduled_task(
             session,
@@ -2450,18 +1961,13 @@ def build_beat_schedule() -> dict:
         )
 
         # Event old cleanup - removes old completed events
-        event_old_cleanup_enabled = _effective_bool(
+        event_old_cleanup_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.scheduler,
             "event_old_cleanup_enabled",
-            "EVENT_OLD_CLEANUP_ENABLED",
-            True,
         )
-        event_old_cleanup_interval = _resolve_int(
-            session,
-            SettingDomain.scheduler,
-            "event_old_cleanup_interval_seconds",
-            86400,
+        event_old_cleanup_interval = resolve_integer(
+            session, SettingDomain.scheduler, "event_old_cleanup_interval_seconds"
         )
         event_old_cleanup_interval = max(
             event_old_cleanup_interval, 3600
@@ -2475,15 +1981,13 @@ def build_beat_schedule() -> dict:
         )
 
         # RADIUS sync - syncs NAS devices and users to FreeRADIUS
-        radius_sync_enabled = _effective_bool(
+        radius_sync_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.radius,
             "radius_sync_enabled",
-            "RADIUS_SYNC_ENABLED",
-            True,
         )
-        radius_sync_interval = _resolve_int(
-            session, SettingDomain.radius, "radius_sync_interval_seconds", 300
+        radius_sync_interval = resolve_integer(
+            session, SettingDomain.radius, "radius_sync_interval_seconds"
         )
         radius_sync_interval = max(radius_sync_interval, 60)  # Min: 1 minute
         if radius_sync_enabled:
@@ -2502,51 +2006,23 @@ def build_beat_schedule() -> dict:
                     "args": [str(sync_job.id)],
                 }
 
-        # RADIUS refresh safety-net. radcheck/radreply rebuilds are normally
-        # enqueued fire-and-forget on block/restore events; if that enqueue is
-        # lost (worker down, broker hiccup, restart) a paid customer can stay
-        # walled-gardened until the next event touches them. This periodic
-        # whole-table rebuild converges radcheck/radreply on the authoritative
-        # subscription/subscriber status, so a dropped enqueue self-heals within
-        # one interval. Idempotent (per-user DELETE+INSERT). (cutover fix)
-        radius_refresh_safety_enabled = _effective_bool(
-            session,
-            SettingDomain.subscriber,
-            "radius_refresh_safety_net_enabled",
-            "RADIUS_REFRESH_SAFETY_NET_ENABLED",
-            True,
-        )
-        radius_refresh_safety_interval = _effective_int(
-            session,
-            SettingDomain.subscriber,
-            "radius_refresh_safety_net_interval_minutes",
-            "RADIUS_REFRESH_SAFETY_NET_INTERVAL_MINUTES",
-            15,
-        )
-        radius_refresh_safety_interval = max(radius_refresh_safety_interval, 5)
-        if radius_refresh_safety_enabled:
-            schedule["radius_refresh_safety_net"] = {
-                "task": "app.tasks.radius_population.refresh_radius_from_subs",
-                "schedule": timedelta(minutes=radius_refresh_safety_interval),
-            }
-
         # CRM ticket pull: inbound CRM tickets/comments into local support tickets.
-        crm_ticket_pull_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "crm_ticket_pull_enabled",
-            "CRM_TICKET_PULL_ENABLED",
-            False,
+        crm_ticket_pull_enabled = control_registry.is_enabled(
+            session, "crm.ticket_pull"
         )
-        crm_ticket_pull_interval = _effective_int(
-            session,
-            SettingDomain.scheduler,
-            "crm_ticket_pull_interval_minutes",
-            "CRM_TICKET_PULL_INTERVAL_MINUTES",
-            5,
+        crm_ticket_pull_interval = resolve_integer(
+            session, SettingDomain.scheduler, "crm_ticket_pull_interval_minutes"
         )
         crm_ticket_pull_interval = max(crm_ticket_pull_interval, 1)
-        if crm_ticket_pull_enabled:
+        from app.services.integrations.crm_ticket_readiness import (
+            resolve_crm_ticket_pull_readiness,
+        )
+
+        crm_ticket_readiness = resolve_crm_ticket_pull_readiness(
+            session,
+            control_enabled=crm_ticket_pull_enabled,
+        )
+        if crm_ticket_readiness.schedule_enabled:
             schedule["crm_ticket_pull"] = {
                 "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
                 "schedule": timedelta(minutes=crm_ticket_pull_interval),
@@ -2559,10 +2035,15 @@ def build_beat_schedule() -> dict:
                 "schedule": crontab(hour=3, minute=40),
                 "kwargs": {"full": True},
             }
+        elif crm_ticket_pull_enabled:
+            logger.error(
+                "crm_ticket_pull_not_ready issue_codes=%s",
+                ",".join(crm_ticket_readiness.issue_codes),
+            )
 
         # ERP schedules derive from validated capability bindings. Per-flow
         # single-writer ownership remains the independent business cutover gate.
-        from app.services.integrations.connectors.dotmac_erp import (
+        from app.services.integrations.backoffice_contracts import (
             ERP_OPERATIONAL_SYNC_CAPABILITY,
             ERP_OUTBOX_CAPABILITY,
             ERP_STATUS_CAPABILITY,
@@ -2574,12 +2055,8 @@ def build_beat_schedule() -> dict:
         erp_operational_sync_enabled = capability_enabled(
             session, ERP_OPERATIONAL_SYNC_CAPABILITY
         )
-        dotmac_erp_outbox_interval = _effective_int(
-            session,
-            SettingDomain.integration,
-            "dotmac_erp_outbox_interval_seconds",
-            "DOTMAC_ERP_OUTBOX_INTERVAL_SECONDS",
-            60,
+        dotmac_erp_outbox_interval = resolve_integer(
+            session, SettingDomain.integration, "dotmac_erp_outbox_interval_seconds"
         )
         dotmac_erp_outbox_interval = max(dotmac_erp_outbox_interval, 30)
         _sync_scheduled_task(
@@ -2591,15 +2068,13 @@ def build_beat_schedule() -> dict:
         )
 
         # Expense-claim status reconciliation. Polls ERP for
-        # in-flight claims and refreshes erp_claim_status on the source row.
+        # in-flight claims and refreshes expense_claim_status on the source row.
         # Same master gate (dotmac_erp_sync_enabled, default OFF) → inert until
         # cutover; read-only against ERP, so re-running is always safe.
-        dotmac_erp_expense_refresh_interval = _effective_int(
+        dotmac_erp_expense_refresh_interval = resolve_integer(
             session,
             SettingDomain.integration,
             "dotmac_erp_expense_status_refresh_interval_seconds",
-            "DOTMAC_ERP_EXPENSE_STATUS_REFRESH_INTERVAL_SECONDS",
-            300,
         )
         _sync_scheduled_task(
             session,
@@ -2610,16 +2085,14 @@ def build_beat_schedule() -> dict:
         )
 
         # Material-request status reconciliation. Polls ERP for
-        # in-flight ISSUE requests and refreshes erp_material_status on the source
+        # in-flight ISSUE requests and refreshes support_status on the source
         # row (flipping to fulfilled when ERP reports it). Same master gate
         # (dotmac_erp_sync_enabled, default OFF) → inert until cutover; read-only
         # against ERP, so re-running is always safe.
-        dotmac_erp_material_refresh_interval = _effective_int(
+        dotmac_erp_material_refresh_interval = resolve_integer(
             session,
             SettingDomain.integration,
             "dotmac_erp_material_status_refresh_interval_seconds",
-            "DOTMAC_ERP_MATERIAL_STATUS_REFRESH_INTERVAL_SECONDS",
-            300,
         )
         _sync_scheduled_task(
             session,
@@ -2642,12 +2115,10 @@ def build_beat_schedule() -> dict:
         # ERP remains authoritative for AP settlement. Poll its dedicated
         # source-invoice read contract and project timestamped observations for
         # the vendor portal; never infer payment from the creation response.
-        dotmac_erp_purchase_invoice_status_interval = _effective_int(
+        dotmac_erp_purchase_invoice_status_interval = resolve_integer(
             session,
             SettingDomain.integration,
             "dotmac_erp_purchase_invoice_status_refresh_interval_seconds",
-            "DOTMAC_ERP_PURCHASE_INVOICE_STATUS_REFRESH_INTERVAL_SECONDS",
-            300,
         )
         _sync_scheduled_task(
             session,
@@ -2694,20 +2165,11 @@ def build_beat_schedule() -> dict:
         # observer and the freshness signal is only useful if it runs
         # continuously. Frequent by design so a stalled channel surfaces in
         # minutes, not hours.
-        channel_health_enabled = _effective_bool(
-            session,
-            SettingDomain.network_monitoring,
-            "channel_health_enabled",
-            "CHANNEL_HEALTH_ENABLED",
-            True,
-        )
         channel_health_interval_seconds = max(
-            _effective_int(
+            resolve_integer(
                 session,
                 SettingDomain.network_monitoring,
                 "channel_health_interval_seconds",
-                "CHANNEL_HEALTH_INTERVAL_SECONDS",
-                60,
             ),
             30,
         )
@@ -2715,7 +2177,7 @@ def build_beat_schedule() -> dict:
             session,
             name="channel_health_observer",
             task_name="app.tasks.channel_health.observe_channel_health",
-            enabled=channel_health_enabled,
+            enabled=True,
             interval_seconds=channel_health_interval_seconds,
         )
 
@@ -2723,11 +2185,10 @@ def build_beat_schedule() -> dict:
         # configured celery timezone (Africa/Lagos in prod). The service
         # short-circuits when disabled or already sent today, so a missed
         # beat self-heals on the next fire without double-sending.
-        ncc_report_email_enabled = _resolve_bool(
+        ncc_report_email_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.notification,
             "ncc_report_email_enabled",
-            False,
         )
         if ncc_report_email_enabled:
             schedule["ncc_report_email"] = {

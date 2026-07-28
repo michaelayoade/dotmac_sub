@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from decimal import Decimal
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
+from sqlalchemy import func, select
+
+from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
+from app.models.event_store import EventStore
+from app.schemas.billing import InvoiceCreate, InvoiceLineCreate
+from app.services import billing as billing_service
+from app.services import invoice_draft_authoring
+from app.services.billing.account_credit import eligible_invoices
+from app.services.db_session_adapter import db_session_adapter
+from app.services.events.handlers.notification import NotificationHandler
+from app.services.events.types import Event, EventType
+from app.services.owner_commands import CommandContext
+
+
+def _line(
+    description: str = "Monthly service",
+    *,
+    line_id=None,
+    amount: str = "100.00",
+) -> invoice_draft_authoring.DraftLineCommand:
+    return invoice_draft_authoring.DraftLineCommand(
+        line_id=line_id,
+        description=description,
+        quantity=Decimal("1"),
+        unit_price=Decimal(amount),
+    )
+
+
+def _context(key: str) -> CommandContext:
+    return CommandContext.system(
+        actor="finance-test",
+        scope="invoice_draft:test",
+        reason="Invoice draft regression test",
+        idempotency_key=key,
+    )
+
+
+def _create_command(subscriber) -> invoice_draft_authoring.CreateInvoiceDraftCommand:
+    return invoice_draft_authoring.CreateInvoiceDraftCommand(
+        account_id=subscriber.id,
+        invoice_number=None,
+        currency="NGN",
+        issued_at=None,
+        due_at=None,
+        memo="Atomic draft",
+        is_proforma=False,
+        lines=(_line(),),
+    )
+
+
+def test_create_draft_commits_complete_aggregate_and_replays(
+    db_session, subscriber
+) -> None:
+    command = _create_command(subscriber)
+    db_session_adapter.release_read_transaction(db_session)
+
+    created = invoice_draft_authoring.create_invoice_draft(
+        db_session,
+        command,
+        context=_context("invoice-draft-create-replay"),
+    )
+    replay = invoice_draft_authoring.create_invoice_draft(
+        db_session,
+        command,
+        context=_context("invoice-draft-create-replay"),
+    )
+
+    invoice = db_session.get(Invoice, created.invoice_id)
+    lines = db_session.scalars(
+        select(InvoiceLine).where(InvoiceLine.invoice_id == created.invoice_id)
+    ).all()
+    event = db_session.scalar(
+        select(EventStore).where(EventStore.invoice_id == created.invoice_id)
+    )
+
+    assert created.status is InvoiceStatus.draft
+    assert created.total == Decimal("100.00")
+    assert replay.invoice_id == created.invoice_id
+    assert replay.replayed is True
+    assert invoice is not None
+    assert invoice.balance_due == Decimal("100.00")
+    assert len(lines) == 1
+    assert event is not None
+    assert event.payload["amount"] == "100.00"
+    assert event.payload["status"] == "draft"
+
+    db_session_adapter.release_read_transaction(db_session)
+    with pytest.raises(
+        invoice_draft_authoring.InvoiceDraftAuthoringError
+    ) as mismatched_replay:
+        invoice_draft_authoring.create_invoice_draft(
+            db_session,
+            replace(command, memo="Changed retry payload"),
+            context=_context("invoice-draft-create-replay"),
+        )
+    assert mismatched_replay.value.code.endswith(".idempotency_conflict")
+
+
+def test_create_draft_rolls_back_header_lines_and_evidence_on_failure(
+    db_session, subscriber, monkeypatch
+) -> None:
+    command = _create_command(subscriber)
+    db_session_adapter.release_read_transaction(db_session)
+
+    def fail_after_lines(*_args, **_kwargs):
+        raise RuntimeError("outbox unavailable")
+
+    monkeypatch.setattr(invoice_draft_authoring, "_emit_created", fail_after_lines)
+
+    with pytest.raises(RuntimeError, match="outbox unavailable"):
+        invoice_draft_authoring.create_invoice_draft(
+            db_session,
+            command,
+            context=_context("invoice-draft-create-rollback"),
+        )
+
+    assert db_session.scalar(select(func.count()).select_from(Invoice)) == 0
+    assert db_session.scalar(select(func.count()).select_from(InvoiceLine)) == 0
+
+
+def test_shared_invoice_constructor_rolls_back_header_when_lines_fail(
+    db_session, subscriber, monkeypatch
+) -> None:
+    db_session.commit()
+
+    def fail_line_replacement(*_args, **_kwargs):
+        raise RuntimeError("line replacement failed")
+
+    monkeypatch.setattr(
+        billing_service.InvoiceLines,
+        "replace_admin_draft_lines",
+        fail_line_replacement,
+    )
+
+    with pytest.raises(RuntimeError, match="line replacement failed"):
+        billing_service.invoices.create_with_lines(
+            db_session,
+            InvoiceCreate(
+                account_id=subscriber.id,
+                invoice_number="INV-ATOMIC-ROLLBACK",
+                currency="NGN",
+                status=InvoiceStatus.issued,
+            ),
+            (
+                InvoiceLineCreate(
+                    invoice_id=uuid4(),
+                    description="Installation",
+                    quantity=Decimal("1"),
+                    unit_price=Decimal("100.00"),
+                ),
+            ),
+        )
+
+    assert db_session.scalar(select(func.count()).select_from(Invoice)) == 0
+    assert db_session.scalar(select(func.count()).select_from(InvoiceLine)) == 0
+
+
+def test_update_replaces_lines_only_while_invoice_is_draft(
+    db_session, subscriber
+) -> None:
+    command = _create_command(subscriber)
+    subscriber_id = command.account_id
+    db_session_adapter.release_read_transaction(db_session)
+    created = invoice_draft_authoring.create_invoice_draft(
+        db_session,
+        command,
+        context=_context("invoice-draft-update-create"),
+    )
+    existing_line_id = db_session.scalar(
+        select(InvoiceLine.id).where(InvoiceLine.invoice_id == created.invoice_id)
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    updated = invoice_draft_authoring.update_invoice_draft(
+        db_session,
+        invoice_draft_authoring.UpdateInvoiceDraftCommand(
+            invoice_id=created.invoice_id,
+            account_id=subscriber_id,
+            invoice_number=created.invoice_number,
+            currency="NGN",
+            issued_at=None,
+            due_at=None,
+            memo="Updated once",
+            is_proforma=False,
+            lines=(
+                _line("Updated service", line_id=existing_line_id, amount="125.00"),
+                _line("Router rental", amount="25.00"),
+            ),
+        ),
+        context=_context("invoice-draft-update"),
+    )
+
+    assert updated.total == Decimal("150.00")
+
+    invoice = db_session.get(Invoice, created.invoice_id)
+    assert invoice is not None
+    invoice.status = InvoiceStatus.issued
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(invoice_draft_authoring.InvoiceDraftAuthoringError) as rejected:
+        invoice_draft_authoring.update_invoice_draft(
+            db_session,
+            invoice_draft_authoring.UpdateInvoiceDraftCommand(
+                invoice_id=created.invoice_id,
+                account_id=subscriber_id,
+                invoice_number=created.invoice_number,
+                currency="NGN",
+                issued_at=None,
+                due_at=None,
+                memo="Illegal edit",
+                is_proforma=False,
+                lines=(_line(line_id=uuid4()),),
+            ),
+            context=_context("invoice-draft-update-issued"),
+        )
+
+    assert rejected.value.code.endswith(".invoice_not_editable")
+
+
+def test_issued_lines_are_immutable_and_proformas_are_not_collectible(
+    db_session, subscriber
+) -> None:
+    issued = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-ISSUED-GUARD",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        is_proforma=False,
+    )
+    proforma = Invoice(
+        account_id=subscriber.id,
+        invoice_number="PF-CREDIT-GUARD",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        total=Decimal("200.00"),
+        balance_due=Decimal("200.00"),
+        is_proforma=True,
+    )
+    db_session.add_all([issued, proforma])
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as line_rejected:
+        billing_service.invoice_lines.create(
+            db_session,
+            InvoiceLineCreate(
+                invoice_id=issued.id,
+                description="Illegal issued edit",
+                quantity=Decimal("1"),
+                unit_price=Decimal("10.00"),
+            ),
+        )
+
+    assert line_rejected.value.status_code == 409
+    assert eligible_invoices(db_session, str(subscriber.id)) == [issued]
+
+    with pytest.raises(HTTPException) as issue_rejected:
+        billing_service.invoices.issue_draft_system(
+            db_session,
+            str(proforma.id),
+            issued_at=proforma.created_at,
+            due_at=None,
+            reason="proforma-guard-test",
+        )
+    assert issue_rejected.value.status_code == 409
+
+
+def test_draft_created_event_never_queues_customer_notification(monkeypatch) -> None:
+    handler = NotificationHandler()
+    monkeypatch.setattr(
+        handler,
+        "_load_templates",
+        lambda *_args, **_kwargs: pytest.fail(
+            "draft notification policy should return before template loading"
+        ),
+    )
+
+    handler.handle(
+        object(),
+        Event(
+            event_type=EventType.invoice_created,
+            payload={"status": "draft", "invoice_number": "INV-DRAFT"},
+        ),
+    )

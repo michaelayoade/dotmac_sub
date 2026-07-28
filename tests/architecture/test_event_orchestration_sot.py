@@ -23,7 +23,16 @@ def test_money_events_do_not_suppress_independent_customer_or_external_outputs()
     for event_type in (EventType.payment_received, EventType.invoice_overdue):
         plan = event_execution_plan(event_type.value, handlers)
         assert plan
-        assert all(not step.dependencies for step in plan)
+        steps = {step.handler_name: step for step in plan}
+        assert steps["NotificationHandler"].dependencies == ()
+        assert steps["WebhookHandler"].dependencies == ()
+
+
+def test_payment_received_orders_only_the_dependent_financial_consequence():
+    plan = event_execution_plan(EventType.payment_received.value, _declared_handlers())
+    steps = {step.handler_name: step for step in plan}
+
+    assert steps["EnforcementHandler"].dependencies == ("PrepaidRenewalHandler",)
 
 
 def test_activation_enforcement_cannot_run_before_provisioning():

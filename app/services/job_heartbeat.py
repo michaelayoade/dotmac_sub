@@ -24,6 +24,8 @@ _RESULT_KEY_PREFIX = "job:heartbeat:result:"
 _TTL_SECONDS = int(30 * 24 * 3600)  # 30 days; freshness is judged by age, not TTL
 _redis_client: Any = None
 
+PAYMENT_RECONCILIATION_TASK = "app.tasks.payment_reconciliation.reconcile_topups"
+
 # Scheduled money jobs whose LAST-RUN result (status + returned counts) we surface
 # in billing-health. Only these are instrumented — not every celery task.
 MONEY_JOB_TASKS = (
@@ -31,6 +33,7 @@ MONEY_JOB_TASKS = (
     "app.tasks.billing.run_billing_notifications",
     "app.tasks.collections.run_billing_enforcement",
     "app.tasks.collections.run_bundle_reconcile",
+    PAYMENT_RECONCILIATION_TASK,
 )
 
 
@@ -87,11 +90,14 @@ def record_result(
     *,
     status: str,
     detail: dict[str, Any] | None = None,
+    next_attempt_at: datetime | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Store the LAST-RUN result of a task as a small JSON blob. Never raises.
 
-    Blob shape: ``{"status": "ok"|"error", "at": iso8601, "detail": {...}|None}``.
+    Blob shape includes the factual last result, consecutive failure count, and
+    the next scheduled attempt when a retry owner supplied one. Consumers
+    render those facts instead of inventing a single "health" label.
     ``detail`` is the task's returned counts on success, or ``{"error": msg}`` on
     failure. Recorded under a separate key from the last-success heartbeat so the
     two never clobber each other.
@@ -102,10 +108,31 @@ def record_result(
     if client is None:
         return False
     try:
+        previous_failures = 0
+        previous = get_last_result(task_name)
+        if isinstance(previous, dict):
+            try:
+                previous_failures = int(previous.get("consecutive_failures") or 0)
+            except (TypeError, ValueError):
+                previous_failures = 0
+        successful = status in {"ok", "success"}
+        failed = status in {"error", "failed", "timeout", "partial"}
         payload = {
             "status": status,
             "at": (now or datetime.now(UTC)).isoformat(),
             "detail": detail if isinstance(detail, dict) else None,
+            "consecutive_failures": (
+                0
+                if successful
+                else (
+                    max(previous_failures, 0) + 1
+                    if failed
+                    else max(previous_failures, 0)
+                )
+            ),
+            "next_attempt_at": next_attempt_at.isoformat()
+            if next_attempt_at is not None
+            else None,
         }
         client.set(_RESULT_KEY_PREFIX + task_name, json.dumps(payload), ex=_TTL_SECONDS)
         return True

@@ -1,16 +1,17 @@
-"""Account-level service restore for paid-up-but-walled accounts.
+"""Account-level service restore for funded-or-covered walled accounts.
 
 The SAFE replacement for per-invoice credit settlement, which is unsound on the
 migrated dataset (per-invoice ``balance_due``/allocations are not authoritative —
 many invoices were paid from the account deposit with no invoice-linked
 allocation, and recomputing locally manufactures phantom debt).
 
-Instead of trusting per-invoice balances, this keys on the authoritative
-account-level net. Prepaid accounts must meet the canonical prepaid access
-threshold; a zero-balance rule here would disagree with the suspension sweep
-and make service oscillate. Postpaid legacy repair retains its non-negative
-account-net cohort, while the restore owner separately refuses to clear an
-overdue lock until collectible debt is gone.
+Instead of trusting per-invoice balances, prepaid selection consumes the same
+funding and exact-coverage decision as live access restoration. A configured
+reserve target never blocks restoration of an already covered service, and a
+future billing anchor or paid invoice alone never authorizes restoration.
+Postpaid legacy repair retains its non-negative account-net cohort, while the
+restore owner separately refuses to clear an overdue lock until collectible
+debt is gone.
 
 NO ledger / money writes. Pure service-state correction:
   - ``restore_account_services`` — reason-scoped, lifts only payment/collections
@@ -27,11 +28,14 @@ import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import BillingMode
+from app.models.collections import FinancialAccessOrigin
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.access_resolution import resolve_prepaid_funding
 from app.services.billing_profile import resolve_billing_profile
@@ -62,16 +66,20 @@ def _funding_allows_restore(db: Session, account_id: str) -> bool:
         return False
     profile = resolve_billing_profile(db, account)
     if profile.effective_mode == BillingMode.prepaid:
-        return profile.automation_safe and resolve_prepaid_funding(db, account).funded
+        if not profile.automation_safe:
+            return False
+        funding = resolve_prepaid_funding(db, account)
+        return funding.funded or bool(funding.covered_subscription_ids)
     return get_available_balance(db, account_id) >= 0
 
 
 def find_walled_paid_account_ids(db: Session, *, limit: int | None = None) -> list[str]:
-    """Walled subscribers whose canonical access funding gate passes.
+    """Walled subscribers with at least one canonical restoration path.
 
-    Keyed on the account-level net (deposit/ledger via ``get_available_balance``),
-    never per-invoice balance_due. These are paid up yet walled — the cohort to
-    restore.
+    Prepaid selection accepts sufficient account funding or exact current
+    coverage. The restoration owner still chooses the exact eligible locks, so
+    an unresolved sibling service cannot be restored by association. Postpaid
+    selection remains account-net based, never per-invoice ``balance_due``.
     """
     candidate_ids = [
         str(r[0])
@@ -88,8 +96,47 @@ def find_walled_paid_account_ids(db: Session, *, limit: int | None = None) -> li
     return out
 
 
+def find_prepaid_restorable_lock_account_ids(
+    db: Session, *, limit: int | None = None
+) -> list[str]:
+    """Accounts whose active prepaid locks have an owner-approved restore path.
+
+    This is the production cleanup cohort. It starts from active prepaid locks,
+    not subscriber status or ``next_billing_at``, and asks the canonical
+    financial-access owner which exact lock IDs are restorable. Consequently a
+    covered subscription can be restored while an unresolved sibling remains
+    untouched, and postpaid/overdue-only accounts cannot enter this cohort.
+    """
+    from app.services.collections import preview_financial_access_restoration
+
+    rows = db.execute(
+        select(EnforcementLock.subscriber_id, EnforcementLock.id)
+        .where(
+            EnforcementLock.is_active.is_(True),
+            EnforcementLock.reason == EnforcementReason.prepaid,
+        )
+        .order_by(EnforcementLock.subscriber_id, EnforcementLock.id)
+    ).all()
+    lock_ids_by_account: dict[str, set[UUID]] = {}
+    for account_id, lock_id in rows:
+        lock_ids_by_account.setdefault(str(account_id), set()).add(lock_id)
+
+    out: list[str] = []
+    for account_id, prepaid_lock_ids in lock_ids_by_account.items():
+        preview = preview_financial_access_restoration(
+            db,
+            account_id,
+            origin=FinancialAccessOrigin.prepaid_enforcement,
+        )
+        if prepaid_lock_ids.intersection(preview.target_lock_ids):
+            out.append(account_id)
+            if limit is not None and len(out) >= limit:
+                break
+    return out
+
+
 def project_unwall(db: Session, account_id: str) -> UnwallResult:
-    """Read-only: report a walled+paid-up account without mutating anything."""
+    """Read-only: report an eligible walled account without mutating anything."""
     from app.services.collections import get_available_balance
 
     account = db.get(Subscriber, coerce_uuid(account_id))
@@ -102,7 +149,7 @@ def project_unwall(db: Session, account_id: str) -> UnwallResult:
 
 
 def unwall_account(db: Session, account_id: str) -> UnwallResult:
-    """Restore service for one paid-up walled account (commits on success).
+    """Restore eligible service for one walled account (commits on success).
 
     Service-only: reason-scoped restore + status re-derivation. No ledger writes.
     """
@@ -164,8 +211,9 @@ def unwall_cohort(
     send_coa: bool = True,
     notify: bool = False,
     extra_subscription_ids: list[str] | None = None,
+    prepaid_locks_only: bool = False,
 ) -> UnwallSummary:
-    """Restore service for paid-up-but-walled accounts, then refresh RADIUS + CoA.
+    """Restore eligible walled service, then refresh RADIUS + CoA.
 
     Two modes:
       - **Targeted** (``account_ids`` given): restore ONLY those accounts that are
@@ -173,7 +221,7 @@ def unwall_cohort(
         covers active-but-stale-tag accounts (restore is a no-op for them; the
         RADIUS refresh + CoA below still drops the stale walled-garden tag and
         kicks the session).
-      - **Cohort** (default): discover and restore all walled + paid-up accounts.
+      - **Cohort** (default): discover and restore every eligible walled account.
 
     ``notify`` defaults False (bulk catch-up — suppress the "service resumed"
     burst). ``extra_subscription_ids`` forces RADIUS + CoA onto extra subscriptions.
@@ -182,6 +230,8 @@ def unwall_cohort(
     if account_ids is not None:
         # The canonical funding gate still applies in targeted mode.
         targets = [a for a in account_ids if _funding_allows_restore(db, a)]
+    elif prepaid_locks_only:
+        targets = find_prepaid_restorable_lock_account_ids(db, limit=limit)
     else:
         targets = find_walled_paid_account_ids(db, limit=limit)
     summary = UnwallSummary(candidates=len(targets), dry_run=dry_run)
@@ -219,7 +269,7 @@ def unwall_cohort(
         for subscription_id in coa_subscription_ids:
             try:
                 kicked += disconnect_subscription_sessions(
-                    db, subscription_id, reason="paid-up account un-wall"
+                    db, subscription_id, reason="funded-or-covered account un-wall"
                 )
             except Exception:
                 logger.warning(

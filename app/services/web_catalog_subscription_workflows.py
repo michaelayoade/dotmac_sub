@@ -12,16 +12,21 @@ from urllib.parse import quote_plus
 
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.audit import AuditActorType
-from app.models.catalog import Subscription
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import SubscriberCategory
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services import web_catalog_subscriptions as core
 from app.services.audit_helpers import build_audit_activities
+from app.services.common import coerce_uuid
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
     SubscriptionCommandOutcomeStatus,
@@ -46,6 +51,56 @@ from app.services.subscription_lifecycle_schedules import (
 )
 
 logger = logging.getLogger(__name__)
+
+SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE = (
+    "The verified prepaid funding position is still under review. "
+    "Complete the reviewed reconstruction before changing this service."
+)
+
+
+_CREATE_LIFECYCLE_COMMANDS = {
+    SubscriptionStatus.active: SubscriptionCommandKind.activate,
+    SubscriptionStatus.suspended: SubscriptionCommandKind.suspend,
+    SubscriptionStatus.disabled: SubscriptionCommandKind.disable,
+    SubscriptionStatus.canceled: SubscriptionCommandKind.cancel,
+}
+
+
+def _apply_requested_create_lifecycle(
+    db: Session,
+    *,
+    created: Subscription,
+    requested_status: SubscriptionStatus,
+    actor_id: str | None,
+) -> str | None:
+    """Apply the selected post-create lifecycle action through its owner."""
+    if requested_status == SubscriptionStatus.pending:
+        return None
+
+    source = f"admin:catalog:{actor_id or 'system'}"
+    reason = f"Selected {requested_status.value} during subscription creation"
+    command_kind = _CREATE_LIFECYCLE_COMMANDS[requested_status]
+    snapshot = resolve_subscription_lifecycle(db, str(created.id))
+    command = SubscriptionLifecycleCommand(
+        subscription_id=str(created.id),
+        kind=command_kind,
+        source=source,
+        reason=reason,
+        expected_head=snapshot.head,
+        idempotency_key=f"admin-create-{command_kind.value}:{created.id}",
+    )
+    outcome = execute_subscription_command(
+        db,
+        command,
+        actor_id=actor_id,
+        actor_type=(AuditActorType.user if actor_id else AuditActorType.system),
+    )
+    if outcome.status not in {
+        SubscriptionCommandOutcomeStatus.applied,
+        SubscriptionCommandOutcomeStatus.skipped,
+    }:
+        return outcome.message
+    return None
 
 
 def preview_lifecycle_command_response(
@@ -73,6 +128,15 @@ def preview_lifecycle_command_response(
             reason=reason,
         )
         preview = preview_subscription_command(db, command)
+    except PrepaidFundingBaselineMissingError:
+        return (
+            {
+                "status": "unavailable",
+                "message": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+                "error_code": "financial_position_unavailable",
+            },
+            409,
+        )
     except (SubscriptionLifecycleError, ValueError) as exc:
         missing = "not found" in str(exc).lower()
         return (
@@ -97,6 +161,12 @@ def preview_lifecycle_command_response(
             "proposed": _serialize_lifecycle_state(preview.proposed),
             "billing_impact": _json_value(preview.billing_impact),
             "access_impact": _json_value(preview.access_impact),
+            "recommended_action_url": (
+                "/admin/billing/invoices?status=draft"
+                if "prepaid_financial_reconciliation_required"
+                in preview.eligibility_reasons
+                else None
+            ),
         },
         200,
     )
@@ -155,6 +225,19 @@ def execute_lifecycle_command_response(
             command,
             actor_id=actor_id,
             actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        )
+    except PrepaidFundingBaselineMissingError:
+        return (
+            {
+                "status": "unavailable",
+                "message": SERVICE_CHANGE_FINANCIAL_POSITION_MESSAGE,
+                "previous_head": expected_head,
+                "current_head": expected_head,
+                "artifact_ids": [],
+                "error_code": "financial_position_unavailable",
+                "replayed": False,
+            },
+            409,
         )
     except (SubscriptionLifecycleError, ValueError) as exc:
         missing = "not found" in str(exc).lower()
@@ -332,7 +415,6 @@ def _scheduled_status_change_context(
     db: Session,
     subscription_id: str,
 ) -> list[dict[str, object]]:
-    from sqlalchemy import select
 
     from app.models.subscription_lifecycle_schedule import (
         SubscriptionLifecycleSchedule,
@@ -474,32 +556,21 @@ def handle_subscription_create_form(
             request,
             actor_id,
         )
-        if form.get("activate_immediately") == "1":
-            snapshot = resolve_subscription_lifecycle(db, str(created.id))
-            command = SubscriptionLifecycleCommand(
-                subscription_id=str(created.id),
-                kind=SubscriptionCommandKind.activate,
-                source=f"admin:catalog:{actor_id or 'system'}",
-                reason="Activate after subscription creation",
-                expected_head=snapshot.head,
-                idempotency_key=f"admin-create-activate:{created.id}",
-            )
-            outcome = execute_subscription_command(
-                db,
-                command,
-                actor_id=actor_id,
-                actor_type=(AuditActorType.user if actor_id else AuditActorType.system),
-            )
-            if outcome.status not in {
-                SubscriptionCommandOutcomeStatus.applied,
-                SubscriptionCommandOutcomeStatus.skipped,
-            }:
-                return {
-                    "redirect_url": (
-                        f"/admin/catalog/subscriptions/{created.id}"
-                        f"?error={quote_plus(outcome.message)}"
-                    )
-                }
+        lifecycle_error = _apply_requested_create_lifecycle(
+            db,
+            created=created,
+            requested_status=SubscriptionStatus(
+                str(subscription.get("requested_status") or "pending")
+            ),
+            actor_id=actor_id,
+        )
+        if lifecycle_error:
+            return {
+                "redirect_url": (
+                    f"/admin/catalog/subscriptions/{created.id}"
+                    f"?error={quote_plus(lifecycle_error)}"
+                )
+            }
         redirect_url = (
             customer_detail_url_for_subscriber_id(db, subscriber_id)
             if subscriber_id
@@ -638,28 +709,53 @@ def admin_resume_vacation_hold_redirect(
     actor_id: str | None,
 ) -> str:
     """Admin action to resume a customer vacation hold and return redirect URL."""
-    from app.models.enforcement_lock import EnforcementReason
-    from app.services.account_lifecycle import restore_subscription
+    from app.models.audit import AuditActorType
+    from app.models.enforcement_lock import EnforcementLock
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        SubscriptionEffectiveTiming,
+        SubscriptionLifecycleCommand,
+        resolve_subscription_lifecycle,
+        resolve_vacation_hold_policy,
+    )
+    from app.services.subscription_lifecycle_commands import (
+        execute_subscription_command,
+    )
 
     admin_ref = f"admin:{actor_id or 'unknown'}"
     try:
-        # ``trigger`` is matched against ALLOWED_RESTORERS by exact membership, so
-        # it must be the bare authority name. This passed the interpolated
-        # "admin:<uuid>", which is never in {"customer", "admin"} — so
-        # resolve_locks_for_trigger cleared ZERO locks, restore_subscription
-        # returned False, the return value was discarded, and the admin was told
-        # "Service resumed successfully" while the customer stayed offline.
-        # ``resolved_by`` is the free-text audit field; that is where the actor
-        # identity belongs.
-        restored = restore_subscription(
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+        if subscription is None:
+            raise ValueError("Subscription not found")
+        decision = resolve_vacation_hold_policy(
             db,
-            subscription_id,
-            trigger="admin",
-            resolved_by=admin_ref,
-            reason=EnforcementReason.customer_hold,
+            subscription,
+            command_kind=SubscriptionCommandKind.vacation_resume,
         )
-        db.commit()
-        if restored:
+        if not decision.eligible or decision.active_lock_id is None:
+            raise ValueError("No active vacation hold exists")
+        lock = db.get(EnforcementLock, coerce_uuid(decision.active_lock_id))
+        if lock is None:
+            raise ValueError("Vacation-hold evidence is missing")
+        snapshot = resolve_subscription_lifecycle(db, subscription_id)
+        outcome = execute_subscription_command(
+            db,
+            SubscriptionLifecycleCommand(
+                subscription_id=subscription_id,
+                kind=SubscriptionCommandKind.vacation_resume,
+                source=admin_ref,
+                effective_timing=SubscriptionEffectiveTiming.immediate,
+                reason="Administrator resumed customer vacation hold",
+                expected_head=snapshot.head,
+                idempotency_key=f"admin-vacation-resume:{lock.id}",
+            ),
+            actor_id=actor_id,
+            actor_type=AuditActorType.user,
+        )
+        if outcome.status.value not in {"applied", "skipped"}:
+            raise ValueError(outcome.message)
+        refreshed = db.get(Subscription, coerce_uuid(subscription_id))
+        if refreshed is not None and refreshed.status == SubscriptionStatus.active:
             notice = "Vacation hold has been cleared. Service resumed successfully."
         else:
             # Never claim success the owner did not give us. It declines for real
@@ -671,7 +767,6 @@ def admin_resume_vacation_hold_redirect(
             )
         query = f"notice={quote_plus(notice)}"
     except Exception as exc:
-        db.rollback()
         logger.error(
             "Failed to resume vacation hold for subscription %s: %s",
             subscription_id,

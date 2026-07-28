@@ -26,6 +26,7 @@ DECLARED_ENV_INPUT_OWNERS = {
     "app/services/credential_crypto.py",
     "app/services/radius_dsn.py",
     "app/services/redis_client.py",
+    "app/services/scheduler_config.py",
     "app/services/secrets.py",
     "app/services/settings_seed.py",
     "app/services/wireguard_crypto.py",

@@ -18,6 +18,8 @@ from app.services.integrations.registry import (
     connector_definitions,
     definitions_for_capability,
     discover_connectors,
+    pinned_connector_definition,
+    supported_connector_definitions,
 )
 from app.services.integrations.runtime import (
     OperationEnvelope,
@@ -28,8 +30,9 @@ from app.services.integrations.runtime import (
 from app.services.web_integrations import build_marketplace_data
 
 EXPECTED_MARKETPLACE = {
+    "lead.capture.http": ("Lead Capture Webhook", "1.0.0", "sales"),
     "whatsapp": ("WhatsApp", "1.0.0", "messaging"),
-    "paystack": ("Paystack", "1.0.0", "payment"),
+    "paystack": ("Paystack", "1.0.1", "payment"),
     "flutterwave": ("Flutterwave", "1.0.0", "payment"),
     "3cx": ("3CX", "1.0.0", "voice"),
     "freepbx": ("FreePBX", "1.0.0", "voice"),
@@ -49,6 +52,7 @@ def test_explicit_registry_preserves_marketplace_catalogue_parity() -> None:
         )
 
     assert tuple(definition.key for definition in connector_definitions()) == (
+        "lead.capture.http",
         "webhook.http",
         "dotmac.crm",
         "whatsapp",
@@ -60,10 +64,10 @@ def test_explicit_registry_preserves_marketplace_catalogue_parity() -> None:
     )
 
 
-def test_marketplace_projection_still_exposes_five_available_cards(db_session) -> None:
+def test_marketplace_projection_exposes_all_available_cards(db_session) -> None:
     data = build_marketplace_data(db_session)
 
-    assert data["stats"] == {"available": 5, "installed": 0, "updates": 0}
+    assert data["stats"] == {"available": 6, "installed": 0, "updates": 0}
     assert {card["key"] for card in data["marketplace_cards"]} == set(
         EXPECTED_MARKETPLACE
     )
@@ -86,6 +90,40 @@ def test_manifest_digest_is_deterministic_and_capabilities_are_queryable() -> No
     assert {
         definition.key for definition in definitions_for_capability("events.deliver.v1")
     } == {"webhook.http"}
+
+
+def test_exact_historical_paystack_pins_remain_bounded_and_executable() -> None:
+    supported_paystack = [
+        definition
+        for definition in supported_connector_definitions()
+        if definition.key == "paystack"
+    ]
+
+    assert [
+        (definition.version, definition.digest) for definition in supported_paystack
+    ] == [
+        (
+            "1.0.1",
+            "d0dabfdf7ce77a65fa5a8259400d249fa27c69bdb695cfdeffd1a357bef0b425",
+        ),
+        (
+            "1.0.0",
+            "53791d3e2e06fe1ca128a0e3e8ced86549392af7b6131f61bd21044d71aafc6e",
+        ),
+        (
+            "1.0.0",
+            "9f1e314860294696c825d8d49d300df903ced6c319b406f295047d25585e836c",
+        ),
+    ]
+    for definition in supported_paystack:
+        assert (
+            pinned_connector_definition(
+                definition.key,
+                version=definition.version,
+                manifest_digest=definition.digest,
+            )
+            is definition
+        )
 
 
 @pytest.mark.parametrize(

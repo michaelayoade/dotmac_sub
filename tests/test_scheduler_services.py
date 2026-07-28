@@ -123,6 +123,46 @@ class TestScheduledTasksCreate:
         assert exc_info.value.status_code == 400
         assert "interval_seconds must be >= 1" in exc_info.value.detail
 
+    def test_rejects_disabled_permanent_lifecycle_task(self, db_session):
+        with pytest.raises(HTTPException) as exc_info:
+            scheduler_service.scheduled_tasks.create(
+                db_session,
+                ScheduledTaskCreate(
+                    name="invoice-cycle-disabled",
+                    task_name="app.tasks.billing.run_invoice_cycle",
+                    interval_seconds=60,
+                    enabled=False,
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert (
+            db_session.query(ScheduledTask)
+            .filter_by(name="invoice-cycle-disabled")
+            .one_or_none()
+            is None
+        )
+
+    def test_rejects_periodic_event_driven_transport_task(self, db_session):
+        with pytest.raises(HTTPException) as exc_info:
+            scheduler_service.scheduled_tasks.create(
+                db_session,
+                ScheduledTaskCreate(
+                    name="parallel-radius-refresh",
+                    task_name=("app.tasks.radius_population.refresh_radius_from_subs"),
+                    interval_seconds=900,
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "cannot be scheduled independently" in exc_info.value.detail
+        assert (
+            db_session.query(ScheduledTask)
+            .filter_by(name="parallel-radius-refresh")
+            .one_or_none()
+            is None
+        )
+
 
 class TestScheduledTasksGet:
     """Tests for ScheduledTasks.get."""
@@ -290,6 +330,58 @@ class TestScheduledTasksUpdate:
         assert exc_info.value.status_code == 400
         assert "interval_seconds must be >= 1" in exc_info.value.detail
 
+    @pytest.mark.parametrize(
+        "update",
+        [
+            ScheduledTaskUpdate(enabled=False),
+            ScheduledTaskUpdate(task_name="app.tasks.billing.replacement"),
+        ],
+    )
+    def test_rejects_disabling_or_renaming_permanent_task(self, db_session, update):
+        task = scheduler_service.scheduled_tasks.create(
+            db_session,
+            ScheduledTaskCreate(
+                name="permanent-invoice-cycle",
+                task_name="app.tasks.billing.run_invoice_cycle",
+                interval_seconds=60,
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            scheduler_service.scheduled_tasks.update(
+                db_session,
+                str(task.id),
+                update,
+            )
+
+        assert exc_info.value.status_code == 409
+        db_session.refresh(task)
+        assert task.enabled is True
+        assert task.task_name == "app.tasks.billing.run_invoice_cycle"
+
+    def test_rejects_renaming_enabled_row_to_event_transport(self, db_session):
+        task = scheduler_service.scheduled_tasks.create(
+            db_session,
+            ScheduledTaskCreate(
+                name="ordinary-periodic-task",
+                task_name="app.tasks.ordinary.run",
+                interval_seconds=900,
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            scheduler_service.scheduled_tasks.update(
+                db_session,
+                str(task.id),
+                ScheduledTaskUpdate(
+                    task_name=("app.tasks.radius_population.refresh_radius_from_subs")
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        db_session.refresh(task)
+        assert task.task_name == "app.tasks.ordinary.run"
+
 
 class TestScheduledTasksDelete:
     """Tests for ScheduledTasks.delete."""
@@ -321,6 +413,22 @@ class TestScheduledTasksDelete:
             scheduler_service.scheduled_tasks.delete(db_session, str(uuid.uuid4()))
 
         assert exc_info.value.status_code == 404
+
+    def test_rejects_deleting_permanent_lifecycle_task(self, db_session):
+        task = scheduler_service.scheduled_tasks.create(
+            db_session,
+            ScheduledTaskCreate(
+                name="permanent-event-dispatch",
+                task_name="app.tasks.events.dispatch_pending_events",
+                interval_seconds=60,
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            scheduler_service.scheduled_tasks.delete(db_session, str(task.id))
+
+        assert exc_info.value.status_code == 409
+        assert db_session.get(ScheduledTask, task.id) is not None
 
 
 # =============================================================================

@@ -57,7 +57,11 @@ from app.models.radius import (
 )
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
-from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
+from app.schemas.catalog import (
+    SubscriptionCreate,
+    SubscriptionTechnicalUpdate,
+    SubscriptionUpdate,
+)
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.schemas.subscriber import SubscriberAccountCreate
 from app.services import auth_flow as auth_flow_service
@@ -191,20 +195,6 @@ def _coerce_setting_int(value: object | None) -> int | None:
     return None
 
 
-def _coerce_setting_bool(
-    value: object | None, default: bool | None = None
-) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
 def _coerce_setting_decimal(value: object | None) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
@@ -227,7 +217,7 @@ def _format_commercial_value(key: str, value: object | None) -> str:
     if value is None:
         return "Not set"
     if key == "billing_enabled":
-        return "Enabled" if bool(value) else "Disabled"
+        return "Approved" if bool(value) else "Administratively disabled"
     if key == "billing_day":
         return f"Day {value}"
     if key in {"payment_due_days", "grace_period_days"}:
@@ -247,7 +237,7 @@ def _enum_raw_value(value: object | None) -> str:
 
 
 def _billing_global_defaults(db: Session) -> dict[str, object | None]:
-    keys = {"billing_enabled", "billing_day", "minimum_balance"}
+    keys = {"billing_day", "minimum_balance"}
     rows = (
         db.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.billing)
@@ -259,7 +249,6 @@ def _billing_global_defaults(db: Session) -> dict[str, object | None]:
         for row in rows
     }
     return {
-        "billing_enabled": _coerce_setting_bool(raw.get("billing_enabled"), True),
         "billing_day": _coerce_setting_int(raw.get("billing_day")),
         "payment_due_days": resolve_payment_due_days(db),
         "min_balance": _coerce_setting_decimal(raw.get("minimum_balance")),
@@ -322,7 +311,7 @@ def _subscription_commercial_policy(
 
     subscriber_fields = [
         ("payment_method", "Payment Method", False),
-        ("billing_enabled", "Billing", True),
+        ("billing_enabled", "Billing and Service Approval", False),
         ("billing_day", "Billing Day", True),
         ("payment_due_days", "Payment Due", True),
         ("grace_period_days", "Grace Period", False),
@@ -445,6 +434,7 @@ def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, 
         "subscriber_id": subscriber_id,
         "offer_id": "",
         "status": SubscriptionStatus.pending.value,
+        "requested_status": SubscriptionStatus.pending.value,
         "billing_mode": "",
         "contract_term": ContractTerm.month_to_month.value,
         "start_at": "",
@@ -546,12 +536,17 @@ def parse_subscription_form(
     if subscription_id:
         data["id"] = subscription_id
     else:
+        requested_status = str(data["status"] or SubscriptionStatus.pending.value)
+        if form.get("activate_immediately") == "1":
+            # Backward compatibility for submissions from the previous form.
+            requested_status = SubscriptionStatus.active.value
         # Creation establishes technical and commercial intent only. Lifecycle
         # facts are owned by subscription_lifecycle_commands after the record
         # and its provisioning inputs have been staged.
         data.update(
             {
                 "status": SubscriptionStatus.pending.value,
+                "requested_status": requested_status,
                 "start_at": "",
                 "end_at": "",
                 "next_billing_at": "",
@@ -610,6 +605,14 @@ def validate_subscription_form(
             return "Account is required."
     if not subscription.get("offer_id"):
         return "Offer is required."
+    if for_create and str(subscription.get("requested_status") or "") not in {
+        SubscriptionStatus.pending.value,
+        SubscriptionStatus.active.value,
+        SubscriptionStatus.suspended.value,
+        SubscriptionStatus.disabled.value,
+        SubscriptionStatus.canceled.value,
+    }:
+        return "Select a valid lifecycle state."
     return None
 
 
@@ -1407,7 +1410,9 @@ def _reconcile_active_subscription_after_credential_sync(
     try:
         from app.services.radius import reconcile_subscription_connectivity
 
-        reconcile_subscription_connectivity(db, str(subscription.id))
+        reconcile_subscription_connectivity(
+            db, str(subscription.id)
+        ).require_projected()
     except Exception:
         logger.warning(
             "RADIUS reconcile failed during subscription credential sync for %s",
@@ -2165,6 +2170,7 @@ def sync_additional_routes_for_subscription(
     metrics: list[str] | None = None,
     add_on_id: str | None = None,
     quantity: str | int | None = None,
+    commit: bool = True,
 ) -> list[str]:
     """Upsert active subscriber additional routes and deactivate removed ones."""
     if not subscription_obj.subscriber_id:
@@ -2249,17 +2255,21 @@ def sync_additional_routes_for_subscription(
         if str(route.cidr) not in desired_map and route.is_active:
             route.is_active = False
 
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
 
     # Routes changed -> reconcile RADIUS and kick live sessions so the BNG
     # re-learns the Framed-Routes. No-op if the route set is unchanged or the
     # subscription isn't active.
-    reauth_subscription_on_identity_change(
-        db,
-        str(subscription_obj.id),
-        before=before_sig,
-        reason="additional_routes_change",
-    )
+    if commit:
+        reauth_subscription_on_identity_change(
+            db,
+            str(subscription_obj.id),
+            before=before_sig,
+            reason="additional_routes_change",
+        )
     return list(desired_map)
 
 
@@ -2903,7 +2913,10 @@ def apply_create_quick_options(
     payload_data: dict[str, object], form: FormData
 ) -> tuple[bool, bool, bool]:
     """Return create follow-up flags without bypassing lifecycle ownership."""
-    activate_immediately = form.get("activate_immediately") == "1"
+    activate_immediately = (
+        str(form.get("status") or "").strip().lower() == SubscriptionStatus.active.value
+        or form.get("activate_immediately") == "1"
+    )
     generate_invoice = form.get("generate_invoice") == "1"
     send_welcome_email = form.get("send_welcome_email") == "1"
     if activate_immediately:
@@ -2930,10 +2943,13 @@ def update_subscription(
     db: Session, subscription_id: str, payload_data: dict[str, object]
 ) -> Subscription:
     """Update subscription."""
+    technical = SubscriptionTechnicalUpdate.model_validate(payload_data)
     return catalog_service.subscriptions.update(
         db=db,
         subscription_id=subscription_id,
-        payload=SubscriptionUpdate.model_validate(payload_data),
+        payload=SubscriptionUpdate.model_validate(
+            technical.model_dump(exclude_unset=True)
+        ),
     )
 
 
@@ -3962,6 +3978,7 @@ def bulk_update_status(
                 SubscriptionStatus.blocked,
                 SubscriptionStatus.suspended,
                 SubscriptionStatus.stopped,
+                SubscriptionStatus.disabled,
             }:
                 command_kind_by_status[status] = SubscriptionCommandKind.restore
         elif target_status == SubscriptionStatus.suspended:
@@ -4126,7 +4143,9 @@ def force_subscription_reauth(
     try:
         from app.services.radius import reconcile_subscription_connectivity
 
-        reconcile_subscription_connectivity(db, str(subscription.id))
+        reconcile_subscription_connectivity(
+            db, str(subscription.id)
+        ).require_projected()
         metadata["radius_reconciled"] = True
     except Exception:
         logger.warning(
@@ -4375,18 +4394,17 @@ def update_subscription_with_audit(
     # Generic edits own technical metadata only; lifecycle and commercial facts
     # change through subscription_lifecycle_commands.
     payload_data = dict(payload_data)
-    payload_data.update(
-        {
-            "offer_id": before.offer_id,
-            "status": before.status,
-            "billing_mode": before.billing_mode,
-            "start_at": before.start_at,
-            "end_at": before.end_at,
-            "next_billing_at": before.next_billing_at,
-            "canceled_at": before.canceled_at,
-            "cancel_reason": before.cancel_reason,
-        }
-    )
+    for protected_field in (
+        "offer_id",
+        "billing_mode",
+        "status",
+        "start_at",
+        "end_at",
+        "next_billing_at",
+        "canceled_at",
+        "cancel_reason",
+    ):
+        payload_data.pop(protected_field, None)
     update_subscription(db, subscription_id, payload_data)
     after = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
     manage_ipv4_assignment = ipv4_assignment_submitted or bool(

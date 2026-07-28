@@ -6,7 +6,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SERVICES = PROJECT_ROOT / "app/services"
 OWNER = SERVICES / "work_order_commands.py"
-IMPORTER = SERVICES / "work_orders_mirror.py"
 DISPATCH = SERVICES / "dispatch.py"
 MANAGER = SERVICES / "field/manager.py"
 WEB = SERVICES / "web_dispatch_work_orders.py"
@@ -21,7 +20,7 @@ def _constructors(path: Path) -> set[str]:
     }
 
 
-def test_work_order_rows_have_one_native_constructor_and_one_import_boundary():
+def test_work_order_rows_have_one_native_constructor():
     native_constructors: list[str] = []
     queue_constructors: list[str] = []
     for path in SERVICES.rglob("*.py"):
@@ -31,10 +30,7 @@ def test_work_order_rows_have_one_native_constructor_and_one_import_boundary():
         if "WorkOrderAssignmentQueue" in constructors:
             queue_constructors.append(str(path.relative_to(PROJECT_ROOT)))
 
-    assert sorted(native_constructors) == [
-        "app/services/work_order_commands.py",
-        "app/services/work_orders_mirror.py",
-    ]
+    assert native_constructors == ["app/services/work_order_commands.py"]
     assert queue_constructors == ["app/services/work_order_commands.py"]
 
 
@@ -62,10 +58,7 @@ def test_assignment_projection_has_no_parallel_service_writer():
         ):
             writers.add(str(path.relative_to(PROJECT_ROOT)))
 
-    assert writers == {
-        "app/services/work_order_commands.py",
-        "app/services/work_orders_mirror.py",
-    }
+    assert writers == {"app/services/work_order_commands.py"}
 
 
 def test_dispatch_adapters_delegate_and_cannot_write_assignment_state_directly():
@@ -84,18 +77,15 @@ def test_dispatch_adapters_delegate_and_cannot_write_assignment_state_directly()
         assert "WorkOrderAssignmentQueue(" not in source
 
 
-def test_crm_import_is_the_only_non_command_work_order_writer():
-    importer_source = IMPORTER.read_text(encoding="utf-8")
-    assert "WorkOrder(" in importer_source
-    assert "crm_work_order_id=" in importer_source
-    assert "work_order_commands" not in importer_source
+def test_retired_crm_work_order_importer_is_absent():
+    assert not (SERVICES / "work_orders_mirror.py").exists()
 
 
 def test_assignment_readers_ignore_non_assigned_queue_rows():
     for relative_path in (
         "field/jobs.py",
         "field/manager.py",
-        "work_orders_mirror.py",
+        "customer_work_order_selfcare.py",
         "workqueue/providers/work_orders.py",
     ):
         source = (SERVICES / relative_path).read_text(encoding="utf-8")

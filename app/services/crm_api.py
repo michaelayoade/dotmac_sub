@@ -33,6 +33,7 @@ from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
+from app.services import service_address as service_address_service
 from app.services.account_lifecycle import (
     cancel_subscription,
     transition_account_status,
@@ -108,11 +109,7 @@ def subscriber_name(subscriber: Subscriber) -> str:
 def address_text(
     subscriber: Subscriber, addresses: list[Address] | None = None
 ) -> str | None:
-    address = None
-    if addresses:
-        address = (
-            next((item for item in addresses if item.is_primary), None) or addresses[0]
-        )
+    address = service_address_service.pick_service_address(addresses)
     if address is not None:
         parts = [
             address.address_line1,
@@ -373,6 +370,9 @@ def _service_extension_entry_payload(
         "name": subscriber_name(subscriber) if subscriber else None,
         "subscription_id": str(entry.subscription_id),
         "previous_next_billing_at": utc_iso(entry.previous_next_billing_at),
+        "grant_starts_at": utc_iso(entry.grant_starts_at),
+        "grant_ends_at": utc_iso(entry.grant_ends_at),
+        "anchor_basis": enum_value(entry.anchor_basis),
         "new_next_billing_at": utc_iso(entry.new_next_billing_at),
         "created_at": utc_iso(entry.created_at),
     }
@@ -385,7 +385,7 @@ def _service_extension_payload(
     entries: list[ServiceExtensionEntry] | None = None,
 ) -> dict[str, Any]:
     actor_lookup = actors or {}
-    payload = {
+    payload: dict[str, Any] = {
         "id": str(extension.id),
         "reason": extension.reason,
         "window_start": utc_iso(extension.window_start),
@@ -661,25 +661,35 @@ def _latest_session_by_subscription(
 ) -> dict[uuid.UUID, RadiusAccountingSession]:
     if not subscription_ids:
         return {}
+    observed_at = func.coalesce(
+        RadiusAccountingSession.last_update_at,
+        RadiusAccountingSession.session_start,
+        RadiusAccountingSession.created_at,
+    )
+    ranked = (
+        select(
+            RadiusAccountingSession.id.label("session_id"),
+            func.row_number()
+            .over(
+                partition_by=RadiusAccountingSession.subscription_id,
+                order_by=(
+                    observed_at.desc(),
+                    RadiusAccountingSession.id.desc(),
+                ),
+            )
+            .label("rank"),
+        )
+        .where(RadiusAccountingSession.subscription_id.in_(subscription_ids))
+        .subquery()
+    )
     rows = list(
         db.scalars(
             select(RadiusAccountingSession)
-            .where(RadiusAccountingSession.subscription_id.in_(subscription_ids))
-            .order_by(
-                RadiusAccountingSession.subscription_id,
-                func.coalesce(
-                    RadiusAccountingSession.last_update_at,
-                    RadiusAccountingSession.session_start,
-                    RadiusAccountingSession.created_at,
-                ).desc(),
-            )
+            .join(ranked, ranked.c.session_id == RadiusAccountingSession.id)
+            .where(ranked.c.rank == 1)
         ).all()
     )
-    mapped: dict[uuid.UUID, RadiusAccountingSession] = {}
-    for row in rows:
-        if row.subscription_id and row.subscription_id not in mapped:
-            mapped[row.subscription_id] = row
-    return mapped
+    return {row.subscription_id: row for row in rows if row.subscription_id}
 
 
 def latest_session_by_subscriber(
@@ -1005,6 +1015,10 @@ def billing_risk_rows(
                 "location": location,
                 "service_plan": primary_service.get("plan_name"),
                 "speed": primary_service.get("speed"),
+                # Primary-service monthly price so bulk consumers (e.g. omni's
+                # billing-risk cache) can read MRR here instead of an N+1
+                # per-subscriber GET /subscribers/{id}/services.
+                "service_mrr": primary_service.get("price"),
                 "balance": summary["balance"],
                 "next_bill_date": summary["next_bill_date"],
                 "billing_start_date": summary["billing_start_date"],
@@ -1436,6 +1450,7 @@ def create_installation_invoice(
     description: str,
     external_ref: str | None = None,
     currency: str = "NGN",
+    commit: bool = True,
 ) -> Invoice:
     """Create a one-time installation invoice (header + single line) for a
     CRM-driven subscriber. Replaces the old Splynx installation-invoice path.
@@ -1478,6 +1493,7 @@ def create_installation_invoice(
                 description=description, quantity=Decimal("1"), unit_price=amount
             )
         ],
+        commit=commit,
     )
     metadata = dict(invoice.metadata_ or {})
     metadata["source"] = "dotmac_crm"
@@ -1488,18 +1504,22 @@ def create_installation_invoice(
     db.add(invoice)
     from sqlalchemy.exc import IntegrityError
 
-    try:
-        db.commit()
-    except IntegrityError:
-        # A concurrent duplicate lost the race on uq_invoices_active_crm_external_ref
-        # — the create is idempotent, so return the invoice the winner wrote.
-        db.rollback()
-        if external_ref:
-            existing = _find_invoice_by_crm_ref(db, external_ref)
-            if existing is not None:
-                return existing
-        raise
-    db.refresh(invoice)
+    if commit:
+        try:
+            db.commit()
+        except IntegrityError:
+            # A concurrent duplicate lost the race on
+            # uq_invoices_active_crm_external_ref — the create is idempotent,
+            # so return the invoice the winner wrote.
+            db.rollback()
+            if external_ref:
+                existing = _find_invoice_by_crm_ref(db, external_ref)
+                if existing is not None:
+                    return existing
+            raise
+        db.refresh(invoice)
+    else:
+        db.flush()
     return invoice
 
 
@@ -1751,6 +1771,7 @@ def record_external_payment(
     memo: str | None = None,
     invoice_external_ref: str | None = None,
     currency: str = "NGN",
+    commit: bool = True,
 ) -> Any:
     """Record a payment the customer made in the CRM (installation / subscription)
     into this app's ledger, so it settles the matching invoice and shows in the
@@ -1813,9 +1834,14 @@ def record_external_payment(
 
     try:
         return billing_service.payments.create(
-            session, payload, auto_allocate=(allocations is None)
+            session,
+            payload,
+            auto_allocate=(allocations is None),
+            commit=commit,
         )
     except IntegrityError:
+        if not commit:
+            raise
         # A concurrent /crm/payments push won the race on
         # uq_payments_active_crm_external_id. The write is idempotent — roll back
         # our losing insert and return the already-recorded payment.
@@ -1907,6 +1933,7 @@ def create_subscription(
     start_at: datetime | None = None,
     service_address_id: Any = None,
     billing_cycle: Any = None,
+    commit: bool = True,
 ) -> dict:
     """Create a subscription for a subscriber from a CRM sale and generate its
     first (subscription-tagged) invoice, so the plan + its charge show in the
@@ -1968,6 +1995,11 @@ def create_subscription(
                 unit_price=price_override,
                 billing_cycle=contracted_cycle,
             ),
+            # The sales-fulfillment coordinator creates the structurally linked
+            # ServiceOrder.  The generic subscription helper must not create a
+            # second, context-free order for the same service.
+            create_service_order=False,
+            commit=commit,
         )
     except HTTPException:
         # enforce_single_active_subscription treats pending as active and rejects
@@ -1980,35 +2012,44 @@ def create_subscription(
         raise
 
     invoice = Invoices.create_for_subscription(
-        session, str(subscriber.id), str(subscription.id), allow_prepaid=True
+        session,
+        str(subscriber.id),
+        str(subscription.id),
+        allow_prepaid=True,
+        commit=commit,
     )
     meta = dict(invoice.metadata_ or {})
     meta["source"] = "dotmac_crm"
     meta["crm_external_ref"] = str(external_ref)
     meta["crm_subscription_id"] = str(subscription.id)
     invoice.metadata_ = meta
-    # DB backstop: uq_invoices_active_crm_external_ref (migration 212). Both
-    # creators commit internally, so on a true-concurrency collision the sub +
-    # invoice are already persisted — cancel the orphan and return the winner.
+    # DB backstop: uq_invoices_active_crm_external_ref (migration 212). Legacy
+    # root mode commits each creator, so on a true-concurrency collision the
+    # sub + invoice are already persisted — cancel the orphan and return the
+    # winner. Owner-participant mode flushes only and lets its outer transaction
+    # roll back and retry as one unit.
     invoice.crm_external_ref = str(external_ref)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        cancel_subscription(
-            session,
-            str(subscription.id),
-            "Duplicate CRM external reference",
-            "crm_subscription_create",
-            emit=False,
-            generate_credit=False,
-        )
-        invoice.is_active = False
-        session.commit()
-        existing = _find_crm_subscription(session, subscriber.id, external_ref)
-        if existing is not None:
-            return existing
-        raise
+    if commit:
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            cancel_subscription(
+                session,
+                str(subscription.id),
+                "Duplicate CRM external reference",
+                "crm_subscription_create",
+                emit=False,
+                generate_credit=False,
+            )
+            invoice.is_active = False
+            session.commit()
+            existing = _find_crm_subscription(session, subscriber.id, external_ref)
+            if existing is not None:
+                return existing
+            raise
+    else:
+        session.flush()
     return {"subscription": subscription, "invoice": invoice, "created": True}
 
 

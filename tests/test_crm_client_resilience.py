@@ -101,13 +101,13 @@ class TestReachabilityCircuit:
             "app.services.crm_client._pooled_client", side_effect=_raise_connect
         ):
             with pytest.raises(CRMClientError):
-                c.list_work_orders(subscriber_id="s1")
+                c.list_tickets(subscriber_id="s1")
         assert _REACHABILITY_CIRCUIT.is_open() is True
 
     def test_http_status_error_does_not_trip_breaker(self):
         """A 4xx/5xx means CRM is reachable — must not open the breaker."""
         c = _client()
-        request = httpx.Request("GET", "https://crm.example/api/v1/work-orders")
+        request = httpx.Request("GET", "https://crm.example/api/v1/tickets")
         response = httpx.Response(500, request=request)
 
         def _raise_status(*_a, **_k):
@@ -119,7 +119,7 @@ class TestReachabilityCircuit:
 
         with patch("app.services.crm_client._pooled_client", side_effect=_raise_status):
             with pytest.raises(CRMClientError):
-                c.list_work_orders(subscriber_id="s1")
+                c.list_tickets(subscriber_id="s1")
         assert _REACHABILITY_CIRCUIT.is_open() is False
 
     def test_breaker_short_circuits_fanout(self):
@@ -129,11 +129,11 @@ class TestReachabilityCircuit:
             "app.services.crm_client._pooled_client", side_effect=_raise_connect
         ) as http_client:
             with pytest.raises(CRMClientError):
-                c.list_work_orders(subscriber_id="s1")
+                c.list_tickets(subscriber_id="s1")
             first_call_count = http_client.call_count
             # Second account: breaker is open → the pooled client is never asked for.
             with pytest.raises(CRMClientError):
-                c.list_work_orders(subscriber_id="s2")
+                c.list_tickets(subscriber_id="s2")
         assert http_client.call_count == first_call_count
 
 
@@ -246,8 +246,8 @@ class TestResponseCache:
             patch("app.services.session_store.get_session_redis", return_value=fake),
             patch.object(c, "_request", side_effect=fake_request),
         ):
-            r1 = c.list_work_orders(subscriber_id="s1")
-            r2 = c.list_work_orders(subscriber_id="s1")
+            r1 = c.list_tickets(subscriber_id="s1")
+            r2 = c.list_tickets(subscriber_id="s1")
 
         assert r1 == r2
         assert calls["n"] == 1  # upstream hit once; second served from cache
@@ -266,8 +266,8 @@ class TestResponseCache:
             patch("app.services.session_store.get_session_redis", return_value=fake),
             patch.object(c, "_request", side_effect=fake_request),
         ):
-            c.list_work_orders(subscriber_id="s1")
-            c.list_work_orders(subscriber_id="s2")
+            c.list_tickets(subscriber_id="s1")
+            c.list_tickets(subscriber_id="s2")
 
         assert calls["n"] == 2  # different subscriber → different cache key
 
@@ -283,8 +283,8 @@ class TestResponseCache:
             patch("app.services.session_store.get_session_redis", return_value=None),
             patch.object(c, "_request", side_effect=fake_request),
         ):
-            c.list_work_orders(subscriber_id="s1")
-            c.list_work_orders(subscriber_id="s1")
+            c.list_tickets(subscriber_id="s1")
+            c.list_tickets(subscriber_id="s1")
 
         assert calls["n"] == 2  # no cache → each call goes upstream
 

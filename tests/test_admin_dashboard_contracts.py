@@ -20,7 +20,7 @@ def _kpis(*, billing_ok=True, online_value=None):
     return build_dashboard_kpis(
         total_subscribers=1200,
         online_sessions_value=online_value or StateValue.present(340),
-        devices_online=48,
+        devices_working=48,
         devices_total=50,
         payments_this_month=1_500_000.0,
         overdue_amount=250_000.0,

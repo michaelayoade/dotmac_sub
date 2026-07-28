@@ -6,6 +6,67 @@ from app.models.subscription_engine import SettingValueType
 from app.services import settings_seed
 from app.services.domain_settings import network_settings
 
+
+class TestSeedSchedulerRuntimeSettings:
+    def test_materializes_environment_only_at_bootstrap(self, db_session, monkeypatch):
+        monkeypatch.setenv("NCC_REPORT_EMAIL_ENABLED", "true")
+
+        settings_seed.seed_scheduler_runtime_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.notification,
+                DomainSetting.key == "ncc_report_email_enabled",
+            )
+            .one()
+        )
+        assert setting.value_json is True
+
+    def test_preserves_existing_database_decision(self, db_session, monkeypatch):
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.notification,
+                key="ncc_report_email_enabled",
+                value_type=SettingValueType.boolean,
+                value_text="false",
+                value_json=False,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+        monkeypatch.setenv("NCC_REPORT_EMAIL_ENABLED", "true")
+
+        settings_seed.seed_scheduler_runtime_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.notification,
+                DomainSetting.key == "ncc_report_email_enabled",
+            )
+            .one()
+        )
+        assert setting.value_json is False
+
+    def test_materializes_registered_integer_environment_value(
+        self, db_session, monkeypatch
+    ):
+        monkeypatch.setenv("COMPENSATION_RETRY_INTERVAL_SECONDS", "120")
+
+        settings_seed.seed_scheduler_runtime_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.provisioning,
+                DomainSetting.key == "compensation_retry_interval_seconds",
+            )
+            .one()
+        )
+        assert setting.value_text == "120"
+
+
 # =============================================================================
 # Auth Settings Tests
 # =============================================================================
@@ -318,6 +379,21 @@ class TestSeedNotificationTemplates:
         assert ("suspension_warning", NotificationChannel.sms) in codes
         assert ("subscription_suspended", NotificationChannel.sms) in codes
 
+    def test_seeds_prepaid_service_renewed_email(self, db_session):
+        settings_seed.seed_notification_templates(db_session)
+
+        template = (
+            db_session.query(NotificationTemplate)
+            .filter(
+                NotificationTemplate.code == "prepaid_service_renewed",
+                NotificationTemplate.channel == NotificationChannel.email,
+            )
+            .one()
+        )
+
+        assert "{renewed_through}" in template.body
+        assert template.is_active is True
+
 
 # =============================================================================
 # Collections Settings Tests
@@ -342,8 +418,7 @@ class TestSeedCollectionsSettings:
         )
         assert setting is None
 
-    def test_seeds_prepaid_skip_holidays(self, db_session, monkeypatch):
-        """Test prepaid skip holidays setting is seeded."""
+    def test_does_not_seed_retired_prepaid_skip_holidays(self, db_session, monkeypatch):
         monkeypatch.setenv("PREPAID_SKIP_HOLIDAYS", '["2026-01-01"]')
 
         settings_seed.seed_collections_settings(db_session)
@@ -356,11 +431,9 @@ class TestSeedCollectionsSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_json == ["2026-01-01"]
+        assert setting is None
 
     def test_seeds_enforcement_window_policy(self, db_session, monkeypatch):
-        monkeypatch.setenv("ENFORCEMENT_WINDOW_MODE", "enforce")
         monkeypatch.setenv("ENFORCEMENT_WINDOW_START", "09:00")
         monkeypatch.setenv("ENFORCEMENT_WINDOW_END", "17:00")
         monkeypatch.setenv("ENFORCEMENT_SKIP_WEEKENDS", "true")
@@ -385,11 +458,11 @@ class TestSeedCollectionsSettings:
             )
             .all()
         }
-        assert rows["enforcement_window_mode"].value_text == "enforce"
         assert rows["enforcement_window_start"].value_text == "09:00"
         assert rows["enforcement_window_end"].value_text == "17:00"
-        assert rows["enforcement_skip_weekends"].value_json is True
-        assert rows["enforcement_skip_holidays"].value_json == ["2026-01-01"]
+        assert "enforcement_window_mode" not in rows
+        assert "enforcement_skip_weekends" not in rows
+        assert "enforcement_skip_holidays" not in rows
 
     def test_seeds_prepaid_balance_sweep_interval(self, db_session, monkeypatch):
         monkeypatch.setenv("PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS", "1800")
@@ -441,9 +514,13 @@ class TestSeedBillingNotificationSettings:
                         "arrangement_max_installments",
                         "arrangement_default_overdue_installments",
                         "service_extension_max_days",
+                        "subscription_billing_treatment_max_days",
                         "topup_preset_amounts",
                         "topup_reconciliation_stale_minutes",
                         "topup_reconciliation_max_age_days",
+                        "topup_reconciliation_expiry_grace_hours",
+                        "topup_reconciliation_batch_size",
+                        "gateway_topup_intent_ttl_minutes",
                         "ar_aging_bucket_days",
                         "billing_health_scan_min_ratio",
                         "billing_health_payment_volume_min_ratio",
@@ -462,9 +539,13 @@ class TestSeedBillingNotificationSettings:
         assert settings["arrangement_max_installments"] == "24"
         assert settings["arrangement_default_overdue_installments"] == "2"
         assert settings["service_extension_max_days"] == "30"
+        assert settings["subscription_billing_treatment_max_days"] == "366"
         assert settings["topup_preset_amounts"] == ("1000,2000,5000,10000,20000,50000")
         assert settings["topup_reconciliation_stale_minutes"] == "15"
         assert settings["topup_reconciliation_max_age_days"] == "7"
+        assert settings["topup_reconciliation_expiry_grace_hours"] == "24"
+        assert settings["topup_reconciliation_batch_size"] == "50"
+        assert settings["gateway_topup_intent_ttl_minutes"] == "30"
         assert settings["ar_aging_bucket_days"] == "30,60,90"
         assert settings["billing_health_scan_min_ratio"] == "0.5"
         assert settings["billing_health_payment_volume_min_ratio"] == "0.4"
@@ -559,8 +640,7 @@ class TestSeedGeocodingSettings:
 class TestSeedSchedulerSettings:
     """Tests for seed_scheduler_settings function."""
 
-    def test_seeds_broker_url(self, db_session, monkeypatch):
-        """Test broker URL setting is seeded."""
+    def test_does_not_persist_deployment_broker_url(self, db_session, monkeypatch):
         monkeypatch.setenv("CELERY_BROKER_URL", "redis://custom:6379/0")
         monkeypatch.delenv("REDIS_URL", raising=False)
 
@@ -574,8 +654,7 @@ class TestSeedSchedulerSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert "redis://" in setting.value_text
+        assert setting is None
 
     def test_seeds_timezone(self, db_session, monkeypatch):
         """Test timezone setting is seeded."""
@@ -594,7 +673,9 @@ class TestSeedSchedulerSettings:
         assert setting is not None
         assert setting.value_text == "America/New_York"
 
-    def test_seeds_event_outbox_dispatch_settings(self, db_session, monkeypatch):
+    def test_seeds_event_outbox_cadence_without_dispatch_toggle(
+        self, db_session, monkeypatch
+    ):
         monkeypatch.setenv("EVENT_DISPATCH_ENABLED", "true")
         monkeypatch.setenv("EVENT_DISPATCH_INTERVAL_SECONDS", "30")
         monkeypatch.setenv("EVENT_DISPATCH_BATCH_SIZE", "250")
@@ -616,7 +697,7 @@ class TestSeedSchedulerSettings:
             )
             .all()
         }
-        assert rows["event_dispatch_enabled"].value_json is True
+        assert "event_dispatch_enabled" not in rows
         assert rows["event_dispatch_interval_seconds"].value_text == "30"
         assert rows["event_dispatch_batch_size"].value_text == "250"
 
@@ -1067,3 +1148,18 @@ class TestSeedCommsSettings:
             .first()
         )
         assert setting is not None
+
+    def test_seeds_periodic_campaign_admission(self, db_session, monkeypatch):
+        monkeypatch.setenv("CAMPAIGN_PROCESSING_ENABLED", "true")
+
+        settings_seed.seed_comms_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.comms,
+                DomainSetting.key == "campaign_processing_enabled",
+            )
+            .one()
+        )
+        assert setting.value_json is True

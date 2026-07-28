@@ -20,6 +20,10 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
 from app.services import web_customer_actions as actions
 from app.services.account_lifecycle import has_active_lock
+from app.services.radius import (
+    ConnectivityProjectionDisposition,
+    SubscriptionConnectivityOutcome,
+)
 
 
 def test_update_person_customer_persists_billing_overrides(db_session, subscriber):
@@ -49,8 +53,6 @@ def test_update_person_customer_persists_billing_overrides(db_session, subscribe
         region=None,
         postal_code=None,
         country_code=None,
-        status="active",
-        is_active="true",
         marketing_opt_in="false",
         notes=None,
         account_start_date=None,
@@ -61,6 +63,7 @@ def test_update_person_customer_persists_billing_overrides(db_session, subscribe
         min_balance="125.50",
         captive_redirect_enabled="false",
         tax_rate_id=str(tax_rate.id),
+        withholding_tax_enabled=None,
         payment_method="transfer",
         metadata_json=None,
     )
@@ -108,6 +111,7 @@ def test_update_business_customer_applies_billing_overrides_to_linked_subscriber
         min_balance="75.00",
         captive_redirect_enabled="false",
         tax_rate_id=str(tax_rate.id),
+        withholding_tax_enabled=None,
         payment_method="cash",
     )
 
@@ -142,20 +146,7 @@ def test_repair_customer_access_state_restores_stale_active_projection(
     db_session.add_all([subscription, credential])
     db_session.commit()
 
-    access_state_calls = []
     reconcile_calls = []
-    monkeypatch.setattr(
-        actions,
-        "set_subscription_access_state",
-        lambda db, subscription_id, state: (
-            access_state_calls.append((subscription_id, state.value if state else None))
-            or {
-                "external_rows_written": 1,
-                "external_rows_deleted": 1,
-                "aggregate_state": state.value if state else None,
-            }
-        ),
-    )
     monkeypatch.setattr(
         actions.radius_service,
         "unblock_external_radius_credentials",
@@ -166,13 +157,15 @@ def test_repair_customer_access_state_restores_stale_active_projection(
         "reconcile_subscription_connectivity",
         lambda db, subscription_id: (
             reconcile_calls.append(subscription_id)
-            or {
-                "ok": True,
-                "radius_users_changed": 1,
-                "radius_clients_changed": 0,
-                "external_credentials_synced": 1,
-                "external_nas_synced": 0,
-            }
+            or SubscriptionConnectivityOutcome(
+                subscription_id=str(subscription_id),
+                disposition=ConnectivityProjectionDisposition.projected,
+                radius_users_changed=1,
+                external_credentials_synced=1,
+                requested_logins=1,
+                projected_logins=1,
+                projection_targets=1,
+            )
         ),
     )
 
@@ -183,7 +176,7 @@ def test_repair_customer_access_state_restores_stale_active_projection(
     assert result["status_before"] == "blocked"
     assert result["status_after"] == "active"
     assert result["reject_rows_removed"] == 1
-    assert access_state_calls == [(str(subscription.id), "active")]
+    assert subscription.access_state == "active"
     assert reconcile_calls == [str(subscription.id)]
 
 
@@ -429,8 +422,6 @@ def test_update_person_rejects_blank_name(db_session, subscriber):
             region=None,
             postal_code=None,
             country_code=None,
-            status="active",
-            is_active="true",
             marketing_opt_in="false",
             notes=None,
             account_start_date=None,
@@ -441,6 +432,7 @@ def test_update_person_rejects_blank_name(db_session, subscriber):
             min_balance=None,
             captive_redirect_enabled="false",
             tax_rate_id=None,
+            withholding_tax_enabled=None,
             payment_method=None,
             metadata_json=None,
         )
@@ -467,8 +459,6 @@ def _update_person(db, subscriber, **overrides):
         region=None,
         postal_code=None,
         country_code=None,
-        status="active",
-        is_active="true",
         marketing_opt_in="false",
         notes=None,
         account_start_date=None,
@@ -479,6 +469,7 @@ def _update_person(db, subscriber, **overrides):
         min_balance=None,
         captive_redirect_enabled="false",
         tax_rate_id=None,
+        withholding_tax_enabled=None,
         payment_method=None,
         metadata_json=None,
     )

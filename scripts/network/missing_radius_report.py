@@ -10,7 +10,8 @@ with the context needed to decide each case, and a proposed classification:
   - qa_exclude  : a QA/test login — should be excluded from the launch gate.
   - manual_review: missing data / ambiguous — a human decides.
 
-Writes nothing. See docs/BILLING_AUTOMATION_LAUNCH_RUNBOOK.md (Step 2).
+Writes nothing. See the continuous-operations section in
+docs/FINANCIAL_ACCESS_ENFORCEMENT.md.
 
 Usage:
     docker compose exec -T -e PYTHONPATH=/app app \

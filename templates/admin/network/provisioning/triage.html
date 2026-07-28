@@ -1,0 +1,53 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, status_presentation_badge %}
+
+{% block title %}Provisioning triage - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    {% call page_header(
+        title="Provisioning triage",
+        subtitle="Open runs, orders, and tasks needing attention — worst first, runs by control-plane phase",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+        color="accent",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Provisioning", "href": "/admin/network/provisioning"}, {"label": "Triage"}]
+    ) %}
+        <a href="/admin/network/provisioning" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Ledger</a>
+    {% endcall %}
+
+    {# counts #}
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {% for c in [
+            {"label": "Needs attention", "value": counts.total, "tone": ""},
+            {"label": "Runs", "value": counts.runs, "tone": "warning"},
+            {"label": "Orders", "value": counts.orders, "tone": "warning"},
+            {"label": "Tasks", "value": counts.tasks, "tone": "warning"}
+        ] %}
+        <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+            <p class="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 dark:text-slate-500">{{ c.label }}</p>
+            <p class="mt-1 text-2xl font-bold tabular-nums {% if c.tone and c.value %}status-foreground status-tone-{{ c.tone }}{% else %}text-slate-900 dark:text-white{% endif %}">{{ c.value }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    {# queue #}
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        {% for item in items %}
+        <a href="{{ item.url }}" class="flex items-center gap-4 border-b border-slate-100 px-5 py-3 transition-colors last:border-0 hover:bg-slate-50 dark:border-slate-800/70 dark:hover:bg-slate-800/50">
+            <span class="w-16 shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-center text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">{{ item.kind }}</span>
+            <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ item.title }}</p>
+                {% if item.subtitle %}<p class="truncate text-xs text-slate-500 dark:text-slate-400">{{ item.subtitle }}</p>{% endif %}
+            </div>
+            {{ status_presentation_badge(item.status, size="sm") }}
+            {% if item.when and item.when != '—' %}<time class="hidden shrink-0 text-[11px] tabular-nums text-slate-400 dark:text-slate-500 sm:block">{{ item.when }}</time>{% endif %}
+        </a>
+        {% else %}
+        <div class="px-5 py-16 text-center">
+            <svg class="mx-auto h-8 w-8 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">All clear — nothing needs attention.</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

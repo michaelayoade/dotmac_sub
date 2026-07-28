@@ -29,6 +29,11 @@ The owner never generates, stores, emails, or logs a plaintext placeholder
 password. A failed or suppressed delivery leaves the committed Subscriber
 intact. The request response reports whether delivery was queued or suppressed;
 the durable notification outcome provides retry and final delivery state.
+Both public operations are typed commands admitted through the verified owner
+executor. The request communication intent, audit evidence, and versioned event
+commit together; redemption commits the credential, Subscriber email
+verification, audit evidence, and completion event together. Domain errors are
+transport-neutral and HTTP mapping remains in the adapters.
 
 This slice requires no migration. `UserCredential` and
 `Subscriber.email_verified` are existing canonical fields.
@@ -37,7 +42,8 @@ This slice requires no migration. `UserCredential` and
 
 The enrollment capability is signed by `auth.token_signing`, is minted only
 when the delivery worker is ready to invoke the email transport, and expires
-24 hours after that materialization. It contains only:
+after the database-authoritative `auth.user_invite_expiry_minutes` duration. It
+contains only:
 
 - purpose, issuer, version, subject, issued-at, and expiry claims;
 - the exact Referral, Party, Lead, and Subscriber UUIDs; and
@@ -73,8 +79,12 @@ username is supplied, the account email is the proposed login username; a
 shared-email collision requires a different explicit username.
 
 Credential insertion and `Subscriber.email_verified = true` are one
-transaction. Email verification here means possession of the Subscriber
-account email that received the capability. It does not:
+transaction with PII-safe audit and `customer_credential_enrollment.completed`
+event evidence. Email verification here means possession of the Subscriber
+account email that received the capability. The event's strict, retryable
+projection handler invalidates the exact authentication cache after commit;
+credential and Subscriber state remain authoritative while projection repair is
+pending. Enrollment does not:
 
 - mark a `PartyContactPoint` verified;
 - activate, merge, archive, or repoint a Party;
@@ -98,6 +108,10 @@ complaint, or erasure does.
 communication intent containing only a typed action version, exact canonical
 Referral/Party/Lead/Subscriber UUIDs, and the normalized email digest. Neither
 the intent nor its Notification contains a token or rendered body.
+The intent has one exact referral-derived dedupe key, so command retry cannot
+create a second delivery path. Request and completion events contain canonical
+identifiers, command/correlation evidence, outcomes, and an email digest, never
+raw email, password, hash, rendered content, or bearer material.
 
 After the normal queue policy and delivery-time eligibility gates,
 `communications.ephemeral_actions` validates the allowlisted action envelope
@@ -119,7 +133,9 @@ canceled, disabled, or inactive accounts fail closed.
 ## Public adapters and failure behavior
 
 - `POST /referrals/signup` commits the exact referral account first, then
-  requests enrollment delivery. Its response distinguishes `queued`,
+  releases only the implicit read transaction and requests enrollment through
+  a separate verified owner boundary. The infrastructure release refuses any
+  pending session mutation. Its response distinguishes `queued`,
   `suppressed`, `rate_limited`, `already_enrolled`, and
   `manual_review_required`. Token expiry is absent at request time because no
   token exists until the worker materializes the message.
@@ -128,7 +144,13 @@ canceled, disabled, or inactive accounts fail closed.
   `POST /api/v1/auth/credential-enrollment`. Both are unauthenticated because
   the signed capability is the narrow authority. Neither accepts Subscriber,
   Party, lifecycle, verification, role, or permission fields from the caller.
-- Delivery requests are limited to three per Subscriber per 15 minutes.
+- Delivery request limit and window resolve only from the bounded
+  `auth.credential_enrollment_request_limit` and
+  `auth.credential_enrollment_request_window_seconds` settings. Their defaults
+  are three requests per 900 seconds; environment names are bootstrap inputs,
+  not runtime overrides.
+- Password acceptance resolves only from `auth.password_min_length`; capability
+  lifetime resolves only from `auth.user_invite_expiry_minutes`.
 - An inactive pre-existing local credential requires manual review; public
   signup never reactivates or replaces it.
 - A changed account email, stale canonical relationship, canceled account,

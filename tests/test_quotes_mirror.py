@@ -104,6 +104,20 @@ def test_read_serves_mirror_when_crm_unreachable(db_session):
     assert out["total"] == 0
 
 
+def test_read_result_marks_missing_crm_binding_unavailable(db_session):
+    from app.services.integrations.installations import InstallationError
+
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    with patch(
+        "app.services.quotes_mirror.reconcile_subscriber",
+        side_effect=InstallationError("no enabled binding"),
+    ):
+        result = quotes_mirror.read_for_subscriber_result(db_session, str(sub.id))
+
+    assert result.state == quotes_mirror.QuoteReadState.unavailable
+    assert result.payload == {"quotes": [], "total": 0, "open": 0}
+
+
 def test_request_quote_write_through_mirrors_result(db_session):
     sub = _subscriber(db_session, crm_id=uuid.uuid4())
     client = MagicMock()

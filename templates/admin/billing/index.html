@@ -149,6 +149,9 @@
                             {{ billing_workbench_card("Payments", "/admin/billing/payments", icon_credit_card("h-4 w-4"), "teal", "emerald", stats.payments_count|default(0) ~ " period") }}
                             {{ billing_workbench_card("Credit Notes", "/admin/billing/credits", icon_archive("h-4 w-4"), "amber", "orange", stats.credit_notes_count|default(0) ~ " period") }}
                             {{ billing_workbench_card("Ledger", "/admin/billing/ledger", icon_database("h-4 w-4"), "violet", "purple", "Entries") }}
+                            {% if can(request, "billing:invoice:read") and can(request, "billing:payment:read") and can(request, "billing:credit_note:read") %}
+                            {{ billing_workbench_card("Documents", "/admin/billing/documents", icon_archive("h-4 w-4"), "blue", "indigo", "Invoices, payments, credits") }}
+                            {% endif %}
                             {{ billing_workbench_card("AR Aging", "/admin/billing/ar-aging", icon_chart_bar("h-4 w-4"), "rose", "pink", "Receivables") }}
                         </div>
                     </section>

@@ -127,9 +127,9 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [ ] Add a Remita integration connector (important for Nigerian ISPs) supporting: invoice generation, payment collection, direct debit mandates, and payment status webhooks
 - [ ] Add a SagePay (Opayo) integration connector for South African market ISPs
 - [ ] Add a Moneris integration connector for Canadian market ISPs
-- [x] Build a unified payment provider configuration page at `/admin/billing/payment-providers` showing all available gateways, their connection status, and a configuration form per provider (implemented for Paystack + Flutterwave)
-- [x] Implement a payment provider test mode that allows admins to verify gateway configuration with test/sandbox credentials before going live
-- [x] Add payment gateway health monitoring with automatic failover -- if the primary gateway is down, route payments to a configured secondary gateway
+- [x] Build connector-owned Paystack and Flutterwave configuration pages under `/admin/integrations/payment-gateways/{provider}` with secret references, complete capability bundles, connection validation, and explicit enablement
+- [x] Validate the configured connector against the provider before enabling customer checkout
+- [x] Order healthy enabled gateways by explicit presentment priority; there is no primary/secondary or automatic failover state
 - [x] Create a payment reconciliation tool that compares DotMac payment records against gateway transaction reports and highlights discrepancies
 
 ---

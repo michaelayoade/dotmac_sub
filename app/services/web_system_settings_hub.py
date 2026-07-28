@@ -85,6 +85,12 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "url": "/admin/system/ticket-settings",
                 "description": "Support ticket statuses, priorities, and types",
             },
+            {
+                "name": "Service Teams",
+                "url": "/admin/system/service-teams",
+                "description": "Operational team identity, lifecycle, and membership",
+                "permission": "operations:service_team:read",
+            },
         ],
     },
     {
@@ -110,23 +116,23 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Available customer payment methods and entry points",
             },
             {
-                "name": "Payment Providers",
-                "url": "/admin/billing/payment-providers",
-                "description": "Gateway integrations and failover",
+                "name": "Online Payment Gateways",
+                "url": "/admin/integrations/marketplace",
+                "description": "Install, validate, and order gateway connectors",
             },
             {
                 "name": "Payment Channels",
-                "url": "/admin/billing/payment-channels",
+                "url": "/admin/settings/billing/payment-channels",
                 "description": "Customer-facing payment options and defaults",
             },
             {
                 "name": "Collection Accounts",
-                "url": "/admin/billing/collection-accounts",
+                "url": "/admin/settings/billing/collection-accounts",
                 "description": "Bank and cash accounts where funds settle",
             },
             {
                 "name": "Channel Mappings",
-                "url": "/admin/billing/payment-channel-accounts",
+                "url": "/admin/settings/billing/payment-channel-accounts",
                 "description": "Map channels to settlement accounts",
             },
             {

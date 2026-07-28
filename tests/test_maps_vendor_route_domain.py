@@ -264,7 +264,7 @@ def test_ported_unique_constraints():
         "proposed_route_revisions"
     )
     assert Base.metadata.tables["vendors"].columns["code"].unique
-    assert Base.metadata.tables["vendors"].columns["erp_id"].unique
+    assert "uq_vendors_supplier_system_reference" in _constraint_names("vendors")
     assert Base.metadata.tables["project_quote_line_items"].columns["client_ref"].unique
 
 
@@ -340,7 +340,7 @@ def test_vendor_route_chain_persists(db_session):
     db_session.add(project)
     db_session.flush()
 
-    vendor = Vendor(name="Skyline Fiber Ltd", code="SKY", erp_id="SUP-001")
+    vendor = Vendor(name="Skyline Fiber Ltd", code="SKY", supplier_reference="SUP-001")
     db_session.add(vendor)
     db_session.flush()
     db_session.add(VendorUser(vendor_id=vendor.id, person_id=uuid4(), role="lead"))

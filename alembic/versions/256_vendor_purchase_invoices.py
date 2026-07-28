@@ -24,6 +24,14 @@ def _uuid_type() -> sa.types.TypeEngine:
     return sa.String(length=36)
 
 
+def _has_columns(table: str, columns: list[str]) -> bool:
+    """Support fresh databases created from today's squashed ORM schema."""
+    existing = {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns(table)
+    }
+    return set(columns).issubset(existing)
+
+
 def upgrade() -> None:
     uuid_type = _uuid_type()
     op.create_table(
@@ -103,7 +111,8 @@ def upgrade() -> None:
             ["erp_purchase_invoice_id"],
         ),
     ):
-        op.create_index(name, "vendor_purchase_invoices", columns)
+        if _has_columns("vendor_purchase_invoices", columns):
+            op.create_index(name, "vendor_purchase_invoices", columns)
 
     op.create_table(
         "vendor_purchase_invoice_line_items",

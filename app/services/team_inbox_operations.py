@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.team_inbox import (
@@ -609,6 +609,55 @@ def bulk_update_status(
     return {"updated": updated, "skipped": skipped, "status": clean_status}
 
 
+def bulk_update_priority(
+    db: Session,
+    *,
+    conversation_ids: Sequence[str | UUID],
+    priority: int | None,
+    actor_person_id: str | UUID | None = None,
+) -> dict[str, object]:
+    if priority is None or not 0 <= int(priority) <= 999:
+        raise InboxOperationError("Priority must be between 0 and 999.")
+    actor_uuid = coerce_uuid(actor_person_id)
+    updated: list[str] = []
+    skipped: list[str] = []
+    for raw_id in conversation_ids:
+        conversation_uuid = coerce_uuid(raw_id)
+        conversation = (
+            db.query(InboxConversation)
+            .filter(InboxConversation.id == conversation_uuid)
+            .with_for_update()
+            .one_or_none()
+            if conversation_uuid is not None
+            else None
+        )
+        if conversation is None or not conversation.is_active:
+            skipped.append(str(raw_id))
+            continue
+        if conversation.priority == int(priority):
+            skipped.append(str(conversation.id))
+            continue
+        metadata = dict(conversation.metadata_ or {})
+        history = metadata.get("priority_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "from": conversation.priority,
+                "to": int(priority),
+                "at": _now_iso(),
+                "actor_id": str(actor_uuid) if actor_uuid else None,
+                "source": "team_inbox_bulk_priority",
+            }
+        )
+        metadata["priority_history"] = history[-50:]
+        conversation.priority = int(priority)
+        conversation.metadata_ = metadata
+        updated.append(str(conversation.id))
+    db.flush()
+    return {"updated": updated, "skipped": skipped, "priority": int(priority)}
+
+
 def bulk_apply_label(
     db: Session,
     *,
@@ -644,6 +693,7 @@ def update_conversation_workflow(
     priority: int | None = None,
     is_muted: bool | None = None,
     snooze_minutes: int | None = None,
+    snooze_until: datetime | None = None,
     actor_person_id: str | UUID | None = None,
 ) -> InboxConversation:
     metadata = dict(conversation.metadata_ or {})
@@ -664,11 +714,21 @@ def update_conversation_workflow(
     if is_muted is not None:
         event["is_muted"] = {"from": conversation.is_muted, "to": bool(is_muted)}
         conversation.is_muted = bool(is_muted)
-    if snooze_minutes is not None:
-        if int(snooze_minutes) <= 0:
+    # An explicit wake time wins over a duration: the operator picked a moment,
+    # not an interval, and a past moment is the same as "do not snooze".
+    if snooze_until is not None or snooze_minutes is not None:
+        if snooze_until is not None:
+            target = (
+                snooze_until
+                if snooze_until.tzinfo
+                else snooze_until.replace(tzinfo=UTC)
+            )
+            if target <= datetime.now(UTC):
+                raise InboxOperationError("Choose a snooze time in the future.")
+        elif int(snooze_minutes or 0) <= 0:
             target = None
         else:
-            target = datetime.now(UTC) + timedelta(minutes=int(snooze_minutes))
+            target = datetime.now(UTC) + timedelta(minutes=int(snooze_minutes or 0))
         event["snoozed_until"] = {
             "from": conversation.snoozed_until.isoformat()
             if conversation.snoozed_until
@@ -929,28 +989,29 @@ def retry_failed_outbound_batch(
 
 
 def queue_metrics(db: Session) -> InboxQueueMetrics:
+    """Sidebar counts, as aggregates.
+
+    Every one of these used to be a Python ``sum`` over every open
+    conversation loaded into memory, on each page load. They are counted in
+    the database now.
+    """
     from app.services import team_inbox_read
 
-    open_rows = (
-        db.query(InboxConversation)
-        .filter(InboxConversation.is_active.is_(True))
-        .filter(InboxConversation.status != "resolved")
-        .all()
-    )
-    open_ids = [row.id for row in open_rows]
-    active_assignment_ids = (
-        {
-            row[0]
-            for row in db.query(InboxConversationAssignment.conversation_id)
-            .filter(InboxConversationAssignment.conversation_id.in_(open_ids))
-            .filter(InboxConversationAssignment.is_active.is_(True))
-            .all()
-        }
-        if open_ids
-        else set()
-    )
+    def count_open(*clauses) -> int:
+        query = (
+            db.query(func.count(InboxConversation.id))
+            .filter(InboxConversation.is_active.is_(True))
+            .filter(InboxConversation.status != "resolved")
+        )
+        for clause in clauses:
+            query = query.filter(clause)
+        return int(query.scalar() or 0)
+
+    assigned_conversation_ids = select(
+        InboxConversationAssignment.conversation_id
+    ).where(InboxConversationAssignment.is_active.is_(True))
     return InboxQueueMetrics(
-        total_open=len(open_rows),
+        total_open=count_open(),
         needs_response=team_inbox_read.list_conversations(
             db, needs_response=True, limit=1
         ).count,
@@ -961,15 +1022,14 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
             .scalar()
             or 0
         ),
-        unassigned_open=sum(
-            1
-            for conversation in open_rows
-            if conversation.id not in active_assignment_ids
+        unassigned_open=count_open(
+            ~InboxConversation.id.in_(assigned_conversation_ids)
         ),
-        muted_open=sum(1 for conversation in open_rows if conversation.is_muted),
-        snoozed_open=sum(
-            1 for conversation in open_rows if conversation.snoozed_until is not None
-        ),
+        muted_open=count_open(InboxConversation.is_muted.is_(True)),
+        # "Asleep now", matching the queue's snoozed filter. Counting every row
+        # with a wake time meant the badge kept counting conversations that had
+        # already woken.
+        snoozed_open=count_open(team_inbox_read.currently_snoozed_clause()),
     )
 
 
@@ -1051,3 +1111,238 @@ def auto_resolve_stale_conversations(
         resolved += 1
     db.flush()
     return resolved
+
+
+SNOOZE_UNTIL_REPLY_KEY = "snooze_until_reply"
+
+
+def snooze_until_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    actor_person_id: str | UUID | None = None,
+) -> InboxConversation:
+    """Snooze a conversation with no wake time — the customer's reply wakes it.
+
+    Stored as a metadata flag rather than a far-future ``snoozed_until``, so the
+    queue's snoozed filter still means "asleep" while nothing invents a wake
+    date the operator never chose. ``wake_on_inbound`` clears it.
+    """
+    metadata = dict(conversation.metadata_ or {})
+    metadata[SNOOZE_UNTIL_REPLY_KEY] = True
+    history = metadata.get("workflow_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            "at": _now_iso(),
+            "actor_id": str(coerce_uuid(actor_person_id))
+            if coerce_uuid(actor_person_id)
+            else None,
+            "source": "team_inbox_workflow",
+            "snooze_until_reply": True,
+        }
+    )
+    metadata["workflow_history"] = history[-50:]
+    conversation.metadata_ = metadata
+    conversation.snoozed_until = None
+    conversation.status = "snoozed"
+    db.flush()
+    return conversation
+
+
+def wake_due_snoozed_conversations(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    limit: int = 200,
+) -> int:
+    """Settle conversations whose chosen wake time has passed.
+
+    Snoozing wrote a durable ``status='snoozed'`` and a ``snoozed_until``, and
+    nothing ever cleared them — so a conversation snoozed until Tuesday was
+    still filed as snoozed the following month, and absent from the Open
+    cohort. The workqueue provider already read the wake time as expiry
+    (``snoozed_until <= now`` means awake), so the two disagreed about the same
+    column.
+
+    Idempotent and repair-shaped: it recomputes from ``snoozed_until`` alone,
+    so re-running it changes nothing and a missed run is caught by the next.
+    """
+    moment = now or datetime.now(UTC)
+    due = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.snoozed_until.isnot(None))
+        .filter(InboxConversation.snoozed_until <= moment)
+        .order_by(InboxConversation.snoozed_until.asc())
+        .limit(max(1, limit))
+        .all()
+    )
+    woken = 0
+    for conversation in due:
+        metadata = dict(conversation.metadata_ or {})
+        history = metadata.get("workflow_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "at": _now_iso(),
+                "actor_id": None,
+                "source": "team_inbox_snooze_expiry",
+                "snoozed_until": {
+                    "from": conversation.snoozed_until.isoformat()
+                    if conversation.snoozed_until
+                    else None,
+                    "to": None,
+                },
+            }
+        )
+        metadata["workflow_history"] = history[-50:]
+        conversation.metadata_ = metadata
+        conversation.snoozed_until = None
+        # A conversation resolved while asleep stays resolved: the wake time
+        # passing is not a reason to reopen closed work.
+        if conversation.status == "snoozed":
+            conversation.status = "open"
+        woken += 1
+    db.flush()
+    return woken
+
+
+def wake_conversation(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    source: str,
+) -> bool:
+    """Wake one snoozed conversation now (durable-timer consumer effect).
+
+    Mirrors ``wake_due_snoozed_conversations`` for a single row: clears the
+    wake time, reopens only a still-snoozed conversation, and appends the
+    workflow history fact. A resolved conversation stays resolved.
+    """
+    if conversation.snoozed_until is None and conversation.status != "snoozed":
+        return False
+    metadata = dict(conversation.metadata_ or {})
+    history = metadata.get("workflow_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            "at": _now_iso(),
+            "actor_id": None,
+            "source": source,
+            "snoozed_until": {
+                "from": conversation.snoozed_until.isoformat()
+                if conversation.snoozed_until
+                else None,
+                "to": None,
+            },
+        }
+    )
+    metadata["workflow_history"] = history[-50:]
+    conversation.metadata_ = metadata
+    conversation.snoozed_until = None
+    if conversation.status == "snoozed":
+        conversation.status = "open"
+    db.flush()
+    return True
+
+
+def wake_on_inbound(db: Session, *, conversation: InboxConversation) -> bool:
+    """Wake a conversation that was snoozed until the customer replied.
+
+    Called from every inbound path. Returns whether it woke anything, so a
+    caller can tell the difference between "nothing to do" and a state change.
+
+    Deliberately narrow: it only acts on the until-reply flag. A conversation
+    snoozed to a *time* keeps sleeping, because the operator picked that time
+    knowing the customer might write again; and a resolved conversation is left
+    alone so an inbound message does not silently reopen closed work.
+    """
+    metadata = dict(conversation.metadata_ or {})
+    if not metadata.pop(SNOOZE_UNTIL_REPLY_KEY, False):
+        return False
+
+    history = metadata.get("workflow_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(
+        {
+            "at": _now_iso(),
+            "actor_id": None,
+            "source": "team_inbox_inbound",
+            "woke_on_reply": True,
+        }
+    )
+    metadata["workflow_history"] = history[-50:]
+    conversation.metadata_ = metadata
+    conversation.snoozed_until = None
+    if conversation.status == "snoozed":
+        conversation.status = "open"
+    db.flush()
+    return True
+
+
+@dataclass(frozen=True)
+class RenderedTranscript:
+    subject: str
+    html: str
+    # How many messages actually left with the export. The audit records it,
+    # and deriving it here rather than in the caller keeps it honest: the
+    # renderer already decides what is included.
+    message_count: int
+
+
+def render_conversation_transcript(
+    db: Session, *, conversation: InboxConversation
+) -> RenderedTranscript:
+    """Render a conversation for emailing.
+
+    Internal notes and comments are deliberately excluded: a transcript is
+    often forwarded to the customer or a third party, and internal
+    collaboration is not theirs to read. Only the messages that were actually
+    exchanged appear.
+    """
+    from html import escape as _escape
+
+    messages = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction.in_(["inbound", "outbound"]))
+        .order_by(InboxMessage.created_at.asc())
+        .all()
+    )
+
+    subject = (
+        f"Transcript: {conversation.subject}"
+        if conversation.subject
+        else f"Transcript: conversation with {conversation.contact_address or 'customer'}"
+    )
+
+    rows = []
+    for message in messages:
+        metadata = message.metadata_ or {}
+        if metadata.get("delivery_status") == SCHEDULED_DELIVERY_STATUS_FOR_TRANSCRIPT:
+            # Not sent yet — it is not part of what was exchanged.
+            continue
+        who = "Us" if message.direction == "outbound" else "Customer"
+        when = (message.sent_at or message.created_at).strftime("%Y-%m-%d %H:%M UTC")
+        body = _escape(str(message.body or "")).replace("\n", "<br>")
+        rows.append(
+            f"<p style='margin:0 0 12px'><strong>{who}</strong> "
+            f"<span style='color:#64748b'>{when}</span><br>{body}</p>"
+        )
+
+    message_count = len(rows)
+    if not rows:
+        rows.append("<p><em>No messages were exchanged.</em></p>")
+
+    html = f"<h2 style='margin:0 0 16px'>{_escape(subject)}</h2>" + "".join(rows)
+    return RenderedTranscript(subject=subject, html=html, message_count=message_count)
+
+
+# Kept as a module constant so the transcript filter cannot drift from the
+# outbound owner's scheduled marker.
+SCHEDULED_DELIVERY_STATUS_FOR_TRANSCRIPT = "scheduled"

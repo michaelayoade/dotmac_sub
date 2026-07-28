@@ -7,18 +7,19 @@ import re
 import secrets
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from functools import wraps
+from typing import Any, ParamSpec, TypeVar
 from uuid import UUID
 
-from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.sales import Lead
-from app.models.subscriber import Subscriber, SubscriberContact
+from app.models.subscriber import Subscriber
 from app.models.support import (
+    AutomationTrigger,
     Ticket,
     TicketAccessToken,
     TicketAssignee,
@@ -44,6 +45,7 @@ from app.schemas.support import (
 from app.services import domain_settings as domain_settings_service
 from app.services import notification as notification_service
 from app.services import numbering as numbering_service
+from app.services import service_address as service_address_service
 from app.services import settings_spec, support_ticket_filters, ticket_validation
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.audit_helpers import log_audit_event
@@ -55,13 +57,107 @@ from app.services.customer_identity_resolution import (
     resolve_customer_identity,
 )
 from app.services.customer_support_links import ticket_customer_link_filter
+from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import FilterValidationError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+    owner_command_active,
+)
 from app.services.sales import lifecycle as lead_lifecycle
 from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
+
+P = ParamSpec("P")
+R = TypeVar("R")
+_LIFECYCLE_CONCERN = "ticket lifecycle mutations"
+
+
+class SupportTicketError(DomainError):
+    """Transport-neutral failure from the canonical Ticket owner."""
+
+
+def _ticket_error(code: str, message: str, **details: object) -> SupportTicketError:
+    return SupportTicketError(code=code, message=message, details=details)
+
+
+def _command_idempotency_key(request: object | None) -> str | None:
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get("Idempotency-Key")
+    return str(value).strip() or None if value is not None else None
+
+
+def ticket_owner_command(name: str):
+    """Enter the canonical Ticket transaction around one typed public method.
+
+    Calls made by another Ticket operation (for example a bulk command invoking
+    the single-ticket update participant) remain flush-only inside the existing
+    root command.
+    """
+
+    definition = OwnerCommandDefinition(
+        owner="support.ticket_lifecycle",
+        concern=_LIFECYCLE_CONCERN,
+        name=name,
+    )
+
+    def decorate(operation):
+        @wraps(operation)
+        def wrapped(db: Session, *args, **kwargs):
+            # Participate in any owner command already in flight, not just this
+            # owner's. A cross-domain coordinator (for example
+            # communications.conversation_ticket_handoff issuing a ticket from a
+            # conversation) provides the transaction; opening a second root
+            # command inside it is rejected as nested. Ticket state is still
+            # decided here — only the transaction boundary is the caller's.
+            #
+            # The participant path intentionally does not emit the realtime
+            # workqueue invalidation: it fires post-commit, and here the commit
+            # belongs to the coordinator, which emits it once its own
+            # transaction lands. Workqueue holds no authority, so a late
+            # invalidation costs a pane its instant refresh, never a fact.
+            if owner_command_active(db):
+                result = operation(db, *args, **kwargs)
+                db.info.pop("_support_previous_assignee_id", None)
+                return result
+
+            from app.services.db_session_adapter import db_session_adapter
+
+            db_session_adapter.release_read_transaction(db)
+            actor = str(kwargs.get("actor_id") or "support-system")
+            context = CommandContext.system(
+                actor=actor,
+                scope=f"support.ticket:{name}",
+                reason=f"execute canonical Ticket {name} command",
+                idempotency_key=_command_idempotency_key(kwargs.get("request")),
+            )
+            result = execute_owner_command(
+                db,
+                definition=definition,
+                context=context,
+                operation=lambda: operation(db, *args, **kwargs),
+            )
+            if name == "create" and isinstance(result, Ticket):
+                _notify_workqueue(result, "added")
+            elif name == "update" and isinstance(result, Ticket):
+                previous = db.info.pop("_support_previous_assignee_id", None)
+                _notify_workqueue(
+                    result,
+                    "updated",
+                    previous_assignee_id=previous,
+                )
+            return result
+
+        return wrapped
+
+    return decorate
+
 
 # Ticket.status is a free-form string column; these guard every write at the
 # boundary (no schema migration). closed/canceled/merged are terminal — they
@@ -127,10 +223,31 @@ def transition_ticket_status(
 
 MENTION_EMAIL_RE = re.compile(r"@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
+# Ticket states worth interrupting a customer for, and what to say. Everything
+# else (triage churn, internal reassignment) stays silent — a notification the
+# customer cannot act on trains them to ignore the next one.
+CUSTOMER_NOTIFIED_TICKET_STATUSES: dict[str, dict[str, str]] = {
+    TicketStatus.open.value: {
+        "label": "we're on it",
+        "body": "is now being worked on. We'll update you as it progresses.",
+    },
+    TicketStatus.waiting_on_customer.value: {
+        "label": "we need your input",
+        "body": ("is waiting on you. Please reply on the ticket so we can continue."),
+    },
+    TicketStatus.on_hold.value: {
+        "label": "on hold",
+        "body": "has been placed on hold. We'll let you know when it resumes.",
+    },
+    TicketStatus.closed.value: {
+        "label": "closed",
+        "body": "has been closed. Reply if the problem is still there.",
+    },
+}
+
 SUPPORT_NOTIFICATION_TOGGLE_KEY = "support_ticket_notifications_enabled"
 SUPPORT_AUTO_ASSIGN_ENABLED_KEY = "support_ticket_auto_assign_enabled"
 SUPPORT_REGION_ASSIGNMENT_RULES_KEY = "support_region_assignment_rules"
-SUPPORT_SERVICE_TEAM_MEMBERS_KEY = "support_service_team_members"
 
 
 def _now() -> datetime:
@@ -185,8 +302,8 @@ def _ensure_not_merged_source(ticket: Ticket) -> None:
         ticket.merged_into_ticket_id is not None
         or support_ticket_settings_service.status_is_merged(ticket.status)
     ):
-        raise HTTPException(
-            status_code=409, detail="Cannot modify a merged source ticket"
+        raise _ticket_error(
+            "ticket_merged_source", "Cannot modify a merged source ticket"
         )
 
 
@@ -405,7 +522,7 @@ def _validate_ticket_lead_alignment(
         return
     lead = db.get(Lead, lead_id)
     if lead is None:
-        raise HTTPException(status_code=404, detail="Lead not found")
+        raise _ticket_error("lead_not_found", "Lead not found")
 
     subscriber_ids: set[UUID] = set()
     for field in ("subscriber_id", "customer_account_id", "customer_person_id"):
@@ -415,16 +532,16 @@ def _validate_ticket_lead_alignment(
     for subscriber_id in subscriber_ids:
         subscriber = db.get(Subscriber, subscriber_id)
         if subscriber is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Ticket {subscriber_id} Subscriber link was not found",
+            raise _ticket_error(
+                "subscriber_not_found",
+                f"Ticket {subscriber_id} Subscriber link was not found",
             )
         try:
             lead_lifecycle.validate_lead_subscriber_alignment(
                 db, lead=lead, subscriber=subscriber
             )
         except lead_lifecycle.LeadLifecycleError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise _ticket_error("lead_subscriber_mismatch", str(exc)) from exc
 
 
 class TicketComments:
@@ -432,7 +549,7 @@ class TicketComments:
     def get(db: Session, comment_id: str) -> TicketComment:
         comment = db.get(TicketComment, comment_id)
         if not comment:
-            raise HTTPException(status_code=404, detail="Ticket comment not found")
+            raise _ticket_error("comment_not_found", "Ticket comment not found")
         return comment
 
     @staticmethod
@@ -545,6 +662,7 @@ class TicketComments:
         return comment
 
     @staticmethod
+    @ticket_owner_command("update_comment")
     def update(
         db: Session,
         *,
@@ -555,7 +673,7 @@ class TicketComments:
     ) -> TicketComment:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
 
         data = payload.model_dump(exclude_unset=True)
@@ -579,17 +697,18 @@ class TicketComments:
             actor_id=actor_id,
             metadata={"comment_id": str(comment.id)},
         )
-        db.commit()
+        db.flush()
         db.refresh(comment)
         return comment
 
     @staticmethod
+    @ticket_owner_command("delete_comment")
     def delete(
         db: Session, *, comment: TicketComment, actor_id: str | None, request=None
     ) -> None:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         db.delete(comment)
         log_audit_event(
@@ -601,7 +720,7 @@ class TicketComments:
             actor_id=actor_id,
             metadata={"comment_id": str(comment.id)},
         )
-        db.commit()
+        db.flush()
 
 
 class TicketSlaEvents:
@@ -609,7 +728,7 @@ class TicketSlaEvents:
     def get(db: Session, event_id: str) -> TicketSlaEvent:
         event = db.get(TicketSlaEvent, event_id)
         if not event:
-            raise HTTPException(status_code=404, detail="Ticket SLA event not found")
+            raise _ticket_error("sla_event_not_found", "Ticket SLA event not found")
         return event
 
     @staticmethod
@@ -624,10 +743,11 @@ class TicketSlaEvents:
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    @ticket_owner_command("create_sla_event")
     def create(db: Session, payload: TicketSlaEventCreate) -> TicketSlaEvent:
         ticket = db.get(Ticket, payload.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         event = TicketSlaEvent(
             ticket_id=payload.ticket_id,
@@ -637,32 +757,34 @@ class TicketSlaEvents:
             metadata_=payload.metadata_,
         )
         db.add(event)
-        db.commit()
+        db.flush()
         db.refresh(event)
         return event
 
     @staticmethod
+    @ticket_owner_command("update_sla_event")
     def update(
         db: Session, event: TicketSlaEvent, payload: TicketSlaEventUpdate
     ) -> TicketSlaEvent:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(event, key, value)
-        db.commit()
+        db.flush()
         db.refresh(event)
         return event
 
     @staticmethod
+    @ticket_owner_command("delete_sla_event")
     def delete(db: Session, event: TicketSlaEvent) -> None:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         db.delete(event)
-        db.commit()
+        db.flush()
 
 
 def _notify_workqueue(
@@ -733,25 +855,33 @@ class Tickets:
     @staticmethod
     def _resolve_ticket_number(db: Session) -> str | None:
         Tickets.reconcile_ticket_number_sequence(db)
-        return numbering_service.generate_number(
-            db=db,
-            domain=SettingDomain.workflow,
-            sequence_key="support_ticket",
-            enabled_key="support_ticket_numbering_enabled",
-            prefix_key="support_ticket_number_prefix",
-            padding_key="support_ticket_number_padding",
-            start_key="support_ticket_number_start",
-        )
+        # Imported tickets can legitimately be ahead of the local document
+        # sequence.  Keep advancing the locked canonical sequence until its
+        # candidate is actually free instead of failing the customer request on
+        # support_tickets_number_key.  All local creators delegate here, so the
+        # sequence lock serializes concurrent reservations.
+        for _attempt in range(10_000):
+            candidate = numbering_service.generate_number(
+                db=db,
+                domain=SettingDomain.workflow,
+                sequence_key="support_ticket",
+                enabled_key="support_ticket_numbering_enabled",
+                prefix_key="support_ticket_number_prefix",
+                padding_key="support_ticket_number_padding",
+                start_key="support_ticket_number_start",
+            )
+            if candidate is None:
+                return None
+            occupied = db.scalar(
+                select(Ticket.id).where(Ticket.number == candidate).limit(1)
+            )
+            if occupied is None:
+                return candidate
+        raise RuntimeError("support ticket number sequence could not find a free value")
 
     @staticmethod
     def reconcile_ticket_number_sequence(db: Session) -> int | None:
-        """Advance ticket numbering beyond imported numbers before allocation.
-
-        Imports preserve their source ticket numbers and therefore bypass the
-        local document sequence.  Locking that sequence before inspecting the
-        occupied number space keeps native creates serialised with imports and
-        prevents a stale counter from walking one collision at a time.
-        """
+        """Advance native numbering past ticket numbers preserved by imports."""
         enabled = settings_spec.resolve_value(
             db, SettingDomain.workflow, "support_ticket_numbering_enabled"
         )
@@ -769,15 +899,15 @@ class Tickets:
             start_value = 1
         prefix_text = prefix if isinstance(prefix, str) else ""
 
-        # Take the sequence lock first: imports use this same reconciliation
-        # path, so no allocator can consume a stale value between the scan and
-        # the sequence update.
+        # Lock first so concurrent native creates and CRM imports cannot use a
+        # stale sequence value between inspecting existing ticket numbers and
+        # advancing the counter.
         sequence = numbering_service.lock_sequence(
             db, "support_ticket", start_value
         )
         max_value: int | None = None
-        for number in db.query(Ticket.number).filter(Ticket.number.isnot(None)):
-            text = str(number[0])
+        for (number,) in db.query(Ticket.number).filter(Ticket.number.isnot(None)):
+            text = str(number)
             if prefix_text:
                 if not text.startswith(prefix_text):
                     continue
@@ -798,7 +928,7 @@ class Tickets:
     def _assert_ticket_exists(db: Session, ticket_id: UUID) -> Ticket:
         ticket = db.get(Ticket, ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         return ticket
 
     @staticmethod
@@ -899,9 +1029,11 @@ class Tickets:
             else []
         )
         if ticket.service_team_id:
-            members = support_ticket_settings_service.service_team_members(db).get(
-                str(ticket.service_team_id), []
+            from app.services.ticket_assignment.selectors import (
+                list_team_candidate_person_ids,
             )
+
+            members = list_team_candidate_person_ids(db, str(ticket.service_team_id))
             if members:
                 current = set(assignee_ids)
                 assignee_ids = [
@@ -974,8 +1106,34 @@ class Tickets:
                 db
             ),
         )
+        assignment_engine.stage_ticket_evaluation_evidence(
+            db, ticket_id=ticket.id, result=result
+        )
         if result.reason == "no_matching_rule":
             return None
+        assignee_id = _coerce_uuid(result.assignee_person_id)
+        team_id = _coerce_uuid(result.fallback_service_team_id)
+        if result.assignment_target in {"team", "rule_scope"}:
+            ticket.service_team_id = team_id
+            ticket.assigned_to_person_id = None
+            ticket.ticket_manager_person_id = None
+            ticket.site_coordinator_person_id = None
+            db.query(TicketAssignee).filter(
+                TicketAssignee.ticket_id == ticket.id
+            ).delete()
+        elif result.reason == "queue_fallback_team_assigned" and team_id:
+            ticket.service_team_id = team_id
+        elif result.assignment_target == "technical_supervisor" and assignee_id:
+            if not ticket.ticket_manager_person_id:
+                ticket.ticket_manager_person_id = assignee_id
+        elif result.assignment_target == "site_coordinator" and assignee_id:
+            if not ticket.site_coordinator_person_id:
+                ticket.site_coordinator_person_id = assignee_id
+        elif result.assignment_target == "technician" and assignee_id:
+            if not ticket.assigned_to_person_id:
+                ticket.assigned_to_person_id = assignee_id
+            if not any(row.person_id == assignee_id for row in ticket.assignees):
+                db.add(TicketAssignee(ticket_id=ticket.id, person_id=assignee_id))
         return result.as_dict()
 
     @staticmethod
@@ -984,6 +1142,50 @@ class Tickets:
         if rule_result is not None:
             return rule_result
         return Tickets._apply_region_auto_assignment(ticket, db)
+
+    @staticmethod
+    def _apply_automation_rules(
+        db: Session, ticket: Ticket, trigger: AutomationTrigger
+    ) -> tuple[str, ...]:
+        """Apply policy proposals inside the canonical Ticket writer."""
+        from app.models.support import AutomationActionType
+        from app.services import support_automation
+
+        if support_automation.identity_review_blocks_automation(ticket):
+            support_automation.mark_identity_automation_suppressed(ticket)
+            return ()
+
+        applied: list[str] = []
+        for proposal in support_automation.evaluate_rules(db, ticket, trigger):
+            if proposal.action_type == AutomationActionType.assign_team:
+                ticket.service_team_id = proposal.service_team_id
+            elif proposal.action_type == AutomationActionType.assign_technician:
+                ticket.technician_person_id = proposal.technician_person_id
+            elif proposal.action_type == AutomationActionType.set_priority:
+                ticket.priority = proposal.priority or ticket.priority
+            elif proposal.action_type == AutomationActionType.set_status:
+                if proposal.status:
+                    try:
+                        transition_ticket_status(
+                            ticket, proposal.status, source="automation"
+                        )
+                    except ValueError:
+                        logger.warning(
+                            "automation set_status ignored invalid status %r",
+                            proposal.status,
+                        )
+                        continue
+            elif proposal.action_type == AutomationActionType.set_due_in_hours:
+                if proposal.due_in_hours is not None:
+                    ticket.due_at = _now() + timedelta(hours=proposal.due_in_hours)
+            elif proposal.action_type == AutomationActionType.add_tag:
+                if proposal.tag:
+                    tags = list(ticket.tags or [])
+                    if proposal.tag not in tags:
+                        tags.append(proposal.tag)
+                        ticket.tags = tags
+            applied.append(proposal.rule_name)
+        return tuple(applied)
 
     @staticmethod
     def _queue_notifications_for_assignments(
@@ -1008,19 +1210,17 @@ class Tickets:
         recipients.update(str(row.person_id) for row in assignee_rows)
 
         if ticket.service_team_id:
-            team_map = _read_json_setting(
-                db, SettingDomain.workflow, SUPPORT_SERVICE_TEAM_MEMBERS_KEY
+            from app.services.ticket_assignment.selectors import (
+                list_team_candidate_person_ids,
             )
-            team_members = (
-                team_map.get(str(ticket.service_team_id))
-                if isinstance(team_map, dict)
-                else None
+
+            team_members = list_team_candidate_person_ids(
+                db, str(ticket.service_team_id)
             )
-            if isinstance(team_members, list):
-                for member in team_members:
-                    member_uuid = _coerce_uuid(str(member))
-                    if member_uuid:
-                        recipients.add(str(member_uuid))
+            for member in team_members:
+                member_uuid = _coerce_uuid(str(member))
+                if member_uuid:
+                    recipients.add(str(member_uuid))
 
         if actor_id:
             recipients.discard(str(actor_id))
@@ -1078,6 +1278,132 @@ class Tickets:
             )
 
     @staticmethod
+    def _queue_customer_ticket_update(
+        db: Session,
+        ticket: Ticket,
+        *,
+        event_type: str,
+        subject: str,
+        body: str,
+        dedupe_key: str,
+        extra_metadata: dict[str, object] | None = None,
+    ) -> None:
+        """Tell the customer their ticket moved.
+
+        Channels are NOT chosen here — the defaults below are a fallback and
+        ``notification_channel_policy`` resolves the actual channels (see
+        ``docs/designs/NOTIFICATION_CHANNEL_POLICY.md``). Silence on a ticket is
+        the single largest driver of "any update?" contacts, so every
+        customer-visible movement gets one message.
+        """
+        if not Tickets._notifications_enabled(db):
+            return
+
+        subscriber_id = ticket.subscriber_id or ticket.customer_account_id
+        if not subscriber_id:
+            return
+        subscriber = db.get(Subscriber, subscriber_id)
+        if not subscriber:
+            return
+
+        from app.services import customer_experience_communications
+
+        customer_experience_communications.request_update(
+            db,
+            subscriber_id=subscriber.id,
+            event_type=event_type,
+            subject=subject,
+            body=body,
+            metadata={
+                "type": "ticket",
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.number,
+                **(extra_metadata or {}),
+            },
+            dedupe_key=dedupe_key,
+            default_channels=(
+                NotificationChannel.email,
+                NotificationChannel.whatsapp,
+                NotificationChannel.push,
+            ),
+        )
+
+    @staticmethod
+    def _notify_customer_of_comment(
+        db: Session, ticket: Ticket, comment: TicketComment
+    ) -> None:
+        """Notify the customer when staff reply visibly on their ticket.
+
+        Internal notes and the customer's own comments are never echoed back.
+        """
+        if comment.is_internal:
+            return
+        if comment.author_type != TicketCommentAuthorType.staff.value:
+            return
+
+        ticket_ref = ticket.number or str(ticket.id)[:8]
+        preview = " ".join((comment.body or "").split())[:400]
+        Tickets._queue_customer_ticket_update(
+            db,
+            ticket,
+            event_type="support_ticket_comment_added",
+            subject=f"Update on support ticket {ticket_ref}",
+            body=f"There is a new update on ticket {ticket_ref}:\n\n{preview}",
+            dedupe_key=f"ticket-comment:{comment.id}",
+            extra_metadata={"comment_id": str(comment.id)},
+        )
+
+    @staticmethod
+    def _notify_customer_of_status_change(
+        db: Session, ticket: Ticket, previous_status: str
+    ) -> None:
+        """Notify the customer when their ticket reaches a state they care about.
+
+        Deliberately narrow: intermediate triage churn is noise to a customer,
+        while "we're working on it", "we need you", and "it's closed" are not.
+        """
+        current = ticket.status
+        if current == previous_status:
+            return
+        if current not in CUSTOMER_NOTIFIED_TICKET_STATUSES:
+            return
+
+        ticket_ref = ticket.number or str(ticket.id)[:8]
+        message = CUSTOMER_NOTIFIED_TICKET_STATUSES[current]
+        Tickets._queue_customer_ticket_update(
+            db,
+            ticket,
+            event_type="support_ticket_status_changed",
+            subject=f"Support ticket {ticket_ref}: {message['label']}",
+            body=f"Ticket {ticket_ref} ({ticket.title}) {message['body']}",
+            dedupe_key=Tickets._status_change_dedupe_key(
+                ticket, previous_status, current
+            ),
+            extra_metadata={"from_status": previous_status, "to_status": current},
+        )
+
+    @staticmethod
+    def _status_change_dedupe_key(
+        ticket: Ticket, previous_status: str, current: str
+    ) -> str:
+        """Identify one *transition*, not one status.
+
+        Intent dedupe is permanent and global (``communication_intents.submit``
+        looks the key up with ``one_or_none()`` over all time), so keying on the
+        status alone silences every later re-entry into it. A ticket parked
+        on_hold is told "we'll let you know when it resumes" and then never
+        hears the resume; a ticket that bounces back to waiting_on_customer asks
+        for input once and then stalls silently. Both are the "any update?"
+        contact this notification exists to prevent.
+
+        The minute bucket keeps genuine idempotency — a retry or double submit
+        of the same transition still collapses — while letting a later,
+        distinct transition through.
+        """
+        stamp = _now().strftime("%Y%m%d%H%M")
+        return f"ticket-status:{ticket.id}:{previous_status}->{current}:{stamp}"
+
+    @staticmethod
     def _queue_resolution_confirmation_notifications(
         db: Session, ticket: Ticket, token_row: TicketAccessToken
     ) -> None:
@@ -1103,40 +1429,27 @@ class Tickets:
             f"Confirm or dispute it here: {action_url}"
         )
 
-        recipients: set[tuple[NotificationChannel, str]] = set()
-        if subscriber.email:
-            recipients.add((NotificationChannel.email, subscriber.email.strip()))
-        if subscriber.phone:
-            recipients.add((NotificationChannel.sms, subscriber.phone.strip()))
+        from app.services import customer_experience_communications
 
-        contact_rows = (
-            db.query(SubscriberContact)
-            .filter(SubscriberContact.subscriber_id == subscriber.id)
-            .filter(SubscriberContact.receives_notifications.is_(True))
-            .all()
+        customer_experience_communications.request_update(
+            db,
+            subscriber_id=subscriber.id,
+            event_type="support_ticket_resolution_confirmation",
+            subject=subject,
+            body=body,
+            metadata={
+                "type": "ticket",
+                "ticket_id": str(ticket.id),
+                "ticket_number": ticket.number,
+                "confirmation_token_id": str(token_row.id),
+            },
+            dedupe_key=f"ticket-resolution-confirmation:{token_row.id}",
+            default_channels=(
+                NotificationChannel.email,
+                NotificationChannel.whatsapp,
+                NotificationChannel.push,
+            ),
         )
-        for contact in contact_rows:
-            if contact.email:
-                recipients.add((NotificationChannel.email, contact.email.strip()))
-            phone = contact.whatsapp or contact.phone
-            if phone:
-                recipients.add((NotificationChannel.sms, phone.strip()))
-
-        for channel, recipient in sorted(recipients, key=lambda item: item[1]):
-            if not recipient:
-                continue
-            notification_service.notifications.queue_customer_notification(
-                db,
-                NotificationCreate(
-                    subscriber_id=subscriber.id,
-                    channel=channel,
-                    recipient=recipient,
-                    event_type="support_ticket_resolution_confirmation",
-                    category="service",
-                    subject=subject if channel == NotificationChannel.email else None,
-                    body=body,
-                ),
-            )
 
     @staticmethod
     def _emit_ticket_event(
@@ -1173,14 +1486,23 @@ class Tickets:
         )
 
     @staticmethod
+    @ticket_owner_command("create")
     def create(
         db: Session,
         payload: TicketCreate,
         actor_id: str | None = None,
         request=None,
         *,
+        origin_conversation_id: UUID | None = None,
         dispatch_event_after_commit: bool = True,
     ) -> Ticket:
+        """Create a ticket inside the canonical Ticket transaction.
+
+        ``origin_conversation_id`` is keyword-only and deliberately absent from
+        ``TicketCreate``: only ``communications.conversation_ticket_handoff``
+        may assert that a ticket originated from an inbox conversation, so the
+        claim must not be settable by anything that can post a ticket payload.
+        """
         ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
         data["status"] = data.get(
@@ -1208,6 +1530,8 @@ class Tickets:
                 }
             }
         )
+        if origin_conversation_id is not None:
+            ticket.origin_conversation_id = origin_conversation_id
         ticket.number = Tickets._resolve_ticket_number(db)
 
         db.add(ticket)
@@ -1239,9 +1563,8 @@ class Tickets:
         Tickets._apply_ncc_categorisation(ticket, data)
 
         from app.models.support import AutomationTrigger
-        from app.services import support_automation
 
-        support_automation.apply_rules(db, ticket, AutomationTrigger.ticket_created)
+        Tickets._apply_automation_rules(db, ticket, AutomationTrigger.ticket_created)
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -1262,19 +1585,19 @@ class Tickets:
             dispatch_after_commit=dispatch_event_after_commit,
         )
 
-        db.commit()
+        db.flush()
         db.refresh(ticket)
-        _notify_workqueue(ticket, "added")
         return ticket
 
     @staticmethod
     def get(db: Session, ticket_id: str) -> Ticket:
         ticket = db.get(Ticket, ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         return ticket
 
     @staticmethod
+    @ticket_owner_command("set_satisfaction")
     def set_satisfaction(
         db: Session, ticket: Ticket, *, rating: int, comment: str | None = None
     ) -> Ticket:
@@ -1286,9 +1609,9 @@ class Tickets:
             TicketStatus.resolved.value,
             TicketStatus.closed.value,
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="You can rate support once the ticket is resolved.",
+            raise _ticket_error(
+                "satisfaction_not_eligible",
+                "You can rate support once the ticket is resolved.",
             )
         meta = dict(ticket.metadata_ or {})
         meta["csat"] = {
@@ -1298,7 +1621,7 @@ class Tickets:
         }
         ticket.metadata_ = meta
         db.add(ticket)
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         return ticket
 
@@ -1321,6 +1644,7 @@ class Tickets:
         return comment
 
     @staticmethod
+    @ticket_owner_command("request_resolution_confirmation")
     def request_resolution_confirmation(
         db: Session,
         ticket_id: str,
@@ -1332,9 +1656,9 @@ class Tickets:
         ticket = Tickets.get(db, ticket_id)
         _ensure_not_merged_source(ticket)
         if ticket.status in _TICKET_TERMINAL_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot request confirmation for a closed ticket.",
+            raise _ticket_error(
+                "resolution_confirmation_not_eligible",
+                "Cannot request confirmation for a closed ticket.",
             )
 
         now = _now()
@@ -1362,6 +1686,48 @@ class Tickets:
         meta["resolution_confirmation"] = confirmation
         ticket.metadata_ = meta
 
+        # The grace deadline is a durable per-ticket timer staged atomically
+        # with this transition (ADR 0007 §7); its fired trigger drives the
+        # receipted auto-confirm consumer. Re-requesting replaces the timer;
+        # confirm/dispute make a stale firing a state-guarded no-op.
+        from app.services.owner_commands import CommandContext
+        from app.services.runtime_durable_timers import (
+            ScheduleTimerCommand,
+            schedule_timer,
+        )
+
+        schedule_timer(
+            db,
+            ScheduleTimerCommand(
+                owner="support.ticket_lifecycle",
+                entity_kind="support_ticket",
+                entity_id=ticket.id,
+                purpose="resolution_confirmation_due",
+                due_at=now + timedelta(hours=int(grace_hours)),
+                output_event_type="support.resolution_confirmation_due",
+            ),
+            context=CommandContext.system(
+                actor=str(actor_id or "support.ticket_lifecycle"),
+                scope=str(ticket.id),
+                reason="resolution confirmation grace deadline",
+                idempotency_key=(f"resolution-grace:{ticket.id}:{now.isoformat()}"),
+            ),
+        )
+        from app.services.events import EventType, emit_event
+
+        emit_event(
+            db,
+            EventType.ticket_resolution_requested,
+            {
+                "ticket_id": str(ticket.id),
+                "grace_hours": int(grace_hours),
+                "requested_by": actor_id,
+                "requested_at": now.isoformat(),
+            },
+            actor=str(actor_id or "support.ticket_lifecycle"),
+            subscriber_id=ticket.subscriber_id,
+        )
+
         token_row = ticket_access_tokens.mint(
             db,
             ticket,
@@ -1384,12 +1750,13 @@ class Tickets:
             metadata={"token_id": str(token_row.id), "grace_hours": int(grace_hours)},
         )
         Tickets._queue_resolution_confirmation_notifications(db, ticket, token_row)
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         db.refresh(token_row)
         return ticket, token_row
 
     @staticmethod
+    @ticket_owner_command("confirm_resolution")
     def confirm_resolution(
         db: Session,
         token_row: TicketAccessToken,
@@ -1398,14 +1765,14 @@ class Tickets:
     ) -> Ticket:
         ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         if ticket.status == TicketStatus.closed.value:
             return ticket
         _ensure_not_merged_source(ticket)
         if ticket.status in {TicketStatus.canceled.value, TicketStatus.merged.value}:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot confirm a terminal ticket.",
+            raise _ticket_error(
+                "resolution_confirmation_terminal",
+                "Cannot confirm a terminal ticket.",
             )
 
         now = _now()
@@ -1449,11 +1816,69 @@ class Tickets:
             actor_id=None,
             metadata={"token_id": str(token_row.id), "auto": bool(auto)},
         )
-        db.commit()
+        from app.services.events import EventType, emit_event
+
+        emit_event(
+            db,
+            EventType.ticket_resolution_confirmed,
+            {
+                "ticket_id": str(ticket.id),
+                "auto": bool(auto),
+                "confirmed_at": now.isoformat(),
+            },
+            actor="support.ticket_lifecycle",
+            subscriber_id=ticket.subscriber_id,
+        )
+        db.flush()
         db.refresh(ticket)
         return ticket
 
     @staticmethod
+    @ticket_owner_command("respond_to_resolution_for_customer")
+    def respond_to_resolution_for_customer(
+        db: Session,
+        ticket: Ticket,
+        *,
+        confirm: bool,
+        reason: str | None = None,
+    ) -> Ticket:
+        """Authenticated self-care adapter into the resolution owner.
+
+        The public magic link and signed-in clients converge on the same active
+        confirmation capability and therefore the same mutation/audit path.
+        """
+        if ticket.status != TicketStatus.pending_confirmation.value:
+            raise _ticket_error(
+                "resolution_confirmation_not_pending",
+                "This ticket is not awaiting resolution confirmation.",
+            )
+        token_row = (
+            db.query(TicketAccessToken)
+            .filter(TicketAccessToken.ticket_id == ticket.id)
+            .filter(TicketAccessToken.purpose == "resolution_confirm")
+            .filter(TicketAccessToken.is_active.is_(True))
+            .filter(TicketAccessToken.responded_at.is_(None))
+            .filter(
+                or_(
+                    TicketAccessToken.expires_at.is_(None),
+                    TicketAccessToken.expires_at >= _now(),
+                )
+            )
+            .order_by(TicketAccessToken.created_at.desc())
+            .first()
+        )
+        if token_row is None:
+            raise _ticket_error(
+                "resolution_confirmation_inactive",
+                "The resolution confirmation request is no longer active.",
+            )
+        token_row.ticket = ticket
+        if confirm:
+            return Tickets.confirm_resolution(db, token_row)
+        return Tickets.dispute_resolution(db, token_row, reason=reason)
+
+    @staticmethod
+    @ticket_owner_command("dispute_resolution")
     def dispute_resolution(
         db: Session,
         token_row: TicketAccessToken,
@@ -1462,12 +1887,12 @@ class Tickets:
     ) -> Ticket:
         ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
         if not ticket or not ticket.is_active:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         if ticket.status in _TICKET_TERMINAL_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot dispute a terminal ticket.",
+            raise _ticket_error(
+                "resolution_dispute_terminal",
+                "Cannot dispute a terminal ticket.",
             )
 
         now = _now()
@@ -1512,11 +1937,25 @@ class Tickets:
             actor_id=None,
             metadata={"token_id": str(token_row.id), "has_reason": bool(clean_reason)},
         )
-        db.commit()
+        from app.services.events import EventType, emit_event
+
+        emit_event(
+            db,
+            EventType.ticket_resolution_disputed,
+            {
+                "ticket_id": str(ticket.id),
+                "disputed_at": now.isoformat(),
+                "has_reason": bool(clean_reason),
+            },
+            actor="support.ticket_lifecycle",
+            subscriber_id=ticket.subscriber_id,
+        )
+        db.flush()
         db.refresh(ticket)
         return ticket
 
     @staticmethod
+    @ticket_owner_command("auto_confirm_pending")
     def auto_confirm_pending(
         db: Session,
         *,
@@ -1562,8 +2001,7 @@ class Tickets:
             try:
                 Tickets.confirm_resolution(db, token_row, auto=True)
                 confirmed += 1
-            except HTTPException:
-                db.rollback()
+            except SupportTicketError:
                 logger.exception(
                     "ticket_auto_confirm_failed",
                     extra={
@@ -1574,13 +2012,116 @@ class Tickets:
         return confirmed
 
     @staticmethod
+    @ticket_owner_command("consume_resolution_confirmation_due")
+    def consume_resolution_confirmation_due(
+        db: Session,
+        *,
+        ticket_id: str,
+        event_id,
+        context,
+    ) -> str:
+        """Receipt one fired grace timer into an auto-confirmation.
+
+        The effect and its unique (consumer, event_id) receipt commit
+        atomically; a stale firing after confirm/dispute/re-request is a
+        state-guarded no-op.
+        """
+        from app.services.events.owner_outputs import consume_owner_output
+
+        def _effect() -> str:
+            uid = _coerce_uuid(str(ticket_id))
+            ticket = db.get(Ticket, uid) if uid is not None else None
+            if ticket is None or not ticket.is_active:
+                return "skipped_missing"
+            if ticket.status != TicketStatus.pending_confirmation.value:
+                return "skipped_state"
+            meta = dict(ticket.metadata_ or {})
+            confirmation = dict(meta.get("resolution_confirmation") or {})
+            grace_raw = confirmation.get("grace_hours")
+            grace_hours = int(grace_raw) if grace_raw is not None else 24
+            resolved_at = _as_utc(ticket.resolved_at)
+            if resolved_at is None or (
+                resolved_at + timedelta(hours=grace_hours) > _now()
+            ):
+                return "skipped_not_due"
+            token_row = (
+                db.query(TicketAccessToken)
+                .filter(TicketAccessToken.ticket_id == ticket.id)
+                .filter(TicketAccessToken.purpose == "resolution_confirm")
+                .filter(TicketAccessToken.is_active.is_(True))
+                .order_by(TicketAccessToken.created_at.desc())
+                .first()
+            )
+            if token_row is None:
+                token_row = ticket_access_tokens.mint(
+                    db,
+                    ticket,
+                    purpose="resolution_confirm",
+                    ttl_days=max(1, grace_hours // 24 or 1),
+                )
+                db.flush()
+            Tickets.confirm_resolution(db, token_row, auto=True)
+            return "confirmed"
+
+        result, _receipt = consume_owner_output(
+            db,
+            consumer="support.ticket_lifecycle",
+            event_id=event_id,
+            event_type="support.resolution_confirmation_due",
+            producer_owner="runtime.durable_timers",
+            context=context,
+            operation=_effect,
+        )
+        return result if result is not None else "replayed"
+
+    @staticmethod
+    @ticket_owner_command("consume_sla_breach_due")
+    def consume_sla_breach_due(
+        db: Session,
+        *,
+        clock_id: str,
+        event_id,
+        context,
+    ) -> str:
+        """Receipt one fired SLA-clock timer into breach evaluation.
+
+        The breach records, escalation planning, and the unique
+        (consumer, event_id) receipt commit atomically; a clock that was
+        paused, completed, or re-targeted makes a stale firing a
+        state-guarded no-op inside check_sla_breaches.
+        """
+        from app.models.ticket_workflow import SlaClock
+        from app.services.events.owner_outputs import consume_owner_output
+        from app.services.sla_assignment import check_sla_breaches
+
+        def _effect() -> str:
+            uid = _coerce_uuid(str(clock_id))
+            clock = db.get(SlaClock, uid) if uid is not None else None
+            if clock is None:
+                return "skipped_missing"
+            breached = check_sla_breaches(db, clock.entity_id)
+            return "breached" if breached else "skipped_state"
+
+        result, _receipt = consume_owner_output(
+            db,
+            consumer="support.ticket_lifecycle",
+            event_id=event_id,
+            event_type="support.ticket_sla_breach_due",
+            producer_owner="runtime.durable_timers",
+            context=context,
+            operation=_effect,
+        )
+        return result if result is not None else "replayed"
+
+    @staticmethod
+    @ticket_owner_command("add_attachments")
     def add_attachments(
         db: Session, ticket_id: str, attachments: list[dict] | None
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
         ticket.attachments = _merge_attachment_dicts(ticket.attachments, attachments)
         db.add(ticket)
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         return ticket
 
@@ -1599,7 +2140,7 @@ class Tickets:
             query = query.filter(Ticket.number == lookup)
         ticket = query.first()
         if not ticket:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         return ticket
 
     @staticmethod
@@ -1672,7 +2213,7 @@ class Tickets:
                     filters
                 )
             except FilterValidationError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise _ticket_error("invalid_ticket_filter", str(exc)) from exc
             if filter_clause is not None:
                 query = query.filter(filter_clause)
 
@@ -1771,6 +2312,7 @@ class Tickets:
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    @ticket_owner_command("update")
     def update(
         db: Session,
         ticket_id: str,
@@ -1808,11 +2350,13 @@ class Tickets:
 
         _validate_ticket_lead_alignment(db, data, existing=ticket)
 
+        previous_status = ticket.status
         if "status" in data:
             # Admin edit may legitimately reopen, but it's validated + audited.
             transition_ticket_status(
                 ticket, data.pop("status"), source="admin_update", allow_reopen=True
             )
+            Tickets._notify_customer_of_status_change(db, ticket, previous_status)
 
         for key, value in data.items():
             setattr(ticket, key, value)
@@ -1879,9 +2423,10 @@ class Tickets:
                 metadata={"from": before["status"], "to": after["status"]},
             )
             from app.models.support import AutomationTrigger
-            from app.services import support_automation
 
-            support_automation.apply_rules(db, ticket, AutomationTrigger.status_changed)
+            Tickets._apply_automation_rules(
+                db, ticket, AutomationTrigger.status_changed
+            )
         if before["priority"] != after["priority"]:
             log_audit_event(
                 db=db,
@@ -1893,9 +2438,8 @@ class Tickets:
                 metadata={"from": before["priority"], "to": after["priority"]},
             )
             from app.models.support import AutomationTrigger
-            from app.services import support_automation
 
-            support_automation.apply_rules(
+            Tickets._apply_automation_rules(
                 db, ticket, AutomationTrigger.priority_changed
             )
 
@@ -1910,17 +2454,16 @@ class Tickets:
         ):
             Tickets._emit_ticket_event(db, "ticket.assigned", ticket, actor_id)
 
-        db.commit()
+        db.flush()
         db.refresh(ticket)
         previous_assignee = before.get("assigned_to_person_id")
-        _notify_workqueue(
-            ticket,
-            "updated",
-            previous_assignee_id=UUID(previous_assignee) if previous_assignee else None,
+        db.info["_support_previous_assignee_id"] = (
+            UUID(previous_assignee) if previous_assignee else None
         )
         return ticket
 
     @staticmethod
+    @ticket_owner_command("soft_delete")
     def soft_delete(
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> None:
@@ -1936,9 +2479,10 @@ class Tickets:
             actor_id=actor_id,
             metadata={"soft_deleted": True},
         )
-        db.commit()
+        db.flush()
 
     @staticmethod
+    @ticket_owner_command("bulk_update")
     def bulk_update(
         db: Session,
         payload: TicketBulkUpdateRequest,
@@ -1985,10 +2529,11 @@ class Tickets:
             actor_id=actor_id,
             metadata={"count": len(updated)},
         )
-        db.commit()
+        db.flush()
         return updated
 
     @staticmethod
+    @ticket_owner_command("manual_auto_assign")
     def manual_auto_assign(
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> dict[str, Any]:
@@ -2005,27 +2550,43 @@ class Tickets:
             metadata={"result": result},
         )
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
-        db.commit()
+        db.flush()
         return result
 
     @staticmethod
+    @ticket_owner_command("create_comment")
     def create_comment(
         db: Session,
         ticket_id: str,
         payload: TicketCommentCreate,
         actor_id: str | None = None,
         request=None,
+        mentioned_agent_ids: Sequence[UUID] = (),
     ) -> TicketComment:
         ticket = Tickets.get(db, ticket_id)
         comment = ticket_comments.create(
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )
         Tickets._queue_mention_notifications(db, ticket, payload.body, actor_id)
-        db.commit()
+        Tickets._notify_customer_of_comment(db, ticket, comment)
+        if mentioned_agent_ids:
+            from app.services import ticket_mentions
+
+            ticket_mentions.notify_ticket_comment_mentions(
+                db,
+                ticket_id=str(ticket.id),
+                ticket_number=ticket.number,
+                ticket_title=ticket.title,
+                comment_preview=payload.body[:300],
+                mentioned_agent_ids=[str(item) for item in mentioned_agent_ids],
+                actor_person_id=actor_id,
+            )
+        db.flush()
         db.refresh(comment)
         return comment
 
     @staticmethod
+    @ticket_owner_command("bulk_create_comments")
     def bulk_create_comments(
         db: Session,
         ticket_id: str,
@@ -2041,12 +2602,13 @@ class Tickets:
             )
             Tickets._queue_mention_notifications(db, ticket, payload.body, actor_id)
             comments.append(comment)
-        db.commit()
+        db.flush()
         for comment in comments:
             db.refresh(comment)
         return comments
 
     @staticmethod
+    @ticket_owner_command("link_ticket")
     def link_ticket(
         db: Session,
         *,
@@ -2087,7 +2649,7 @@ class Tickets:
             actor_id=actor_id,
             metadata={"to_ticket_id": str(target.id), "link_type": link_type},
         )
-        db.commit()
+        db.flush()
         db.refresh(link)
         return link
 
@@ -2113,6 +2675,7 @@ class Tickets:
         )
 
     @staticmethod
+    @ticket_owner_command("merge")
     def merge(
         db: Session,
         source_ticket_id: str,
@@ -2123,8 +2686,8 @@ class Tickets:
         source = Tickets.get(db, source_ticket_id)
         target = Tickets.get(db, str(payload.target_ticket_id))
         if source.id == target.id:
-            raise HTTPException(
-                status_code=400, detail="Cannot merge a ticket into itself"
+            raise _ticket_error(
+                "ticket_merge_self", "Cannot merge a ticket into itself"
             )
         _ensure_not_merged_source(source)
         _ensure_not_merged_source(target)
@@ -2238,7 +2801,7 @@ class Tickets:
             metadata={"target_ticket_id": str(target.id), "reason": payload.reason},
         )
 
-        db.commit()
+        db.flush()
         db.refresh(target)
         return target
 
@@ -2304,10 +2867,11 @@ class TicketAccessTokens:
         return "ok"
 
     @staticmethod
+    @ticket_owner_command("mark_access_token_used")
     def mark_accessed(db: Session, token_row: TicketAccessToken) -> None:
         token_row.accessed_at = _now()
         db.add(token_row)
-        db.commit()
+        db.flush()
 
     @staticmethod
     def action_urls(token_row: TicketAccessToken) -> dict[str, str | None]:
@@ -2336,7 +2900,10 @@ class TicketAccessTokens:
 def _person_option(row) -> dict[str, str]:
     full_name = " ".join(filter(None, [row.first_name, row.last_name])).strip()
     label = row.display_name or full_name or row.email or str(row.id)
-    address = ", ".join([p for p in [row.address_line1, row.city, row.region] if p])
+    parts = service_address_service.address_parts(row)
+    address = ", ".join(
+        [p for p in [parts.address_line1, parts.city, parts.region] if p]
+    )
     return {
         "id": str(row.id),
         "label": label,
@@ -2418,6 +2985,7 @@ def list_people(
 
     rows = (
         db.query(Subscriber)
+        .options(selectinload(Subscriber.addresses))
         .filter(Subscriber.is_active.is_(True))
         .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
         .limit(limit)

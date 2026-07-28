@@ -1436,12 +1436,17 @@ class TestCustomerTopupRoutes:
                         "topup_intent_id": "intent-1",
                         "account_id": "acct-1",
                     },
+                    "preview_fingerprint": "a" * 64,
                 },
             ),
         ):
             response = customer_create_topup_intent(
                 request=request,
-                payload={"amount": 5000, "provider": "paystack"},
+                payload={
+                    "amount": 5000,
+                    "provider": "paystack",
+                    "preview_fingerprint": "a" * 64,
+                },
                 db=MagicMock(),
             )
 
@@ -1841,7 +1846,7 @@ class TestVacationHoldUsageLimits:
         # Mock the settings and usage to simulate max holds reached
         def mock_resolve_value(db, domain, key):
             if key == "max_suspend_holds_per_year":
-                return 2
+                return 1
             if key == "customer_suspend_enabled":
                 return True
             if key == "max_suspend_days":
@@ -1850,28 +1855,33 @@ class TestVacationHoldUsageLimits:
                 return 0
             return None
 
-        # Mock usage to show 2 holds already used
-        mock_usage = {
-            "holds_this_year": 2,
-            "last_hold_date": None,
-            "days_since_last": None,
-        }
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+
+        db_session.add(
+            EnforcementLock(
+                subscription_id=subscription.id,
+                subscriber_id=subscriber.id,
+                reason=EnforcementReason.customer_hold,
+                source="historical:0",
+                is_active=False,
+                resolved_at=datetime.now(UTC),
+                resolved_by="test",
+                created_at=datetime.now(UTC),
+            )
+        )
+        db_session.commit()
 
         with patch(
             "app.services.settings_spec.resolve_value",
             side_effect=mock_resolve_value,
         ):
-            with patch(
-                "app.services.customer_portal_flow_services._get_vacation_hold_usage",
-                return_value=mock_usage,
-            ):
-                with pytest.raises(ValueError, match="maximum of 2 vacation holds"):
-                    apply_service_suspend(
-                        db_session,
-                        {"account_id": subscriber.id},
-                        str(subscription.id),
-                        days=7,
-                    )
+            with pytest.raises(ValueError, match="maximum of 1 vacation holds"):
+                apply_service_suspend(
+                    db_session,
+                    {"account_id": subscriber.id},
+                    str(subscription.id),
+                    days=7,
+                )
 
     def test_apply_service_suspend_rejects_during_cooldown(
         self, db_session, subscription, subscriber
@@ -2101,10 +2111,10 @@ class TestVacationHoldCeleryTask:
         mock_session.rollback = db_session.rollback
         mock_session.scalars = db_session.scalars
 
-        # Mock restore_subscription to raise an error
+        # Mock the lifecycle command owner to raise an error
         with patch("app.tasks.vacation_holds.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.vacation_holds.restore_subscription",
+                "app.tasks.vacation_holds.execute_subscription_command",
                 side_effect=Exception("Test error"),
             ):
                 result = resume_expired_holds()
@@ -2123,41 +2133,8 @@ class TestPlaywrightPortalRoutes:
         assert defaults[0] == "/portal/usage"
 
 
-class TestDashboardLiveFramedIp:
-    def test_live_framed_ip_prefers_open_session(self, db_session, subscription):
-        from datetime import timedelta
+class TestDashboardLiveSessionCutover:
+    def test_page_local_framed_ip_resolver_is_retired(self):
+        from app.services import customer_portal_context
 
-        from app.models.usage import AccountingStatus, RadiusAccountingSession
-        from app.services.customer_portal_context import _live_framed_ips
-
-        now = datetime.now(UTC)
-        db_session.add_all(
-            [
-                # Closed session with a stale framed IP — must not win.
-                RadiusAccountingSession(
-                    subscription_id=subscription.id,
-                    session_id="closed-1",
-                    status_type=AccountingStatus.stop,
-                    session_start=now - timedelta(hours=5),
-                    session_end=now - timedelta(hours=4),
-                    framed_ip_address="100.64.0.1",
-                ),
-                RadiusAccountingSession(
-                    subscription_id=subscription.id,
-                    session_id="open-1",
-                    status_type=AccountingStatus.interim,
-                    session_start=now - timedelta(hours=1),
-                    framed_ip_address="100.64.9.9",
-                ),
-            ]
-        )
-        db_session.commit()
-
-        ips = _live_framed_ips(db_session, [subscription.id])
-        assert ips == {subscription.id: "100.64.9.9"}
-
-    def test_live_framed_ip_empty_without_open_sessions(self, db_session, subscription):
-        from app.services.customer_portal_context import _live_framed_ips
-
-        assert _live_framed_ips(db_session, [subscription.id]) == {}
-        assert _live_framed_ips(db_session, []) == {}
+        assert not hasattr(customer_portal_context, "_live_framed_ips")

@@ -108,7 +108,7 @@ TASK_PRIORITY_MAPPING: dict[str, TaskPriority] = {
     "app.tasks.tr069.apply_acs_config": TaskPriority.critical,
     "app.tasks.tr069.wait_for_ont_bootstrap": TaskPriority.critical,
     # High priority
-    "app.tasks.tr069.execute_pending_jobs": TaskPriority.high,
+    "app.tasks.tr069.reconcile_command_outcomes": TaskPriority.high,
     "app.tasks.tr069.sync_all_acs_devices": TaskPriority.high,
     # Normal priority (default)
     "app.tasks.tr069.check_device_health": TaskPriority.normal,
@@ -351,7 +351,14 @@ class QueueStrategyAdapter:
     def get_all_queue_health(self) -> dict[str, dict[str, Any]]:
         """Get health status for all tracked queues."""
         result = {}
-        for queue_name in ["celery", "tr069", "acs", "bandwidth", "ingestion"]:
+        for queue_name in [
+            "celery",
+            "tr069",
+            "acs",
+            "bandwidth",
+            "monitoring",
+            "ingestion",
+        ]:
             state = self._update_queue_health(queue_name)
             result[queue_name] = {
                 "depth": state.depth,

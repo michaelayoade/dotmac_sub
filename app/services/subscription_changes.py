@@ -460,7 +460,12 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
-        if str(subscription.offer_id) == str(request.requested_offer_id):
+        offer_matches = str(subscription.offer_id) == str(request.requested_offer_id)
+        address_matches = (
+            request.target_service_address_id is None
+            or subscription.service_address_id == request.target_service_address_id
+        )
+        if offer_matches and address_matches:
             request.status = SubscriptionChangeStatus.applied
             request.applied_at = datetime.now(UTC)
             request.notes = _append_note(
@@ -534,7 +539,10 @@ class SubscriptionChangeRequests(ListResponseMixin):
         catalog_service.subscriptions.update(
             db,
             str(subscription.id),
-            SubscriptionUpdate(offer_id=request.requested_offer_id),
+            SubscriptionUpdate(
+                offer_id=request.requested_offer_id,
+                service_address_id=request.target_service_address_id,
+            ),
             skip_proration_artifacts=skip_proration_artifacts,
             plan_change_operation_key=plan_change_operation_key or str(request.id),
             plan_change_preview_fingerprint=expected_fingerprint,
@@ -562,7 +570,9 @@ class SubscriptionChangeRequests(ListResponseMixin):
             from app.services.enforcement import update_subscription_sessions
             from app.services.radius import reconcile_subscription_connectivity
 
-            reconcile_subscription_connectivity(db, str(subscription.id))
+            reconcile_subscription_connectivity(
+                db, str(subscription.id)
+            ).require_projected()
             if subscription.status == SubscriptionStatus.active:
                 update_subscription_sessions(
                     db, str(subscription.id), reason="profile_change"

@@ -1,27 +1,22 @@
-"""Tests for per-type operational-status derivers (Phase 2b): OLT + ONT.
-
-See docs/designs/DEVICE_OPERATIONAL_STATUS.md.
-"""
+"""Per-type behavior tests for the binary device operational owner."""
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from app.services.device_operational_status import (
-    DEGRADED,
-    DOWN,
-    UP,
+    NOT_WORKING,
+    WORKING,
+    derive_nas_operational_status,
     derive_olt_operational_status,
     derive_ont_operational_status,
+    derive_router_operational_status,
 )
 
 NOW = datetime(2026, 6, 26, 12, 0, tzinfo=UTC)
 
 
-def _enum(v):
-    return SimpleNamespace(value=v)
-
-
-# ── OLT (ping + poll + freshness) ────────────────────────────────────────────
+def _enum(value):
+    return SimpleNamespace(value=value)
 
 
 def _olt(ping_ok, poll=None, ping_at=NOW):
@@ -32,68 +27,75 @@ def _olt(ping_ok, poll=None, ping_at=NOW):
     )
 
 
-def test_olt_ping_ok_poll_success_is_up():
+def test_olt_positive_ping_and_poll_is_working():
     op = derive_olt_operational_status(_olt(True, "success"), now=NOW)
-    assert op.status == UP
+
+    assert op.status == WORKING
+    assert op.reason == "observed_working"
 
 
-def test_olt_ping_ok_poll_failing_is_degraded():
+def test_olt_positive_ping_with_poll_failure_is_working_and_impaired():
     op = derive_olt_operational_status(_olt(True, "timeout"), now=NOW)
-    assert op.status == DEGRADED
+
+    assert op.status == WORKING
     assert op.reason == "poll_timeout"
+    assert op.impaired is True
 
 
-def test_olt_ping_failed_is_down():
+def test_olt_negative_ping_is_not_working():
     op = derive_olt_operational_status(_olt(False, "success"), now=NOW)
-    assert op.status == DOWN
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "ping_failed"
+    assert op.alarming is True
 
 
-def test_olt_never_pinged_is_offline_while_retrying():
+def test_olt_without_observation_is_not_working_until_verified():
     op = derive_olt_operational_status(_olt(None, None, ping_at=None), now=NOW)
-    assert op.status == DOWN
-    assert op.reason == "not_warmed_retry_pending"
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_not_started"
 
 
-def test_olt_stale_ping_retains_last_state_while_retrying():
+def test_olt_expired_direct_observation_is_not_working():
     op = derive_olt_operational_status(
         _olt(True, "success", ping_at=NOW - timedelta(hours=3)), now=NOW
     )
-    assert op.status == UP
-    assert op.reason == "stale_retry_pending"
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_expired"
 
 
-def test_olt_stale_direct_falls_back_to_linked_zabbix():
-    # OLT poller dead (stale ping), but the linked Zabbix device says up
+def test_olt_expired_direct_observation_uses_current_linked_evidence():
     op = derive_olt_operational_status(
         _olt(True, "success", ping_at=NOW - timedelta(days=60)),
         linked_live_status="up",
         warm_stale=False,
         now=NOW,
     )
-    assert op.status == UP
-    assert op.reason == "observed_up_linked"
+
+    assert op.status == WORKING
+    assert op.reason == "observed_working_linked"
 
 
-def test_olt_fresh_direct_beats_linked_zabbix():
-    # fresh direct ping failure wins over a linked 'up' (direct is more specific)
+def test_olt_current_direct_negative_beats_linked_positive():
     op = derive_olt_operational_status(
         _olt(False, "success"), linked_live_status="up", now=NOW
     )
-    assert op.status == DOWN
+
+    assert op.status == NOT_WORKING
 
 
-def test_olt_stale_with_stale_warmer_retains_last_state():
+def test_olt_stale_linked_evidence_does_not_confirm_operation():
     op = derive_olt_operational_status(
         _olt(True, "success", ping_at=NOW - timedelta(days=60)),
         linked_live_status="up",
         warm_stale=True,
         now=NOW,
     )
-    assert op.status == UP
-    assert op.retry_pending is True
 
-
-# ── ONT (multi-source reconciliation) ────────────────────────────────────────
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_expired"
 
 
 def _ont(olt_status=None, acs=None, seen=None, offline_reason=None, olt_seen=True):
@@ -106,39 +108,82 @@ def _ont(olt_status=None, acs=None, seen=None, offline_reason=None, olt_seen=Tru
     )
 
 
-def test_ont_olt_online_is_up():
+def test_ont_current_olt_positive_is_working():
     op = derive_ont_operational_status(_ont("online"), now=NOW)
-    assert op.status == UP
+
+    assert op.status == WORKING
     assert op.reason == "olt_online"
 
 
-def test_ont_offline_but_recent_acs_is_up():
-    # the key accuracy win: OLT says offline, but ACS informed 5 min ago
+def test_ont_recent_acs_positive_is_working():
     op = derive_ont_operational_status(
         _ont("offline", acs=NOW - timedelta(minutes=5)), now=NOW
     )
-    assert op.status == UP
+
+    assert op.status == WORKING
     assert op.reason == "acs_inform_recent"
 
 
-def test_ont_offline_with_history_is_down():
+def test_ont_current_negative_is_not_working():
     op = derive_ont_operational_status(
         _ont("offline", seen=NOW - timedelta(days=2), offline_reason="no_signal"),
         now=NOW,
     )
-    assert op.status == DOWN
+
+    assert op.status == NOT_WORKING
     assert op.reason == "no_signal"
+    assert op.alarming is True
 
 
-def test_ont_never_seen_is_offline_while_retrying():
+def test_ont_never_verified_is_not_working():
     op = derive_ont_operational_status(_ont("offline", olt_seen=False), now=NOW)
-    assert op.status == DOWN
-    assert op.reason == "never_seen_retry_pending"
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_not_started"
+    assert op.alarming is False
 
 
-def test_ont_stale_acs_does_not_count_as_up():
+def test_ont_expired_positive_is_not_working():
     op = derive_ont_operational_status(
-        _ont("offline", acs=NOW - timedelta(hours=2), seen=NOW - timedelta(hours=2)),
-        now=NOW,
+        _ont("online", acs=NOW - timedelta(hours=2), olt_seen=False), now=NOW
     )
-    assert op.status == DOWN
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_expired"
+
+
+def test_unlinked_active_nas_is_not_working_without_verifier():
+    op = derive_nas_operational_status(
+        SimpleNamespace(status=_enum("active"), health_status=None)
+    )
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_not_configured"
+
+
+def test_degraded_nas_is_working_with_impairment():
+    op = derive_nas_operational_status(
+        SimpleNamespace(status=_enum("active"), health_status=_enum("degraded"))
+    )
+
+    assert op.status == WORKING
+    assert op.impaired is True
+
+
+def test_router_requires_current_last_seen_confirmation():
+    router = SimpleNamespace(status=_enum("online"), last_seen_at=None)
+
+    op = derive_router_operational_status(router, now=NOW)
+
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_expired"
+
+
+def test_current_router_is_working():
+    router = SimpleNamespace(
+        status=_enum("online"), last_seen_at=NOW - timedelta(minutes=2)
+    )
+
+    op = derive_router_operational_status(router, now=NOW)
+
+    assert op.status == WORKING

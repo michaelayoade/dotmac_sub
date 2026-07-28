@@ -393,76 +393,79 @@ from app.models.equipment import Equipment, EquipmentStatus
 
 #### Step 2: Create the Service Layer
 
-Create a service file with manager classes:
+Create a registered query/command owner with typed contracts. The public
+command owns the business transaction; helpers below it only flush:
 
 ```python
-# app/services/equipment.py
+from dataclasses import dataclass
 from uuid import UUID
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
 from app.models.equipment import Equipment, EquipmentStatus
-from app.services._base import ListResponseMixin
 
-class EquipmentManager(ListResponseMixin):
-    """Manages equipment CRUD operations."""
 
-    def list(
-        self,
-        db: Session,
-        status: EquipmentStatus | None = None,
-        location_id: UUID | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[Equipment]:
-        """List equipment with optional filtering."""
-        query = db.query(Equipment)
+class EquipmentNotFoundError(ValueError):
+    pass
 
-        if status:
-            query = query.filter(Equipment.status == status)
-        if location_id:
-            query = query.filter(Equipment.location_id == location_id)
 
-        return query.offset(offset).limit(limit).all()
+@dataclass(frozen=True)
+class CreateEquipment:
+    serial_number: str
+    model: str
+    status: EquipmentStatus
 
-    def get(self, db: Session, equipment_id: UUID) -> Equipment | None:
-        """Get single equipment by ID."""
-        return db.query(Equipment).filter(Equipment.id == equipment_id).first()
 
-    def create(self, db: Session, data: dict) -> Equipment:
-        """Create new equipment."""
-        equipment = Equipment(**data)
+@dataclass(frozen=True)
+class EquipmentCreated:
+    equipment_id: UUID
+
+
+@dataclass(frozen=True)
+class EquipmentPage:
+    items: tuple[Equipment, ...]
+    total: int
+
+
+def list_page(
+    db: Session,
+    *,
+    status: EquipmentStatus | None,
+    limit: int,
+    offset: int,
+) -> EquipmentPage:
+    filters = () if status is None else (Equipment.status == status,)
+    items = tuple(
+        db.scalars(
+            select(Equipment)
+            .where(*filters)
+            .order_by(Equipment.serial_number)
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    total = db.scalar(select(func.count()).select_from(Equipment).where(*filters))
+    return EquipmentPage(items=items, total=total or 0)
+
+
+def create(db: Session, command: CreateEquipment) -> EquipmentCreated:
+    with db.begin():
+        equipment = Equipment(
+            serial_number=command.serial_number,
+            model=command.model,
+            status=command.status,
+        )
         db.add(equipment)
-        db.commit()
-        db.refresh(equipment)
-        return equipment
-
-    def update(self, db: Session, equipment_id: UUID, data: dict) -> Equipment | None:
-        """Update equipment."""
-        equipment = self.get(db, equipment_id)
-        if not equipment:
-            return None
-
-        for key, value in data.items():
-            if hasattr(equipment, key):
-                setattr(equipment, key, value)
-
-        db.commit()
-        db.refresh(equipment)
-        return equipment
-
-    def delete(self, db: Session, equipment_id: UUID) -> bool:
-        """Delete equipment."""
-        equipment = self.get(db, equipment_id)
-        if not equipment:
-            return False
-
-        db.delete(equipment)
-        db.commit()
-        return True
-
-
-# Create singleton instance
-equipment = EquipmentManager()
+        db.flush()
+        # Stage the versioned domain event/outbox through its registered owner.
+        outcome = EquipmentCreated(equipment_id=equipment.id)
+    return outcome
 ```
+
+Register the owner, its concerns, dependencies, entrypoints, and migration
+state in `app/services/sot_relationships.py`. Add the matching relationship-map
+entry and architecture tests in the same change.
 
 #### Step 3: Create Web Routes
 
@@ -512,21 +515,17 @@ def list_equipment(
         except ValueError:
             pass
 
-    # Fetch equipment
-    items = equipment_service.equipment.list(
+    result = equipment_service.list_page(
         db,
         status=status_filter,
         limit=PER_PAGE,
         offset=offset
     )
-
-    # Get total for pagination
-    all_items = equipment_service.equipment.list(db, status=status_filter, limit=10000)
-    total_pages = (len(all_items) + PER_PAGE - 1) // PER_PAGE
+    total_pages = (result.total + PER_PAGE - 1) // PER_PAGE
 
     context = _base_context(request)
     context.update({
-        "equipment_list": items,
+        "equipment_list": result.items,
         "page": page,
         "total_pages": total_pages,
         "status_filter": status,
@@ -556,16 +555,17 @@ def create_equipment(
     db: Session = Depends(get_db),
 ):
     """Create new equipment."""
-    data = {
-        "serial_number": serial_number,
-        "model": model,
-        "status": EquipmentStatus(status),
-    }
-
-    equipment = equipment_service.equipment.create(db, data)
+    result = equipment_service.create(
+        db,
+        equipment_service.CreateEquipment(
+            serial_number=serial_number,
+            model=model,
+            status=EquipmentStatus(status),
+        ),
+    )
 
     return RedirectResponse(
-        url=f"/admin/equipment/{equipment.id}",
+        url=f"/admin/equipment/{result.equipment_id}",
         status_code=303
     )
 
@@ -962,43 +962,40 @@ def create_item(db: Session = Depends(get_db)):
 
 ### Service Patterns
 
-#### 1. Manager Class Pattern
+#### 1. Command and Query Owner Pattern
 
 ```python
-class ItemManager:
-    def list(self, db, **filters):
-        query = db.query(Item)
-        # Apply filters
-        return query.all()
+def list_items(db: Session, query: ListItems) -> ItemPage:
+    """Read-only query owner: filters, count, ordering, and page agree."""
+    ...
 
-    def get(self, db, item_id):
-        return db.query(Item).filter(Item.id == item_id).first()
 
-    def create(self, db, data):
-        item = Item(**data)
+def create_item(db: Session, command: CreateItem) -> ItemCreated:
+    """Public command owner: typed intent and one atomic transaction."""
+    with db.begin():
+        item = Item(name=command.name, item_type=command.item_type)
         db.add(item)
-        db.commit()
-        return item
-
-# Singleton
-items = ItemManager()
+        db.flush()
+        # Stage audit evidence and the versioned domain event here.
+        outcome = ItemCreated(item_id=item.id)
+    return outcome
 ```
 
 #### 2. Transaction Pattern
 
 ```python
-def complex_operation(self, db, data):
-    try:
-        # Multiple operations
-        item1 = self.create_item(db, data["item1"])
-        item2 = self.create_item(db, data["item2"])
-        self.link_items(db, item1, item2)
-        db.commit()
-        return item1
-    except Exception:
-        db.rollback()
-        raise
+def complex_operation(db: Session, command: LinkItems) -> ItemsLinked:
+    with db.begin():
+        item1 = _create_item(db, command.first)  # nested helper: flush only
+        item2 = _create_item(db, command.second)
+        _link_items(db, item1, item2)
+        outcome = ItemsLinked(first_id=item1.id, second_id=item2.id)
+    return outcome
 ```
+
+Routes, tasks, event handlers, and CLI adapters create/close the session and
+map domain outcomes or errors. They do not call `commit()`, `rollback()`,
+`flush()`, `begin()`, or ORM mutation methods.
 
 ### Template Patterns
 
@@ -1142,12 +1139,12 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)):
 ### Role-Based Access
 
 ```python
-from app.services.rbac import require_permission
+from app.services.auth_dependencies import require_permission
 
 @router.post("/admin/users")
 def create_user(
     request: Request,
-    _: None = Depends(require_permission("users.create"))
+    _auth: dict = Depends(require_permission("system:write"))
 ):
     # User has permission
     pass

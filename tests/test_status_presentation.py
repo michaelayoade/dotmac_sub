@@ -15,6 +15,7 @@ from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import Ticket, TicketStatus
 from app.models.vendor_routes import VendorPurchaseInvoiceStatus
+from app.models.vendor_supply import VendorAdvanceStatus, VendorMaterialReleaseStatus
 from app.schemas.billing import InvoiceRead, PaymentRead
 from app.schemas.catalog import SubscriptionRead
 from app.schemas.network_monitoring import NetworkDeviceRead
@@ -22,7 +23,6 @@ from app.schemas.status_presentation import StatusIcon, StatusTone
 from app.schemas.support import TicketRead
 from app.services.device_operational_status import (
     DeviceOperationalState,
-    OperationalStatus,
     annotate_operational_status,
 )
 from app.services.field.work_order_status import WorkOrderStatus
@@ -32,21 +32,34 @@ from app.services.status_presentation import (
     connection_health_status_presentation,
     credit_note_status_presentation,
     device_operational_status_presentation,
-    erp_supplier_invoice_status_presentation,
     field_expense_status_presentation,
     field_material_request_status_presentation,
     invoice_status_presentation,
     outage_status_presentation,
     payment_status_presentation,
+    service_access_status_presentation,
     subscription_status_presentation,
+    supplier_invoice_status_presentation,
     system_job_status_presentation,
     ticket_status_presentation,
+    vendor_advance_status_presentation,
+    vendor_material_release_status_presentation,
     vendor_purchase_invoice_status_presentation,
     withholding_tax_status_presentation,
     work_order_status_presentation,
 )
 from app.services.topology.connection_status import ConnectionHealthState
 from app.services.topology.outage import OutageStatus
+
+
+@pytest.mark.parametrize("status", ["available", "restricted", "unavailable"])
+def test_service_access_presentation_covers_projection_states(status: str) -> None:
+    presentation = service_access_status_presentation(status)
+
+    assert presentation.value == status
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
 
 
 @pytest.mark.parametrize("status", list(WithholdingTaxStatus))
@@ -84,6 +97,30 @@ def test_vendor_purchase_invoice_presentation_covers_authoritative_enum(
     assert presentation.icon in StatusIcon
 
 
+@pytest.mark.parametrize("status", list(VendorMaterialReleaseStatus))
+def test_vendor_material_release_presentation_covers_authoritative_enum(
+    status: VendorMaterialReleaseStatus,
+) -> None:
+    presentation = vendor_material_release_status_presentation(status)
+
+    assert presentation.value == status.value
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
+@pytest.mark.parametrize("status", list(VendorAdvanceStatus))
+def test_vendor_advance_presentation_covers_authoritative_enum(
+    status: VendorAdvanceStatus,
+) -> None:
+    presentation = vendor_advance_status_presentation(status)
+
+    assert presentation.value == status.value
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
 @pytest.mark.parametrize(
     "status",
     [
@@ -103,7 +140,7 @@ def test_vendor_purchase_invoice_presentation_covers_authoritative_enum(
 def test_erp_supplier_invoice_presentation_covers_authoritative_statuses(
     status: str,
 ) -> None:
-    presentation = erp_supplier_invoice_status_presentation(status)
+    presentation = supplier_invoice_status_presentation(status)
 
     assert presentation.value == status
     assert presentation.label
@@ -151,28 +188,16 @@ def test_system_job_presentation_covers_lifecycle(status: str) -> None:
     ("status", "label", "tone", "icon"),
     [
         (
-            DeviceOperationalState.up,
-            "Up",
+            DeviceOperationalState.working,
+            "Working",
             StatusTone.positive,
             StatusIcon.check,
         ),
         (
-            DeviceOperationalState.degraded,
-            "Degraded",
-            StatusTone.warning,
-            StatusIcon.alert,
-        ),
-        (
-            DeviceOperationalState.down,
-            "Down",
+            DeviceOperationalState.not_working,
+            "Not working",
             StatusTone.negative,
             StatusIcon.x,
-        ),
-        (
-            DeviceOperationalState.maintenance,
-            "Maintenance",
-            StatusTone.neutral,
-            StatusIcon.minus,
         ),
     ],
 )
@@ -250,23 +275,6 @@ def test_access_session_presentation_covers_admin_observation_vocabulary(
     assert presentation.icon == icon
 
 
-def test_retry_pending_down_is_warning_not_confirmed_failure() -> None:
-    operational = OperationalStatus(
-        status=DeviceOperationalState.down.value,
-        reason="not_warmed_retry_pending",
-        admin_status="online",
-        mismatch=True,
-        mismatch_reason="active_retry_pending",
-    )
-
-    assert operational.presentation.model_dump(mode="json") == {
-        "value": "down",
-        "label": "Down",
-        "tone": "warning",
-        "icon": "clock",
-    }
-
-
 def test_network_device_read_serializes_operational_presentation() -> None:
     now = datetime.now(UTC)
     device = NetworkDevice(
@@ -275,6 +283,7 @@ def test_network_device_read_serializes_operational_presentation() -> None:
         role=DeviceRole.edge,
         status=DeviceStatus.online,
         live_status="up",
+        live_status_at=now,
         ping_enabled=True,
         snmp_enabled=False,
         send_notifications=True,
@@ -287,12 +296,12 @@ def test_network_device_read_serializes_operational_presentation() -> None:
 
     payload = NetworkDeviceRead.model_validate(device).model_dump(mode="json")
 
-    assert payload["operational_status"] == "up"
-    assert payload["operational_reason"] == "observed_up"
-    assert payload["operational_retry_pending"] is False
+    assert payload["operational_status"] == "working"
+    assert payload["operational_reason"] == "observed_working"
+    assert "operational_retry_pending" not in payload
     assert payload["status_presentation"] == {
-        "value": "up",
-        "label": "Up",
+        "value": "working",
+        "label": "Working",
         "tone": "positive",
         "icon": "check",
     }

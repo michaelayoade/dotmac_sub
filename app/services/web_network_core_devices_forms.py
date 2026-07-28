@@ -41,8 +41,7 @@ from app.services import network as network_service
 from app.services import ping as ping_service
 from app.services.brand_theme import DEFAULT_SEMANTIC_COLORS
 from app.services.device_operational_status import (
-    DEGRADED,
-    DOWN,
+    NOT_WORKING,
     annotate_operational_status,
 )
 
@@ -617,16 +616,21 @@ def list_page_data(
                 continue
             key = str(child.parent_device_id)
             bucket = child_impacts.setdefault(
-                key, {"total": 0, "offline": 0, "degraded": 0, "impacted": False}
+                key,
+                {
+                    "total": 0,
+                    "not_working": 0,
+                    "impaired": 0,
+                    "impacted": False,
+                },
             )
             bucket["total"] = int(bucket["total"]) + 1
-            child_status = child.operational.status
-            if child_status == DOWN:
-                bucket["offline"] = int(bucket["offline"]) + 1
-            if child_status == DEGRADED:
-                bucket["degraded"] = int(bucket["degraded"]) + 1
+            if child.operational.status == NOT_WORKING:
+                bucket["not_working"] = int(bucket["not_working"]) + 1
+            if child.operational.impaired:
+                bucket["impaired"] = int(bucket["impaired"]) + 1
             bucket["impacted"] = bool(
-                int(bucket["offline"]) > 0 or int(bucket["degraded"]) > 0
+                int(bucket["not_working"]) > 0 or int(bucket["impaired"]) > 0
             )
 
     uptime_map: dict[str, str | None] = {}
@@ -787,11 +791,13 @@ def detail_page_data(
     lineage.reverse()
     child_status_summary = {
         "total": len(child_devices),
-        "offline": sum(1 for c in child_devices if c.operational.status == DOWN),
-        "degraded": sum(1 for c in child_devices if c.operational.status == DEGRADED),
+        "not_working": sum(
+            1 for c in child_devices if c.operational.status == NOT_WORKING
+        ),
+        "impaired": sum(1 for c in child_devices if c.operational.impaired),
     }
     child_status_summary["impacted"] = (
-        child_status_summary["offline"] + child_status_summary["degraded"]
+        child_status_summary["not_working"] + child_status_summary["impaired"]
     ) > 0
     descendants_by_parent: dict[UUID, list[NetworkDevice]] = {}
     descendant_devices: list[NetworkDevice] = []

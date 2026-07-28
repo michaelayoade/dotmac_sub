@@ -6,8 +6,8 @@ See DEVICE_OPERATIONAL_STATUS.md / monitoring_coverage.py.
 from types import SimpleNamespace
 
 from app.services.device_operational_status import (
-    DOWN,
-    UP,
+    NOT_WORKING,
+    WORKING,
     derive_operational_status,
 )
 from app.services.monitoring_coverage import MonitoringCoverage
@@ -52,14 +52,14 @@ def _dev(live, ip):
     return SimpleNamespace(status=None, live_status=live, mgmt_ip=ip)
 
 
-def test_no_path_device_is_offline_while_retrying():
+def test_no_path_device_is_not_working_without_claiming_physical_failure():
     cov = MonitoringCoverage(["172.16.0.0/16"], loaded=True)
     # device in an off-tunnel subnet, Zabbix says down -> blind spot
     op = derive_operational_status(
         _dev("down", "172.21.4.1"), warm_stale=False, coverage=cov
     )
-    assert op.status == DOWN
-    assert op.reason == "no_path_retry_pending"
+    assert op.status == NOT_WORKING
+    assert op.reason == "verification_path_unavailable"
     assert op.alarming is False
 
 
@@ -68,7 +68,7 @@ def test_covered_down_device_still_down():
     op = derive_operational_status(
         _dev("down", "172.16.5.9"), warm_stale=False, coverage=cov
     )
-    assert op.status == DOWN
+    assert op.status == NOT_WORKING
 
 
 def test_observed_up_wins_over_no_path():
@@ -77,12 +77,12 @@ def test_observed_up_wins_over_no_path():
     op = derive_operational_status(
         _dev("up", "172.21.4.1"), warm_stale=False, coverage=cov
     )
-    assert op.status == UP
+    assert op.status == WORKING
 
 
 def test_no_coverage_arg_is_phase1_behaviour():
     op = derive_operational_status(_dev("down", "172.21.4.1"), warm_stale=False)
-    assert op.status == DOWN  # no coverage passed -> unchanged from Phase 1
+    assert op.status == NOT_WORKING
 
 
 # ── compute_reachable_cidrs degrades safely without wg ────────────────────────

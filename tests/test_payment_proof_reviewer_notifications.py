@@ -30,6 +30,8 @@ from app.services import (
     staff_notifications,
     web_admin_notifications,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from app.web.admin.notifications import notification_inbox_open
 
 
@@ -105,15 +107,30 @@ def _subscriber(db_session) -> Subscriber:
 
 
 def _submit(db_session, subscriber: Subscriber) -> dict:
+    subscriber_id = str(subscriber.id)
+    db_session_adapter.release_read_transaction(db_session)
     return payment_proofs.submit_proof(
         db_session,
-        str(subscriber.id),
-        submitted_by=str(subscriber.id),
+        subscriber_id,
+        context=CommandContext.system(
+            actor=f"test:subscriber:{subscriber_id}",
+            scope=payment_proofs.SUBMISSION_SCOPE,
+            reason="Reviewer-notification submission behavior test",
+        ),
+        submitted_by=subscriber_id,
         amount="7500.00",
         currency="NGN",
         bank_name="ZENITH BANK",
         reference=f"REVIEW-{uuid.uuid4().hex[:10]}",
         file_path="uploads/payment_proofs/reviewer-notification.png",
+    ).to_dict()
+
+
+def _review_context(action: str) -> CommandContext:
+    return CommandContext.system(
+        actor="test:payment-proof-reviewer",
+        scope=payment_proofs.REVIEW_SCOPE,
+        reason=f"Reviewer-notification {action} behavior test",
     )
 
 
@@ -229,10 +246,13 @@ def test_review_resolution_closes_inbox_and_suppresses_configured_escalations(
     subscriber = _subscriber(db_session)
     proof = _submit(db_session, subscriber)
 
+    reviewer_id = str(reviewer.id)
+    db_session_adapter.release_read_transaction(db_session)
     payment_proofs.verify_proof(
         db_session,
         proof["id"],
-        verified_by=str(reviewer.id),
+        context=_review_context("verify"),
+        verified_by=reviewer_id,
         auto_allocate=False,
     )
 
@@ -265,10 +285,13 @@ def test_rejection_also_closes_the_shared_review_request(db_session) -> None:
     db_session.commit()
     proof = _submit(db_session, _subscriber(db_session))
 
+    reviewer_id = str(reviewer.id)
+    db_session_adapter.release_read_transaction(db_session)
     payment_proofs.reject_proof(
         db_session,
         proof["id"],
-        verified_by=str(reviewer.id),
+        context=_review_context("reject"),
+        verified_by=reviewer_id,
         review_notes="Transfer is not present on the receiving statement",
     )
 

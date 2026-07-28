@@ -181,6 +181,8 @@ def set_session_revocation_epoch(
     principal_id: str,
     ttl_seconds: int,
     fallback_epochs: dict[str, str],
+    *,
+    require_durable: bool = False,
 ) -> str:
     """Mark every session for the principal created before now as revoked.
 
@@ -191,13 +193,17 @@ def set_session_revocation_epoch(
     """
     now_iso = datetime.now(UTC).isoformat()
     client = get_session_redis()
+    durable_write_succeeded = False
     if client:
         try:
             client.setex(
                 _epoch_key(prefix, principal_id), max(1, int(ttl_seconds)), now_iso
             )
+            durable_write_succeeded = True
         except redis.RedisError as exc:
             logger.warning("Session revocation epoch write failed: %s", exc)
+    if require_durable and not durable_write_succeeded:
+        raise RuntimeError("Durable session revocation store is unavailable")
     if _fallback_enabled():
         fallback_epochs[str(principal_id)] = now_iso
     return now_iso

@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,8 +17,13 @@ def test_only_handoff_owner_passes_native_origin_to_work_order_command():
     for path in (ROOT / "app").rglob("*.py"):
         if path.name == "work_order_commands.py":
             continue
-        source = path.read_text()
-        if "origin_ticket_id=" in source:
+        tree = ast.parse(path.read_text())
+        if any(
+            isinstance(node, ast.Call)
+            and "work_order_commands" in ast.unparse(node.func)
+            and any(keyword.arg == "origin_ticket_id" for keyword in node.keywords)
+            for node in ast.walk(tree)
+        ):
             callsites.append(path.relative_to(ROOT).as_posix())
 
     assert callsites == ["app/services/ticket_work_order_handoff.py"]

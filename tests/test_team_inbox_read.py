@@ -302,13 +302,31 @@ def test_admin_inbox_detail_renders_timeline(db_session, monkeypatch):
         request=SimpleNamespace(
             state=SimpleNamespace(),
             query_params={},
+            headers={"hx-request": "true"},
         ),
         db=db_session,
     )
 
-    assert captured["template_name"] == "admin/inbox/detail.html"
+    # HTMX list clicks render the thread+context partial into the workspace.
+    assert captured["template_name"] == "admin/inbox/_conversation.html"
     assert context["timeline"].id == str(conversation.id)
     assert context["timeline"].messages[0].body == "Down"
+
+
+def test_admin_inbox_detail_non_htmx_redirects_to_workspace(db_session):
+    support = _team(db_session, "Support")
+    conversation = _conversation(db_session, support, subject="Router offline")
+    db_session.commit()
+
+    response = admin_inbox.team_inbox_detail(
+        conversation.id,
+        request=SimpleNamespace(state=SimpleNamespace(), query_params={}, headers={}),
+        db=db_session,
+    )
+
+    # A full navigation lands in the workspace with the conversation preselected.
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/inbox?c={conversation.id}"
 
 
 def test_admin_inbox_detail_reply_queues_message(db_session):
@@ -324,7 +342,7 @@ def test_admin_inbox_detail_reply_queues_message(db_session):
     )
 
     assert response.status_code == 303
-    assert f"/admin/inbox/{conversation.id}" in response.headers["location"]
+    assert f"/admin/inbox?c={conversation.id}" in response.headers["location"]
     notification = db_session.query(Notification).one()
     assert notification.recipient == "customer@example.com"
     timeline = team_inbox_read.get_conversation_timeline(db_session, conversation.id)

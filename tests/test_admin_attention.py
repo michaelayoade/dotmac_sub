@@ -19,7 +19,7 @@ def _build(**overrides):
         overdue_amount=0.0,
         suspended_count=0,
         pending_orders=0,
-        ont_summary={"low_signal": 0, "offline": 0},
+        ont_summary={"low_signal": 0, "not_working": 0},
         unconfigured_ont_count=0,
         pending_location_requests=0,
         pon_outage_count=0,
@@ -48,11 +48,11 @@ def test_items_are_severity_ordered_and_toned():
     assert [i["severity"] for i in network_items] == ["critical"]
 
 
-def test_ont_offline_threshold_owned_here():
-    items, _ = _build(ont_summary={"low_signal": 0, "offline": 5})
-    assert not any("offline" in i["label"] for i in items)
-    items, _ = _build(ont_summary={"low_signal": 0, "offline": 6})
-    assert any("6 ONTs offline" == i["label"] for i in items)
+def test_ont_not_working_threshold_owned_here():
+    items, _ = _build(ont_summary={"low_signal": 0, "not_working": 5})
+    assert not any("not working" in i["label"] for i in items)
+    items, _ = _build(ont_summary={"low_signal": 0, "not_working": 6})
+    assert any("6 ONTs not working" == i["label"] for i in items)
 
 
 def test_absorbed_template_items_pon_and_infra():
@@ -69,14 +69,16 @@ def test_absorbed_template_items_pon_and_infra():
     assert infra["severity"] == "warning"
 
 
-def test_ont_offline_threshold_is_configurable():
+def test_ont_not_working_threshold_is_configurable():
     # The significance threshold is a parameter (settings-owned at the caller);
     # the module constant is only the registered default.
     items, _ = _build(
-        ont_summary={"low_signal": 0, "offline": 3}, ont_offline_threshold=2
+        ont_summary={"low_signal": 0, "not_working": 3},
+        ont_not_working_threshold=2,
     )
-    assert any("3 ONTs offline" == i["label"] for i in items)
+    assert any("3 ONTs not working" == i["label"] for i in items)
     items, _ = _build(
-        ont_summary={"low_signal": 0, "offline": 3}, ont_offline_threshold=10
+        ont_summary={"low_signal": 0, "not_working": 3},
+        ont_not_working_threshold=10,
     )
-    assert not any("offline" in i["label"] for i in items)
+    assert not any("not working" in i["label"] for i in items)

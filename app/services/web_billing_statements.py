@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.schemas.notification import NotificationCreate
+from app.services import display_format
 from app.services import notification as notification_service
 from app.services.customer_financial_ledger import (
     CustomerFinancialEvent,
@@ -31,6 +32,38 @@ class StatementRange:
     end: datetime
     start_date: date
     end_date: date
+
+
+@dataclass(frozen=True, slots=True)
+class StatementCurrencySummary:
+    """One statement balance lane; nominal currencies are never netted."""
+
+    currency: str
+    opening_balance: Decimal
+    period_delta: Decimal
+    closing_balance: Decimal
+    opening_display: str
+    period_display: str
+    closing_display: str
+
+
+@dataclass(frozen=True, slots=True)
+class StatementRow:
+    """Template-ready statement row from one canonical financial event."""
+
+    id: str
+    occurred_at: datetime
+    entry_type: str
+    entry_type_label: str
+    source: str
+    source_label: str
+    signed_amount: Decimal
+    running_balance: Decimal
+    currency: str
+    amount_display: str
+    running_balance_display: str
+    memo: str
+    source_url: str | None
 
 
 def parse_statement_range(
@@ -67,6 +100,35 @@ def _signed_amount(entry: CustomerFinancialEvent) -> Decimal:
     return entry.signed_amount
 
 
+def _event_source_url(entry: CustomerFinancialEvent) -> str | None:
+    """Link an event to its authoritative document when one has an admin page."""
+
+    event_type, _, event_id = entry.id.partition(":")
+    if not event_id:
+        return None
+    if event_type == "invoice":
+        return f"/admin/billing/invoices/{event_id}"
+    if event_type == "payment":
+        return f"/admin/billing/payments/{event_id}"
+    if event_type == "invoice-writeoff":
+        invoice_id = getattr(entry.raw, "invoice_id", None)
+        if invoice_id:
+            return f"/admin/billing/invoices/{invoice_id}"
+    return None
+
+
+def _amounts_by_currency(
+    entries: list[CustomerFinancialEvent],
+) -> dict[str, Decimal]:
+    amounts: dict[str, Decimal] = {}
+    for entry in entries:
+        currency = display_format.currency_code(entry.currency)
+        amounts[currency] = amounts.get(currency, Decimal("0.00")) + _signed_amount(
+            entry
+        )
+    return amounts
+
+
 def _statement_entries(
     db: Session,
     *,
@@ -82,54 +144,75 @@ def _statement_entries(
     )
 
 
-def _opening_balance(
-    db: Session,
-    *,
-    account_id: UUID,
-    date_range: StatementRange,
-) -> Decimal:
-    opening_entries = list_customer_financial_events(
-        db,
-        account_id,
-        end=date_range.start,
-        currency=None,
-    )
-    return sum(
-        (_signed_amount(entry) for entry in opening_entries),
-        Decimal("0.00"),
-    )
-
-
 def build_account_statement(
     db: Session,
     *,
     account_id: UUID,
     date_range: StatementRange,
 ) -> dict[str, Any]:
-    """Build statement payload for an account and date range."""
-    opening_balance = _opening_balance(db, account_id=account_id, date_range=date_range)
+    """Build a currency-safe statement projection for an account and date range."""
+    default_currency = display_format.default_currency(db)
+    opening_entries = list_customer_financial_events(
+        db,
+        account_id,
+        end=date_range.start,
+        currency=None,
+    )
     entries = _statement_entries(db, account_id=account_id, date_range=date_range)
-    period_delta = sum((_signed_amount(e) for e in entries), Decimal("0.00"))
-    closing_balance = opening_balance + period_delta
+    opening_by_currency = _amounts_by_currency(opening_entries)
+    period_by_currency = _amounts_by_currency(entries)
+    currencies = sorted(set(opening_by_currency) | set(period_by_currency))
+    if not currencies:
+        currencies = [default_currency]
 
-    rows: list[dict[str, Any]] = []
-    running_balance = opening_balance
+    summaries = tuple(
+        StatementCurrencySummary(
+            currency=currency,
+            opening_balance=(
+                opening := opening_by_currency.get(currency, Decimal("0.00"))
+            ),
+            period_delta=(period := period_by_currency.get(currency, Decimal("0.00"))),
+            closing_balance=(closing := opening + period),
+            opening_display=display_format.format_currency_amount(opening, currency),
+            period_display=display_format.format_currency_amount(period, currency),
+            closing_display=display_format.format_currency_amount(closing, currency),
+        )
+        for currency in currencies
+    )
+
+    rows: list[StatementRow] = []
+    running_by_currency = dict(opening_by_currency)
     for entry in entries:
         signed = _signed_amount(entry)
-        running_balance += signed
+        currency = display_format.currency_code(entry.currency)
+        running_balance = running_by_currency.get(currency, Decimal("0.00")) + signed
+        running_by_currency[currency] = running_balance
+        source = entry.source.value
+        entry_type = entry.entry_type.value
         rows.append(
-            {
-                "entry": entry,
-                "signed_amount": signed,
-                "running_balance": running_balance,
-            }
+            StatementRow(
+                id=entry.id,
+                occurred_at=entry.occurred_at,
+                entry_type=entry_type,
+                entry_type_label=entry_type.replace("_", " ").title(),
+                source=source,
+                source_label=source.replace("_", " ").title(),
+                signed_amount=signed,
+                running_balance=running_balance,
+                currency=currency,
+                amount_display=display_format.format_currency_amount(signed, currency),
+                running_balance_display=display_format.format_currency_amount(
+                    running_balance, currency
+                ),
+                memo=entry.memo,
+                source_url=_event_source_url(entry),
+            )
         )
 
     return {
         "rows": rows,
-        "opening_balance": opening_balance,
-        "period_delta": period_delta,
-        "closing_balance": closing_balance,
+        "summaries": summaries,
+        "has_multiple_currencies": len(summaries) > 1,
     }
 
 
@@ -151,21 +234,43 @@ def render_statement_csv(
             f"{date_range.start_date.isoformat()} to {date_range.end_date.isoformat()}",
         ]
     )
-    writer.writerow(["Opening Balance", f"{statement['opening_balance']:.2f}"])
-    writer.writerow(["Closing Balance", f"{statement['closing_balance']:.2f}"])
-    writer.writerow([])
-    writer.writerow(["Date", "Type", "Source", "Amount", "Running Balance", "Memo"])
-
-    for row in statement["rows"]:
-        entry = row["entry"]
+    writer.writerow(
+        ["Currency", "Opening Balance", "Period Activity", "Closing Balance"]
+    )
+    for summary in statement["summaries"]:
         writer.writerow(
             [
-                entry.created_at.date().isoformat() if entry.created_at else "",
-                entry.entry_type.value if entry.entry_type else "",
-                entry.source.value if entry.source else "",
-                f"{row['signed_amount']:.2f}",
-                f"{row['running_balance']:.2f}",
-                entry.memo or "",
+                summary.currency,
+                f"{summary.opening_balance:.2f}",
+                f"{summary.period_delta:.2f}",
+                f"{summary.closing_balance:.2f}",
+            ]
+        )
+    writer.writerow([])
+    writer.writerow(
+        [
+            "Date",
+            "Type",
+            "Source",
+            "Amount",
+            "Running Balance",
+            "Currency",
+            "Memo",
+            "Source URL",
+        ]
+    )
+
+    for row in statement["rows"]:
+        writer.writerow(
+            [
+                row.occurred_at.date().isoformat(),
+                row.entry_type,
+                row.source,
+                f"{row.signed_amount:.2f}",
+                f"{row.running_balance:.2f}",
+                row.currency,
+                row.memo,
+                row.source_url or "",
             ]
         )
 
@@ -215,6 +320,11 @@ def queue_account_statement_email(
         raise HTTPException(
             status_code=400, detail="No recipient email set for this account"
         )
+    balance_lines = "\n".join(
+        f"{summary.currency}: opening {summary.opening_balance:.2f}, "
+        f"activity {summary.period_delta:.2f}, closing {summary.closing_balance:.2f}"
+        for summary in statement["summaries"]
+    )
     notification_service.notifications.create_customer_notification(
         db,
         NotificationCreate(
@@ -225,8 +335,7 @@ def queue_account_statement_email(
             body=(
                 "Your account statement is ready.\n\n"
                 f"Period: {date_range.start_date.isoformat()} to {date_range.end_date.isoformat()}\n"
-                f"Opening balance: {statement['opening_balance']:.2f}\n"
-                f"Closing balance: {statement['closing_balance']:.2f}\n"
+                f"Balances by currency:\n{balance_lines}\n"
                 f"Transactions: {len(statement['rows'])}\n"
             ),
         ),

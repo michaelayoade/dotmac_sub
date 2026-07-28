@@ -72,6 +72,12 @@
                     <span class="text-sm text-stone-500 dark:text-stone-400">Amount Paid</span>
                     <span class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{{ invoice_currency }} {{ "{:,.2f}".format(amount) }}</span>
                 </div>
+                {% if amount_credited is not none %}
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Amount Credited</span>
+                    <span class="text-sm font-semibold text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(amount_credited) }}</span>
+                </div>
+                {% endif %}
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Invoice</span>
                     <span class="text-sm font-medium text-stone-900 dark:text-white">#{{ invoice.invoice_number or invoice.id[:8] }}</span>
@@ -94,6 +100,12 @@
                     <span class="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ invoice_currency }} {{ "{:,.2f}".format(credit_added) }}</span>
                 </div>
                 {% endif %}
+                {% if prepaid_amount_applied and prepaid_amount_applied > 0 %}
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Applied to Prepaid Service</span>
+                    <span class="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ invoice_currency }} {{ "{:,.2f}".format(prepaid_amount_applied) }}</span>
+                </div>
+                {% endif %}
                 {% if available_balance is not none %}
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Current Balance</span>
@@ -112,6 +124,17 @@
                 {% endif %}
             </div>
         </div>
+
+        {% if renewed_services %}
+        <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-left dark:border-emerald-800 dark:bg-emerald-900/20">
+            <p class="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Service renewal confirmed</p>
+            {% for renewal in renewed_services %}
+            <p class="mt-1 text-sm text-emerald-700 dark:text-emerald-400">
+                {{ renewal.offer_name }} is renewed through {{ renewal.renewed_through.strftime('%B %d, %Y') }}.
+            </p>
+            {% endfor %}
+        </div>
+        {% endif %}
 
         <!-- Actions -->
         <div class="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">

@@ -28,7 +28,9 @@ def _sync_credential_to_radius(db: Session, credential: AccessCredential) -> Non
             .all()
         )
         for subscription in active_subscriptions:
-            reconcile_subscription_connectivity(db, str(subscription.id))
+            reconcile_subscription_connectivity(
+                db, str(subscription.id)
+            ).require_projected()
     except Exception as exc:
         # Don't fail the operation if RADIUS sync fails
         logger.warning(

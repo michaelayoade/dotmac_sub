@@ -105,11 +105,11 @@ def _capture_meta(db: Session, referral: Referral) -> dict:
     return capture if isinstance(capture, dict) else {}
 
 
-def _reward_display(referral: Referral) -> str:
+def _reward_display(referral: Referral, *, program_currency: str) -> str:
     amount = referral.reward_amount
     if amount is None:
         return "—"
-    currency = (referral.reward_currency or "NGN").strip() or "NGN"
+    currency = (referral.reward_currency or program_currency).strip()
     return f"{currency} {amount:,.2f}"
 
 
@@ -125,7 +125,7 @@ def _referred_name(referral: Referral) -> str:
     return str(name).strip() if name else "—"
 
 
-def _row(referral: Referral) -> dict:
+def _row(referral: Referral, *, program_currency: str) -> dict:
     return {
         "id": str(referral.id),
         "referrer": _subscriber_name(referral.referrer),
@@ -134,7 +134,7 @@ def _row(referral: Referral) -> dict:
         "referred_href": _subscriber_link(referral.referred_subscriber),
         "status": referral.status,
         "reward_status": referral.reward_status,
-        "reward": _reward_display(referral),
+        "reward": _reward_display(referral, program_currency=program_currency),
         "source": referral.source or "—",
         "created_at": referral.created_at,
         "qualified_at": referral.qualified_at,
@@ -304,10 +304,14 @@ def list_data(
         .all()
     )
 
+    program = referrals_service.program(db)
+    program_currency = str(program["currency"])
     return {
-        "referrals": [_row(r) for r in items],
+        "referrals": [
+            _row(referral, program_currency=program_currency) for referral in items
+        ],
         "stats": _stats(db),
-        "program": referrals_service.program(db),
+        "program": program,
         "statuses": STATUSES,
         "reward_statuses": REWARD_STATUSES,
         "status_filter": list_query.filter_value("status"),
@@ -351,9 +355,10 @@ def detail_data(db: Session, *, referral_id: str) -> dict | None:
     if referral is None:
         return None
     meta = referral.metadata_ if isinstance(referral.metadata_, dict) else {}
+    program = referrals_service.program(db)
     return {
         "referral": referral,
-        "row": _row(referral),
+        "row": _row(referral, program_currency=str(program["currency"])),
         "capture": _capture_meta(db, referral),
         "code": referral.code.code if referral.code is not None else None,
         "lead_id": str(referral.referred_lead_id)
@@ -367,6 +372,6 @@ def detail_data(db: Session, *, referral_id: str) -> dict | None:
         and referral.referred_lead_id is not None
         else None,
         "reward_credit_id": meta.get("reward_credit_id"),
-        "program": referrals_service.program(db),
+        "program": program,
         "program_settings_url": PROGRAM_SETTINGS_URL,
     }

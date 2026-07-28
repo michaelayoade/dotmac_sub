@@ -55,6 +55,34 @@ NAME_PLACEHOLDER_MARKERS = {
 }
 _NAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+_GENERIC_CUSTOMER_NAME_MARKERS = {
+    "n/a",
+    "na",
+    "nil",
+    "none",
+    "not applicable",
+    "not available",
+    "not specified",
+    "null",
+}
+_GENERIC_CUSTOMER_NAME_TOKENS = {"customer", "unknown"}
+
+
+def normalize_customer_name(value: str | None) -> str:
+    """Return a comparison-safe customer name without inventing identity."""
+
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def is_placeholder_customer_name(value: str | None) -> bool:
+    """Identify CRM's known generic names after conservative normalization."""
+
+    normalized = normalize_customer_name(value)
+    if not normalized or normalized in _GENERIC_CUSTOMER_NAME_MARKERS:
+        return True
+    tokens = set(normalized.split())
+    return bool(tokens) and tokens <= _GENERIC_CUSTOMER_NAME_TOKENS
+
 
 def default_country_code(db=None) -> str:
     if db is None:

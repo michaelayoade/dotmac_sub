@@ -6,8 +6,8 @@ Three surfaces, all built from existing data:
 * **ranking** — worst-performer table per tier (BTS / OLT / PON / AP) over a
   window, sorted by uptime % ascending, enriched with affected-subscriber count
   and incident count. Reuses ``network_monitoring.uptime_report`` as the engine.
-* **wallboard** — live up/down/degraded counts per tier from the warmed
-  ``live_status`` cache + ONT-online ratio (no live fan-out on the request path).
+* **wallboard** — binary working/not-working counts per tier from timestamped
+  cached observations + ONT operation (no live fan-out on the request path).
 * **sla** — uptime % vs target with PASS/BREACH + MTTR (see Phase 2b).
 
 Tiers map onto the engine's ``group_by`` dimensions:
@@ -273,29 +273,21 @@ def ranking(db: Session, tier: str, window_key: str, *, limit: int = 100) -> dic
     }
 
 
-_STATE_UP = "up"
-_STATE_DOWN = "down"
-_STATE_DEGRADED = "degraded"
-# Worst-first ordering for the BTS site roll-up.
+_STATE_WORKING = "working"
+_STATE_NOT_WORKING = "not_working"
 _STATE_ORDER = {
-    _STATE_DOWN: 4,
-    _STATE_DEGRADED: 3,
-    _STATE_UP: 2,
-}
-
-# Operational status (the one reader) -> wallboard card bucket. A wallboard
-# only needs the coarse bucket. Retry gaps remain binary and non-alarming in the
-# shared reader; maintenance/unknown fall back to down on this live wallboard.
-_OP_TO_CARD = {
-    "up": _STATE_UP,
-    "degraded": _STATE_DEGRADED,
-    "down": _STATE_DOWN,
-    "maintenance": _STATE_DOWN,
-    "unknown": _STATE_DOWN,
+    _STATE_NOT_WORKING: 2,
+    _STATE_WORKING: 1,
 }
 
 
-def _device_state(status, live_status: str | None, *, warm_stale: bool) -> str:
+def _device_state(
+    status,
+    live_status: str | None,
+    live_status_at: datetime | None,
+    *,
+    warm_stale: bool,
+) -> str:
     """Coarse wallboard bucket for a device, via the shared operational-status
     reader so the wallboard and Network Devices page agree."""
     from types import SimpleNamespace
@@ -303,19 +295,22 @@ def _device_state(status, live_status: str | None, *, warm_stale: bool) -> str:
     from app.services.device_operational_status import derive_operational_status
 
     op = derive_operational_status(
-        SimpleNamespace(status=status, live_status=live_status),
+        SimpleNamespace(
+            status=status,
+            live_status=live_status,
+            live_status_at=live_status_at,
+        ),
         warm_stale=warm_stale,
     )
-    return _OP_TO_CARD.get(op.status, _STATE_DOWN)
+    return op.status
 
 
 def _empty_card(tier: str, label: str) -> dict:
     return {
         "tier": tier,
         "label": label,
-        _STATE_UP: 0,
-        _STATE_DEGRADED: 0,
-        _STATE_DOWN: 0,
+        _STATE_WORKING: 0,
+        _STATE_NOT_WORKING: 0,
         "total": 0,
     }
 
@@ -326,7 +321,7 @@ def _bump(card: dict, state: str) -> None:
 
 
 def wallboard(db: Session) -> dict:
-    """Live up/down/degraded counts per tier from warmed caches."""
+    """Binary operational counts per tier from the canonical resolver."""
     devices = (
         db.query(
             NetworkDevice.id,
@@ -334,6 +329,7 @@ def wallboard(db: Session) -> dict:
             NetworkDevice.matched_device_type,
             NetworkDevice.pop_site_id,
             NetworkDevice.live_status,
+            NetworkDevice.live_status_at,
             NetworkDevice.status,
         )
         .filter(NetworkDevice.is_active.is_(True))
@@ -347,8 +343,21 @@ def wallboard(db: Session) -> dict:
     ap_card = _empty_card("ap", TIERS["ap"][0])
     # BTS: roll each pop_site up to the worst state among its devices.
     site_worst: dict[str, str] = {}
-    for did, dtype, matched, pop_site_id, live_status, status in devices:
-        state = _device_state(status, live_status, warm_stale=warm_stale)
+    for (
+        did,
+        dtype,
+        matched,
+        pop_site_id,
+        live_status,
+        live_status_at,
+        status,
+    ) in devices:
+        state = _device_state(
+            status,
+            live_status,
+            live_status_at,
+            warm_stale=warm_stale,
+        )
         if matched == "olt":
             _bump(olt_card, state)
         if dtype == DeviceType.access_point:
@@ -369,18 +378,16 @@ def wallboard(db: Session) -> dict:
 
 
 def _pon_wallboard_card(db: Session) -> dict:
-    """PON tier card from current ONT-online ratio per active port: a port is
-    up if all ONTs online, down if all offline, degraded if partial, unknown if
-    it has no ONTs."""
+    """PON tier card: every ONT must be confirmed working for the port to work."""
     from app.models.network import OntUnit, PonPort
-    from app.services.network.ont_status import effective_ont_online_clause
+    from app.services.network.ont_status import operational_ont_working_clause
 
-    online_count = func.count(case((effective_ont_online_clause(), OntUnit.id)))
+    working_count = func.count(case((operational_ont_working_clause(), OntUnit.id)))
     rows = (
         db.query(
             PonPort.id,
             func.count(OntUnit.id),
-            online_count,
+            working_count,
         )
         .select_from(PonPort)
         .outerjoin(OntUnit, OntUnit.pon_port_id == PonPort.id)
@@ -389,17 +396,10 @@ def _pon_wallboard_card(db: Session) -> dict:
         .all()
     )
     card = _empty_card("pon", TIERS["pon"][0])
-    for _pid, total, online in rows:
+    for _pid, total, working in rows:
         total = int(total or 0)
-        online = int(online or 0)
-        if total == 0:
-            state = _STATE_DOWN
-        elif online == total:
-            state = _STATE_UP
-        elif online == 0:
-            state = _STATE_DOWN
-        else:
-            state = _STATE_DEGRADED
+        working = int(working or 0)
+        state = _STATE_WORKING if total > 0 and working == total else _STATE_NOT_WORKING
         _bump(card, state)
     return card
 

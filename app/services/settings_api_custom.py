@@ -80,8 +80,6 @@ _NOTIFICATION_SETTING_INT_KEYS = {"alert_notifications_default_delay_minutes"}
 _NOTIFICATION_SETTING_BOOL_KEYS = {"alert_notifications_enabled"}
 
 _SCHEDULER_SETTING_KEYS = {
-    "broker_url",
-    "result_backend",
     "timezone",
     "beat_max_loop_interval",
     "beat_refresh_seconds",

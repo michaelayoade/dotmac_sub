@@ -7,18 +7,16 @@ from app.models.billing import Invoice
 from app.models.catalog import CatalogOffer, NasDevice, Subscription
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Reseller, Subscriber, SubscriberCategory, UserType
+from app.services import service_address as service_address_service
 from app.services.response import list_response
 
 logger = logging.getLogger(__name__)
 
 
 def _subscriber_metadata(subscriber: Subscriber) -> dict[str, str]:
+    parts = service_address_service.address_parts(subscriber)
     address = ", ".join(
-        [
-            part
-            for part in [subscriber.address_line1, subscriber.city, subscriber.region]
-            if part
-        ]
+        [part for part in [parts.address_line1, parts.city, parts.region] if part]
     )
     return {
         "email": subscriber.email or "",

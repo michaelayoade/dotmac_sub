@@ -49,7 +49,6 @@ _TERMINAL_ASSIGNMENT_STATUSES = frozenset(
     {
         SubscriptionStatus.archived,
         SubscriptionStatus.canceled,
-        SubscriptionStatus.disabled,
         SubscriptionStatus.expired,
         SubscriptionStatus.hidden,
     }

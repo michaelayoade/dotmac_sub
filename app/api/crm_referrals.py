@@ -12,6 +12,7 @@ The referrer subject is a subscriber, so the CRM's
 ``POST /crm/subscribers/{subscriber_id}/referral-code``.
 """
 
+from typing import Never
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -32,7 +33,11 @@ from app.schemas.referral import (
     ReferralSubscriberCreateRequest,
 )
 from app.services import customer_credential_enrollment, referral_account_conversion
+from app.services import referrals as referral_program
 from app.services.auth_dependencies import require_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.services.referrals import referrals as referrals_service
 
 router = APIRouter(prefix="/crm", tags=["crm-referrals"])
@@ -47,8 +52,53 @@ def _conversion_source(auth: dict, surface: str) -> str:
     return f"{surface}:{principal_type}:{actor}"[:80]
 
 
-def _conversion_error(exc: referral_account_conversion.ReferralAccountConversionError):
-    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+def _conversion_error(
+    exc: referral_account_conversion.ReferralAccountConversionError,
+) -> Never:
+    status_code = {
+        "referrals.account_conversion.invalid_capability": status.HTTP_401_UNAUTHORIZED,
+        "referrals.account_conversion.context_not_found": status.HTTP_404_NOT_FOUND,
+        "referrals.account_conversion.subscriber_not_found": status.HTTP_404_NOT_FOUND,
+        "referrals.account_conversion.invalid_command": (
+            status.HTTP_422_UNPROCESSABLE_ENTITY
+        ),
+        "referrals.account_conversion.incomplete_context": status.HTTP_409_CONFLICT,
+        "referrals.account_conversion.stale_context": status.HTTP_409_CONFLICT,
+        "referrals.account_conversion.context_not_convertible": (
+            status.HTTP_409_CONFLICT
+        ),
+        "referrals.account_conversion.account_conflict": status.HTTP_409_CONFLICT,
+        "referrals.account_conversion.self_referral": status.HTTP_409_CONFLICT,
+    }.get(exc.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    raise HTTPException(status_code=status_code, detail=exc.message) from exc
+
+
+def _program_error(exc: DomainError) -> Never:
+    suffix = exc.code.removeprefix("referrals.program.")
+    status_code = {
+        "subscriber_not_found": status.HTTP_404_NOT_FOUND,
+        "referral_not_found": status.HTTP_404_NOT_FOUND,
+        "code_not_found": status.HTTP_404_NOT_FOUND,
+        "invalid_command": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "contact_required": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "invalid_filter": status.HTTP_400_BAD_REQUEST,
+        "program_disabled": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "invalid_configuration": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "self_referral": status.HTTP_409_CONFLICT,
+        "existing_customer": status.HTTP_409_CONFLICT,
+        "invalid_transition": status.HTTP_409_CONFLICT,
+        "account_attachment_required": status.HTTP_409_CONFLICT,
+        "idempotency_conflict": status.HTTP_409_CONFLICT,
+        "financial_conflict": status.HTTP_409_CONFLICT,
+        "incomplete_reward_evidence": status.HTTP_409_CONFLICT,
+        "write_conflict": status.HTTP_409_CONFLICT,
+    }.get(suffix, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    detail = (
+        exc.message
+        if exc.code.startswith("referrals.program.")
+        else "Referral command failed."
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.get(
@@ -63,13 +113,16 @@ def list_referrals(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    items = referrals_service.list(
-        db,
-        status=status,
-        referrer_subscriber_id=referrer_subscriber_id,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        items = referrals_service.list(
+            db,
+            status=status,
+            referrer_subscriber_id=referrer_subscriber_id,
+            limit=limit,
+            offset=offset,
+        )
+    except DomainError as exc:
+        _program_error(exc)
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
 
@@ -79,7 +132,10 @@ def list_referrals(
     dependencies=[Depends(require_permission("crm:lead:read"))],
 )
 def get_referral(referral_id: str, db: Session = Depends(get_db)):
-    return referrals_service.get(db, referral_id)
+    try:
+        return referrals_service.get(db, referral_id)
+    except DomainError as exc:
+        _program_error(exc)
 
 
 @router.post(
@@ -87,10 +143,33 @@ def get_referral(referral_id: str, db: Session = Depends(get_db)):
     response_model=ReferralRead,
     dependencies=[Depends(require_permission("crm:lead:write"))],
 )
-def issue_referral_reward(referral_id: str, db: Session = Depends(get_db)):
+def issue_referral_reward(
+    referral_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user),
+):
     """Issue the referrer's reward as an account credit (idempotent on
     ``external_ref="referral:{id}"``) and mark the referral rewarded."""
-    return referrals_service.issue_reward(db, referral_id)
+    try:
+        resolved_referral_id = UUID(referral_id)
+        db_session_adapter.release_read_transaction(db)
+        referral_program.issue_referral_reward(
+            db,
+            referral_program.IssueReferralRewardCommand(
+                context=CommandContext.system(
+                    actor=_conversion_source(auth, "staff_referral_reward"),
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Staff requested referral reward issuance",
+                    idempotency_key=f"referral-reward:{resolved_referral_id}",
+                ),
+                referral_id=resolved_referral_id,
+            ),
+        )
+        return referrals_service.get(db, resolved_referral_id)
+    except (ValueError, DomainError) as exc:
+        if isinstance(exc, DomainError):
+            _program_error(exc)
+        raise HTTPException(status_code=404, detail="Referral not found.") from exc
 
 
 @router.post(
@@ -99,9 +178,32 @@ def issue_referral_reward(referral_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("crm:lead:write"))],
 )
 def reject_referral(
-    referral_id: str, payload: ReferralRejectRequest, db: Session = Depends(get_db)
+    referral_id: str,
+    payload: ReferralRejectRequest,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user),
 ):
-    return referrals_service.reject(db, referral_id, payload.reason)
+    try:
+        resolved_referral_id = UUID(referral_id)
+        db_session_adapter.release_read_transaction(db)
+        referral_program.reject_referral(
+            db,
+            referral_program.RejectReferralCommand(
+                context=CommandContext.system(
+                    actor=_conversion_source(auth, "staff_referral_reject"),
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Staff rejected the referral",
+                    idempotency_key=f"referral-reject:{resolved_referral_id}",
+                ),
+                referral_id=resolved_referral_id,
+                reason=payload.reason,
+            ),
+        )
+        return referrals_service.get(db, resolved_referral_id)
+    except (ValueError, DomainError) as exc:
+        if isinstance(exc, DomainError):
+            _program_error(exc)
+        raise HTTPException(status_code=404, detail="Referral not found.") from exc
 
 
 @router.post(
@@ -121,21 +223,31 @@ def attach_referral_subscriber(
     """Reviewed exact-Party adjudication for an existing Subscriber account."""
 
     try:
+        resolved_referral_id = UUID(referral_id)
+        db_session_adapter.release_read_transaction(db)
         return referral_account_conversion.attach_existing_account(
             db,
-            referral_id=UUID(referral_id),
-            referred_party_id=payload.referred_party_id,
-            referred_lead_id=payload.referred_lead_id,
-            subscriber_id=payload.subscriber_id,
-            source=_conversion_source(auth, "staff_referral_attach"),
-            reason=payload.reason,
+            referral_account_conversion.AttachExistingReferralAccountCommand(
+                context=CommandContext.system(
+                    actor=_conversion_source(auth, "staff_referral_attach"),
+                    scope=(
+                        referral_account_conversion.REFERRAL_ACCOUNT_CONVERSION_SCOPE
+                    ),
+                    reason=payload.reason,
+                    idempotency_key=(
+                        f"referral-account-attach:{resolved_referral_id}:"
+                        f"{payload.subscriber_id}"
+                    ),
+                ),
+                referral_id=resolved_referral_id,
+                referred_party_id=payload.referred_party_id,
+                referred_lead_id=payload.referred_lead_id,
+                subscriber_id=payload.subscriber_id,
+            ),
         )
-    except (
-        ValueError,
-        referral_account_conversion.ReferralAccountConversionError,
-    ) as exc:
-        if isinstance(exc, referral_account_conversion.ReferralAccountConversionError):
-            _conversion_error(exc)
+    except referral_account_conversion.ReferralAccountConversionError as exc:
+        _conversion_error(exc)
+    except ValueError as exc:
         raise HTTPException(status_code=404, detail="Referral not found") from exc
 
 
@@ -157,21 +269,28 @@ def create_referral_subscriber(
     """Create an account without losing the exact Referral/Party/Lead context."""
 
     try:
+        resolved_referral_id = UUID(referral_id)
+        db_session_adapter.release_read_transaction(db)
         return referral_account_conversion.create_account(
             db,
-            referral_id=UUID(referral_id),
-            referred_party_id=payload.referred_party_id,
-            referred_lead_id=payload.referred_lead_id,
-            subscriber_payload=payload.subscriber,
-            source=_conversion_source(auth, "staff_referral_create"),
-            reason=payload.reason,
+            referral_account_conversion.CreateReferralAccountCommand(
+                context=CommandContext.system(
+                    actor=_conversion_source(auth, "staff_referral_create"),
+                    scope=(
+                        referral_account_conversion.REFERRAL_ACCOUNT_CONVERSION_SCOPE
+                    ),
+                    reason=payload.reason,
+                    idempotency_key=(f"referral-account-create:{resolved_referral_id}"),
+                ),
+                referral_id=resolved_referral_id,
+                referred_party_id=payload.referred_party_id,
+                referred_lead_id=payload.referred_lead_id,
+                subscriber_payload=payload.subscriber,
+            ),
         )
-    except (
-        ValueError,
-        referral_account_conversion.ReferralAccountConversionError,
-    ) as exc:
-        if isinstance(exc, referral_account_conversion.ReferralAccountConversionError):
-            _conversion_error(exc)
+    except referral_account_conversion.ReferralAccountConversionError as exc:
+        _conversion_error(exc)
+    except ValueError as exc:
         raise HTTPException(status_code=404, detail="Referral not found") from exc
 
 
@@ -181,9 +300,32 @@ def create_referral_subscriber(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission("crm:lead:write"))],
 )
-def ensure_referral_code(subscriber_id: str, db: Session = Depends(get_db)):
+def ensure_referral_code(
+    subscriber_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user),
+):
     """Get or mint the active referral code for a referrer (a subscriber)."""
-    return referrals_service.ensure_code(db, subscriber_id)
+    try:
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
+        result = referral_program.ensure_referral_code(
+            db,
+            referral_program.EnsureReferralCodeCommand(
+                context=CommandContext.system(
+                    actor=_conversion_source(auth, "staff_referral_code"),
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Staff requested the Subscriber referral code",
+                    idempotency_key=f"referral-code:{resolved_subscriber_id}",
+                ),
+                subscriber_id=resolved_subscriber_id,
+            ),
+        )
+        return referrals_service.get_code(db, result.referral_code_id)
+    except (ValueError, DomainError) as exc:
+        if isinstance(exc, DomainError):
+            _program_error(exc)
+        raise HTTPException(status_code=404, detail="Subscriber not found.") from exc
 
 
 @public_router.post(
@@ -194,18 +336,32 @@ def ensure_referral_code(subscriber_id: str, db: Session = Depends(get_db)):
 def capture_referral(payload: ReferralCaptureRequest, db: Session = Depends(get_db)):
     """Capture the prospect and return a signed continuation into signup."""
 
-    referral = referrals_service.capture(
-        db,
-        code=payload.code,
-        name=payload.name,
-        email=payload.email,
-        phone=payload.phone,
-        region=payload.region,
-        address=payload.address,
-        notes=payload.notes,
-        source="public",
-    )
-    signed = referral_account_conversion.issue_public_signup_context(db, referral)
+    try:
+        db_session_adapter.release_read_transaction(db)
+        result = referral_program.capture_referral(
+            db,
+            referral_program.CaptureReferralCommand(
+                context=CommandContext.system(
+                    actor="public_referral_capture",
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Public prospect submitted a referral capture",
+                ),
+                code=payload.code,
+                name=payload.name,
+                email=payload.email,
+                phone=payload.phone,
+                region=payload.region,
+                address=payload.address,
+                notes=payload.notes,
+                source="public",
+            ),
+        )
+        referral = referrals_service.get(db, result.referral_id)
+        signed = referral_account_conversion.issue_public_signup_context(db, referral)
+    except referral_program.ReferralProgramError as exc:
+        _program_error(exc)
+    except referral_account_conversion.ReferralAccountConversionError as exc:
+        _conversion_error(exc)
     return ReferralCaptureRead(
         **ReferralRead.model_validate(referral).model_dump(),
         conversion_token=signed.token,
@@ -225,17 +381,40 @@ def signup_referral_account(
     """Create the exact account, then queue separate credential enrollment."""
 
     try:
+        db_session_adapter.release_read_transaction(db)
         account = referral_account_conversion.create_public_account(
             db,
-            conversion_token=payload.conversion_token,
-            account_payload=payload.account,
+            referral_account_conversion.CreatePublicReferralAccountCommand(
+                context=CommandContext.system(
+                    actor="public_referral_signup",
+                    scope=(
+                        referral_account_conversion.REFERRAL_ACCOUNT_CONVERSION_SCOPE
+                    ),
+                    reason=(
+                        "Public signup presented the signed Referral, Party, and "
+                        "Lead context"
+                    ),
+                ),
+                conversion_token=payload.conversion_token,
+                account_payload=payload.account,
+            ),
         )
         enrollment = customer_credential_enrollment.request_referral_enrollment(
             db,
-            referral_id=account.referral_id,
-            referred_party_id=account.referred_party_id,
-            referred_lead_id=account.referred_lead_id,
-            subscriber_id=account.subscriber_id,
+            customer_credential_enrollment.RequestReferralEnrollmentCommand(
+                context=CommandContext.system(
+                    actor="service:public-referral-signup",
+                    scope=customer_credential_enrollment.CUSTOMER_CREDENTIAL_ENROLLMENT_SCOPE,
+                    reason="Request referral customer credential enrollment",
+                    idempotency_key=(
+                        f"referral-credential-enrollment:{account.referral_id}"
+                    ),
+                ),
+                referral_id=account.referral_id,
+                referred_party_id=account.referred_party_id,
+                referred_lead_id=account.referred_lead_id,
+                subscriber_id=account.subscriber_id,
+            ),
         )
         return ReferralSelfServiceSignupRead(
             referral_id=account.referral_id,
@@ -248,5 +427,16 @@ def signup_referral_account(
         )
     except referral_account_conversion.ReferralAccountConversionError as exc:
         _conversion_error(exc)
-    except customer_credential_enrollment.CustomerCredentialEnrollmentError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except DomainError as exc:
+        status_code = {
+            "auth.customer_credential_enrollment.context_not_found": (
+                status.HTTP_404_NOT_FOUND
+            ),
+            "auth.customer_credential_enrollment.stale_context": (
+                status.HTTP_409_CONFLICT
+            ),
+            "auth.customer_credential_enrollment.inactive_account": (
+                status.HTTP_409_CONFLICT
+            ),
+        }.get(exc.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc

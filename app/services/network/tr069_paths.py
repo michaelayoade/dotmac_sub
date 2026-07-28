@@ -142,6 +142,23 @@ _TR181_PATHS: dict[str, str] = {
     "diag.ping.state": "IP.Diagnostics.IPPing.DiagnosticsState",
     "diag.traceroute.host": "IP.Diagnostics.TraceRoute.Host",
     "diag.traceroute.state": "IP.Diagnostics.TraceRoute.DiagnosticsState",
+    # TR-143 throughput. Mapped for completeness: as of the 2026-07 fleet
+    # survey no device in the production ACS exposes the TR-181 tree (0 of
+    # 406) - every TR-143-capable unit is TR-098. See LINK_SPEED_TEST design.
+    "diag.download.state": "IP.Diagnostics.DownloadDiagnostics.DiagnosticsState",
+    "diag.download.url": "IP.Diagnostics.DownloadDiagnostics.DownloadURL",
+    "diag.download.interface": "IP.Diagnostics.DownloadDiagnostics.Interface",
+    "diag.download.test_bytes": "IP.Diagnostics.DownloadDiagnostics.TestBytesReceived",
+    "diag.download.total_bytes": "IP.Diagnostics.DownloadDiagnostics.TotalBytesReceived",
+    "diag.download.bom_time": "IP.Diagnostics.DownloadDiagnostics.BOMTime",
+    "diag.download.eom_time": "IP.Diagnostics.DownloadDiagnostics.EOMTime",
+    "diag.upload.state": "IP.Diagnostics.UploadDiagnostics.DiagnosticsState",
+    "diag.upload.url": "IP.Diagnostics.UploadDiagnostics.UploadURL",
+    "diag.upload.interface": "IP.Diagnostics.UploadDiagnostics.Interface",
+    "diag.upload.test_file_length": "IP.Diagnostics.UploadDiagnostics.TestFileLength",
+    "diag.upload.total_bytes": "IP.Diagnostics.UploadDiagnostics.TotalBytesSent",
+    "diag.upload.bom_time": "IP.Diagnostics.UploadDiagnostics.BOMTime",
+    "diag.upload.eom_time": "IP.Diagnostics.UploadDiagnostics.EOMTime",
     # ── Optical ─────────────────────────────────────────────────────────
     "optical.signal_level": "Optical.Interface.{i}.OpticalSignalLevel",
     "optical.lower_threshold": "Optical.Interface.{i}.LowerOpticalThreshold",
@@ -242,6 +259,23 @@ _TR098_PATHS: dict[str, str] = {
     "diag.ping.state": "IPPingDiagnostics.DiagnosticsState",
     "diag.traceroute.host": "TraceRouteDiagnostics.Host",
     "diag.traceroute.state": "TraceRouteDiagnostics.DiagnosticsState",
+    # TR-143 throughput. This is the tree the fleet actually implements:
+    # 363 of 406 devices in the production ACS expose these objects
+    # (EG8145V5 and HG8546M), all writable.
+    "diag.download.state": "DownloadDiagnostics.DiagnosticsState",
+    "diag.download.url": "DownloadDiagnostics.DownloadURL",
+    "diag.download.interface": "DownloadDiagnostics.Interface",
+    "diag.download.test_bytes": "DownloadDiagnostics.TestBytesReceived",
+    "diag.download.total_bytes": "DownloadDiagnostics.TotalBytesReceived",
+    "diag.download.bom_time": "DownloadDiagnostics.BOMTime",
+    "diag.download.eom_time": "DownloadDiagnostics.EOMTime",
+    "diag.upload.state": "UploadDiagnostics.DiagnosticsState",
+    "diag.upload.url": "UploadDiagnostics.UploadURL",
+    "diag.upload.interface": "UploadDiagnostics.Interface",
+    "diag.upload.test_file_length": "UploadDiagnostics.TestFileLength",
+    "diag.upload.total_bytes": "UploadDiagnostics.TotalBytesSent",
+    "diag.upload.bom_time": "UploadDiagnostics.BOMTime",
+    "diag.upload.eom_time": "UploadDiagnostics.EOMTime",
     # ── Optical (not standard in TR-098; vendor extension paths) ───────
     "optical.signal_level": "WANDevice.1.X_GponInterafceConfig.RXPower",
     "optical.lower_threshold": "WANDevice.1.X_GponInterafceConfig.LowerRXThreshold",

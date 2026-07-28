@@ -1,6 +1,6 @@
 """Architecture guard: the team-inbox owner family is the only inbox writer.
 
-``communications.team_inbox`` (SOT_RELATIONSHIP_MAP §Communications) owns all
+The contracted ``communications.team_inbox_*`` family owns all
 inbox ORM mutations. Everything else — API webhooks, admin web routes, tasks,
 other services — must go through the family's entrypoints
 (``team_inbox_commands`` for admin mutations, ``*_committed`` receivers for
@@ -38,6 +38,8 @@ _INBOX_MODELS = (
     "InboxComment",
     "InboxAgentPresence",
     "InboxConversationAssignment",
+    "InboxProviderObservation",
+    "InboxConversationReadState",
 )
 
 _WRITE_CONTEXTS = (

@@ -217,7 +217,6 @@ class ProjectTaskBase(BaseModel):
     assigned_to_person_ids: list[UUID] | None = None
     created_by_person_id: UUID | None = None
     ticket_id: UUID | None = None
-    work_order_id: UUID | None = None
     start_at: datetime | None = None
     due_at: datetime | None = None
     completed_at: datetime | None = None
@@ -245,7 +244,6 @@ class ProjectTaskUpdate(BaseModel):
     assigned_to_person_ids: list[UUID] | None = None
     created_by_person_id: UUID | None = None
     ticket_id: UUID | None = None
-    work_order_id: UUID | None = None
     start_at: datetime | None = None
     due_at: datetime | None = None
     completed_at: datetime | None = None

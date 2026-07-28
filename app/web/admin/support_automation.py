@@ -15,9 +15,11 @@ from app.models.support import (
     AutomationActionType,
     AutomationTrigger,
 )
-from app.services import support_automation as automation_service
+from app.services import support_automation_rules as automation_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.auth_dependencies import require_permission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 
 router = APIRouter(prefix="/support/automation", tags=["web-admin-support-automation"])
 templates = Jinja2Templates(directory="templates")
@@ -151,11 +153,17 @@ def automation_create(
     db: Session = Depends(get_db),
 ):
     try:
-        conditions = _parse_json_field(conditions_json, "conditions")
-        action = AutomationActionType(action_type)
-        action_value = _validate_action_value(
-            db, action, _parse_json_field(action_value_json, "action_value")
+        conditions = automation_service.TicketAutomationConditions.from_mapping(
+            _parse_json_field(conditions_json, "conditions")
         )
+        action = AutomationActionType(action_type)
+        action_value = automation_service.TicketAutomationAction.from_mapping(
+            action,
+            _validate_action_value(
+                db, action, _parse_json_field(action_value_json, "action_value")
+            ),
+        )
+        db_session_adapter.release_read_transaction(db)
         automation_service.create_rule(
             db,
             name=name,
@@ -167,9 +175,7 @@ def automation_create(
             sort_order=sort_order,
             is_active=is_active,
         )
-        db.commit()
-    except (ValueError, KeyError) as exc:
-        db.rollback()
+    except (ValueError, KeyError, DomainError) as exc:
         context = _ctx(request, db)
         context.update(
             {
@@ -227,11 +233,17 @@ def automation_update(
     db: Session = Depends(get_db),
 ):
     try:
-        conditions = _parse_json_field(conditions_json, "conditions")
-        action = AutomationActionType(action_type)
-        action_value = _validate_action_value(
-            db, action, _parse_json_field(action_value_json, "action_value")
+        conditions = automation_service.TicketAutomationConditions.from_mapping(
+            _parse_json_field(conditions_json, "conditions")
         )
+        action = AutomationActionType(action_type)
+        action_value = automation_service.TicketAutomationAction.from_mapping(
+            action,
+            _validate_action_value(
+                db, action, _parse_json_field(action_value_json, "action_value")
+            ),
+        )
+        db_session_adapter.release_read_transaction(db)
         automation_service.update_rule(
             db,
             str(rule_id),
@@ -244,9 +256,7 @@ def automation_update(
             sort_order=sort_order,
             is_active=is_active,
         )
-        db.commit()
-    except (ValueError, KeyError) as exc:
-        db.rollback()
+    except (ValueError, KeyError, DomainError) as exc:
         rule = automation_service.get_rule(db, str(rule_id))
         context = _ctx(request, db)
         context.update({"rule": rule, "form_mode": "edit", "error": str(exc)})
@@ -262,8 +272,8 @@ def automation_update(
     dependencies=[Depends(require_permission("support:automation:write"))],
 )
 def automation_delete(rule_id: UUID, db: Session = Depends(get_db)):
+    db_session_adapter.release_read_transaction(db)
     automation_service.delete_rule(db, str(rule_id))
-    db.commit()
     return RedirectResponse(url="/admin/support/automation", status_code=303)
 
 
@@ -282,9 +292,9 @@ def automation_toggle(
     If `target=on` or `target=off` is supplied, the call is idempotent
     (double-click won't flip back). Otherwise falls back to legacy flip.
     """
+    db_session_adapter.release_read_transaction(db)
     if target in ("on", "off"):
         automation_service.set_rule_active(db, str(rule_id), is_active=(target == "on"))
     else:
         automation_service.toggle_rule(db, str(rule_id))
-    db.commit()
     return RedirectResponse(url="/admin/support/automation", status_code=303)

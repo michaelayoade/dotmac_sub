@@ -126,25 +126,25 @@ def _alert_intervals_by_device(
 
 
 def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeReportItem]:
-    """Per-PON-port availability, *derived* from the current ONT-online ratio.
+    """Per-PON-port availability, derived from current working ONTs.
 
     PON ports have no monitored host and no uptime ``Alert`` source, so unlike the
     other dimensions this is not measured from downtime intervals. We approximate
-    a port's health as the fraction of its ONTs currently reporting ``online``
-    (``offline``/``unknown`` ONTs count against it). Rows are flagged
-    ``derived=True`` so the UI labels them estimates, not contractual SLA.
+    a port's health as the fraction of its ONTs the operational owner currently
+    resolves as ``working``. Rows are flagged ``derived=True`` so the UI labels
+    them estimates, not contractual SLA.
     Ports with no ONTs are reported with ``uptime_percent=None`` (no signal).
     """
-    from app.services.network.ont_status import effective_ont_online_clause
+    from app.services.network.ont_status import operational_ont_working_clause
 
-    online_count = func.count(case((effective_ont_online_clause(), OntUnit.id)))
+    working_count = func.count(case((operational_ont_working_clause(), OntUnit.id)))
     rows = (
         db.query(
             PonPort.id,
             PonPort.name,
             OLTDevice.name.label("olt_name"),
             func.count(OntUnit.id).label("total"),
-            online_count.label("online"),
+            working_count.label("working"),
         )
         .select_from(PonPort)
         .join(OLTDevice, OLTDevice.id == PonPort.olt_id)
@@ -154,14 +154,14 @@ def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeRepo
         .all()
     )
     items: list[UptimeReportItem] = []
-    for pon_id, pon_name, olt_name, total, online in rows:
+    for pon_id, pon_name, olt_name, total, working in rows:
         total = int(total or 0)
-        online = int(online or 0)
+        working = int(working or 0)
         if total == 0:
             uptime_percent = None
             downtime = 0
         else:
-            ratio = Decimal(online) / Decimal(total)
+            ratio = Decimal(working) / Decimal(total)
             uptime_percent = _round_percent(ratio * Decimal("100.00"))
             downtime = int((Decimal(1) - ratio) * Decimal(window_seconds))
         items.append(
@@ -275,40 +275,30 @@ def network_health_summary(
     crit_pct: int = 70,
     fallback_stats: dict | None = None,
 ) -> dict[str, object]:
-    """Fleet-level network health: OLT/ONT counts and the health-ring status.
+    """Fleet-level binary device health and health-ring status.
 
-    Owns the healthy/warning/critical decision for the overview ring. When no
-    OLTs are defined, falls back to the monitoring-device stats supplied by
-    ``network_devices.get_dashboard_stats`` so a monitoring-only deployment
-    still reports health. Threshold percentages are configuration supplied by
-    the caller's settings resolution.
+    Counts come from the canonical device projection. When no OLT rows exist,
+    the ring falls back to the complete projected device fleet so a
+    monitoring-only deployment still reports health.
     """
-    olt_total = db.query(func.count(OLTDevice.id)).scalar() or 0
-    olt_online = (
-        db.query(func.count(OLTDevice.id))
-        .filter(OLTDevice.is_active.is_(True))
-        .scalar()
-        or 0
-    )
-    ont_total = db.query(func.count(OntUnit.id)).scalar() or 0
-    ont_active = (
-        db.query(func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
-        or 0
-    )
+    from app.services.device_projection_views import device_projection_stats
+
+    olt_stats = device_projection_stats(db, device_type="olt")
+    ont_stats = device_projection_stats(db, device_type="ont")
+    olt_total = olt_stats["total"]
+    olt_working = olt_stats["working"]
+    ont_total = ont_stats["total"]
+    ont_working = ont_stats["working"]
 
     stats = fallback_stats or {}
     if olt_total == 0 and (stats.get("total_count") or 0) > 0:
         olts_total = int(stats["total_count"])
-        olts_online = int(
-            (stats.get("online_count") or 0)
-            + (stats.get("degraded_count") or 0)
-            + (stats.get("maintenance_count") or 0)
-        )
+        olts_working = int(stats.get("working_count") or 0)
     else:
         olts_total = olt_total
-        olts_online = olt_online
+        olts_working = olt_working
 
-    health_pct = int((olts_online / olts_total) * 100) if olts_total > 0 else 0
+    health_pct = int((olts_working / olts_total) * 100) if olts_total > 0 else 0
     if health_pct >= warn_pct:
         health_status = "healthy"
     elif health_pct >= crit_pct:
@@ -318,11 +308,11 @@ def network_health_summary(
 
     return {
         "olt_total": olt_total,
-        "olt_online": olt_online,
+        "olt_working": olt_working,
         "ont_total": ont_total,
-        "ont_active": ont_active,
+        "ont_working": ont_working,
         "olts_total": olts_total,
-        "olts_online": olts_online,
+        "olts_working": olts_working,
         "health_pct": health_pct,
         "health_status": health_status,
     }
@@ -845,56 +835,29 @@ class NetworkDevices(ListResponseMixin):
         """Build network dashboard stats for admin overview.
 
         Returns:
-            Dictionary with online/total counts, uptime_percentage,
+            Dictionary with working/total counts, operating percentage,
             active_alarms, device_status_chart, and alarm severity breakdown.
 
-        All aggregations use SQL-level queries for performance.
+        Device counts come from the canonical cross-type projection instead of
+        reinterpreting the mutable ``NetworkDevice.status`` admin field.
         """
         from app.models.network_monitoring import AlertSeverity as Sev
         from app.models.network_monitoring import AlertStatus as AStatus
-        from app.models.network_monitoring import DeviceStatus as DStatus
+        from app.services.device_projection_views import device_projection_stats
 
-        # Device counts using SQL aggregation
-        device_counts = (
-            db.query(
-                func.count(NetworkDevice.id).label("total"),
-                func.count(NetworkDevice.id)
-                .filter(NetworkDevice.status == DStatus.online)
-                .label("online"),
-                func.count(NetworkDevice.id)
-                .filter(NetworkDevice.status == DStatus.degraded)
-                .label("degraded"),
-                func.count(NetworkDevice.id)
-                .filter(NetworkDevice.status == DStatus.offline)
-                .label("offline"),
-                func.count(NetworkDevice.id)
-                .filter(NetworkDevice.status == DStatus.maintenance)
-                .label("maintenance"),
-            )
-            .filter(NetworkDevice.is_active.is_(True))
-            .one()
-        )
-
-        total_count = device_counts.total or 0
-        online_count = device_counts.online or 0
-        degraded_count = device_counts.degraded or 0
-        offline_count = device_counts.offline or 0
-        maintenance_count = device_counts.maintenance or 0
+        device_counts = device_projection_stats(db)
+        total_count = device_counts["total"]
+        working_count = device_counts["working"]
+        not_working_count = device_counts["not_working"]
 
         uptime_percentage = (
-            round(
-                (online_count + degraded_count + maintenance_count) / total_count * 100,
-                1,
-            )
-            if total_count > 0
-            else 0.0
+            round(working_count / total_count * 100, 1) if total_count > 0 else 0.0
         )
 
-        # Device status chart
         device_status_chart = {
-            "labels": ["Online", "Degraded", "Offline", "Maintenance"],
-            "values": [online_count, degraded_count, offline_count, maintenance_count],
-            "tones": ["positive", "warning", "negative", "neutral"],
+            "labels": ["Working", "Not working"],
+            "values": [working_count, not_working_count],
+            "tones": ["positive", "negative"],
         }
 
         # Alarm counts using SQL aggregation
@@ -941,11 +904,9 @@ class NetworkDevices(ListResponseMixin):
         ]
 
         return {
-            "online_count": online_count,
+            "working_count": working_count,
             "total_count": total_count,
-            "degraded_count": degraded_count,
-            "offline_count": offline_count,
-            "maintenance_count": maintenance_count,
+            "not_working_count": not_working_count,
             "uptime_percentage": uptime_percentage,
             "device_status_chart": device_status_chart,
             "alarms_critical": alarms_critical,
@@ -975,10 +936,8 @@ class NetworkDevices(ListResponseMixin):
         from app.models.network_monitoring import MetricType as MT
         from app.models.usage import AccountingStatus, RadiusAccountingSession
         from app.services.device_operational_status import (
-            DEGRADED,
-            DOWN,
-            MAINTENANCE,
-            UP,
+            NOT_WORKING,
+            WORKING,
             OperationalStatus,
             annotate_operational_status,
         )
@@ -996,51 +955,28 @@ class NetworkDevices(ListResponseMixin):
             )
             for device in devices
         }
-        online_count = len(
+        working_count = len(
             [
                 device
                 for device in devices
-                if operational_by_id[device.id].status == UP
-                and not operational_by_id[device.id].retry_pending
+                if operational_by_id[device.id].status == WORKING
             ]
         )
-        degraded_count = len(
+        not_working_count = len(
             [
                 device
                 for device in devices
-                if operational_by_id[device.id].status == DEGRADED
-                and not operational_by_id[device.id].retry_pending
+                if operational_by_id[device.id].status == NOT_WORKING
             ]
         )
-        offline_count = len(
-            [
-                device
-                for device in devices
-                if operational_by_id[device.id].status == DOWN
-                and not operational_by_id[device.id].retry_pending
-            ]
-        )
-        maintenance_count = len(
-            [
-                device
-                for device in devices
-                if operational_by_id[device.id].status == MAINTENANCE
-            ]
-        )
-        retry_pending_count = len(
-            [device for device in devices if operational_by_id[device.id].retry_pending]
+        impaired_count = len(
+            [device for device in devices if operational_by_id[device.id].impaired]
         )
 
         device_status_chart = {
-            "labels": ["Up", "Degraded", "Down", "Refresh pending", "Maintenance"],
-            "values": [
-                online_count,
-                degraded_count,
-                offline_count,
-                retry_pending_count,
-                maintenance_count,
-            ],
-            "tones": ["positive", "warning", "negative", "warning", "neutral"],
+            "labels": ["Working", "Not working"],
+            "values": [working_count, not_working_count],
+            "tones": ["positive", "negative"],
         }
 
         # ---- Alarms ----
@@ -1165,11 +1101,9 @@ class NetworkDevices(ListResponseMixin):
         return {
             "stats": {
                 "devices_total": len(devices),
-                "devices_online": online_count,
-                "devices_offline": offline_count,
-                "devices_degraded": degraded_count,
-                "devices_maintenance": maintenance_count,
-                "devices_retry_pending": retry_pending_count,
+                "devices_working": working_count,
+                "devices_not_working": not_working_count,
+                "devices_impaired": impaired_count,
                 "alarms_open": alarms_open,
                 "subscribers_online": subscribers_online,
             },
@@ -1646,50 +1580,15 @@ class AlertEvents(ListResponseMixin):
 
 
 def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, int]:
-    """Aggregate binary ONT monitoring status.
+    """Aggregate the owner-resolved binary ONT operational status.
 
     Returns:
-        Dictionary with total, online, offline, low_signal counts.
+        Dictionary with total, working, not_working, low_signal counts.
     """
     del refresh
-    from sqlalchemy import func as sa_func
+    from app.services.network.ont_status import ont_status_summary
 
-    from app.models.network import OntUnit
-    from app.services.network.ont_status import effective_ont_online_clause
-
-    inventory_total = (
-        db.query(sa_func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
-        or 0
-    )
-    online = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.is_active.is_(True), effective_ont_online_clause())
-        .scalar()
-        or 0
-    )
-    offline = max(inventory_total - online, 0)
-    low_signal = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(
-            OntUnit.is_active.is_(True),
-            OntUnit.olt_rx_signal_dbm.isnot(None),
-            OntUnit.olt_rx_signal_dbm < -27,
-        )
-        .scalar()
-        or 0
-    )
-
-    return {
-        "total": inventory_total,
-        "online": online,
-        "offline": offline,
-        "low_signal": low_signal,
-    }
-
-
-def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
-    """Aggregate effective binary ONT link status."""
-    return get_onu_status_summary(db)
+    return ont_status_summary(db, low_signal_threshold_dbm=-27)
 
 
 def get_pon_outage_summary(db: Session) -> list[dict]:

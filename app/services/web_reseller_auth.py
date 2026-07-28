@@ -10,10 +10,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider, UserCredential
-from app.models.subscriber import Subscriber
+from app.models.subscriber import ResellerUser, Subscriber
 from app.services import auth_flow as auth_flow_service
-from app.services import reseller_portal
+from app.services import credential_recovery, reseller_portal
 from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,14 @@ logger = logging.getLogger(__name__)
 templates = get_reseller_templates()
 _RESELLER_RESET_LOGIN_PATH = "/reseller/auth/login?next=/reseller/dashboard"
 _HTTP_ERROR_PREFIX_RE = re.compile(r"^\d{3}:\s*")
+
+
+def _credential_recovery_context(reason: str) -> CommandContext:
+    return CommandContext.system(
+        actor="service:reseller-auth-web",
+        scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+        reason=reason,
+    )
 
 
 def _password_reset_email_for_identifier(db: Session, identifier: str) -> str:
@@ -36,6 +45,19 @@ def _password_reset_email_for_identifier(db: Session, identifier: str) -> str:
         .order_by(UserCredential.created_at.desc())
         .scalar()
     )
+    if not email:
+        email = (
+            db.query(ResellerUser.email)
+            .join(
+                UserCredential,
+                ResellerUser.id == UserCredential.reseller_user_id,
+            )
+            .filter(UserCredential.provider == AuthProvider.local)
+            .filter(UserCredential.is_active.is_(True))
+            .filter(func.lower(UserCredential.username) == normalized_identifier)
+            .order_by(UserCredential.created_at.desc())
+            .scalar()
+        )
     return email or identifier
 
 
@@ -133,21 +155,20 @@ def reseller_login_submit(
                 isinstance(detail, dict)
                 and detail.get("code") == "PASSWORD_RESET_REQUIRED"
             ):
-                reset_email = _password_reset_email_for_identifier(db, username)
-                # Short TTL: this token lands in a redirect URL (browser
-                # history, access logs), so keep its replay window small.
-                reset = auth_flow_service.request_password_reset(
-                    db=db, email=reset_email, ttl_minutes=15
+                reset = credential_recovery.issue_reset_capability_for_email(
+                    db,
+                    _password_reset_email_for_identifier(db, username),
+                    ttl_minutes=15,
                 )
-                if reset and reset.get("token"):
+                if reset and reset.token:
                     query = urlencode(
                         {
-                            "token": str(reset["token"]),
+                            "token": reset.token,
                             "next_login": _RESELLER_RESET_LOGIN_PATH,
                         }
                     )
                     return RedirectResponse(
-                        url=f"/auth/reset-password?{query}",
+                        url=f"/auth/reset-password#{query}",
                         status_code=303,
                     )
         error_msg = _login_error_message(exc)
@@ -167,8 +188,15 @@ def reseller_forgot_password_page(request: Request, success: bool = False):
 
 def reseller_forgot_password_submit(request: Request, db: Session, email: str):
     try:
-        auth_flow_service.forgot_password_flow(
-            db, email, next_login_path=_RESELLER_RESET_LOGIN_PATH
+        credential_recovery.request_password_recovery(
+            db,
+            credential_recovery.RequestPasswordRecoveryCommand(
+                context=_credential_recovery_context(
+                    "Reseller portal password recovery request"
+                ),
+                email=email,
+                next_login_path=_RESELLER_RESET_LOGIN_PATH,
+            ),
         )
     except Exception:
         logger.info(

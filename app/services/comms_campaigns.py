@@ -23,6 +23,7 @@ from app.models.comms_campaign import (
     CampaignStep,
     CampaignType,
 )
+from app.models.domain_settings import SettingDomain
 from app.models.notification import (
     CommunicationSuppression,
     NotificationChannel,
@@ -48,6 +49,7 @@ from app.services.communication_intents import (
     submit,
 )
 from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.settings_spec import resolve_boolean
 
 NON_CONTACTABLE_STATUSES = {
     SubscriberStatus.disabled.value,
@@ -108,6 +110,20 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _assert_periodic_campaign_admission_enabled(db: Session) -> None:
+    """Reject new scheduled intent while the rollout admission gate is closed."""
+
+    if resolve_boolean(db, SettingDomain.comms, "campaign_processing_enabled"):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Scheduled campaign admission is disabled. Draft and manual-send "
+            "workflows remain available."
+        ),
+    )
+
+
 def _campaign_or_404(db: Session, campaign_id: str | UUID) -> Campaign:
     campaign = db.get(Campaign, coerce_uuid(campaign_id))
     if campaign is None or not campaign.is_active:
@@ -166,6 +182,54 @@ def _validate_campaign_values(campaign: Campaign) -> None:
 #: actually stop it -- a marketing-scoped suppression blocks this category and
 #: leaves invoices alone.
 MARKETING_CATEGORY = "marketing"
+
+
+#: Financial segment values. Marketing that cannot see service state is the
+#: reason a separate CRM was worth replacing — not upselling a subscriber who
+#: is in arrears is the concrete case. The values name the *canonical*
+#: financial meanings rather than inventing a generic "debt" notion:
+#: ``customer.financial_position`` deliberately keeps due and overdue distinct.
+FINANCIAL_SEGMENTS = {
+    "no_due_debt",
+    "has_due_debt",
+    "has_overdue_debt",
+}
+
+
+def _financial_segment(campaign: Campaign) -> str | None:
+    segment = (
+        campaign.segment_filter if isinstance(campaign.segment_filter, dict) else {}
+    )
+    value = str(segment.get("financial_position") or "").strip().lower()
+    return value if value in FINANCIAL_SEGMENTS else None
+
+
+def _financial_excluded(db: Session, campaign: Campaign, subscribers: list) -> set:
+    """Subscriber ids the financial segment excludes.
+
+    Read in bulk for the same reason suppression is: a campaign audience is
+    thousands of accounts, and the per-account financial reads issue several
+    queries each. The predicate comes from ``invoice_collectibility``, the
+    owner of what due and overdue mean, so a segment can never disagree with
+    the customer's own invoice page.
+    """
+    wanted = _financial_segment(campaign)
+    if wanted is None or not subscribers:
+        return set()
+    from app.services.invoice_collectibility import (
+        accounts_with_due_debt,
+        accounts_with_overdue_debt,
+    )
+
+    ids = [item.id for item in subscribers]
+    if wanted == "has_overdue_debt":
+        matching = accounts_with_overdue_debt(db, ids)
+        return {item.id for item in subscribers if item.id not in matching}
+    matching = accounts_with_due_debt(db, ids)
+    if wanted == "has_due_debt":
+        return {item.id for item in subscribers if item.id not in matching}
+    # no_due_debt
+    return {item.id for item in subscribers if item.id in matching}
 
 
 def _blocked_addresses(
@@ -499,6 +563,8 @@ def within_send_window(campaign: Campaign, now: datetime) -> bool:
 def create_campaign(
     db: Session, payload, *, created_by_system_user_id: str | UUID | None = None
 ) -> Campaign:
+    if payload.scheduled_at is not None:
+        _assert_periodic_campaign_admission_enabled(db)
     campaign = Campaign(
         name=payload.name,
         campaign_type=payload.campaign_type,
@@ -537,7 +603,13 @@ def update_campaign(db: Session, campaign_id: str | UUID, payload) -> Campaign:
         raise HTTPException(
             status_code=409, detail="Sending campaigns cannot be edited"
         )
-    for field_name, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    if (
+        changes.get("status") == CampaignStatus.scheduled.value
+        and campaign.status != CampaignStatus.scheduled.value
+    ):
+        _assert_periodic_campaign_admission_enabled(db)
+    for field_name, value in changes.items():
         if field_name == "metadata":
             campaign.metadata_ = value or {}
         elif field_name == "campaign_sender_id" and value is not None:
@@ -614,6 +686,7 @@ def build_recipient_list(
         channel=campaign.channel,
         addresses=[_recipient_address(campaign, item)[0] for item in subscribers],
     )
+    financially_excluded = _financial_excluded(db, campaign, subscribers)
 
     for subscriber in subscribers:
         address, email = _recipient_address(campaign, subscriber)
@@ -631,6 +704,9 @@ def build_recipient_list(
             continue
         if address in blocked:
             skipped["suppressed"] += 1
+            continue
+        if subscriber.id in financially_excluded:
+            skipped["financial_position"] += 1
             continue
         already_exists = (
             db.query(CampaignRecipient.id)
@@ -960,7 +1036,7 @@ def send_campaign_batch(
                 channels=(channel,),
                 include_reseller=False,
                 persist_policy_suppressions=False,
-                subscriber_recipients={channel: recipient.address},
+                recipients={channel: recipient.address},
                 metadata=rendered.metadata,
                 dedupe_key=f"campaign:recipient:{recipient.id}",
             ),

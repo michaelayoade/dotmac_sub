@@ -1,14 +1,15 @@
-"""Real observability on the integrations surfaces (audit P-C).
+"""Real evidence on the integrations surfaces (audit P-C).
 
-Connector health must come from real signals (integration runs / webhook
-deliveries), API-key ``last_used_at`` must be stamped (throttled) on auth,
-and the activity log must show connector names and real run durations.
+The UI must expose the last observation and whether it requires attention,
+without collapsing installation state and runtime evidence into a health word.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+
+from fastapi.templating import Jinja2Templates
 
 from app.models.auth import ApiKey
 from app.models.integration import (
@@ -21,6 +22,7 @@ from app.models.integration_platform import IntegrationInstallation
 from app.services import web_integrations
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_user_auth
+from app.web.brand_globals import install_brand_jinja_global
 from tests.integration_platform_helpers import enable_capability
 
 
@@ -71,23 +73,34 @@ def _make_run(
     return run
 
 
-def _health_for(data: dict, installation: IntegrationInstallation) -> str:
+def _evidence_for(data: dict, installation: IntegrationInstallation) -> dict:
     for row in data["integrations"]:
         if row["installation"].id == installation.id:
-            return row["health"]
+            return row["operational_evidence"]
     raise AssertionError("installation not in installed integrations data")
 
 
-def test_connector_health_unknown_when_no_signals(db_session):
+def test_installed_integrations_evidence_template_compiles() -> None:
+    install_brand_jinja_global()
+    env = Jinja2Templates(directory="templates").env
+
+    env.get_template("admin/integrations/installed.html")
+
+
+def test_connector_evidence_says_when_no_signals(db_session):
     connector = _make_installation(db_session)
 
     data = web_integrations.build_installed_integrations_data(db_session)
 
-    assert _health_for(data, connector) == "unknown"
-    assert data["stats"]["healthy"] == 0
+    evidence = _evidence_for(data, connector)
+    assert evidence["last_result"] == (
+        "No completed job or delivery evidence has been recorded."
+    )
+    assert evidence["needs_attention"] is False
+    assert data["stats"]["attention"] == 0
 
 
-def test_connector_health_healthy_when_last_run_succeeded(db_session):
+def test_connector_evidence_reports_last_success_without_health_label(db_session):
     connector = _make_installation(db_session)
     now = datetime.now(UTC)
     _make_run(
@@ -107,11 +120,13 @@ def test_connector_health_healthy_when_last_run_succeeded(db_session):
 
     data = web_integrations.build_installed_integrations_data(db_session)
 
-    assert _health_for(data, connector) == "healthy"
-    assert data["stats"]["healthy"] == 1
+    evidence = _evidence_for(data, connector)
+    assert evidence["last_result"] == "The last completed integration job succeeded."
+    assert evidence["needs_attention"] is False
+    assert data["stats"]["attention"] == 0
 
 
-def test_connector_health_degraded_when_last_run_failed(db_session):
+def test_connector_evidence_reports_last_failure_and_attention(db_session):
     connector = _make_installation(db_session)
     now = datetime.now(UTC)
     _make_run(
@@ -131,10 +146,13 @@ def test_connector_health_degraded_when_last_run_failed(db_session):
 
     data = web_integrations.build_installed_integrations_data(db_session)
 
-    assert _health_for(data, connector) == "degraded"
+    evidence = _evidence_for(data, connector)
+    assert evidence["last_result"] == "The last completed integration job failed."
+    assert evidence["needs_attention"] is True
+    assert data["stats"]["attention"] == 1
 
 
-def test_connector_health_ignores_in_flight_runs(db_session):
+def test_connector_evidence_ignores_in_flight_runs(db_session):
     connector = _make_installation(db_session)
     _make_run(
         db_session,
@@ -145,7 +163,10 @@ def test_connector_health_ignores_in_flight_runs(db_session):
 
     data = web_integrations.build_installed_integrations_data(db_session)
 
-    assert _health_for(data, connector) == "unknown"
+    evidence = _evidence_for(data, connector)
+    assert evidence["last_result"] == (
+        "No completed job or delivery evidence has been recorded."
+    )
 
 
 def test_activity_log_resolves_connector_name_and_run_duration(db_session):

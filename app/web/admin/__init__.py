@@ -26,7 +26,6 @@ from app.web.admin.billing_invoice_bulk import router as billing_invoice_bulk_ro
 from app.web.admin.billing_invoices import router as billing_invoices_router
 from app.web.admin.billing_payment_proofs import router as billing_payment_proofs_router
 from app.web.admin.billing_payments import router as billing_payments_router
-from app.web.admin.billing_providers import router as billing_providers_router
 from app.web.admin.billing_reporting import router as billing_reporting_router
 from app.web.admin.catalog import router as catalog_router
 from app.web.admin.catalog_settings import legacy_add_ons_router
@@ -42,6 +41,7 @@ from app.web.admin.drift import router as drift_router
 from app.web.admin.field_maps import router as field_maps_router
 from app.web.admin.gis import router as gis_router
 from app.web.admin.inbox import router as inbox_router
+from app.web.admin.inbox import settings_router as inbox_settings_router
 from app.web.admin.integrations import router as integrations_router
 from app.web.admin.legal import router as legal_router
 from app.web.admin.nas import router as nas_router
@@ -86,12 +86,19 @@ from app.web.admin.network_vendor_capabilities import (
 from app.web.admin.network_weathermap import router as network_weathermap_router
 from app.web.admin.network_zones import router as network_zones_router
 from app.web.admin.notifications import router as notifications_router
+from app.web.admin.payment_configuration_actions import (
+    router as payment_configuration_actions_router,
+)
 from app.web.admin.projects import router as projects_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
 from app.web.admin.sales import router as sales_router
+from app.web.admin.service_change_reconciliation import (
+    router as service_change_reconciliation_router,
+)
 from app.web.admin.service_requests_queue import router as service_requests_queue_router
+from app.web.admin.service_teams import router as service_teams_router
 from app.web.admin.support_assignment_rules import (
     router as support_assignment_rules_router,
 )
@@ -106,6 +113,7 @@ from app.web.admin.vendor_routes import router as vendor_routes_router
 from app.web.admin.vendors import router as vendors_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
+from app.web.admin.workqueue import router as workqueue_router
 from app.web.auth.dependencies import require_admin_web_auth
 
 router = APIRouter(
@@ -172,6 +180,7 @@ def admin_nas_legacy_path_redirect(path: str):
 
 # Include all admin sub-routers
 router.include_router(dashboard_router)
+router.include_router(service_change_reconciliation_router)
 router.include_router(design_system_router)
 router.include_router(dispatch_work_orders_router)
 router.include_router(field_maps_router)
@@ -214,6 +223,10 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
+    payment_configuration_actions_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
     billing_credits_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
@@ -242,14 +255,12 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
-    billing_providers_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
-)
-router.include_router(
     billing_reporting_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(inbox_router)
+router.include_router(workqueue_router)
+router.include_router(inbox_settings_router)
 router.include_router(system_router)
 router.include_router(system_whats_new_router)
 router.include_router(
@@ -392,6 +403,7 @@ router.include_router(
 )
 router.include_router(resellers_router)
 router.include_router(service_requests_queue_router)
+router.include_router(service_teams_router)
 router.include_router(alerts_router)
 router.include_router(drift_router)
 router.include_router(

@@ -146,7 +146,7 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
                 context,
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
-            if (detail.ticketRef != null || detail.projectId != null) ...[
+            if (!detail.customerExperience.isEmpty) ...[
               const SizedBox(height: 8),
               _ReferenceChips(detail: detail),
             ],
@@ -682,19 +682,40 @@ class _ReferenceChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lifecycle = detail.customerExperience;
+    final taskTicket = lifecycle.projectTaskTicket;
+    final originTicket = lifecycle.originTicket;
     return Wrap(
       spacing: 8,
       runSpacing: 8,
       children: [
-        if (_hasText(detail.ticketRef))
+        if (originTicket != null)
           Chip(
             avatar: const Icon(Icons.confirmation_number_outlined, size: 18),
-            label: Text('Ticket ${detail.ticketRef}'),
+            label: Text(
+              'Ticket ${originTicket.number ?? _shortId(originTicket.id)} · ${originTicket.status.replaceAll('_', ' ')}',
+            ),
           ),
-        if (_hasText(detail.projectId))
+        if (taskTicket != null && taskTicket.id != originTicket?.id)
+          Chip(
+            avatar: const Icon(Icons.support_agent_outlined, size: 18),
+            label: Text(
+              'Task ticket ${taskTicket.number ?? _shortId(taskTicket.id)} · ${taskTicket.status.replaceAll('_', ' ')}',
+            ),
+          ),
+        if (lifecycle.project != null)
           Chip(
             avatar: const Icon(Icons.account_tree_outlined, size: 18),
-            label: Text('Project ${_shortId(detail.projectId!)}'),
+            label: Text(
+              'Project ${lifecycle.project!.number ?? lifecycle.project!.title} · ${lifecycle.project!.status.replaceAll('_', ' ')}',
+            ),
+          ),
+        if (lifecycle.projectTask != null)
+          Chip(
+            avatar: const Icon(Icons.task_alt_outlined, size: 18),
+            label: Text(
+              'Task ${lifecycle.projectTask!.number ?? lifecycle.projectTask!.title} · ${lifecycle.projectTask!.status.replaceAll('_', ' ')}',
+            ),
           ),
       ],
     );

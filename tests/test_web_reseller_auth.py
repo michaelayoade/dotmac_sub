@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from unittest.mock import MagicMock
 
 from fastapi import HTTPException
@@ -127,11 +128,18 @@ def test_reseller_login_redirects_to_shared_reset_flow(monkeypatch):
         lambda _db, _identifier: "reseller@example.com",
     )
     reset_request = MagicMock(
-        return_value={"token": "reset-token", "email": "reseller@example.com"}
+        return_value=web_reseller_auth_service.credential_recovery.PasswordResetCapability(
+            token="reset-token",
+            email="reseller@example.com",
+            person_name="Reseller",
+            principal_type="subscriber",
+            principal_id=uuid.uuid4(),
+            ttl_minutes=15,
+        )
     )
     monkeypatch.setattr(
-        web_reseller_auth_service.auth_flow_service,
-        "request_password_reset",
+        web_reseller_auth_service.credential_recovery,
+        "issue_reset_capability_for_email",
         reset_request,
     )
 
@@ -146,12 +154,10 @@ def test_reseller_login_redirects_to_shared_reset_flow(monkeypatch):
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 303
     assert response.headers["location"] == (
-        "/auth/reset-password?token=reset-token&next_login="
+        "/auth/reset-password#token=reset-token&next_login="
         "%2Freseller%2Fauth%2Flogin%3Fnext%3D%2Freseller%2Fdashboard"
     )
-    reset_request.assert_called_once_with(
-        db=db, email="reseller@example.com", ttl_minutes=15
-    )
+    reset_request.assert_called_once_with(db, "reseller@example.com", ttl_minutes=15)
 
 
 def test_reseller_login_returns_error_when_reset_token_not_generated(monkeypatch):
@@ -178,9 +184,9 @@ def test_reseller_login_returns_error_when_reset_token_not_generated(monkeypatch
         lambda _db, _identifier: "reseller@example.com",
     )
     monkeypatch.setattr(
-        web_reseller_auth_service.auth_flow_service,
-        "request_password_reset",
-        lambda **_kwargs: None,
+        web_reseller_auth_service.credential_recovery,
+        "issue_reset_capability_for_email",
+        lambda *_args, **_kwargs: None,
     )
 
     response = web_reseller_auth_service.reseller_login_submit(
@@ -225,11 +231,11 @@ def test_reseller_login_error_hides_http_status_prefix(monkeypatch):
 def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
     request = _request()
     db = object()
-    forgot_flow = MagicMock()
+    recovery_request = MagicMock()
     monkeypatch.setattr(
-        web_reseller_auth_service.auth_flow_service,
-        "forgot_password_flow",
-        forgot_flow,
+        web_reseller_auth_service.credential_recovery,
+        "request_password_recovery",
+        recovery_request,
     )
 
     response = web_reseller_auth_service.reseller_forgot_password_submit(
@@ -240,8 +246,8 @@ def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
 
     assert response.status_code == 200
     assert "Check your email" in response.body.decode()
-    forgot_flow.assert_called_once_with(
-        db,
-        "reseller@example.com",
-        next_login_path="/reseller/auth/login?next=/reseller/dashboard",
-    )
+    recovery_request.assert_called_once()
+    called_db, command = recovery_request.call_args.args
+    assert called_db is db
+    assert command.email == "reseller@example.com"
+    assert command.next_login_path == "/reseller/auth/login?next=/reseller/dashboard"

@@ -35,6 +35,7 @@ from app.schemas.billing import (
     PaymentReversalPreviewRequest,
 )
 from app.services import billing as billing_service
+from tests.payment_provider_event_helpers import stage_verified_provider_event
 
 
 def _settled_consolidated_payment(db_session, *, provider=None):
@@ -277,7 +278,7 @@ def test_trusted_provider_refund_dispatches_to_consolidated_owner(db_session):
         db_session, provider=provider
     )
 
-    event = billing_service.payment_provider_events.ingest(
+    event = stage_verified_provider_event(
         db_session,
         PaymentProviderEventIngest(
             provider_id=provider.id,
@@ -287,7 +288,6 @@ def test_trusted_provider_refund_dispatches_to_consolidated_owner(db_session):
             currency="NGN",
             idempotency_key=f"provider-consolidated-refund-{uuid.uuid4().hex}",
         ),
-        trusted_financial_effects=True,
     )
 
     db_session.refresh(account)
@@ -315,7 +315,7 @@ def test_trusted_provider_reversal_dispatches_to_consolidated_owner(db_session):
         db_session, provider=provider
     )
 
-    event = billing_service.payment_provider_events.ingest(
+    event = stage_verified_provider_event(
         db_session,
         PaymentProviderEventIngest(
             provider_id=provider.id,
@@ -325,7 +325,6 @@ def test_trusted_provider_reversal_dispatches_to_consolidated_owner(db_session):
             currency="NGN",
             idempotency_key=f"provider-consolidated-reversal-{uuid.uuid4().hex}",
         ),
-        trusted_financial_effects=True,
     )
 
     db_session.refresh(account)

@@ -21,14 +21,14 @@ def test_support_ticket_attachments_use_subscriber_safe_uploaded_by(
             storage_key_or_relative_path="attachments/public/support_ticket/ticket-1/file.pdf",
         )
 
-    monkeypatch.setattr(web_support_tickets.file_uploads, "upload", _fake_upload)
+    monkeypatch.setattr(web_support_tickets.file_uploads, "stage_upload", _fake_upload)
     attachment = SimpleNamespace(
         filename="proof.pdf",
         content_type="application/pdf",
         file=BytesIO(b"%PDF-1.4 test"),
     )
 
-    uploaded = web_support_tickets.upload_ticket_attachments(
+    uploaded = web_support_tickets.upload_ticket_attachments.__wrapped__(
         db_session,
         ticket_id="ticket-1",
         attachments=[attachment],
@@ -56,14 +56,14 @@ def test_support_ticket_attachments_ignore_system_user_uploaded_by(
             storage_key_or_relative_path="attachments/public/support_ticket_comment/ticket-2/file.pdf",
         )
 
-    monkeypatch.setattr(web_support_tickets.file_uploads, "upload", _fake_upload)
+    monkeypatch.setattr(web_support_tickets.file_uploads, "stage_upload", _fake_upload)
     attachment = SimpleNamespace(
         filename="evidence.pdf",
         content_type="application/pdf",
         file=BytesIO(b"%PDF-1.4 test"),
     )
 
-    uploaded = web_support_tickets.upload_ticket_attachments(
+    uploaded = web_support_tickets.upload_ticket_attachments.__wrapped__(
         db_session,
         ticket_id="ticket-2",
         attachments=[attachment],

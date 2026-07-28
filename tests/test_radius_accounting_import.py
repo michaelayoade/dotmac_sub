@@ -275,7 +275,7 @@ def _activate(db_session, subscription):
     db_session.commit()
 
 
-def test_import_persists_framed_ips_and_writes_back_subscription(
+def test_import_persists_framed_ips_as_observations(
     db_session, subscription, tmp_path, monkeypatch
 ):
     engine = _make_radacct(tmp_path, monkeypatch)
@@ -307,10 +307,13 @@ def test_import_persists_framed_ips_and_writes_back_subscription(
     assert local.framed_ipv6_prefix is None
     assert local.nas_port_id == "pppoe-user1"
     assert local.called_station_id == "service1"
-    # Live session → the subscription's current address follows it.
+    # Accounting is observation-only. Desired addresses remain owned by IP
+    # assignment/connectivity and cannot be replaced by a live or stale session.
     db_session.refresh(subscription)
-    assert subscription.ipv4_address == "100.64.10.20"
-    assert subscription.ipv6_address == "2a02:db8:100::/56"
+    assert subscription.ipv4_address is None
+    assert subscription.ipv6_address is None
+    assert subscription.last_seen_framed_ipv4 == "100.64.10.20"
+    assert subscription.last_seen_framed_ipv6 == "2a02:db8:100::/56"
 
 
 def test_import_survives_radacct_without_framed_ip_columns(
