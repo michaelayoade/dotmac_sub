@@ -769,22 +769,55 @@ def test_only_active_subscriptions_count_as_attached(db_session, catalog_offer):
 def test_repeated_deactivation_transitions_dedupe_onto_one_alert(
     db_session, catalog_offer
 ):
-    """Fingerprint dedupe plus the transition gate: no stacking, no re-notify."""
+    """Fingerprint dedupe plus the transition gate: no stacking, no re-notify.
+
+    Scoped to this owner's fingerprint prefix, not a bare ``AdminAlert`` count.
+    A global count is both too weak and too fragile for the property: it cannot
+    tell "one row under a device-stable key" (correct) from "one row under a key
+    that drifted between calls" (the exact failure this test exists to catch),
+    and any alert another owner raised in the same session perturbs it.
+    """
     from app.models.admin_alert import AdminAlert, AdminNotification
+    from app.models.network_monitoring import AlertStatus
+    from app.services.network_monitoring import (
+        _ADMISSION_ALERT_PREFIX,
+        _stranded_customer_fingerprint,
+    )
 
     _admin_notification_target(db_session)
     device = _nas_node_with_customers(db_session, catalog_offer, "stranded-dedupe", 2)
 
     set_network_device_active(db_session, device, False, reason="manual_delete")
-    # Re-applying the already-inactive state is NOT a transition: the router
+    # Re-applying the already-inactive state is NOT an edge: the router
     # inventory sync re-asserts deactivation every cycle, and that must not
     # re-open an alert an operator already worked.
     set_network_device_active(db_session, device, False, reason="router_inventory_sync")
     set_network_device_active(db_session, device, False, reason="router_inventory_sync")
 
-    assert db_session.query(AdminAlert).count() == 1
-    # One inbox notification, not one per sync cycle.
-    assert db_session.query(AdminNotification).count() == 1
+    # The harness session runs autoflush=False and the alert sink flushes the
+    # alert but not the notifications it queues behind it. Production callers
+    # own the commit, which flushes both; do the same here or the notification
+    # query below reads an empty table and proves nothing.
+    db_session.flush()
+
+    raised = (
+        db_session.query(AdminAlert)
+        .filter(AdminAlert.fingerprint.like(f"{_ADMISSION_ALERT_PREFIX}%"))
+        .all()
+    )
+    # Exactly one row, under the device-stable key, still open: three
+    # transitions neither stacked rows nor re-opened the alert.
+    assert [(alert.fingerprint, alert.status) for alert in raised] == [
+        (_stranded_customer_fingerprint(device), AlertStatus.open)
+    ]
+
+    # One inbox notification for that alert, not one per sync cycle.
+    notifications = (
+        db_session.query(AdminNotification)
+        .filter(AdminNotification.alert_id == raised[0].id)
+        .count()
+    )
+    assert notifications == 1
 
 
 def test_reactivation_clears_the_outstanding_alert(db_session, catalog_offer):
@@ -805,14 +838,29 @@ def test_reactivation_clears_the_outstanding_alert(db_session, catalog_offer):
 def test_reactivation_without_an_outstanding_alert_is_a_no_op(
     db_session, catalog_offer
 ):
+    """Silent stays silent, and re-admission does not invent an alert.
+
+    Reported as this owner's rows rather than a bare count so a failure names
+    which of the two things happened: a row the deactivation or reactivation
+    should never have created (broken zero-customer gate, or a drifting
+    fingerprint that stopped the resolve finding its target), or a row left
+    unresolved. A bare count cannot tell those apart.
+    """
     from app.models.admin_alert import AdminAlert
+    from app.services.network_monitoring import _ADMISSION_ALERT_PREFIX
 
     device = _nas_node_with_customers(db_session, catalog_offer, "stranded-none", 0)
     set_network_device_active(db_session, device, False, reason="manual_delete")
 
     set_network_device_active(db_session, device, True, reason="inventory_update")
 
-    assert db_session.query(AdminAlert).count() == 0
+    db_session.flush()
+    raised = (
+        db_session.query(AdminAlert)
+        .filter(AdminAlert.fingerprint.like(f"{_ADMISSION_ALERT_PREFIX}%"))
+        .all()
+    )
+    assert [(alert.fingerprint, alert.status) for alert in raised] == []
 
 
 def test_the_alert_never_opens_an_outage_incident(db_session, catalog_offer):
@@ -820,11 +868,15 @@ def test_the_alert_never_opens_an_outage_incident(db_session, catalog_offer):
     from app.models.network_monitoring import OutageIncident
 
     device = _nas_node_with_customers(db_session, catalog_offer, "stranded-no-inc", 4)
+    before = db_session.query(OutageIncident).count()
 
     set_network_device_active(db_session, device, False, reason="manual_delete")
 
+    db_session.flush()
     assert _admission_alert(db_session, device) is not None
-    assert db_session.query(OutageIncident).count() == 0
+    # Delta, not an absolute count: the property is that this transition opens
+    # no incident, which must not depend on the table being empty to begin with.
+    assert db_session.query(OutageIncident).count() == before
 
 
 def test_a_failing_impact_read_cannot_block_the_transition(
