@@ -13733,7 +13733,7 @@
    ],
    "request": "d9186960cfcf",
    "responses": {
-    "201": "56cb42710a34",
+    "201": "e5914f9f4054",
     "422": "a11c9d9b2af8"
    }
   },
@@ -18477,7 +18477,7 @@
   "CPEDeviceCreate": "47e69a31998c",
   "CPEDeviceRead": "3d3019b85a32",
   "CPEDeviceUpdate": "2738e9ce8887",
-  "CRMSubscriberProvisionRequest": "68be20f43148",
+  "CRMSubscriberProvisionRequest": "dd1d29da7928",
   "CampaignAudienceBuildRead": "17e1de9912b5",
   "CampaignCreate": "a794f82cc566",
   "CampaignRead": "bf40b6d23dab",
