@@ -231,3 +231,41 @@ def test_phase2_shadow_obligations_take_money_only_from_rating() -> None:
         ].split("class ObligationResult", maxsplit=1)[0]
     )
     assert "schema_versions=(1, 2)" in handler
+
+
+def test_phase2_rating_replay_uses_immutable_provenance() -> None:
+    root = Path(__file__).resolve().parents[2]
+    model = (root / "app/models/billing_contract.py").read_text(encoding="utf-8")
+    rating = (root / "app/services/billing/rating.py").read_text(encoding="utf-8")
+    obligations = (root / "app/services/billing/obligations.py").read_text(
+        encoding="utf-8"
+    )
+    migration = (
+        root / "alembic/versions/438_billing_obligation_rating_provenance.py"
+    ).read_text(encoding="utf-8")
+
+    for field in (
+        "rating_provenance_complete",
+        "rating_policy_version",
+        "rating_coverage_start",
+        "rating_coverage_end",
+        "rating_rate_basis",
+        "rating_rate_unit",
+        "rating_timezone_name",
+        "rating_proration_policy",
+        "rating_tax_rate_id",
+        "rating_tax_rate_percent",
+        "rating_input_fingerprint",
+    ):
+        assert field in model
+    assert 'RATING_POLICY_VERSION = "billing-rating-v1"' in rating
+    assert '_SUPPORTED_POLICY_VERSIONS = frozenset({"billing-rating-v1"})' in rating
+    assert "class RatingProvenance" in rating
+    assert "def rate_from_provenance" in rating
+    assert "def _rate_v1" in rating
+    assert "rating_provenance_fingerprint_mismatch" in rating
+    assert "rate_from_provenance(_recorded_provenance(obligation))" in obligations
+    assert "incomplete_rating_provenance" in obligations
+    assert "rating_provenance_conflict" in obligations
+    assert "server_default=sa.false()" in migration
+    assert "UPDATE billing_obligations" not in migration

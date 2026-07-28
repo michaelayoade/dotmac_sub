@@ -2160,6 +2160,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.billing.obligations",
                 owns=(
                     "unique billing obligation identity",
+                    "immutable obligation rating provenance",
                     "billing obligation state transition",
                 ),
                 depends_on=(
@@ -2178,7 +2179,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     " Phase 1 consumes the contract owner's output through a "
                     "receipt and emits a terminal shadow result atomically. "
                     "Phase 2 resolves every amount through billing.rating; producer "
-                    "payloads carry identity, never a parallel money formula."
+                    "payloads carry identity, never a parallel money formula. New "
+                    "obligations snapshot complete versioned rating inputs and replay "
+                    "from that immutable snapshot without consulting current tax "
+                    "configuration. Pre-snapshot rows remain explicitly incomplete."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -2190,6 +2194,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "recorded billing obligations",
                                 "deterministic target rating",
                                 "receipted owner-output deliveries",
+                            ),
+                            canonical_writer="billing.obligations",
+                        ),
+                        ConcernContract(
+                            name="immutable obligation rating provenance",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "recorded billing contract terms",
+                                "deterministic target rating",
+                                "recorded billing obligations",
                             ),
                             canonical_writer="billing.obligations",
                         ),
@@ -2224,15 +2238,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="billing.rating",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "typed net, tax, gross, and currency result for "
-                                "the exact contract line and service period"
+                                "typed net, tax, gross, currency, versioned policy, "
+                                "coverage, cadence, tax source/value, and input "
+                                "fingerprint for the exact line and period"
                             ),
                         ),
                         AuthorityInput(
                             name="recorded billing obligations",
                             owner="billing.obligations",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source="billing_obligations rows and their natural identity",
+                            source=(
+                                "billing_obligations rows, natural identity, rated "
+                                "result, and immutable rating replay provenance"
+                            ),
                         ),
                     ),
                     transaction=TransactionContract(
@@ -2251,8 +2269,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         idempotency=(
                             "The natural identity unique constraint is the "
                             "guarantee. A replay returns the existing obligation "
-                            "with replayed=True; a concurrent loser fails closed on "
-                            "billing.obligations.duplicate_obligation."
+                            "only after reproducing its recorded result from its "
+                            "fingerprinted provenance. New coverage for the same "
+                            "identity and incomplete legacy provenance fail closed."
                         ),
                         retries=(
                             "The complete command is retryable. Applications can "
@@ -2266,7 +2285,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "billing.obligations.contract_line_not_found",
                             "billing.obligations.contract_version_not_found",
                             "billing.obligations.duplicate_obligation",
-                            "billing.obligations.existing_obligation_rating_mismatch",
+                            "billing.obligations.incomplete_rating_provenance",
                             "billing.obligations.invalid_command_context",
                             "billing.obligations.invalid_obligation_amount",
                             "billing.obligations.invalid_obligation_transition",
@@ -2275,12 +2294,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "billing.obligations.nested_transaction_completion",
                             "billing.obligations.obligation_not_found",
                             "billing.obligations.period_outside_contract_version",
+                            "billing.obligations.rating_provenance_conflict",
+                            "billing.obligations.recorded_rating_provenance_invalid",
+                            "billing.obligations.recorded_rating_result_mismatch",
                             "billing.obligations.resolution_exceeds_obligation",
                         ),
                         mapping_owner="billing, invoicing, and collections adapters",
                         fail_closed_on=(
                             "a duplicate natural identity under concurrency",
-                            "an existing obligation disagreeing with current rating",
+                            "missing, corrupt, or conflicting rating provenance",
+                            "a stored result that cannot be reproduced from its "
+                            "recorded inputs",
                             "an application exceeding the obligation gross amount",
                             "a period outside the contract version interval",
                         ),
@@ -2290,8 +2314,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
-                            "Version 1 is additive. Consumers validate the "
-                            "obligation identity and never re-decide its state."
+                            "Version 1 is additive. New outputs include the rating "
+                            "input fingerprint; consumers validate obligation "
+                            "identity and never re-decide state or money."
                         ),
                         replay=(
                             "The contract-output receipt, obligations, and staged "
@@ -2306,14 +2331,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="billing.obligations",
                         verification=(
-                            "Natural-identity uniqueness, replay, calendar period, "
-                            "and state-transition tests plus the ADR 0007 guards."
+                            "Natural-identity uniqueness, immutable-input replay "
+                            "after tax mutation, coverage conflict, fingerprint "
+                            "integrity, calendar period, and state-transition tests."
                         ),
                         cutover_gate=(
                             "ADR 0007 Phase 2 gate: exact period and amount parity "
                             "against current invoice generation and prepaid renewal "
-                            "for the active cohort, with zero duplicate, gapped, or "
-                            "overlapping obligations outside typed policy."
+                            "for the active cohort; complete reproducible provenance "
+                            "for every included obligation; and zero duplicate, "
+                            "gapped, or overlapping obligations outside typed policy."
                         ),
                         fallback_retirement=(
                             "Independent _period_end and monthly-only renewal "
@@ -2582,9 +2609,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "ADR 0007 Phase 2. Read-only policy/resolver: the same "
                     "contract version, line, period, coverage, and tax inputs "
-                    "always produce the same typed rated result. A contracted "
-                    "tax treatment code with no active tax rate fails closed "
-                    "instead of rating tax-free."
+                    "always produce the same typed rated result and content-addressed "
+                    "provenance. Recorded provenance replays through its named policy "
+                    "without reading mutable current tax configuration. A contracted "
+                    "tax code with zero or multiple active rates fails closed."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -2625,9 +2653,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "rows before recording a rated result."
                         ),
                         idempotency=(
-                            "Deterministic: identical version, line, period, "
-                            "coverage, and tax inputs produce an identical typed "
-                            "result."
+                            "Deterministic: identical versioned policy, line, period, "
+                            "coverage, cadence, price, and tax inputs produce an "
+                            "identical fingerprint and typed result. Recorded policy "
+                            "versions remain replayable when a new policy is added."
                         ),
                         retries=(
                             "Transient reads may be retried; a missing named tax "
@@ -2636,14 +2665,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     errors=ErrorContract(
                         domain_codes=(
+                            "billing.rating.ambiguous_tax_treatment",
                             "billing.rating.contract_line_not_found",
                             "billing.rating.contract_version_not_found",
+                            "billing.rating.invalid_rating_provenance",
+                            "billing.rating.rating_provenance_fingerprint_mismatch",
                             "billing.rating.unknown_tax_treatment",
+                            "billing.rating.unsupported_policy_version",
                             "billing.rating.usage_rating_requires_observation",
                         ),
                         mapping_owner="billing and invoicing adapters",
                         fail_closed_on=(
-                            "a contracted tax treatment code with no active rate",
+                            "a contracted tax treatment code with zero or multiple "
+                            "active rates",
+                            "corrupt or unsupported recorded rating provenance",
                             "usage-metered rating without an observed quantity",
                         ),
                     ),
@@ -2655,13 +2690,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="billing.rating",
                         verification=(
-                            "Deterministic rating, proration, tax-inclusive, and "
-                            "fail-closed tax tests plus the ADR 0007 guards."
+                            "Deterministic rating, content-addressed replay, tax "
+                            "mutation, proration, tax-inclusive, ambiguous-tax, and "
+                            "fail-closed tests plus the ADR 0007 guards."
                         ),
                         cutover_gate=(
                             "ADR 0007 Phase 2 gate: rated totals match current "
                             "postpaid invoice generation and prepaid renewal "
-                            "previews for the complete active cohort."
+                            "previews for the complete active cohort and every "
+                            "included obligation has complete replayable provenance."
                         ),
                         fallback_retirement=(
                             "Parallel money formulas in invoice generation and "

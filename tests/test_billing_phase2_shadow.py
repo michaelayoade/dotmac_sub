@@ -12,6 +12,7 @@ from app.models.billing_contract import (
     AccountingTreatment,
     BillingContractLine,
     BillingContractSourceKind,
+    BillingObligation,
     BillingRecordAuthority,
     CadenceAlignment,
     ChargeComponent,
@@ -355,6 +356,51 @@ def test_phase2_missing_target_obligation_blocks_approval(
     assert result.blocker_count == 1
     run = db_session.get(BillingCutoverVerificationRun, result.run_id)
     assert run.unexpected_unlinked_count == 1
+
+
+def test_phase2_incomplete_legacy_rating_provenance_is_unresolved(
+    db_session,
+    subscriber,
+    subscription,
+) -> None:
+    subscriber_id, subscription_id = subscriber.id, subscription.id
+    db_session.commit()
+    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    amount = Decimal("25000.00")
+    _prepare_subscription(
+        db_session,
+        subscription=subscription,
+        starts_at=cutoff,
+        amount=amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+    )
+    _record_and_schedule(
+        db_session,
+        subscriber_id=subscriber_id,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+    )
+    obligation = db_session.execute(select(BillingObligation)).scalar_one()
+    obligation.rating_provenance_complete = False
+    db_session.commit()
+
+    result = BillingShadowVerification.record_phase2_run(
+        db_session,
+        _run_command(cutoff),
+        context=_context("phase2-run", key="pytest:phase2-incomplete-provenance"),
+    )
+
+    assert result.covered_count == 0
+    assert result.blocker_count == 1
+    run = db_session.get(BillingCutoverVerificationRun, result.run_id)
+    assert run.unresolved_count == 1
+    assert run.cohort_classification["_details"][str(subscription_id)] == [
+        "billing.obligations.incomplete_rating_provenance"
+    ]
 
 
 def test_phase2_detects_a_gap_without_attempting_repair(

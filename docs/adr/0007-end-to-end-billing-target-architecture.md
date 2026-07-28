@@ -721,17 +721,22 @@ coherent reviewable slice with its own forward-fix plan.
   current-owner and target totals per currency, and preserve expected new
   cadence, unresolved, ambiguous, unlinked, duplicate, gap, overlap, and
   variance evidence. The verifier cannot repair any owner or move authority.
-- Open cutover blocker: a shadow obligation persists the rated result and
-  service period, but not every input needed to reproduce that result after
-  policy changes. In particular, an optional covered/proration interval is not
-  stored and a tax-treatment code resolves the currently active tax-rate row.
-  Before authority can move, persist immutable or versioned rating provenance
-  (including coverage and tax inputs), make replay resolve the recorded
-  provenance, and add mutation/replay tests. A mismatch failure is useful
-  shadow evidence; it is not a substitute for reproducibility.
+- Rating-provenance implementation: every newly scheduled shadow obligation
+  stores its versioned policy, exact coverage, contracted price/quantity,
+  rate unit/quantity, timezone, proration policy/factor, exact tax-rate
+  identity/value, and a content fingerprint atomically with the rated result.
+  Replay reproduces the result from that snapshot without reading mutable
+  current tax configuration; different coverage for the same natural identity
+  fails closed. Existing obligations remain explicitly provenance-incomplete
+  instead of receiving inferred historical inputs, and therefore block the
+  Phase 2 cohort until they are replaced or reviewed through an approved
+  owner-backed migration. Future rating policies must add a replay
+  implementation; they must not change the meaning of `billing-rating-v1`.
 - Gate:
   - exact period and amount parity for existing supported contracts;
   - approved expected differences for newly supported cadence;
+  - complete fingerprint-valid rating provenance for every included
+    obligation;
   - zero duplicate/gapped/overlapping obligations outside typed policy;
   - concurrency and replay uniqueness on PostgreSQL;
   - leap-year, end-of-month, timezone, late/lapsed, and proration matrix green.
@@ -953,6 +958,10 @@ evidence are append-only and are not removed by rollback.
   The contract output schema now carries identity only; `billing.obligations`
   invokes `billing.rating` for every shadow amount. Version 1 contract outputs
   remain consumable during shadow rollout, but their amount fields are ignored.
+  New obligations persist fingerprinted `billing-rating-v1` replay inputs and
+  reproduce their stored result without resolving current tax state. Legacy
+  provenance-incomplete obligations are an explicit unresolved cohort, never
+  silently backfilled.
   Complete-cohort runs use typed previews from the current postpaid and prepaid
   owners, require exact parity for supported cadence, keep newly supported
   cadence in an explicit expected-difference cohort, and block approval on any

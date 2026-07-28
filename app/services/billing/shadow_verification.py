@@ -659,6 +659,10 @@ class BillingShadowVerification:
             CadenceError,
             period_containing,
         )
+        from app.services.billing.obligations import (
+            BillingObligationError,
+            BillingObligations,
+        )
         from app.services.billing.rating import (
             BillingRatingError,
             rate_line_period,
@@ -1003,6 +1007,13 @@ class BillingShadowVerification:
                     continue
                 obligation = matching[0]
                 try:
+                    BillingObligations.replay_recorded_rating(obligation)
+                except BillingObligationError as exc:
+                    source_row["recorded_rating_error"] = exc.code
+                    _mark(classification, "unresolved", subscription_id)
+                    detail(subscription_id, exc.code)
+                    continue
+                try:
                     rated = rate_line_period(
                         db,
                         contract_version_id=version.id,
@@ -1042,6 +1053,9 @@ class BillingShadowVerification:
                         "tax_amount": str(rated.tax_amount),
                         "gross_amount": str(rated.gross_amount),
                         "currency": rated.currency,
+                        "rating_input_fingerprint": (
+                            obligation.rating_input_fingerprint
+                        ),
                     }
                 )
 
