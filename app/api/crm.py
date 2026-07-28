@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import (
     APIRouter,
@@ -38,7 +38,7 @@ CRM_MAX_PER_PAGE = 500
 
 def _error(
     status_code: int, message: str, errors: dict[str, list[str]] | None = None
-) -> None:
+) -> NoReturn:
     detail: dict[str, Any] = {"message": message}
     if errors:
         detail["errors"] = errors
