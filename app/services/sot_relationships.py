@@ -12326,11 +12326,198 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "persisted outage incident status vocabulary",
                     "outage incident lifecycle",
-                    "outage event emission and escalation planning",
+                    "typed outage lifecycle output emission",
+                    "committed outage output consumption",
                 ),
                 depends_on=(
                     "network.outage_impact",
                     "events.dispatcher",
+                    "events.owner_outputs",
+                    "operations.sla_escalation",
+                ),
+                notes=(
+                    "Every incident transition stages its typed outage output "
+                    "(plus the legacy network.alert webhook fan-out) atomically "
+                    "with the status write; the registered projection handler "
+                    "delivers those outputs back to the receipted consume_* "
+                    "commands, which attach operational owners/watchers and "
+                    "plan or cancel SLA escalations through the escalation "
+                    "participants. Outage resolution emits recovery evidence "
+                    "only and never closes support Tickets or WorkOrders."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="persisted outage incident status vocabulary",
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=("recorded outage incidents",),
+                        ),
+                        ConcernContract(
+                            name="outage incident lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "recorded outage incidents",
+                                "resolved outage impact",
+                            ),
+                            canonical_writer="network.outage_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="typed outage lifecycle output emission",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("recorded outage incidents",),
+                            canonical_writer="network.outage_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="committed outage output consumption",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "recorded outage incidents",
+                                "operational escalation surface",
+                                "receipted owner-output deliveries",
+                            ),
+                            canonical_writer="network.outage_lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="recorded outage incidents",
+                            owner="network.outage_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "outage_incidents rows with operator/classifier "
+                                "provenance and lifecycle timestamps"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="resolved outage impact",
+                            owner="network.outage_impact",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "affected-customer impact resolved from the "
+                                "authoritative forwarding topology"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="operational escalation surface",
+                            owner="operations.sla_escalation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "operational owners, watchers, room links, "
+                                "escalation events, and deliveries"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="receipted owner-output deliveries",
+                            owner="events.owner_outputs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique (consumer, event_id) receipts committing "
+                                "atomically with each consumed outage effect"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Incident transitions flush into their calling "
+                            "adapter's transaction and stage outputs atomically; "
+                            "consume_outage_activation and "
+                            "consume_outage_termination each enter "
+                            "execute_owner_command once on a transaction-free "
+                            "session."
+                        ),
+                        locking=(
+                            "Transitions operate on the loaded incident row inside "
+                            "the reconcile scan's advisory-locked pass or the "
+                            "operator adapter's transaction; consumers reload the "
+                            "incident before applying consequences."
+                        ),
+                        idempotency=(
+                            "Escalation participants are idempotent per trigger; "
+                            "consumer receipts make redelivery an exact no-op, and "
+                            "a terminal incident skips fresh planning."
+                        ),
+                        retries=(
+                            "A failed consequence leaves no receipt; the outbox "
+                            "redelivers until the consumer commits or the failure "
+                            "is reviewed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.outage_lifecycle.active_caller_transaction",
+                            "network.outage_lifecycle.command_contract_violation",
+                            "network.outage_lifecycle.invalid_command_context",
+                            "network.outage_lifecycle.nested_owner_command",
+                            "network.outage_lifecycle.nested_transaction_completion",
+                        ),
+                        mapping_owner="network monitoring and event adapters",
+                        fail_closed_on=(
+                            "an unknown outage status value",
+                            "operator termination of a classifier incident",
+                            "consequence application outside an owner command",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "outage.created",
+                            "outage.suspected",
+                            "outage.confirmed",
+                            "outage.clearing",
+                            "outage.reopened",
+                            "outage.rerooted",
+                            "outage.discarded",
+                            "outage.resolved",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries incident identity, status, "
+                            "provenance, scope, severity, affected count, and "
+                            "lifecycle timestamps; the legacy network.alert "
+                            "fan-out keeps the identical payload for external "
+                            "webhook subscribers."
+                        ),
+                        replay=(
+                            "Incident rows and EventStore evidence reconstruct "
+                            "each transition; consumer receipts make redelivered "
+                            "consequences exact no-ops."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "inline cross-owner escalation calls and a pre-commit "
+                            "swallowed network.alert-only fan-out"
+                        ),
+                        new_owner="network.outage_lifecycle",
+                        verification=(
+                            "Chain behavior tests (atomic staging, receipts, "
+                            "replay, failed-delivery visibility, ticket/work-order "
+                            "non-closure) and the outage boundary architecture "
+                            "test."
+                        ),
+                        cutover_gate=(
+                            "Typed outputs and receipted consumers are the only "
+                            "consequence path; no inline cross-owner call remains "
+                            "in the transitions."
+                        ),
+                        fallback_retirement=(
+                            "The pre-commit swallowed emission and inline "
+                            "ensure/plan/cancel calls are removed from the "
+                            "lifecycle transitions."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/NETWORK_OUTAGE_RESPONSE_LIFECYCLE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/services/topology/test_outage_lifecycle_chain.py",
+                        "tests/architecture/test_outage_lifecycle_chain_boundary.py",
+                        "tests/services/topology/test_outage_reconcile.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -15899,15 +16086,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         event_types=(
                             "ticket.created",
                             "ticket.assigned",
-                            "ticket.status_changed",
-                            "ticket.comment_added",
                             "ticket.resolution_requested",
                             "ticket.resolution_confirmed",
                             "ticket.resolution_disputed",
-                            "ticket.merged",
+                            "support.resolution_confirmation_due",
+                            "support.ticket_sla_breach_due",
                         ),
                         schema_version=1,
-                        delivery_owner="communications.notification_service",
+                        delivery_owner="events.dispatcher",
                         compatibility=(
                             "Version 1 carries stable Ticket/account identifiers and bounded "
                             "change evidence; private comment bodies and attachments are not "
@@ -16245,11 +16431,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "ticket-to-work-order issuance eligibility",
                     "native ticket-to-work-order provenance",
                     "field-outcome projection onto the ticket timeline",
+                    "committed field outcome consumption",
                 ),
                 depends_on=(
                     "support.ticket_lifecycle",
                     "operations.work_order_commands",
+                    "operations.field_completion",
                     "observability.audit_log",
+                    "events.dispatcher",
+                    "events.owner_outputs",
                 ),
                 notes=(
                     "An active member of the ticket's assigned team explicitly "
@@ -16290,6 +16480,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical ticket lifecycle state",
                             ),
                             canonical_writer="support.ticket_work_order_handoff",
+                        ),
+                        ConcernContract(
+                            name="committed field outcome consumption",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authoritative field outcome",
+                                "native ticket-to-work-order provenance",
+                                "receipted owner-output deliveries",
+                            ),
                         ),
                     ),
                     authoritative_inputs=(
@@ -16340,9 +16539,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="authoritative field outcome",
-                            owner="operations.work_order_status",
+                            owner="operations.field_completion",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source="completed or failed WorkOrder field event",
+                            source=(
+                                "committed work_order.field_outcome_recorded output "
+                                "from the field transition owner"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="receipted owner-output deliveries",
+                            owner="events.owner_outputs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique (consumer, event_id) receipts committing "
+                                "atomically with each consumed field outcome"
+                            ),
                         ),
                     ),
                     transaction=TransactionContract(
@@ -16393,9 +16604,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     events=EventContract(
-                        event_types=("ticket.work_order_issued",),
+                        event_types=(
+                            "ticket.work_order_issued",
+                            "work_order.field_outcome_recorded",
+                        ),
                         schema_version=1,
-                        delivery_owner="observability.audit_log",
+                        delivery_owner="events.dispatcher",
                         compatibility=(
                             "Version 1 records native ticket/work-order/project scope and "
                             "the assigned team without customer payloads."
@@ -17273,7 +17487,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.work_orders",
                     "operations.work_order_status",
                     "control.domain_settings",
-                    "support.ticket_work_order_handoff",
                 ),
                 notes=(
                     "Authenticated field job detail projects the same completion "
@@ -17288,6 +17501,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "service-work-order material need and operational approval",
                     "backoffice material-outcome projection into the service workflow",
                     "work-order material allocation after confirmed external issue",
+                    "committed material output consumption",
                 ),
                 depends_on=(
                     "control.settings_spec",
@@ -17328,6 +17542,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             input_names=(
                                 "canonical material dependency state",
                                 "ERP material-support outcome observation",
+                                "material dependency transition protocol",
+                            ),
+                            canonical_writer="operations.material_dependencies",
+                        ),
+                        ConcernContract(
+                            name="committed material output consumption",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical material dependency state",
                                 "material dependency transition protocol",
                             ),
                             canonical_writer="operations.material_dependencies",
@@ -17439,7 +17662,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     events=EventContract(
-                        event_types=("field_material_request.changed",),
+                        event_types=(
+                            "field_material_request.approved",
+                            "field_material_request.fulfilled",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
@@ -17506,6 +17732,112 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_field_material_requests.py",
                         "tests/test_dotmac_erp_material_sync.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.material_consumption",
+                module="app.services.field.materials",
+                owns=("field material consumption evidence",),
+                depends_on=(
+                    "operations.material_dependencies",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Technicians record monotonic, allocation-capped material "
+                    "consumption on their scoped work orders. Each recording "
+                    "stages the consumption-evidence output atomically for "
+                    "downstream reconcilers; ERP inventory outcomes remain "
+                    "ERP-owned observations."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="field material consumption evidence",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("allocated work-order materials",),
+                            canonical_writer="operations.material_consumption",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="allocated work-order materials",
+                            owner="operations.material_dependencies",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "FieldWorkOrderMaterial allocation rows synced "
+                                "from the ERP material-support outcome"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "consume commits once per technician submission on "
+                            "the scoped work order."
+                        ),
+                        locking=(
+                            "Each FieldWorkOrderMaterial row is selected FOR "
+                            "UPDATE before the monotonic consumption write."
+                        ),
+                        idempotency=(
+                            "Consumption is monotonic and capped at the "
+                            "allocation; replays cannot reduce or exceed it."
+                        ),
+                        retries=(
+                            "A failed submission changes nothing; the client "
+                            "resubmits the same absolute quantities."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.material_consumption.active_caller_transaction",
+                            "operations.material_consumption.command_contract_violation",
+                            "operations.material_consumption.invalid_command_context",
+                            "operations.material_consumption.nested_owner_command",
+                            "operations.material_consumption.nested_transaction_completion",
+                        ),
+                        mapping_owner="field API adapters",
+                        fail_closed_on=(
+                            "consumption above the allocated quantity",
+                            "an unscoped work order",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("field_material.consumption_recorded",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries work-order identity and per-item "
+                            "allocated/consumed quantities."
+                        ),
+                        replay=(
+                            "Allocation rows are the durable state; the output "
+                            "is evidence and replays are additive no-ops."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="unregistered writer on the SOT baseline",
+                        new_owner="operations.material_consumption",
+                        verification=(
+                            "Field materials consumption tests and the materials "
+                            "chain boundary test."
+                        ),
+                        cutover_gate=(
+                            "The module leaves the shrink-only unregistered "
+                            "writer baseline."
+                        ),
+                        fallback_retirement=("No parallel consumption writer exists."),
+                    ),
+                    steward="field operations",
+                    design_refs=(
+                        "docs/designs/MATERIALS_VENDOR_ERP_CHAIN.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_field_materials.py",
+                        "tests/architecture/test_materials_lifecycle_chain_boundary.py",
                     ),
                 ),
             ),
@@ -18085,8 +18417,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     transaction=TransactionContract(
                         mode=TransactionMode.PARTICIPANT,
                         boundary=(
-                            "The vendor or staff adapter owns commit; this owner "
-                            "stages the request, review, or outcome."
+                            "The vendor workspace or signed staff-review coordinator "
+                            "owns commit; this owner stages the request, review, or "
+                            "provider outcome."
                         ),
                         locking=(
                             "Review and outcome application lock the release row."
@@ -18188,6 +18521,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "control.settings_spec",
                     "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_records",
                 ),
                 notes=(
                     "Sub decides whether to advance money to a vendor and how "
@@ -18264,8 +18598,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     transaction=TransactionContract(
                         mode=TransactionMode.PARTICIPANT,
                         boundary=(
-                            "The vendor or staff adapter owns commit; this owner "
-                            "stages the request, review, or observation."
+                            "The vendor workspace or signed staff-review coordinator "
+                            "owns commit; this owner stages the request, review, or "
+                            "provider observation."
                         ),
                         locking=(
                             "Review and observation application lock the advance."
@@ -18582,6 +18917,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "auth.permission_gate",
                     "control.settings_spec",
                     "operations.project_lifecycle",
+                    "operations.vendor_advances",
+                    "operations.vendor_material_release",
                     "operations.vendor_project_records",
                     "operations.vendor_project_lifecycle",
                     "operations.work_order_commands",
@@ -18609,6 +18946,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "authenticated vendor workspace command context",
                                 "canonical installation-project lifecycle state",
                                 "canonical vendor project records",
+                                "canonical vendor material release decisions",
+                                "canonical vendor advance decisions",
                                 "vendor quote currency and validity policy",
                                 "vendor workspace mutation protocol",
                             ),
@@ -18705,6 +19044,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="canonical vendor material release decisions",
+                            owner="operations.vendor_material_release",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "assigned-project eligibility and staged material "
+                                "release request records"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor advance decisions",
+                            owner="operations.vendor_advances",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "approved-quote allowance, committed advances, and "
+                                "staged advance request records"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="work-order as-built evidence policy",
                             owner="operations.work_order_commands",
                             kind=AuthorityKind.CONTROL_INPUT,
@@ -18776,6 +19133,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "operations.vendor_project_workspace.unsupported_action",
                             "operations.vendor_project_workspace.invalid_as_built_route",
                             "operations.vendor_project_workspace.invalid_write_evidence",
+                            "operations.vendor_project_workspace.project_not_releasable",
+                            "operations.vendor_project_workspace.items_required",
+                            "operations.vendor_project_workspace.invalid_quantity",
+                            "operations.vendor_project_workspace.project_not_advanceable",
+                            "operations.vendor_project_workspace.approved_quote_required",
+                            "operations.vendor_project_workspace.advance_ceiling_exceeded",
+                            "operations.vendor_project_workspace.invalid_amount",
                             "operations.vendor_project_workspace.invalid_command_context",
                             "operations.vendor_project_workspace.command_contract_violation",
                             "operations.vendor_project_workspace.nested_owner_command",
@@ -18821,6 +19185,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "docs/designs/VENDOR_PROJECT_REVIEW_UI.md",
                         "docs/designs/UI_PROJECTION_CONTRACTS.md",
                         "docs/designs/VENDOR_ROUTE_REVISION_AUTHORING.md",
+                        "docs/designs/VENDOR_SUPPLY_UI.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                         "docs/adr/0002-owner-command-transaction-boundary.md",
                     ),
@@ -19372,7 +19737,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     events=EventContract(
-                        event_types=("vendor_purchase_invoice.changed",),
+                        event_types=(
+                            "vendor_purchase_invoice.changed",
+                            "vendor_purchase_invoice.approved",
+                        ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
                         compatibility=(
@@ -19634,6 +20002,189 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_vendor_submission_proposals.py",
                         "tests/architecture/test_vendor_submission_confirmation_boundary.py",
                         "tests/test_vendor_lifecycle.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_supply_review_confirmation",
+                module="app.services.vendor_supply_review_proposals",
+                owns=(
+                    "short-lived signed vendor supply review proposal",
+                    "vendor supply review stale-preview verification",
+                    "vendor supply review idempotency and replay result",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "auth.token_signing",
+                    "operations.vendor_advances",
+                    "operations.vendor_material_release",
+                    "ui.vendor_supply_projection",
+                ),
+                notes=(
+                    "This coordinator cannot decide stock issue or payment. It binds "
+                    "an authenticated staff actor to an exact material-release or "
+                    "advance preview, revalidates it under lock, and invokes the "
+                    "declaring participant owner once."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="short-lived signed vendor supply review proposal",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authenticated vendor supply review context",
+                                "canonical vendor supply review preview",
+                                "capability signing envelope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor supply review stale-preview verification",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical vendor supply review preview",
+                                "capability signing envelope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor supply review idempotency and replay result",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated vendor supply review context",
+                                "canonical vendor supply review preview",
+                                "vendor supply review replay record",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated vendor supply review context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated staff actor, inventory or accounts-payable "
+                                "permission, action, command, and correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor supply review preview",
+                            owner="ui.vendor_supply_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "exact release lines or advance amount, project/vendor "
+                                "identity, allowance facts, target action, and fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="capability signing envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="configured context-signing key and algorithm",
+                        ),
+                        AuthorityInput(
+                            name="vendor supply review replay record",
+                            owner="operations.vendor_supply_review_confirmation",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "IdempotencyKey row keyed by proposal jti, supply type, "
+                                "and review action"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "A typed confirmation command owns locked stale verification, "
+                            "replay reservation, participant mutation, and one root commit."
+                        ),
+                        locking=(
+                            "The material release or advance is locked before fingerprint "
+                            "comparison and participant review."
+                        ),
+                        idempotency=(
+                            "Signed jti plus supply type and action identifies one stable "
+                            "review result."
+                        ),
+                        retries=(
+                            "Invalid or stale proposals are terminal; concurrency failures "
+                            "retry the complete typed confirmation."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_supply_review_confirmation.actor_required",
+                            "operations.vendor_supply_review_confirmation.unsupported_supply_type",
+                            "operations.vendor_supply_review_confirmation.unsupported_action",
+                            "operations.vendor_supply_review_confirmation.invalid_proposal",
+                            "operations.vendor_supply_review_confirmation.expired_proposal",
+                            "operations.vendor_supply_review_confirmation.proposal_context_mismatch",
+                            "operations.vendor_supply_review_confirmation.confirmation_in_progress",
+                            "operations.vendor_supply_review_confirmation.stale_proposal",
+                            "operations.vendor_supply_review_confirmation.material_release_not_found",
+                            "operations.vendor_supply_review_confirmation.advance_not_found",
+                            "operations.vendor_supply_review_confirmation.material_not_reviewable",
+                            "operations.vendor_supply_review_confirmation.advance_not_reviewable",
+                            "operations.vendor_supply_review_confirmation.reason_required",
+                            "operations.vendor_supply_review_confirmation.reason_too_long",
+                            "operations.vendor_supply_review_confirmation.not_reviewable",
+                            "operations.vendor_supply_review_confirmation.invalid_command_context",
+                            "operations.vendor_supply_review_confirmation.command_contract_violation",
+                            "operations.vendor_supply_review_confirmation.nested_owner_command",
+                            "operations.vendor_supply_review_confirmation.active_caller_transaction",
+                            "operations.vendor_supply_review_confirmation.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.admin.vendor_operations",
+                        fail_closed_on=(
+                            "invalid, expired, or context-mismatched proposal",
+                            "request, quote allowance, or lifecycle drift",
+                            "ambiguous concurrent confirmation",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_material_release.reviewed",
+                            "vendor_advance.reviewed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries record, project, vendor, decision, actor, "
+                            "and amount where applicable."
+                        ),
+                        replay=(
+                            "The supply record, outbox event, and idempotency row rebuild "
+                            "the decision and replay result."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "admin supply routes calling participant committed wrappers"
+                        ),
+                        new_owner="operations.vendor_supply_review_confirmation",
+                        verification=(
+                            "Preview, expiry, stale-state, replay, rollback, permission, "
+                            "and adapter boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Every staff supply decision uses signed preview and typed "
+                            "confirmation on a clean session."
+                        ),
+                        fallback_retirement=(
+                            "Direct admin calls to material or advance committed wrappers "
+                            "are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/designs/VENDOR_SUPPLY_UI.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_supply_ui.py",
+                        "tests/architecture/test_vendor_supply_ui_boundary.py",
+                        "tests/test_vendor_delivery_portfolio.py",
+                        "tests/architecture/test_vendor_delivery_portfolio_boundary.py",
                     ),
                 ),
             ),
@@ -20853,6 +21404,129 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Calling domain owners define token purpose, claims, lifetime, "
                     "and authorization consequences. Auth owns only the signed "
                     "envelope and never turns a domain capability into identity proof."
+                ),
+            ),
+            SOTService(
+                name="auth.access_invitations",
+                module="app.services.access_invitations",
+                owns=("access invitation lifecycle",),
+                depends_on=(
+                    "auth.credential_recovery",
+                    "runtime.durable_timers",
+                    "events.dispatcher",
+                    "events.owner_outputs",
+                ),
+                notes=(
+                    "Records issued/accepted/expired/revoked evidence for the "
+                    "staff, reseller, user, and subscriber invitation "
+                    "capabilities, with a durable per-invitation expiry timer "
+                    "and a receipted expiry consumer. Rows are lifecycle "
+                    "evidence, never an access grant: the capability's "
+                    "redeem-time TTL check in the issuing domain remains the "
+                    "fail-closed gate, and a completed reset stamps "
+                    "acceptance."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="access invitation lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=("issued invitation capabilities",),
+                            canonical_writer="auth.access_invitations",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="issued invitation capabilities",
+                            owner="auth.credential_recovery",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "exact reset capabilities minted for invite "
+                                "purposes with their principal and TTL"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "record_issued participates in the caller's active "
+                            "owner command or roots its own; the expiry "
+                            "consumer enters execute_owner_command once on a "
+                            "transaction-free session."
+                        ),
+                        locking=(
+                            "Reissue supersedes the principal's prior issued "
+                            "rows inside one transaction; expiry reloads the "
+                            "row and state-guards the transition."
+                        ),
+                        idempotency=(
+                            "Reissue replaces the expiry timer by generation; "
+                            "consumer receipts make redelivery an exact no-op."
+                        ),
+                        retries=(
+                            "A failed expiry consequence leaves no receipt; "
+                            "the outbox redelivers until it commits."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.access_invitations.active_caller_transaction",
+                            "auth.access_invitations.command_contract_violation",
+                            "auth.access_invitations.invalid_command_context",
+                            "auth.access_invitations.nested_owner_command",
+                            "auth.access_invitations.nested_transaction_completion",
+                        ),
+                        mapping_owner="auth and admin web adapters",
+                        fail_closed_on=("expiring an accepted or revoked invitation",),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "access_invitation.issued",
+                            "access_invitation.accepted",
+                            "access_invitation.expired",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries invitation, principal, purpose, "
+                            "and deadline identities; no email addresses, only "
+                            "digests on the row."
+                        ),
+                        replay=(
+                            "Invitation rows are the durable state; outputs are "
+                            "evidence and consumer receipts reject replays."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "stateless capability TTLs with redeem-time-only "
+                            "expiry and no lifecycle evidence"
+                        ),
+                        new_owner="auth.access_invitations",
+                        verification=(
+                            "Invitation lifecycle behavior tests and the "
+                            "identity chain boundary test."
+                        ),
+                        cutover_gate=(
+                            "Every invite issuance path records its invitation "
+                            "and stages the expiry timer."
+                        ),
+                        fallback_retirement=(
+                            "Redeem-time TTL checks are retained deliberately "
+                            "as the fail-closed gate; no parallel lifecycle "
+                            "writer exists."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/designs/IDENTITY_ONBOARDING_CHAIN.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_access_invitations.py",
+                        "tests/architecture/test_identity_onboarding_chain_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -24503,6 +25177,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     events=EventContract(
                         event_types=(
                             "vendor_purchase_invoice.erp_projection_refreshed",
+                            "vendor_purchase_invoice.payment_observed",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
@@ -25470,6 +26145,434 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_web_dispatch_work_orders.py",
                         "tests/test_projects_api.py",
                         "tests/architecture/test_projects_sot_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="ui.vendor_supply_projection",
+                module="app.services.vendor_supply_views",
+                owns=(
+                    "vendor project supply workspace projection",
+                    "staff vendor supply review queues and impact previews",
+                    "latest active vendor supply record selection",
+                    "material provider issue observation presentation",
+                    "advance payables observation presentation",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "operations.vendor_advances",
+                    "operations.vendor_material_release",
+                    "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_records",
+                    "ui.status_presentation",
+                ),
+                notes=(
+                    "Read-only composition for vendor material and mobilisation-advance "
+                    "workflows. It renders owner-supplied eligibility, exact decision "
+                    "state, and provider observations without inferring stock issue, "
+                    "payment, settlement, or stale data as current."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor project supply workspace projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical vendor project lifecycle facts",
+                                "canonical vendor material release decisions",
+                                "canonical vendor advance decisions",
+                                "vendor supply request capabilities",
+                                "canonical vendor supply status presentation",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="staff vendor supply review queues and impact previews",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical vendor material release decisions",
+                                "canonical vendor advance decisions",
+                                "canonical vendor project records",
+                                "staff vendor supply review capabilities",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="latest active vendor supply record selection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical vendor material release decisions",
+                                "canonical vendor advance decisions",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="material provider issue observation presentation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("material provider issue observation",),
+                        ),
+                        ConcernContract(
+                            name="advance payables observation presentation",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("advance payables settlement observation",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical vendor project lifecycle facts",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active InstallationProject assignment and lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor project records",
+                            owner="operations.vendor_project_records",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="approved quote identity, total, and currency",
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor material release decisions",
+                            owner="operations.vendor_material_release",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active release, line, review, and provider-correlation rows",
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor advance decisions",
+                            owner="operations.vendor_advances",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active advance, quote allowance, review, and "
+                                "payables-correlation rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor supply request capabilities",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "vendor:material:request and vendor:advance:request "
+                                "capabilities"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="staff vendor supply review capabilities",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="inventory and finance accounts-payable read/write results",
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor supply status presentation",
+                            owner="ui.status_presentation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="labels, semantic tones, and icon keys",
+                        ),
+                        AuthorityInput(
+                            name="material provider issue observation",
+                            owner="operations.vendor_material_release",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "support system, reference, status, and observed timestamp"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="advance payables settlement observation",
+                            owner="operations.vendor_advances",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "payables system, reference, status, and observed timestamp"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Typed workspace, queue, detail, and preview queries never "
+                            "commit, flush, or make a business decision."
+                        ),
+                        locking=(
+                            "Ordinary projections do not lock; confirmation preview can "
+                            "request a row lock for stale-safe revalidation."
+                        ),
+                        idempotency=(
+                            "Equivalent scope and snapshot return equivalent typed results."
+                        ),
+                        retries="Read availability failures may be retried.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "ui.vendor_supply_projection.material_release_not_found",
+                            "ui.vendor_supply_projection.advance_not_found",
+                            "ui.vendor_supply_projection.unsupported_action",
+                            "ui.vendor_supply_projection.reason_required",
+                            "ui.vendor_supply_projection.reason_too_long",
+                            "ui.vendor_supply_projection.material_not_reviewable",
+                            "ui.vendor_supply_projection.advance_not_reviewable",
+                        ),
+                        mapping_owner=(
+                            "app.web.vendor_portal and app.web.admin.vendor_operations"
+                        ),
+                        fail_closed_on=(
+                            "vendor/project scope mismatch",
+                            "missing review record",
+                            "non-reviewable state",
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="material provider issue observation presentation",
+                            input_names=("material provider issue observation",),
+                            writer="ui.vendor_supply_projection",
+                            freshness=(
+                                "Each present observation carries its provider-observed "
+                                "timestamp; absent and not-applicable states are explicit."
+                            ),
+                            stale_behavior=(
+                                "Retain and label the last observation; never infer issue "
+                                "or payment from a Dotmac approval."
+                            ),
+                            drift_signal=(
+                                "An approved record without a later provider observation."
+                            ),
+                            rebuild_operation=(
+                                "Re-run project_workspace or the relevant review/detail "
+                                "query after the provider owner refreshes its observation."
+                            ),
+                            repair_owner=(
+                                "integration.dotmac_erp_material_support_adapter"
+                            ),
+                        ),
+                        ProjectionContract(
+                            name="advance payables observation presentation",
+                            input_names=("advance payables settlement observation",),
+                            writer="ui.vendor_supply_projection",
+                            freshness=(
+                                "Each present observation carries its provider-observed "
+                                "timestamp; absent and not-applicable states are explicit."
+                            ),
+                            stale_behavior=(
+                                "Retain and label the last observation; never infer "
+                                "payment from a Dotmac approval."
+                            ),
+                            drift_signal=(
+                                "An approved advance without a later payables observation."
+                            ),
+                            rebuild_operation=(
+                                "Re-run project_workspace or the relevant review/detail "
+                                "query after the provider owner refreshes its observation."
+                            ),
+                            repair_owner="integration.dotmac_erp_payables_adapter",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "missing vendor UI and route/template-local staff supply forms"
+                        ),
+                        new_owner="ui.vendor_supply_projection",
+                        verification=(
+                            "Eligibility, status, observation, permission, queue, preview, "
+                            "and template architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Vendor detail and staff queue consume only typed projection "
+                            "objects and owner-supplied actions."
+                        ),
+                        fallback_retirement=(
+                            "Templates do not infer supply transitions, payment, or stock "
+                            "issue state."
+                        ),
+                    ),
+                    steward="vendor operations UI",
+                    design_refs=(
+                        "docs/designs/VENDOR_SUPPLY_UI.md",
+                        "docs/designs/UI_PROJECTION_CONTRACTS.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_supply_ui.py",
+                        "tests/architecture/test_vendor_supply_ui_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="ui.vendor_delivery_portfolio_projection",
+                module="app.services.vendor_delivery_portfolio",
+                owns=(
+                    "admin vendor operational portfolio composition",
+                    "admin vendor project portfolio filtering and pagination",
+                    "admin vendor portfolio KPI and cohort parity",
+                    "admin vendor portfolio field visibility",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "operations.vendor_advances",
+                    "operations.vendor_material_release",
+                    "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_records",
+                    "operations.vendor_purchase_invoices",
+                    "ui.project_vendor_delivery_projection",
+                    "ui.status_presentation",
+                    "ui.vendor_supply_projection",
+                ),
+                notes=(
+                    "Read-only, permission-scoped composition for the admin vendor "
+                    "detail page. It pages active installation projects assigned to "
+                    "one authorized vendor, reuses project-delivery current-record "
+                    "selection, bulk-loads the latest material and advance projections, "
+                    "and links every KPI to its exact lifecycle-status cohort."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="admin vendor operational portfolio composition",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "authorized vendor portfolio scope",
+                                "canonical vendor project lifecycle facts",
+                                "canonical project vendor-delivery composition",
+                                "canonical latest vendor supply projection",
+                                "canonical vendor status presentation",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "admin vendor project portfolio filtering and pagination"
+                            ),
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "authorized vendor portfolio scope",
+                                "canonical vendor project lifecycle facts",
+                                "vendor portfolio query contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin vendor portfolio KPI and cohort parity",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical vendor project lifecycle facts",
+                                "canonical vendor status presentation",
+                                "vendor portfolio query contract",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="admin vendor portfolio field visibility",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "authorized vendor portfolio scope",
+                                "canonical project vendor-delivery composition",
+                                "canonical latest vendor supply projection",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authorized vendor portfolio scope",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated vendor UUID scope plus inventory, fiber, "
+                                "and accounts-payable read results supplied by the adapter"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor project lifecycle facts",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active InstallationProject assignment, lifecycle state, "
+                                "native project identity, and update timestamp"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical project vendor-delivery composition",
+                            owner="ui.project_vendor_delivery_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "current quote, route revision, as-built, purchase invoice, "
+                                "and permission-scoped payment observation"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical latest vendor supply projection",
+                            owner="ui.vendor_supply_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "latest active material release and advance per installation "
+                                "project with separate provider observations"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor status presentation",
+                            owner="ui.status_presentation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="server-owned labels, semantic tones, and icon keys",
+                        ),
+                        AuthorityInput(
+                            name="vendor portfolio query contract",
+                            owner="ui.vendor_delivery_portfolio_projection",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed lifecycle-status filter, project search, stable "
+                                "updated-time ordering, page size, and offset"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Loads and composes one authorized vendor portfolio without "
+                            "committing, flushing, mutating ORM state, or invoking a command."
+                        ),
+                        locking=(
+                            "No locks; the projection reads committed rows and applies "
+                            "stable updated-at and UUID ordering."
+                        ),
+                        idempotency=(
+                            "Equivalent vendor scope, capabilities, filters, pagination, "
+                            "and committed snapshot return equivalent typed results."
+                        ),
+                        retries=(
+                            "Read availability failures may be retried; invalid transport "
+                            "filters are rejected by the adapter."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="app.web.admin.vendors",
+                        fail_closed_on=(
+                            "missing inventory read scope",
+                            "missing fiber or accounts-payable capability for protected fields",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "admin vendor detail limited to profile and portal-login data"
+                        ),
+                        new_owner="ui.vendor_delivery_portfolio_projection",
+                        verification=(
+                            "vendor scoping, current-record selection, KPI cohort parity, "
+                            "permission omission, stable pagination, provider freshness, "
+                            "template rendering, and query-boundary tests"
+                        ),
+                        cutover_gate=(
+                            "The admin vendor detail route delegates operational reads to "
+                            "the typed portfolio and templates render only its fields."
+                        ),
+                        fallback_retirement=(
+                            "No route or template performs project selection, lifecycle "
+                            "grouping, financial visibility, or provider-state inference."
+                        ),
+                    ),
+                    steward="vendor operations UI",
+                    design_refs=(
+                        "docs/designs/VENDOR_DELIVERY_PORTFOLIO_UI.md",
+                        "docs/designs/VENDOR_PROJECT_REVIEW_UI.md",
+                        "docs/designs/VENDOR_SUPPLY_UI.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_delivery_portfolio.py",
+                        "tests/architecture/test_vendor_delivery_portfolio_boundary.py",
                     ),
                 ),
             ),
@@ -27038,6 +28141,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor quote status labels, semantic tones, and icon keys",
                     "vendor proposed-route status labels, semantic tones, and icon keys",
                     "vendor as-built status labels, semantic tones, and icon keys",
+                    "vendor material-release status labels, semantic tones, and icon keys",
+                    "vendor advance status labels, semantic tones, and icon keys",
                     "supplier-invoice status labels, semantic tones, and icon keys",
                     "status presentation fallback semantics",
                 ),
@@ -27052,6 +28157,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.work_order_status",
                     "operations.vendor_project_lifecycle",
                     "operations.vendor_project_workspace",
+                    "operations.vendor_material_release",
+                    "operations.vendor_advances",
                     "integration.dotmac_erp_payables_adapter",
                 ),
                 notes=(
@@ -27544,6 +28651,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "SalesOrder implementation-scope coordination",
                     "verified implementation release coordination",
+                    "committed lifecycle output consumption",
                 ),
                 depends_on=(
                     "control.settings_spec",
@@ -27552,10 +28660,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.vendor_project_lifecycle",
                     "operations.service_order_lifecycle",
                     "events.dispatcher",
+                    "events.owner_outputs",
                 ),
                 notes=(
                     "Coordinates exact structural identifiers while each domain "
-                    "owner remains the only writer of its own root."
+                    "owner remains the only writer of its own root. The "
+                    "verified-implementation, service-order-release, and CX-"
+                    "acceptance outputs are consumed through receipted owner "
+                    "commands so each effect commits atomically with its "
+                    "unique (consumer, event_id) receipt."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -27577,6 +28690,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "canonical native project state",
                                 "canonical sales ServiceOrder state",
                             ),
+                        ),
+                        ConcernContract(
+                            name="committed lifecycle output consumption",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical vendor verification evidence",
+                                "canonical sales ServiceOrder state",
+                                "canonical SalesOrder implementation contract",
+                                "receipted owner-output deliveries",
+                            ),
+                            canonical_writer="sales.fulfillment",
                         ),
                     ),
                     authoritative_inputs=(
@@ -27631,13 +28755,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "creation and identity"
                             ),
                         ),
+                        AuthorityInput(
+                            name="receipted owner-output deliveries",
+                            owner="events.owner_outputs",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "unique (consumer, event_id) receipts committing "
+                                "atomically with each consumed lifecycle effect"
+                            ),
+                        ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
                             "Scope and release commands may own the root transaction or "
-                            "flush into the invoking order/event coordinator; each called "
-                            "domain owner remains transaction-neutral in nested use."
+                            "flush into the invoking order/event coordinator; the "
+                            "consume_* commands each enter execute_owner_command once "
+                            "on a transaction-free session; each called domain owner "
+                            "remains transaction-neutral in nested use."
                         ),
                         locking=(
                             "The exact SalesOrder or InstallationProject is selected FOR "
@@ -27891,7 +29026,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "customer_experience.ready",
                             "customer_experience.accepted",
                             "customer_experience.needs_attention",
-                            "sales_order.fulfilled",
                         ),
                         schema_version=1,
                         delivery_owner="events.dispatcher",
