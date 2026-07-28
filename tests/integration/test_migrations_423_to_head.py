@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,7 +17,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 
 from alembic import command
-from app.config import settings
+from app import config as app_config
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION_423 = "423_prepaid_opening_funding_reconciliation"
@@ -157,7 +158,11 @@ def test_postgres_upgrades_revision_423_through_current_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = isolated_migration_database
-    monkeypatch.setattr(settings, "database_url", _render_url(database_url))
+    monkeypatch.setattr(
+        app_config,
+        "settings",
+        replace(app_config.settings, database_url=_render_url(database_url)),
+    )
     config = _alembic_config()
 
     command.upgrade(config, REVISION_423)
