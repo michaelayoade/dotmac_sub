@@ -7,8 +7,8 @@ from app.services.customer_identity_normalization import (
     is_placeholder_name,
     normalize_channel_address,
     normalize_email_identifier,
-    normalize_phone_identifier,
     normalize_name_text,
+    normalize_phone_identifier,
 )
 
 
@@ -44,9 +44,7 @@ def test_normalize_name_helpers_handle_placeholder_cases():
 
 
 def test_customer_name_fingerprint_normalizes_casing_and_spacing():
-    assert customer_name_signature("  Ada ", "  Lovelace ", None) == (
-        "ada lovelace"
-    )
+    assert customer_name_signature("  Ada ", "  Lovelace ", None) == ("ada lovelace")
     assert customer_name_fingerprint(
         first_name="Ada",
         last_name="Lovelace",

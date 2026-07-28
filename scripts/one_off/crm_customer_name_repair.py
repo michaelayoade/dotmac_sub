@@ -49,7 +49,9 @@ def main() -> int:
         )
         print(json.dumps(plan.manifest, indent=2, sort_keys=True))
         if not args.apply:
-            print("DRY-RUN only. Re-run with --apply, --digest, and --deployment-target.")
+            print(
+                "DRY-RUN only. Re-run with --apply, --digest, and --deployment-target."
+            )
             return 0
         if not args.digest.strip():
             print("REFUSING: --digest is required in apply mode.")

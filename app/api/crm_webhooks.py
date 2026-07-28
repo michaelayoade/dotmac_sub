@@ -176,17 +176,17 @@ async def receive_crm_customer(
         return _complete(db, receipt, consequence)
     except HTTPException as exc:
         if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
-            integration_inbox.mark_failed(
-                receipt,
+            integration_inbox.fail_consequence(
+                db,
+                receipt=receipt,
                 error_code="crm_customer_name_rejected",
                 error_detail="Customer name is missing or invalid.",
+                consequence={
+                    "status": "rejected",
+                    "error_code": "crm_customer_name_rejected",
+                    "name_disposition": "rejected",
+                },
             )
-            receipt.consequence_json = {
-                "status": "rejected",
-                "error_code": "crm_customer_name_rejected",
-                "name_disposition": "rejected",
-            }
-            db.commit()
         else:
             _failed(db, receipt, exc)
         raise

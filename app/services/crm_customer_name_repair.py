@@ -76,7 +76,11 @@ def _current_name(subscriber: Subscriber) -> dict[str, str | None]:
 
 def _name_snapshot(event: AuditEvent, *, side: str) -> dict[str, str | None]:
     changes = dict(event.metadata_ or {}).get("changes") or {}
-    snapshot = {"first_name": None, "last_name": None, "display_name": None}
+    snapshot: dict[str, str | None] = {
+        "first_name": None,
+        "last_name": None,
+        "display_name": None,
+    }
     for field in snapshot:
         change = changes.get(field)
         if isinstance(change, dict):
@@ -115,7 +119,15 @@ def _first_non_placeholder_name(
     first = snapshot["first_name"]
     last = snapshot["last_name"]
     if display and not is_placeholder_name(display):
-        return snapshot
+        if first and last:
+            return snapshot
+        name_parts = display.split(maxsplit=1)
+        if len(name_parts) == 2:
+            return {
+                "first_name": name_parts[0],
+                "last_name": name_parts[1],
+                "display_name": display,
+            }
     if first and last and not is_placeholder_name(f"{first} {last}"):
         return {
             "first_name": first,

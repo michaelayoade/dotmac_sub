@@ -194,7 +194,6 @@ def test_apply_name_remediation_plan_rejects_party_bound_rows(db_session):
         last_name="Unknown",
         display_name="Customer Unknown",
         email="party@example.com",
-        party_id=identity.id,
     )
     db_session.add(subscriber)
     db_session.commit()
