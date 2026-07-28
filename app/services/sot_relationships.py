@@ -11747,7 +11747,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "independent existence — but it requests the transition "
                     "from this owner instead of writing the flag. Reachability "
                     "observations never drive inventory lifecycle in either "
-                    "direction."
+                    "direction. Deactivating a device that still has customers "
+                    "attached raises an admin-facing data-integrity alert at "
+                    "the transition (resolved on re-admission) — a statement "
+                    "about the inventory record with a known blast radius, "
+                    "never an outage incident and never a customer-visible "
+                    "surface. "
+                    "Inventory absence must not open a customer-facing outage: "
+                    "an unpolled device supports no reachability verdict, which "
+                    "is why deactivation classifies as unknown."
                 ),
             ),
             SOTService(

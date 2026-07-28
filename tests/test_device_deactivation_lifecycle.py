@@ -619,3 +619,256 @@ def test_projection_drift_reports_a_reconciler_that_stopped_converging(db_sessio
     drift = {row["id"]: row["drift"] for row in projection_drift_rows(db_session)}
 
     assert drift.get(str(device.id)) == DRIFT_STALE_PROJECTION
+
+
+# ── 9. Deactivating with customers attached is an admin integrity alert ──────
+#
+# The remaining hole in the slice: ``outage_reconcile`` sweeps only pollable
+# nodes, so a device deactivated with customers still hanging off it is never
+# re-examined and the stranding is invisible.
+#
+# The fix is deliberately NOT an outage incident. An unpolled device supports no
+# reachability verdict — that is exactly why section 5 makes deactivation
+# classify as UNKNOWN — so deriving "outage" from an administrative flag would
+# reintroduce the same boundary violation inverted. What is raised instead is an
+# admin-facing data-integrity alert, once, at the transition.
+
+
+def _nas_node_with_customers(db_session, catalog_offer, name, customers):
+    """A monitoring device with ``customers`` active subscriptions attached.
+
+    Uses the NAS attachment arm ``topology.affected`` already reads (matched NAS
+    -> ``Subscription.provisioning_nas_device_id``), so the alert's number is
+    the same number the outage console quotes for the node.
+    """
+    from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+    from app.models.subscriber import Subscriber
+
+    n = next(_ip_counter)
+    nas = NasDevice(name=f"nas-{name}", management_ip=f"10.77.{n // 250}.{n % 250 + 1}")
+    db_session.add(nas)
+    db_session.flush()
+    device = _fresh_up(
+        db_session, name, matched_device_type="nas", matched_device_id=nas.id
+    )
+    for index in range(customers):
+        subscriber = Subscriber(
+            first_name="Att",
+            last_name=str(index),
+            email=f"{uuid.uuid4().hex}@example.com",
+        )
+        db_session.add(subscriber)
+        db_session.flush()
+        db_session.add(
+            Subscription(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+                provisioning_nas_device_id=nas.id,
+            )
+        )
+    db_session.flush()
+    return device
+
+
+def _admin_notification_target(db_session):
+    """An admin the alert sink will materialize an inbox notification for."""
+    from app.models.rbac import Role, SystemUserRole
+    from app.models.system_user import SystemUser
+
+    user = SystemUser(
+        first_name="System",
+        last_name="Admin",
+        email=f"{uuid.uuid4().hex}@example.com",
+    )
+    role = Role(name="admin", is_active=True)
+    db_session.add_all([user, role])
+    db_session.flush()
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+    db_session.flush()
+    return user
+
+
+def _admission_alert(db_session, device):
+    from app.models.admin_alert import AdminAlert
+    from app.services.network_monitoring import _stranded_customer_fingerprint
+
+    return (
+        db_session.query(AdminAlert)
+        .filter(AdminAlert.fingerprint == _stranded_customer_fingerprint(device))
+        .one_or_none()
+    )
+
+
+def test_deactivating_with_customers_attached_raises_an_integrity_alert(
+    db_session, catalog_offer
+):
+    from app.models.network_monitoring import AlertStatus
+
+    device = _nas_node_with_customers(db_session, catalog_offer, "stranded-1", 3)
+
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+
+    alert = _admission_alert(db_session, device)
+    assert alert is not None
+    assert alert.category == "network"
+    assert alert.source == "device-admission"
+    assert alert.status == AlertStatus.open
+    # Identity and blast radius are both in the payload.
+    assert alert.details["device_id"] == str(device.id)
+    assert alert.details["device_name"] == device.name
+    assert alert.details["reason"] == "manual_delete"
+    assert alert.details["attached_customer_count"] == 3
+    assert "3" in (alert.summary or "")
+
+
+def test_deactivating_an_unattached_device_stays_silent(db_session, catalog_offer):
+    """A routine decommission must not fire. The silence is the feature."""
+    device = _nas_node_with_customers(db_session, catalog_offer, "stranded-0", 0)
+
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+
+    assert device.is_active is False
+    assert _admission_alert(db_session, device) is None
+
+
+def test_only_active_subscriptions_count_as_attached(db_session, catalog_offer):
+    """A cancelled customer behind a retired device is not a stranding."""
+    from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+    from app.models.subscriber import Subscriber
+
+    nas = NasDevice(name="nas-cancelled", management_ip="10.77.9.9")
+    db_session.add(nas)
+    db_session.flush()
+    device = _fresh_up(
+        db_session,
+        "stranded-cancelled",
+        matched_device_type="nas",
+        matched_device_id=nas.id,
+    )
+    subscriber = Subscriber(
+        first_name="Gone", last_name="Away", email=f"{uuid.uuid4().hex}@example.com"
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    db_session.add(
+        Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            provisioning_nas_device_id=nas.id,
+        )
+    )
+    db_session.flush()
+
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+
+    assert _admission_alert(db_session, device) is None
+
+
+def test_repeated_deactivation_transitions_dedupe_onto_one_alert(
+    db_session, catalog_offer
+):
+    """Fingerprint dedupe plus the transition gate: no stacking, no re-notify."""
+    from app.models.admin_alert import AdminAlert, AdminNotification
+
+    _admin_notification_target(db_session)
+    device = _nas_node_with_customers(db_session, catalog_offer, "stranded-dedupe", 2)
+
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+    # Re-applying the already-inactive state is NOT a transition: the router
+    # inventory sync re-asserts deactivation every cycle, and that must not
+    # re-open an alert an operator already worked.
+    set_network_device_active(db_session, device, False, reason="router_inventory_sync")
+    set_network_device_active(db_session, device, False, reason="router_inventory_sync")
+
+    assert db_session.query(AdminAlert).count() == 1
+    # One inbox notification, not one per sync cycle.
+    assert db_session.query(AdminNotification).count() == 1
+
+
+def test_reactivation_clears_the_outstanding_alert(db_session, catalog_offer):
+    from app.models.network_monitoring import AlertStatus
+
+    device = _nas_node_with_customers(db_session, catalog_offer, "stranded-back", 2)
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+    assert _admission_alert(db_session, device) is not None
+
+    set_network_device_active(db_session, device, True, reason="inventory_update")
+
+    alert = _admission_alert(db_session, device)
+    assert alert is not None
+    assert alert.status == AlertStatus.resolved
+    assert alert.resolved_at is not None
+
+
+def test_reactivation_without_an_outstanding_alert_is_a_no_op(
+    db_session, catalog_offer
+):
+    from app.models.admin_alert import AdminAlert
+
+    device = _nas_node_with_customers(db_session, catalog_offer, "stranded-none", 0)
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+
+    set_network_device_active(db_session, device, True, reason="inventory_update")
+
+    assert db_session.query(AdminAlert).count() == 0
+
+
+def test_the_alert_never_opens_an_outage_incident(db_session, catalog_offer):
+    """It is an alert, not an incident, and not a customer-visible surface."""
+    from app.models.network_monitoring import OutageIncident
+
+    device = _nas_node_with_customers(db_session, catalog_offer, "stranded-no-inc", 4)
+
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+
+    assert _admission_alert(db_session, device) is not None
+    assert db_session.query(OutageIncident).count() == 0
+
+
+def test_a_failing_impact_read_cannot_block_the_transition(
+    db_session, monkeypatch, catalog_offer
+):
+    """The advisory alert is subordinate to the lifecycle slice it observes."""
+    import app.services.topology.affected as affected_mod
+
+    device = _nas_node_with_customers(db_session, catalog_offer, "stranded-boom", 2)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("graph projection exploded")
+
+    monkeypatch.setattr(affected_mod, "affected_customers", _boom)
+
+    set_network_device_active(db_session, device, False, reason="manual_delete")
+
+    # Deactivation still landed, whole and correct.
+    assert device.is_active is False
+    assert device.live_status == "unknown"
+    assert _admission_alert(db_session, device) is None
+
+
+def test_the_alert_fingerprint_is_outside_every_managed_sweep_prefix(db_session):
+    """A transition-scoped alert must not be auto-resolved by a sweep.
+
+    ``resolve_missing_alerts`` closes anything under a managed prefix that is
+    absent from the sweep's active set. This alert is raised at a transition and
+    never appears in any sweep's active set, so it must not live under one of
+    their prefixes or it would be resolved on the next evaluation run.
+    """
+    from app.services.admin_alerts import INFRASTRUCTURE_ALERT_PREFIX
+    from app.services.credential_rotation_schedule import _INTEGRITY_FINDING_PREFIX
+    from app.services.cross_app_drift import _DRIFT_ALERT_PREFIX
+    from app.services.nas_lifecycle import _FINDING_PREFIX
+    from app.services.network_monitoring import _ADMISSION_ALERT_PREFIX
+
+    swept = (
+        INFRASTRUCTURE_ALERT_PREFIX,
+        _DRIFT_ALERT_PREFIX,
+        _INTEGRITY_FINDING_PREFIX,
+        _FINDING_PREFIX,
+        "router-sot:",
+    )
+    for prefix in swept:
+        assert not _ADMISSION_ALERT_PREFIX.startswith(prefix), prefix
+        assert not prefix.startswith(_ADMISSION_ALERT_PREFIX), prefix

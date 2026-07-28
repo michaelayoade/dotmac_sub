@@ -2900,7 +2900,15 @@ Dependency order:
    writing `is_active` itself. Reachability observations never drive inventory
    lifecycle in either direction, and inventory lifecycle never fabricates a
    reachability observation: decaying a derived cache withdraws an unsupported
-   assertion, it does not assert a new one.
+   assertion, it does not assert a new one. Deactivating a device that still
+   has customers attached raises an admin-facing data-integrity alert at the
+   transition, deduped per device and resolved on re-admission. That alert is a
+   statement about the inventory record with a known blast radius; it is never
+   an `OutageIncident` and never a customer-visible surface.
+   Inventory absence must not open a customer-facing outage: an unpolled device
+   supports no reachability verdict, which is exactly why deactivation
+   classifies as `unknown` rather than `node_outage`, and the outage sweep is
+   not widened to inactive nodes to compensate.
 3. `network.fiber_source_staging`: owns immutable source manifests, normalized
    staged map facts, and non-authoritative duplicate/match suggestions. Staging
    preserves evidence; it cannot create, merge, retire, or delete canonical

@@ -157,6 +157,51 @@ def test_the_transition_decays_the_derived_reachability_cache() -> None:
     assert "device.live_status = _INACTIVE_LIVE_STATUS" in source
 
 
+def test_the_transition_raises_the_stranded_customer_integrity_alert() -> None:
+    """Deactivating with customers attached must announce itself.
+
+    ``outage_reconcile`` sweeps only pollable nodes, so a device deactivated
+    with customers still on it is never re-examined. The owned transition is the
+    only place that observes the deactivation edge, so the alert hangs there.
+    """
+    tree = ast.parse(_source(OWNER_MODULE))
+    transition = _function_named(tree, TRANSITION)
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_sync_stranded_customer_alert"
+        for node in ast.walk(transition)
+    ), f"{TRANSITION} no longer raises the stranded-customer integrity alert"
+
+
+def test_the_admission_alert_is_never_an_outage_incident() -> None:
+    """The explicitly rejected design, pinned so it cannot creep back.
+
+    An unpolled device supports NO reachability verdict — that is why this slice
+    makes deactivation classify as ``UNKNOWN`` rather than ``NODE_OUTAGE``.
+    Deriving a customer-facing outage from an administrative flag would
+    reintroduce the same boundary violation inverted, and would fire on every
+    routine decommission. The admission owner therefore never touches
+    ``OutageIncident``, and the outage sweep is not widened to inactive nodes.
+    """
+    owner = ast.parse(_source(OWNER_MODULE))
+    incident_refs = [
+        node.lineno
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Name) and node.id == "OutageIncident"
+    ]
+    assert incident_refs == [], (
+        "the admission owner references OutageIncident — an administrative flag "
+        f"must not decide a customer-facing outage (lines {incident_refs})"
+    )
+
+    sweep = _source("app/services/topology/outage_reconcile.py")
+    assert "NetworkDevice.is_active.is_(True)" in sweep, (
+        "the outage sweep was widened to inactive nodes; inventory absence is "
+        "not evidence of unreachability"
+    )
+
+
 def test_device_derivation_does_not_filter_out_inactive_devices() -> None:
     """Filtering here made the projection reconciler DELETE the device."""
     source = _source("app/services/web_network_core_devices_inventory.py")
@@ -258,3 +303,10 @@ def test_ownership_is_recorded_in_the_map_and_registry() -> None:
     relationship_map = _source("docs/SOT_RELATIONSHIP_MAP.md")
     assert TRANSITION in relationship_map
     assert "admission" in relationship_map
+
+    # The rejected alternative is recorded, not just the chosen one. Both
+    # documents wrap their prose, so compare on normalised whitespace.
+    for document in (registry, relationship_map):
+        prose = " ".join(document.split())
+        assert "data-integrity alert" in prose
+        assert "Inventory absence must not open a customer-facing outage" in prose
