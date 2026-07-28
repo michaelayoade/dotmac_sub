@@ -23,10 +23,14 @@ from app.models.billing_contract import (
 )
 from app.models.billing_shadow_verification import BillingCutoverVerificationRun
 from app.models.catalog import (
+    AddOn,
+    AddOnPrice,
+    AddOnType,
     BillingCycle,
     BillingMode,
     OfferPrice,
     PriceType,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.subscriber import Subscriber, SubscriberStatus
@@ -131,7 +135,8 @@ def _record_and_schedule(
     cycle: BillingCycle,
     mode: BillingMode,
     period_indexes: tuple[int, ...] = (0,),
-) -> tuple[UUID, UUID]:
+    additional_lines: tuple[ContractLineInput, ...] = (),
+) -> tuple[UUID, tuple[UUID, ...]]:
     result = BillingContracts.record_version(
         db_session,
         RecordContractVersionCommand(
@@ -155,30 +160,75 @@ def _record_and_schedule(
                         else AccountingTreatment.receivable
                     ),
                 ),
+                *additional_lines,
             ),
         ),
         context=_context("billing-contract"),
     )
     db_session.commit()
-    line_key = db_session.execute(
-        select(BillingContractLine.contract_line_key).where(
-            BillingContractLine.contract_version_id == result.version_id
+    line_keys = tuple(
+        db_session.execute(
+            select(BillingContractLine.contract_line_key).where(
+                BillingContractLine.contract_version_id == result.version_id
+            )
         )
-    ).scalar_one()
+        .scalars()
+        .all()
+    )
     db_session.commit()
     for period_index in period_indexes:
-        scheduled = BillingObligations.schedule(
-            db_session,
-            ScheduleObligationCommand(
-                contract_version_id=result.version_id,
-                contract_line_key=line_key,
-                period_index=period_index,
-            ),
-            context=_context("billing-obligation"),
+        for line_key in line_keys:
+            scheduled = BillingObligations.schedule(
+                db_session,
+                ScheduleObligationCommand(
+                    contract_version_id=result.version_id,
+                    contract_line_key=line_key,
+                    period_index=period_index,
+                ),
+                context=_context("billing-obligation"),
+            )
+            assert scheduled.authority is BillingRecordAuthority.shadow
+            db_session.commit()
+    return result.version_id, line_keys
+
+
+def _add_recurring_addon(
+    db_session,
+    *,
+    subscription_id: UUID,
+    starts_at: datetime,
+    amount: Decimal,
+    quantity: int = 1,
+) -> tuple[UUID, UUID]:
+    add_on = AddOn(
+        name="Static IP",
+        addon_type=AddOnType.static_ip,
+        is_active=True,
+    )
+    db_session.add(add_on)
+    db_session.flush()
+    db_session.add(
+        AddOnPrice(
+            add_on_id=add_on.id,
+            price_type=PriceType.recurring,
+            amount=amount,
+            currency="NGN",
+            billing_cycle=BillingCycle.monthly,
+            is_active=True,
         )
-        assert scheduled.authority is BillingRecordAuthority.shadow
-        db_session.commit()
-    return result.version_id, line_key
+    )
+    subscription_add_on = SubscriptionAddOn(
+        subscription_id=subscription_id,
+        add_on_id=add_on.id,
+        quantity=quantity,
+        start_at=starts_at,
+    )
+    db_session.add(subscription_add_on)
+    db_session.flush()
+    subscription_add_on_id = subscription_add_on.id
+    add_on_id = add_on.id
+    db_session.commit()
+    return subscription_add_on_id, add_on_id
 
 
 def _run_command(cutoff: datetime) -> RecordPhase2VerificationCommand:
@@ -241,6 +291,186 @@ def test_phase2_exact_postpaid_period_and_amount_parity_is_durable(
     assert run.event_outcomes["repair_requested"] is False
 
 
+def test_phase2_postpaid_preview_proves_base_and_recurring_addon_parity(
+    db_session,
+    subscriber,
+    subscription,
+) -> None:
+    subscriber_id, subscription_id = subscriber.id, subscription.id
+    db_session.commit()
+    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    base_amount = Decimal("25000.00")
+    addon_amount = Decimal("2000.00")
+    _prepare_subscription(
+        db_session,
+        subscription=subscription,
+        starts_at=cutoff,
+        amount=base_amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+    )
+    subscription_add_on_id, _ = _add_recurring_addon(
+        db_session,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=addon_amount,
+        quantity=2,
+    )
+    _record_and_schedule(
+        db_session,
+        subscriber_id=subscriber_id,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=base_amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+        additional_lines=(
+            ContractLineInput(
+                charge_component=ChargeComponent.addon,
+                component_key=str(subscription_add_on_id),
+                description="Static IP",
+                quantity=Decimal("2"),
+                unit_price=addon_amount,
+                currency="NGN",
+                accounting_treatment=AccountingTreatment.receivable,
+            ),
+        ),
+    )
+
+    result = BillingShadowVerification.record_phase2_run(
+        db_session,
+        _run_command(cutoff),
+        context=_context("phase2-run", key="pytest:phase2-postpaid-addon-parity"),
+    )
+
+    run = db_session.get(BillingCutoverVerificationRun, result.run_id)
+    assert result.covered_count == 1, run.cohort_classification
+    assert result.blocker_count == 0
+    assert run.currency_totals == {
+        "NGN": {
+            "legacy": "29000.00",
+            "target": "29000.00",
+            "difference": "0.00",
+        }
+    }
+
+
+def test_phase2_postpaid_addon_requires_structural_target_line_identity(
+    db_session,
+    subscriber,
+    subscription,
+) -> None:
+    subscriber_id, subscription_id = subscriber.id, subscription.id
+    db_session.commit()
+    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    amount = Decimal("25000.00")
+    _prepare_subscription(
+        db_session,
+        subscription=subscription,
+        starts_at=cutoff,
+        amount=amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+    )
+    subscription_add_on_id, _ = _add_recurring_addon(
+        db_session,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=Decimal("2000.00"),
+    )
+    _record_and_schedule(
+        db_session,
+        subscriber_id=subscriber_id,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+    )
+
+    result = BillingShadowVerification.record_phase2_run(
+        db_session,
+        _run_command(cutoff),
+        context=_context("phase2-run", key="pytest:phase2-postpaid-addon-unlinked"),
+    )
+
+    run = db_session.get(BillingCutoverVerificationRun, result.run_id)
+    assert run.unexpected_unlinked_count == 1
+    assert result.blocker_count == 1
+    assert run.cohort_classification["_details"][str(subscription_id)] == [
+        f"missing_target_recurring_addon:{subscription_add_on_id}"
+    ]
+
+
+def test_phase2_postpaid_multiple_active_addon_prices_are_not_parity(
+    db_session,
+    subscriber,
+    subscription,
+) -> None:
+    subscriber_id, subscription_id = subscriber.id, subscription.id
+    db_session.commit()
+    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    base_amount = Decimal("25000.00")
+    addon_amount = Decimal("2000.00")
+    _prepare_subscription(
+        db_session,
+        subscription=subscription,
+        starts_at=cutoff,
+        amount=base_amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+    )
+    subscription_add_on_id, add_on_id = _add_recurring_addon(
+        db_session,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=addon_amount,
+    )
+    db_session.add(
+        AddOnPrice(
+            add_on_id=add_on_id,
+            price_type=PriceType.recurring,
+            amount=Decimal("3000.00"),
+            currency="NGN",
+            billing_cycle=BillingCycle.monthly,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _record_and_schedule(
+        db_session,
+        subscriber_id=subscriber_id,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=base_amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.postpaid,
+        additional_lines=(
+            ContractLineInput(
+                charge_component=ChargeComponent.addon,
+                component_key=str(subscription_add_on_id),
+                description="Static IP",
+                unit_price=addon_amount,
+                currency="NGN",
+                accounting_treatment=AccountingTreatment.receivable,
+            ),
+        ),
+    )
+
+    result = BillingShadowVerification.record_phase2_run(
+        db_session,
+        _run_command(cutoff),
+        context=_context("phase2-run", key="pytest:phase2-postpaid-addon-ambiguous"),
+    )
+
+    run = db_session.get(BillingCutoverVerificationRun, result.run_id)
+    assert run.unresolved_count == 1
+    assert result.blocker_count == 1
+    assert run.cohort_classification["_details"][str(subscription_id)] == [
+        "postpaid_recurring_addon_multiple_active_prices"
+    ]
+
+
 def test_phase2_exact_prepaid_monthly_parity_uses_the_prepaid_owner_preview(
     db_session,
     subscriber,
@@ -277,6 +507,67 @@ def test_phase2_exact_prepaid_monthly_parity_uses_the_prepaid_owner_preview(
     assert result.covered_count == 1
     assert result.expected_difference_count == 0
     assert result.blocker_count == 0
+
+
+def test_phase2_prepaid_recurring_addon_exclusion_remains_a_cutover_blocker(
+    db_session,
+    subscriber,
+    subscription,
+) -> None:
+    subscriber_id, subscription_id = subscriber.id, subscription.id
+    db_session.commit()
+    cutoff = datetime.now(UTC) + timedelta(minutes=1)
+    base_amount = Decimal("25000.00")
+    addon_amount = Decimal("2000.00")
+    _prepare_subscription(
+        db_session,
+        subscription=subscription,
+        starts_at=cutoff,
+        amount=base_amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.prepaid,
+    )
+    subscription_add_on_id, _ = _add_recurring_addon(
+        db_session,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=addon_amount,
+    )
+    _record_and_schedule(
+        db_session,
+        subscriber_id=subscriber_id,
+        subscription_id=subscription_id,
+        starts_at=cutoff,
+        amount=base_amount,
+        cycle=BillingCycle.monthly,
+        mode=BillingMode.prepaid,
+        additional_lines=(
+            ContractLineInput(
+                charge_component=ChargeComponent.addon,
+                component_key=str(subscription_add_on_id),
+                description="Static IP",
+                unit_price=addon_amount,
+                currency="NGN",
+                accounting_treatment=AccountingTreatment.prepaid_consumption,
+            ),
+        ),
+    )
+
+    result = BillingShadowVerification.record_phase2_run(
+        db_session,
+        _run_command(cutoff),
+        context=_context("phase2-run", key="pytest:phase2-prepaid-addon-blocker"),
+    )
+
+    run = db_session.get(BillingCutoverVerificationRun, result.run_id)
+    assert result.covered_count == 0
+    assert run.unresolved_count == 1
+    assert result.blocker_count == 1
+    assert run.cohort_classification["_details"][str(subscription_id)] == [
+        "current_prepaid_owner_excludes_recurring_addon"
+    ]
+    assert run.event_outcomes["authority_moved"] is False
+    assert run.event_outcomes["repair_requested"] is False
 
 
 def test_phase2_new_prepaid_quarterly_cadence_is_explicit_expected_difference(

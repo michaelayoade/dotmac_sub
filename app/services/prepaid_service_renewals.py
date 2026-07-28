@@ -37,6 +37,7 @@ from app.models.billing import (
     TaxRate,
 )
 from app.models.catalog import (
+    AddOnPrice,
     BillingCycle,
     BillingMode,
     CatalogOffer,
@@ -44,6 +45,7 @@ from app.models.catalog import (
     OfferVersionPrice,
     PriceType,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.subscriber import Address, Subscriber
@@ -313,7 +315,7 @@ class PrepaidServiceRenewalPreview:
 
 @dataclass(frozen=True, slots=True)
 class PrepaidRecurringChargePreview:
-    """Typed current-owner result for one candidate prepaid service period."""
+    """Typed current-owner result for one complete candidate prepaid period."""
 
     subscription_id: UUID
     account_id: UUID
@@ -322,6 +324,7 @@ class PrepaidRecurringChargePreview:
     gross_amount: Decimal
     currency: str
     billing_cycle: BillingCycle
+    excluded_recurring_addon_ids: tuple[UUID, ...]
 
 
 @dataclass(frozen=True)
@@ -466,14 +469,39 @@ def preview_prepaid_recurring_charge(
     amount, currency, cycle = resolved
     from app.services.billing_automation import _period_end
 
+    period_end = _period_end(period_start, cycle)
+    excluded_recurring_addon_ids = tuple(
+        sorted(
+            set(
+                db.execute(
+                    select(SubscriptionAddOn.id)
+                    .join(
+                        AddOnPrice,
+                        AddOnPrice.add_on_id == SubscriptionAddOn.add_on_id,
+                    )
+                    .where(
+                        SubscriptionAddOn.subscription_id == subscription.id,
+                        (SubscriptionAddOn.start_at.is_(None))
+                        | (SubscriptionAddOn.start_at < period_end),
+                        (SubscriptionAddOn.end_at.is_(None))
+                        | (SubscriptionAddOn.end_at > period_start),
+                        AddOnPrice.price_type == PriceType.recurring,
+                        AddOnPrice.is_active.is_(True),
+                    )
+                ).scalars()
+            ),
+            key=str,
+        )
+    )
     return PrepaidRecurringChargePreview(
         subscription_id=subscription.id,
         account_id=subscription.subscriber_id,
         period_start=period_start,
-        period_end=_period_end(period_start, cycle),
+        period_end=period_end,
         gross_amount=round_money(amount),
         currency=str(currency).upper(),
         billing_cycle=cycle,
+        excluded_recurring_addon_ids=excluded_recurring_addon_ids,
     )
 
 

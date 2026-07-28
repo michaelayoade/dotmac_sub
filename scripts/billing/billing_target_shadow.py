@@ -10,6 +10,8 @@ Subcommands::
     poetry run python -m scripts.billing.billing_target_shadow position --account <id> --currency NGN
     poetry run python -m scripts.billing.billing_target_shadow open-obligations --account <id> --currency NGN
     poetry run python -m scripts.billing.billing_target_shadow rate --version <id> --line-key <key> --index 0
+    poetry run python -m scripts.billing.billing_target_shadow preview-addon-contract --subscription <id> --index 1
+    poetry run python -m scripts.billing.billing_target_shadow capture-addon-contract --subscription <id> --index 1 --preview-fingerprint <sha256> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow verify-rating-cohort --cutoff <ISO> --window-start <ISO> --window-end <ISO> --code-version <sha> --schema-version <revision> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow fire-due-timers [--limit 200]
     poetry run python -m scripts.billing.billing_target_shadow advance-collections --obligation <id>
@@ -31,6 +33,10 @@ from uuid import UUID
 
 from app.db import SessionLocal
 from app.models.billing_contract import BillingObligation
+from app.services.billing.addon_contract_backfill import (
+    BillingAddonContractBackfill,
+    CaptureRecurringAddonBackfillCommand,
+)
 from app.services.billing.contracts import BillingContracts
 from app.services.billing.customer_subledger import resolve_position
 from app.services.billing.obligations import BillingObligations
@@ -141,6 +147,71 @@ def _cmd_rate(db, args) -> int:
             "rate_units": rated.rate_units,
             "proration": rated.proration,
             "tax_treatment_code": rated.tax_treatment_code,
+        }
+    )
+    return 0
+
+
+def _cmd_preview_addon_contract(db, args) -> int:
+    preview = BillingAddonContractBackfill.preview(
+        db,
+        subscription_id=UUID(args.subscription),
+        period_index=args.index,
+    )
+    _emit(
+        {
+            "account_id": preview.account_id,
+            "subscription_id": preview.subscription_id,
+            "contract_id": preview.contract_id,
+            "current_contract_version_id": preview.current_contract_version_id,
+            "sales_order_id": preview.sales_order_id,
+            "target_period_start": preview.target_period.starts_at,
+            "target_period_end": preview.target_period.ends_at,
+            "recurring_addon_count": len(preview.terms),
+            "change_required": preview.change_required,
+            "preview_fingerprint": preview.fingerprint,
+            "terms": [
+                {
+                    "subscription_add_on_id": term.subscription_add_on_id,
+                    "add_on_id": term.add_on_id,
+                    "add_on_price_id": term.add_on_price_id,
+                    "description": term.description,
+                    "quantity": term.quantity,
+                    "unit_price": term.unit_price,
+                    "currency": term.currency,
+                    "source_started_at": term.source_started_at,
+                    "source_ends_at": term.source_ends_at,
+                }
+                for term in preview.terms
+            ],
+            "authority_moved": False,
+            "repair_requested": False,
+        }
+    )
+    return 0
+
+
+def _cmd_capture_addon_contract(db, args) -> int:
+    result = BillingAddonContractBackfill.capture(
+        db,
+        CaptureRecurringAddonBackfillCommand(
+            subscription_id=UUID(args.subscription),
+            period_index=args.index,
+            preview_fingerprint=args.preview_fingerprint,
+        ),
+        context=_context(
+            "capture reviewed recurring add-on terms into the shadow owner chain",
+            idempotency_key=args.idempotency_key,
+        ),
+    )
+    _emit(
+        {
+            "event_id": result.event_id,
+            "preview_fingerprint": result.preview_fingerprint,
+            "recurring_addon_count": result.recurring_addon_count,
+            "replayed": result.replayed,
+            "authority_moved": False,
+            "repair_requested": False,
         }
     )
     return 0
@@ -299,6 +370,24 @@ def main() -> int:
     p.add_argument("--line-key", required=True)
     p.add_argument("--index", type=int, default=0)
     p.set_defaults(func=_cmd_rate)
+
+    p = sub.add_parser(
+        "preview-addon-contract",
+        help="preview one future-period recurring add-on contract snapshot",
+    )
+    p.add_argument("--subscription", required=True)
+    p.add_argument("--index", type=int, default=1)
+    p.set_defaults(func=_cmd_preview_addon_contract)
+
+    p = sub.add_parser(
+        "capture-addon-contract",
+        help="emit one confirmed recurring add-on snapshot into the shadow chain",
+    )
+    p.add_argument("--subscription", required=True)
+    p.add_argument("--index", type=int, default=1)
+    p.add_argument("--preview-fingerprint", required=True)
+    p.add_argument("--idempotency-key", required=True)
+    p.set_defaults(func=_cmd_capture_addon_contract)
 
     p = sub.add_parser(
         "verify-rating-cohort",

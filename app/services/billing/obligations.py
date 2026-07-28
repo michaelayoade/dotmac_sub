@@ -322,6 +322,10 @@ class BillingObligations:
         event_id: UUID,
         output_schema_version: int,
         context: CommandContext,
+        contract_change_kind: str = "sales_funding",
+        envelope_source_kind: str = "sales_order",
+        envelope_source_id: UUID | None = None,
+        subscription_id: UUID | None = None,
     ) -> tuple[ObligationResult, ...] | None:
         """Receipt recorded contract versions and schedule shadow obligations."""
 
@@ -335,12 +339,18 @@ class BillingObligations:
                 OwnerOutputEnvelope(
                     event_type=EventType.custom,
                     producer_owner=OWNER,
-                    source_kind="sales_order",
-                    source_id=sales_order_id,
+                    source_kind=envelope_source_kind,
+                    source_id=envelope_source_id or sales_order_id,
                 ),
                 {
                     "output": "billing.obligations.shadow_scheduled",
                     "sales_order_id": str(sales_order_id),
+                    "contract_change_kind": contract_change_kind,
+                    **(
+                        {"subscription_id": str(subscription_id)}
+                        if subscription_id is not None
+                        else {}
+                    ),
                     "obligations": [
                         {
                             "obligation_id": str(result.obligation_id),

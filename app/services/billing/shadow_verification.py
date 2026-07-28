@@ -37,12 +37,9 @@ from app.models.billing_shadow_verification import (
     BillingShadowDeliveryEvidence,
 )
 from app.models.catalog import (
-    AddOnPrice,
     BillingCycle,
     BillingMode,
-    PriceType,
     Subscription,
-    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.event_store import EventStore
@@ -239,34 +236,6 @@ def _mark(
     value = str(subscription_id)
     if value not in classification[category]:
         classification[category].append(value)
-
-
-def _has_recurring_addon(
-    db: Session,
-    *,
-    subscription_id: UUID,
-    period_start: datetime,
-    period_end: datetime,
-) -> bool:
-    """Whether the legacy invoice formula includes an uncontracted add-on."""
-
-    return (
-        db.execute(
-            select(SubscriptionAddOn.id)
-            .join(AddOnPrice, AddOnPrice.add_on_id == SubscriptionAddOn.add_on_id)
-            .where(
-                SubscriptionAddOn.subscription_id == subscription_id,
-                (SubscriptionAddOn.start_at.is_(None))
-                | (SubscriptionAddOn.start_at < period_end),
-                (SubscriptionAddOn.end_at.is_(None))
-                | (SubscriptionAddOn.end_at > period_start),
-                AddOnPrice.price_type == PriceType.recurring,
-                AddOnPrice.is_active.is_(True),
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        is not None
-    )
 
 
 def _topology_categories(
@@ -669,6 +638,7 @@ class BillingShadowVerification:
         )
         from app.services.billing_automation import (
             PostpaidChargePreviewError,
+            RecurringChargeComponentKind,
             preview_postpaid_recurring_charge,
         )
         from app.services.prepaid_service_renewals import (
@@ -896,6 +866,10 @@ class BillingShadowVerification:
             legacy_currency: str | None = None
             legacy_gross: Decimal | None = None
             legacy_error: str | None = None
+            legacy_component_rows: list[dict[str, object]] = []
+            legacy_addon_component_keys: set[str] = set()
+            legacy_preview_issues: list[dict[str, object]] = []
+            prepaid_excluded_addon_keys: set[str] = set()
             if subscription.billing_mode is BillingMode.prepaid:
                 try:
                     preview = preview_prepaid_recurring_charge(
@@ -910,6 +884,19 @@ class BillingShadowVerification:
                     legacy_period_end = preview.period_end
                     legacy_currency = preview.currency
                     legacy_gross = preview.gross_amount
+                    prepaid_excluded_addon_keys = {
+                        str(addon_id)
+                        for addon_id in preview.excluded_recurring_addon_ids
+                    }
+                    legacy_addon_component_keys.update(prepaid_excluded_addon_keys)
+                    legacy_component_rows.append(
+                        {
+                            "kind": "base_service",
+                            "component_key": "base_service",
+                            "gross_amount": str(preview.gross_amount),
+                            "currency": preview.currency,
+                        }
+                    )
             else:
                 try:
                     postpaid_preview = preview_postpaid_recurring_charge(
@@ -924,6 +911,47 @@ class BillingShadowVerification:
                     legacy_period_end = postpaid_preview.period_end
                     legacy_currency = postpaid_preview.currency
                     legacy_gross = postpaid_preview.gross_amount
+                    legacy_component_rows = [
+                        {
+                            "kind": component.kind.value,
+                            "component_key": component.component_key,
+                            "subscription_add_on_id": (
+                                str(component.subscription_add_on_id)
+                                if component.subscription_add_on_id is not None
+                                else None
+                            ),
+                            "add_on_id": (
+                                str(component.add_on_id)
+                                if component.add_on_id is not None
+                                else None
+                            ),
+                            "quantity": str(component.quantity),
+                            "unit_price": str(component.unit_price),
+                            "net_amount": str(component.net_amount),
+                            "tax_amount": str(component.tax_amount),
+                            "gross_amount": str(component.gross_amount),
+                            "currency": postpaid_preview.currency,
+                        }
+                        for component in postpaid_preview.components
+                    ]
+                    legacy_addon_component_keys = {
+                        component.component_key
+                        for component in postpaid_preview.components
+                        if component.kind
+                        is RecurringChargeComponentKind.recurring_addon
+                    }
+                    legacy_preview_issues = [
+                        {
+                            "kind": issue.kind.value,
+                            "subscription_add_on_id": str(issue.subscription_add_on_id),
+                            "add_on_id": str(issue.add_on_id),
+                        }
+                        for issue in postpaid_preview.issues
+                    ]
+                    legacy_addon_component_keys.update(
+                        str(issue.subscription_add_on_id)
+                        for issue in postpaid_preview.issues
+                    )
 
             cadence = BillingContracts.cadence_of(version)
             new_cadence = any(
@@ -963,15 +991,52 @@ class BillingShadowVerification:
                 detail(subscription_id, exc.code)
                 continue
 
-            if _has_recurring_addon(
-                db,
-                subscription_id=subscription_id,
-                period_start=target_period.starts_at,
-                period_end=target_period.ends_at,
-            ):
-                source_row["legacy_preview_error"] = "uncontracted_recurring_addon"
+            target_addon_component_keys = {
+                line.component_key
+                for line in lines
+                if line.charge_component is ChargeComponent.addon
+            }
+            missing_target_addons = sorted(
+                legacy_addon_component_keys - target_addon_component_keys
+            )
+            stale_target_addons = sorted(
+                target_addon_component_keys - legacy_addon_component_keys
+            )
+            if missing_target_addons or stale_target_addons:
+                source_row["recurring_addon_identity"] = {
+                    "current": sorted(legacy_addon_component_keys),
+                    "target": sorted(target_addon_component_keys),
+                }
+                _mark(classification, "unexpected_unlinked", subscription_id)
+                for component_key in missing_target_addons:
+                    detail(
+                        subscription_id,
+                        f"missing_target_recurring_addon:{component_key}",
+                    )
+                for component_key in stale_target_addons:
+                    detail(
+                        subscription_id,
+                        f"stale_target_recurring_addon:{component_key}",
+                    )
+                continue
+            if legacy_preview_issues:
+                source_row["legacy_preview_issues"] = legacy_preview_issues
                 _mark(classification, "unresolved", subscription_id)
-                detail(subscription_id, "uncontracted_recurring_addon")
+                for issue in legacy_preview_issues:
+                    detail(
+                        subscription_id,
+                        f"postpaid_recurring_addon_{issue['kind']}",
+                    )
+                continue
+            if prepaid_excluded_addon_keys:
+                source_row["prepaid_excluded_recurring_addons"] = sorted(
+                    prepaid_excluded_addon_keys
+                )
+                _mark(classification, "unresolved", subscription_id)
+                detail(
+                    subscription_id,
+                    "current_prepaid_owner_excludes_recurring_addon",
+                )
                 continue
 
             target_currency: str | None = None
@@ -1082,6 +1147,7 @@ class BillingShadowVerification:
                         str(legacy_gross) if legacy_gross is not None else None
                     ),
                     "legacy_currency": legacy_currency,
+                    "legacy_components": legacy_component_rows,
                     "new_cadence": new_cadence,
                     "lines": target_line_rows,
                 }

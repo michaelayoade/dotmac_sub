@@ -269,3 +269,88 @@ def test_phase2_rating_replay_uses_immutable_provenance() -> None:
     assert "rating_provenance_conflict" in obligations
     assert "server_default=sa.false()" in migration
     assert "UPDATE billing_obligations" not in migration
+
+
+def test_phase2_current_owner_previews_do_not_hide_recurring_addons() -> None:
+    root = Path(__file__).resolve().parents[2]
+    postpaid = (root / "app/services/billing_automation.py").read_text(encoding="utf-8")
+    prepaid = (root / "app/services/prepaid_service_renewals.py").read_text(
+        encoding="utf-8"
+    )
+    verifier = (root / "app/services/billing/shadow_verification.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "PostpaidChargeComponentPreview" in postpaid
+    assert "_resolve_recurring_addon_charges(" in postpaid
+    assert "components=tuple(components)" in postpaid
+    assert "excluded_recurring_addon_ids" in prepaid
+    assert "missing_target_recurring_addon" in verifier
+    assert "current_prepaid_owner_excludes_recurring_addon" in verifier
+    assert "uncontracted_recurring_addon" not in verifier
+
+
+def test_recurring_addon_backfill_uses_owner_outputs_not_parallel_writes() -> None:
+    root = Path(__file__).resolve().parents[2]
+    producer = (root / "app/services/billing/addon_contract_backfill.py").read_text(
+        encoding="utf-8"
+    )
+    contracts = (root / "app/services/billing/contracts.py").read_text(encoding="utf-8")
+    handler = (
+        root / "app/services/events/handlers/billing_lifecycle_projection.py"
+    ).read_text(encoding="utf-8")
+    operator = (root / "scripts/billing/billing_target_shadow.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "execute_owner_command(" in producer
+    assert "stage_owner_output(" in producer
+    assert '"billing.addon_contract_backfill.captured"' in producer
+    assert "BillingContractLine(" not in producer
+    assert "repair_requested" not in producer
+    assert "consume_recurring_addon_backfill" in contracts
+    assert 'event_type="billing.addon_contract_backfill.captured"' in contracts
+    assert 'producer_owner="billing.addon_contract_backfill"' in contracts
+    assert "_ADDON_BACKFILL_OUTPUT" in handler
+    assert "BillingAddonContractBackfill.preview(" in operator
+    assert "BillingAddonContractBackfill.capture(" in operator
+
+
+def test_live_addon_purchase_drives_the_receipted_timed_shadow_chain() -> None:
+    root = Path(__file__).resolve().parents[2]
+    producer = (root / "app/services/customer_portal_flow_addons.py").read_text(
+        encoding="utf-8"
+    )
+    purchase_command = producer.split("def confirm_addon_purchase(", maxsplit=1)[
+        1
+    ].split("def cancel_addon(", maxsplit=1)[0]
+    api = (root / "app/api/me.py").read_text(encoding="utf-8")
+    contracts = (root / "app/services/billing/contracts.py").read_text(encoding="utf-8")
+    obligations = (root / "app/services/billing/obligations.py").read_text(
+        encoding="utf-8"
+    )
+    handler = (
+        root / "app/services/events/handlers/billing_lifecycle_projection.py"
+    ).read_text(encoding="utf-8")
+
+    assert "PurchaseAddonCommand" in producer
+    assert "AddonPurchaseOutcome" in producer
+    assert "execute_owner_command(" in purchase_command
+    assert "stage_owner_output(" in purchase_command
+    assert "RECURRING_TERMS_ADDED_OUTPUT" in purchase_command
+    assert "billing.contract_terms.recurring_addon_added" in producer
+    assert "db.commit(" not in purchase_command
+    assert "db.rollback(" not in purchase_command
+    assert "with owner_session(db) as owner_db:" in api
+    assert "confirm_addon_purchase(" in api
+
+    assert "consume_recurring_addon_purchase" in contracts
+    assert "BillingContractVersionStatus.draft" in contracts
+    assert "schedule_timer(" in contracts
+    assert "consume_pending_terms_effective_due" in contracts
+    assert "billing.contracts.pending_terms_effective_due" in contracts
+    assert '"recurring_addon_purchase"' in contracts
+    assert "_LIVE_ADDON_PURCHASE_OUTPUT" in handler
+    assert "_PENDING_TERMS_EFFECTIVE_TRIGGER" in handler
+    assert "contract_change_kind=change_kind" in handler
+    assert "source_kind=envelope_source_kind" in obligations
