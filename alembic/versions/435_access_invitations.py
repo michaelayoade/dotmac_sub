@@ -47,9 +47,7 @@ def upgrade() -> None:
         "access_invitations",
         ["principal_type", "principal_id"],
     )
-    op.create_index(
-        "ix_access_invitations_status", "access_invitations", ["status"]
-    )
+    op.create_index("ix_access_invitations_status", "access_invitations", ["status"])
 
 
 def downgrade() -> None:
