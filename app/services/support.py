@@ -902,9 +902,7 @@ class Tickets:
         # Lock first so concurrent native creates and CRM imports cannot use a
         # stale sequence value between inspecting existing ticket numbers and
         # advancing the counter.
-        sequence = numbering_service.lock_sequence(
-            db, "support_ticket", start_value
-        )
+        sequence = numbering_service.lock_sequence(db, "support_ticket", start_value)
         max_value: int | None = None
         for (number,) in db.query(Ticket.number).filter(Ticket.number.isnot(None)):
             text = str(number)

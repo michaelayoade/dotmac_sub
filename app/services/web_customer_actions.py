@@ -3356,8 +3356,7 @@ def approve_subscriber_name_correction(
         or is_placeholder_name(replacement_first)
         or is_placeholder_name(replacement_last)
         or (
-            replacement_display is not None
-            and is_placeholder_name(replacement_display)
+            replacement_display is not None and is_placeholder_name(replacement_display)
         )
     ):
         raise HTTPException(

@@ -18,6 +18,7 @@ from app.models.subscriber import Subscriber
 from app.services.customer_identity_normalization import (
     collapse_whitespace,
     customer_name_fingerprint,
+    customer_name_signature,
     is_placeholder_name,
 )
 from app.services.web_customer_actions import approve_subscriber_name_correction
@@ -107,7 +108,9 @@ def _row_fingerprint(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _first_non_placeholder_name(snapshot: dict[str, str | None]) -> dict[str, str | None]:
+def _first_non_placeholder_name(
+    snapshot: dict[str, str | None],
+) -> dict[str, str | None]:
     display = snapshot["display_name"]
     first = snapshot["first_name"]
     last = snapshot["last_name"]
@@ -136,17 +139,14 @@ def _final_observed_placeholder(snapshot: dict[str, str | None]) -> bool:
 def _load_audit_events(
     db: Session, *, window_start: datetime, window_end: datetime
 ) -> dict[UUID, list[AuditEvent]]:
-    rows = (
-        db.scalars(
-            select(AuditEvent)
-            .where(AuditEvent.entity_type == "subscriber")
-            .where(AuditEvent.action == "crm_customer_identity_update")
-            .where(AuditEvent.occurred_at >= window_start)
-            .where(AuditEvent.occurred_at < window_end)
-            .order_by(AuditEvent.entity_id, AuditEvent.occurred_at.asc())
-        )
-        .all()
-    )
+    rows = db.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.entity_type == "subscriber")
+        .where(AuditEvent.action == "crm_customer_identity_update")
+        .where(AuditEvent.occurred_at >= window_start)
+        .where(AuditEvent.occurred_at < window_end)
+        .order_by(AuditEvent.entity_id, AuditEvent.occurred_at.asc())
+    ).all()
     grouped: dict[UUID, list[AuditEvent]] = defaultdict(list)
     for event in rows:
         if not event.entity_id:
@@ -306,12 +306,16 @@ def apply_name_remediation_plan(
             raise ValueError(f"subscriber {row.subscriber_id} is missing")
         marker = dict(subscriber.metadata_ or {}).get(REMEDIATION_MARKER)
         current_name = _current_name(subscriber)
-        if marker != plan.digest or customer_name_fingerprint(
-            first_name=current_name["first_name"],
-            last_name=current_name["last_name"],
-            display_name=current_name["display_name"],
-            party_id=subscriber.party_id,
-        ) != row.restored_name_fingerprint:
+        if (
+            marker != plan.digest
+            or customer_name_fingerprint(
+                first_name=current_name["first_name"],
+                last_name=current_name["last_name"],
+                display_name=current_name["display_name"],
+                party_id=subscriber.party_id,
+            )
+            != row.restored_name_fingerprint
+        ):
             already_applied = False
             break
     if already_applied and plan.selected_rows:
