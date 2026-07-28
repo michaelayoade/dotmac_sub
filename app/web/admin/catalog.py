@@ -745,6 +745,63 @@ def catalog_subscription_detail(
 
 
 @router.post(
+    "/subscriptions/{subscription_id}/bill-now/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def catalog_subscription_bill_now_preview(
+    request: Request,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Show the owner-produced recovery-cycle preview before a financial write."""
+    try:
+        preview_context = (
+            web_catalog_subscription_workflows_service.prepaid_bill_now_preview_context(
+                db, subscription_id=subscription_id
+            )
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            f"/admin/catalog/subscriptions/{subscription_id}?error={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    context = _base_context(request, db, active_page="catalog-subscriptions")
+    context.update(preview_context)
+    context["subscription_id"] = subscription_id
+    return templates.TemplateResponse(
+        "admin/catalog/prepaid_bill_now_confirm.html", context
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/bill-now/confirm",
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def catalog_subscription_bill_now_confirm(
+    request: Request,
+    subscription_id: str,
+    preview_fingerprint: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        invoice_url = (
+            web_catalog_subscription_workflows_service.confirm_prepaid_bill_now(
+                db,
+                subscription_id=subscription_id,
+                fingerprint=preview_fingerprint,
+                actor_id=_get_actor_id(request),
+            )
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            f"/admin/catalog/subscriptions/{subscription_id}?error={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    return RedirectResponse(invoice_url, status_code=303)
+
+
+@router.post(
     "/subscriptions/{subscription_id}/register-radio-mac",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("catalog:write"))],

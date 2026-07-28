@@ -30,6 +30,18 @@ def test_invoice_batch_run_button_has_submit_guard():
     assert "submitting ? 'Running...' : 'Run Batch'" in template
 
 
+def test_recovery_invoice_payment_remains_a_separate_confirmed_action():
+    template = Path("templates/admin/billing/invoice_detail.html").read_text()
+    confirmation = Path(
+        "templates/admin/billing/prepaid_pay_now_confirm.html"
+    ).read_text()
+
+    assert "prepaid_recovery_settlement" in template
+    assert "prepaid-pay-now/preview" in template
+    assert "Apply any credit note first." in confirmation
+    assert "prepaid-pay-now/confirm" in confirmation
+
+
 def test_billing_money_templates_render_currency_codes_not_naira_glyphs():
     template_paths = [
         "templates/admin/billing/invoice_detail.html",
