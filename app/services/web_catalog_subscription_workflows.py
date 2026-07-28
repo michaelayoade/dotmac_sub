@@ -30,7 +30,7 @@ from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
 )
 from app.services.prepaid_recovery_billing import (
-    PrepaidRecoveryBillingError,
+    PrepaidRecoveryDraftConfirmation,
     create_prepaid_recovery_draft,
     preview_prepaid_recovery_draft,
 )
@@ -68,14 +68,13 @@ def prepaid_bill_now_preview_context(
 
 
 def confirm_prepaid_bill_now(
-    db: Session, *, subscription_id: str, fingerprint: str, actor_id: str | None
+    db: Session,
+    *,
+    subscription_id: str,
+    fingerprint: str,
+    starts_at: datetime,
+    actor_id: str | None,
 ) -> str:
-    preview = preview_prepaid_recovery_draft(db, subscription_id=UUID(subscription_id))
-    if preview.fingerprint != fingerprint:
-        raise PrepaidRecoveryBillingError(
-            code="financial.prepaid_recovery_billing.stale_preview",
-            message="The Bill Now preview expired; review it again.",
-        )
     command_id = uuid4()
     result = create_prepaid_recovery_draft(
         db,
@@ -85,9 +84,13 @@ def confirm_prepaid_bill_now(
             actor=actor_id or "admin:unknown",
             scope="billing:invoice:update",
             reason="Create prepaid recovery invoice from Bill Now confirmation",
-            idempotency_key=f"prepaid-recovery-draft:{subscription_id}:{preview.fingerprint}",
+            idempotency_key=f"prepaid-recovery-draft:{subscription_id}:{fingerprint}",
         ),
-        preview=preview,
+        confirmation=PrepaidRecoveryDraftConfirmation(
+            subscription_id=UUID(subscription_id),
+            starts_at=starts_at,
+            fingerprint=fingerprint,
+        ),
     )
     return f"/admin/billing/invoices/{result.invoice_id}"
 

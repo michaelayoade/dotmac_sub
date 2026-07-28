@@ -791,6 +791,7 @@ def catalog_subscription_bill_now_confirm(
     request: Request,
     subscription_id: str,
     preview_fingerprint: str = Form(...),
+    preview_starts_at: datetime = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     try:
@@ -799,6 +800,7 @@ def catalog_subscription_bill_now_confirm(
                 db,
                 subscription_id=subscription_id,
                 fingerprint=preview_fingerprint,
+                starts_at=preview_starts_at,
                 actor_id=_get_actor_id(request),
             )
         )

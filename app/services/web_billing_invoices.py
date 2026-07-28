@@ -40,6 +40,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_recovery_billing import (
     PrepaidRecoveryBillingError,
+    PrepaidRecoverySettlementConfirmation,
     preview_prepaid_recovery_settlement,
     settle_prepaid_recovery_invoice,
 )
@@ -818,12 +819,6 @@ def confirm_prepaid_recovery_pay_now(
     fingerprint: str,
     actor_id: str | None,
 ) -> None:
-    preview = preview_prepaid_recovery_settlement(db, invoice_id=UUID(invoice_id))
-    if preview.fingerprint != fingerprint:
-        raise PrepaidRecoveryBillingError(
-            code="financial.prepaid_recovery_billing.stale_preview",
-            message="The Pay Now preview expired; review it again.",
-        )
     command_id = UUID(bytes=secrets.token_bytes(16))
     settle_prepaid_recovery_invoice(
         db,
@@ -833,9 +828,12 @@ def confirm_prepaid_recovery_pay_now(
             actor=actor_id or "admin:unknown",
             scope="billing:invoice:update",
             reason="Settle a prepaid recovery invoice from confirmed payment credit",
-            idempotency_key=f"prepaid-recovery-settle:{invoice_id}:{preview.fingerprint}",
+            idempotency_key=f"prepaid-recovery-settle:{invoice_id}:{fingerprint}",
         ),
-        preview=preview,
+        confirmation=PrepaidRecoverySettlementConfirmation(
+            invoice_id=UUID(invoice_id),
+            fingerprint=fingerprint,
+        ),
     )
 
 

@@ -26,6 +26,7 @@
     <form method="post" action="/admin/catalog/subscriptions/{{ subscription_id }}/bill-now/confirm" class="flex justify-end gap-3">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="preview_fingerprint" value="{{ prepaid_bill_now_preview.fingerprint }}">
+        <input type="hidden" name="preview_starts_at" value="{{ prepaid_bill_now_preview.starts_at.isoformat() }}">
         <a href="/admin/catalog/subscriptions/{{ subscription_id }}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200">Cancel</a>
         <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Create draft invoice</button>
     </form>
