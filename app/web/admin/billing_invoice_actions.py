@@ -5,7 +5,7 @@ from urllib.parse import quote_plus
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -95,7 +95,7 @@ def invoice_detail(
 )
 def invoice_prepaid_pay_now_preview(
     request: Request, invoice_id: UUID, db: Session = Depends(get_db)
-) -> HTMLResponse | RedirectResponse:
+) -> Response:
     try:
         preview_context = (
             web_billing_invoices_service.prepaid_recovery_pay_now_preview_context(

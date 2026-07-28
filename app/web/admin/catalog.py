@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
@@ -763,7 +763,7 @@ def catalog_subscription_detail(
 )
 def catalog_subscription_bill_now_preview(
     request: Request, subscription_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse | RedirectResponse:
+) -> Response:
     try:
         preview_context = (
             web_catalog_subscription_workflows_service.prepaid_bill_now_preview_context(
