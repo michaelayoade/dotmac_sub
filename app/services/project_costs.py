@@ -46,9 +46,9 @@ def project_cost_summary(db: Session, project_id: str) -> ProjectCostSummary:
     hourly_rate = _decimal_setting(
         db, SettingDomain.projects, "default_labor_hourly_rate", "0.00"
     )
-    labor_cost = (
-        Decimal(labor_minutes) * hourly_rate / Decimal(60)
-    ).quantize(Decimal("0.01"))
+    labor_cost = (Decimal(labor_minutes) * hourly_rate / Decimal(60)).quantize(
+        Decimal("0.01")
+    )
     expense_total = (
         db.query(func.coalesce(func.sum(FieldExpenseRequestItem.amount), _ZERO))
         .join(

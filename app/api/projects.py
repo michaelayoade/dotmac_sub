@@ -19,16 +19,15 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.project import (
-    ProjectCreate,
     ProjectCostSummary,
+    ProjectCreate,
     ProjectRead,
     ProjectTaskCreate,
     ProjectTaskRead,
     ProjectTaskUpdate,
     ProjectUpdate,
 )
-from app.services import project_filters
-from app.services import project_costs
+from app.services import project_costs, project_filters
 from app.services import projects as projects_service
 from app.services.auth_dependencies import require_permission
 from app.services.domain_errors import DomainError
