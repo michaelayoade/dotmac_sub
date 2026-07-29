@@ -1,6 +1,6 @@
 """Add composable service-team capabilities, scopes, and responsibilities.
 
-Revision ID: 438_composable_service_teams
+Revision ID: 440_composable_service_teams
 Revises: 437_add_pon_port_admin_enabled
 
 This is the expand/backfill half of the service-team authority migration.
@@ -25,8 +25,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "438_composable_service_teams"
-down_revision = "437_add_pon_port_admin_enabled"
+revision = "440_composable_service_teams"
+down_revision = "439_billing_obligation_rating_provenance"
 branch_labels = None
 depends_on = None
 

@@ -7,7 +7,7 @@ import pytest
 
 MIGRATION = (
     Path(__file__).resolve().parents[1]
-    / "alembic/versions/438_composable_service_teams.py"
+    / "alembic/versions/440_composable_service_teams.py"
 )
 MIGRATION_426 = (
     Path(__file__).resolve().parents[1]
@@ -17,7 +17,7 @@ MIGRATION_426 = (
 
 def _load_migration():
     spec = importlib.util.spec_from_file_location(
-        "migration_438_composable_service_teams",
+        "migration_440_composable_service_teams",
         MIGRATION,
     )
     assert spec is not None and spec.loader is not None
@@ -31,8 +31,8 @@ def test_revision_is_forward_from_current_head_and_keeps_426_immutable():
     source = MIGRATION.read_text(encoding="utf-8")
     source_426 = MIGRATION_426.read_text(encoding="utf-8")
 
-    assert migration.revision == "438_composable_service_teams"
-    assert migration.down_revision == "437_add_pon_port_admin_enabled"
+    assert migration.revision == "440_composable_service_teams"
+    assert migration.down_revision == "439_billing_obligation_rating_provenance"
     assert 'revision = "426_service_team_lifecycle"' in source_426
     assert 'down_revision = "425_vendor_project_intake_evidence"' in source_426
     assert "op.drop_column" not in source

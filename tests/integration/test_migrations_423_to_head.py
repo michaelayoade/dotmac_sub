@@ -1,4 +1,4 @@
-"""Exercise the PostgreSQL migration boundary that introduces revisions 430-437."""
+"""Exercise the PostgreSQL migration boundary that introduces revisions 430-440."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 REVISION_423 = "423_prepaid_opening_funding_reconciliation"
 REVISION_437 = "437_add_pon_port_admin_enabled"
 
-TABLES_430_TO_437 = (
+TABLES_430_TO_440 = (
     "billing_contracts",
     "billing_contract_versions",
     "billing_contract_lines",
@@ -172,7 +172,7 @@ def _restore_pre_430_shape(database_url: URL) -> None:
     """
 
     with psycopg.connect(_psycopg_url(database_url), autocommit=True) as connection:
-        for table_name in reversed(TABLES_430_TO_437):
+        for table_name in reversed(TABLES_430_TO_440):
             connection.execute(
                 sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(
                     sql.Identifier(table_name)
@@ -188,7 +188,7 @@ def _restore_pre_430_shape(database_url: URL) -> None:
 
 @dataclass(frozen=True)
 class _LegacyServiceTeamRows:
-    """Identifiers of the representative pre-438 rows staged at revision 437."""
+    """Identifiers of the representative pre-440 rows staged at revision 437."""
 
     operations_team_id: UUID = field(default_factory=uuid4)
     support_team_id: UUID = field(default_factory=uuid4)
@@ -202,7 +202,7 @@ class _LegacyServiceTeamRows:
 
 
 def _stage_legacy_service_teams_at_437(database_url: URL) -> _LegacyServiceTeamRows:
-    """Insert legacy scalar-authority rows for revision 438's backfill to read."""
+    """Insert legacy scalar-authority rows for revision 440's backfill to read."""
 
     rows = _LegacyServiceTeamRows()
     params = {
@@ -272,7 +272,7 @@ def _stage_legacy_service_teams_at_437(database_url: URL) -> _LegacyServiceTeamR
     return rows
 
 
-def _assert_438_backfill_translated_legacy_rows(
+def _assert_440_backfill_translated_legacy_rows(
     engine: Engine, rows: _LegacyServiceTeamRows
 ) -> None:
     with engine.connect() as connection:
@@ -379,7 +379,7 @@ def test_postgres_upgrades_revision_423_through_current_head(
     assert _revision_rows(database_url) == {REVISION_423}
 
     # Stop at the revision-437 boundary and stage legacy scalar-authority rows
-    # so revision 438's backfill runs against representative production shapes.
+    # so revision 440's backfill runs against representative production shapes.
     command.upgrade(config, REVISION_437)
     assert _revision_rows(database_url) == {REVISION_437}
     legacy_rows = _stage_legacy_service_teams_at_437(database_url)
@@ -392,7 +392,44 @@ def test_postgres_upgrades_revision_423_through_current_head(
     try:
         inspector = inspect(engine)
         table_names = set(inspector.get_table_names())
-        assert set(TABLES_430_TO_437) <= table_names
+        assert set(TABLES_430_TO_440) <= table_names
+        verification_columns = {
+            column["name"]
+            for column in inspector.get_columns("billing_cutover_verification_runs")
+        }
+        assert {
+            "expected_difference_count",
+            "gap_count",
+            "overlap_count",
+        } <= verification_columns
+        obligation_columns = {
+            column["name"] for column in inspector.get_columns("billing_obligations")
+        }
+        assert {
+            "rating_provenance_complete",
+            "rating_policy_version",
+            "rating_coverage_start",
+            "rating_coverage_end",
+            "rating_unit_price",
+            "rating_quantity",
+            "rating_rate_basis",
+            "rating_rate_unit",
+            "rating_rate_quantity",
+            "rating_timezone_name",
+            "rating_proration_policy",
+            "rating_rate_units",
+            "rating_proration_factor",
+            "rating_tax_treatment_code",
+            "rating_tax_rate_id",
+            "rating_tax_rate_percent",
+            "rating_tax_inclusive",
+            "rating_input_fingerprint",
+        } <= obligation_columns
+        obligation_foreign_keys = {
+            foreign_key["name"]
+            for foreign_key in inspector.get_foreign_keys("billing_obligations")
+        }
+        assert "fk_billing_obligation_rating_tax_rate" in obligation_foreign_keys
 
         with engine.connect() as connection:
             enum_names = list(
@@ -412,7 +449,7 @@ def test_postgres_upgrades_revision_423_through_current_head(
         for enum_name in ENUMS_430_TO_434:
             assert enum_names.count(enum_name) == 1
 
-        _assert_438_backfill_translated_legacy_rows(engine, legacy_rows)
+        _assert_440_backfill_translated_legacy_rows(engine, legacy_rows)
     finally:
         engine.dispose()
 

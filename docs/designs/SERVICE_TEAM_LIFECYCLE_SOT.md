@@ -50,7 +50,7 @@ and lifecycle timestamps. The following facts are composed:
   are registered with a contract owner, version, and required capability;
   callers cannot invent a route key or substitute a different capability.
 
-Capability vocabulary is seeded by migration 438. Teams, members, managers,
+Capability vocabulary is seeded by migration 440. Teams, members, managers,
 responsibilities, scopes, relationships, routing decisions, and access grants
 are never seeded.
 
@@ -113,7 +113,7 @@ membership-adoption guard. It verifies five native pointers and retires only
 the workflow sources, scalar manager pointer, and compatibility memberships
 that migration 426 would reject.
 
-Migration 438 adds the composable schema and idempotently backfills:
+Migration 440 adds the composable schema and idempotently backfills:
 
 - legacy team type to one registered capability;
 - legacy membership role to one or more responsibilities;

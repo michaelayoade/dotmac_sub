@@ -148,7 +148,7 @@ def test_lifecycle_admin_projection_consumes_composition_owner_queries() -> None
 
 def test_legacy_scalar_columns_are_shadow_only_until_verified_contract() -> None:
     model = _source("app/models/service_team.py")
-    migration = _source("alembic/versions/438_composable_service_teams.py")
+    migration = _source("alembic/versions/440_composable_service_teams.py")
     design = _source("docs/designs/SERVICE_TEAM_LIFECYCLE_SOT.md")
     for name in (
         "ServiceTeamCapability",

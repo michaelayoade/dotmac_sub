@@ -395,8 +395,8 @@ def retire_legacy_service_team_sources(
                 reactivated_members += 1
         if migration_blockers:
             # Core deletion is intentional: this command runs before migration
-            # 438, so ORM relationship cascades must not query the not-yet-created
-            # responsibility table. After 438 the FK itself cascades safely.
+            # 440, so ORM relationship cascades must not query the not-yet-created
+            # responsibility table. After 440 the FK itself cascades safely.
             db.execute(
                 delete(ServiceTeamMember).where(
                     ServiceTeamMember.id.in_(migration_blockers)

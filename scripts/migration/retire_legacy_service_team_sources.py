@@ -53,7 +53,7 @@ def main() -> int:
             with db_session_adapter.read_session() as db:
                 bind = db.get_bind()
                 # This gate exists only to protect migration 426's one-time
-                # cutover. Once the composable schema from 438 is present the
+                # cutover. Once the composable schema from 440 is present the
                 # cutover has happened, and ordinary later identity drift must
                 # never block a deploy behind a destructive retirement tool.
                 if inspect(bind).has_table("service_team_capability_definitions"):

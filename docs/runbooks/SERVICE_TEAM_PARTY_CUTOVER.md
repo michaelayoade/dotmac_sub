@@ -82,7 +82,7 @@ Duplicate resolution details worth reviewing in the evidence counters:
   (`abandoned_legacy_member_entry_count`) but never imported.
 
 The deploy gate is self-retiring: once the composable schema from migration
-438 exists, `--check` reports ready and skips the audit, so later ordinary
+440 exists, `--check` reports ready and skips the audit, so later ordinary
 identity drift can never block a deploy behind this one-time tool.
 
 Rerun `--check`, then rehearse `alembic upgrade heads` against a restored
@@ -92,7 +92,7 @@ gate pass.
 
 ## Composable forward migration
 
-Migration 438 is the expand/backfill phase. It registers capability vocabulary,
+Migration 440 is the expand/backfill phase. It registers capability vocabulary,
 adds capability, responsibility, topology, typed scope, external-reference,
 and routing-policy tables, and copies existing scalar state into shadow
 bindings: legacy `team_type` becomes capabilities (legacy `operations` teams
@@ -126,6 +126,6 @@ Before migration 426, a failed retirement command rolls back atomically. After
 successful source retirement, restore the reviewed pre-cutover backup if the
 release is abandoned; do not recreate settings or manager pointers manually.
 
-Migration 426 remains an irreversible authority cutover. Migration 438 is
+Migration 426 remains an irreversible authority cutover. Migration 440 is
 forward-fix only because reconstructing scalar authority would violate the
 target contract.
