@@ -20,8 +20,9 @@ successful `main` push. No other workflow rebuilds that commit. The BuildKit
 cache scope `dotmac-sub-application` is reserved for this application image so
 unrelated builds cannot overwrite its layer history.
 
-Browser E2E remains nightly and manually dispatchable in `e2e.yml`. It is not a
-per-change merge gate.
+Browser E2E remains nightly and manually dispatchable in `e2e.yml`. It pulls
+the immutable `sha-<commit>` image published by CI, rather than rebuilding it,
+and is not a per-change merge gate.
 
 ## Dependency reuse
 
