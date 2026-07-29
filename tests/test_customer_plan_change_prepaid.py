@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException, Request
+from sqlalchemy import select
 
 from app.models.audit import AuditEvent
 from app.models.billing import (
@@ -564,17 +565,21 @@ def test_operator_remote_provision_projects_then_verifies_exact_profile(
 
     def _project(_db, subscription_id):
         assert subscription_id == str(subscription.id)
-        _db.add(
-            RadiusUser(
+        radius_user = _db.scalar(
+            select(RadiusUser).where(RadiusUser.access_credential_id == credential.id)
+        )
+        if radius_user is None:
+            radius_user = RadiusUser(
                 subscriber_id=subscriber.id,
                 subscription_id=subscription.id,
                 access_credential_id=credential.id,
                 username=credential.username,
-                radius_profile_id=profile.id,
                 is_active=True,
-                last_sync_at=change.remote_reprovision_requested_at
-                + timedelta(seconds=1),
             )
+            _db.add(radius_user)
+        radius_user.radius_profile_id = profile.id
+        radius_user.last_sync_at = change.remote_reprovision_requested_at + timedelta(
+            seconds=1
         )
         _db.flush()
         from app.services.radius import (
@@ -689,8 +694,9 @@ def test_operator_remote_provision_fails_closed_when_projection_target_unavailab
             reason="Operator requested RADIUS provisioning and verification",
         )
     db_session.rollback()
-    db_session.refresh(subscription)
-    assert subscription.offer_id == current_offer.id
+    persisted_subscription = db_session.get(Subscription, subscription.id)
+    assert persisted_subscription is not None
+    assert persisted_subscription.offer_id == current_offer.id
 
 
 def test_wireless_address_relocation_is_qualified_priced_and_awaits_payment(

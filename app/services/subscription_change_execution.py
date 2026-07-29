@@ -265,6 +265,31 @@ def provision_and_verify_remote_change(
     the commercial plan only after the exact fresh local observation exists.
     """
 
+    try:
+        return _provision_and_verify_remote_change(
+            db,
+            request_id=request_id,
+            subscription_id=subscription_id,
+            account_id=account_id,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+            reason=reason,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _provision_and_verify_remote_change(
+    db: Session,
+    *,
+    request_id: UUID,
+    subscription_id: UUID,
+    account_id: UUID,
+    actor_id: str,
+    idempotency_key: str,
+    reason: str,
+) -> RemoteProvisionActionOutcome:
     key = idempotency_key.strip()
     if len(key) < 16:
         raise SubscriptionChangeExecutionError(

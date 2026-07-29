@@ -830,7 +830,6 @@ def provision_remote_plan_change(
         feedback_message = outcome.message
         feedback_reference = outcome.operation_reference
     except SubscriptionChangeExecutionError as exc:
-        db.rollback()
         log_audit_event(
             db,
             request,
@@ -853,7 +852,6 @@ def provision_remote_plan_change(
         feedback_message = str(exc)
         feedback_reference = f"remote-plan-change:{request_id}"
     except Exception as exc:
-        db.rollback()
         logger.exception(
             "Remote plan provisioning failed",
             extra={
