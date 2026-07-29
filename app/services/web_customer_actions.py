@@ -70,6 +70,9 @@ from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.customer_identity_normalization import (
+    collapse_whitespace,
+    customer_name_fingerprint,
+    is_placeholder_name,
     normalize_email_identifier,
     normalize_phone_identifier,
 )
@@ -207,6 +210,7 @@ def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
         "min_balance": "",
         "tax_rate_id": "",
         "withholding_tax_enabled": "false",
+        "vat_exempt": "false",
         "payment_method": "",
     }
     if not subscriber:
@@ -2478,6 +2482,7 @@ def update_person_customer(
     withholding_tax_enabled: str | None,
     payment_method: str | None,
     metadata_json: dict | None,
+    vat_exempt: str | None = None,
     actor_id: str | None = None,
 ):
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
@@ -2547,6 +2552,7 @@ def update_person_customer(
     wht_account_id = before.id
     wht_actor = str(actor_id or f"customer:{before.id}")
     wht_enabled = withholding_tax_enabled == "true"
+    vat_exempt_enabled = vat_exempt == "true"
     db_session_adapter.release_read_transaction(db)
     customer_tax_policies.set_customer_withholding_tax_policy(
         db,
@@ -2560,6 +2566,23 @@ def update_person_customer(
             scope=customer_tax_policies.WRITE_SCOPE,
             reason="Administrator updated customer withholding-tax eligibility",
             idempotency_key=f"customer-wht-policy:{wht_account_id}:{wht_enabled}",
+        ),
+    )
+    db_session_adapter.release_read_transaction(db)
+    customer_tax_policies.set_customer_vat_exemption_policy(
+        db,
+        customer_tax_policies.SetCustomerVatExemptionPolicyCommand(
+            account_id=wht_account_id,
+            vat_exempt=vat_exempt_enabled,
+            updated_by=wht_actor,
+        ),
+        context=CommandContext.system(
+            actor=wht_actor,
+            scope=customer_tax_policies.WRITE_SCOPE,
+            reason="Administrator updated customer VAT exemption",
+            idempotency_key=(
+                f"customer-vat-exemption:{wht_account_id}:{vat_exempt_enabled}"
+            ),
         ),
     )
     if requested_billing_approval is False:
@@ -2601,6 +2624,7 @@ def update_business_customer(
     tax_rate_id: str | None,
     withholding_tax_enabled: str | None,
     payment_method: str | None,
+    vat_exempt: str | None = None,
     actor_id: str | None = None,
 ):
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
@@ -2651,6 +2675,7 @@ def update_business_customer(
     wht_account_id = before.id
     wht_actor = str(actor_id or f"customer:{before.id}")
     wht_enabled = withholding_tax_enabled == "true"
+    vat_exempt_enabled = vat_exempt == "true"
     db_session_adapter.release_read_transaction(db)
     customer_tax_policies.set_customer_withholding_tax_policy(
         db,
@@ -2664,6 +2689,23 @@ def update_business_customer(
             scope=customer_tax_policies.WRITE_SCOPE,
             reason="Administrator updated customer withholding-tax eligibility",
             idempotency_key=f"customer-wht-policy:{wht_account_id}:{wht_enabled}",
+        ),
+    )
+    db_session_adapter.release_read_transaction(db)
+    customer_tax_policies.set_customer_vat_exemption_policy(
+        db,
+        customer_tax_policies.SetCustomerVatExemptionPolicyCommand(
+            account_id=wht_account_id,
+            vat_exempt=vat_exempt_enabled,
+            updated_by=wht_actor,
+        ),
+        context=CommandContext.system(
+            actor=wht_actor,
+            scope=customer_tax_policies.WRITE_SCOPE,
+            reason="Administrator updated customer VAT exemption",
+            idempotency_key=(
+                f"customer-vat-exemption:{wht_account_id}:{vat_exempt_enabled}"
+            ),
         ),
     )
     if requested_billing_approval is False:
@@ -3308,3 +3350,103 @@ def update_customer_profile(
         location_service.geocode_service_address(db, updated)
         db.commit()
     return updated
+
+
+def approve_subscriber_name_correction(
+    db: Session,
+    *,
+    subscriber_id: str,
+    first_name: str,
+    last_name: str,
+    display_name: str | None = None,
+    expected_current_fingerprint: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    manifest_digest: str | None = None,
+    commit: bool = True,
+) -> Subscriber:
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
+    if subscriber.party_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Party-bound subscriber rows are not eligible for legacy name correction.",
+        )
+
+    current_fingerprint = customer_name_fingerprint(
+        first_name=subscriber.first_name,
+        last_name=subscriber.last_name,
+        display_name=subscriber.display_name,
+        party_id=subscriber.party_id,
+    )
+    if current_fingerprint != expected_current_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail="Subscriber name fingerprint mismatch; reload the row and retry.",
+        )
+
+    replacement_display = collapse_whitespace(display_name)
+    replacement_first = collapse_whitespace(first_name) or ""
+    replacement_last = collapse_whitespace(last_name) or ""
+    if (
+        not replacement_first
+        or not replacement_last
+        or is_placeholder_name(replacement_first)
+        or is_placeholder_name(replacement_last)
+        or (
+            replacement_display is not None and is_placeholder_name(replacement_display)
+        )
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Customer name is missing or invalid.",
+        )
+
+    try:
+        payload = SubscriberUpdate(
+            first_name=replacement_first,
+            last_name=replacement_last,
+            display_name=replacement_display,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Customer name is missing or invalid.",
+        ) from exc
+    subscriber.first_name = payload.first_name or subscriber.first_name
+    subscriber.last_name = payload.last_name or subscriber.last_name
+    subscriber.display_name = payload.display_name
+    audit_payload = AuditEventCreate(
+        actor_type=AuditActorType.user if actor_id else AuditActorType.service,
+        actor_id=actor_id or "customer.profile_commands",
+        action="subscriber_name_correction_applied",
+        entity_type="subscriber",
+        entity_id=str(subscriber.id),
+        status_code=200,
+        is_success=True,
+        metadata_={
+            "source": "customer.profile_commands",
+            "expected_current_fingerprint": expected_current_fingerprint,
+            "manifest_digest": manifest_digest,
+            "current_name": {
+                "first_name": subscriber.first_name,
+                "last_name": subscriber.last_name,
+                "display_name": subscriber.display_name,
+            },
+            "replacement_name": {
+                "first_name": replacement_first,
+                "last_name": replacement_last,
+                "display_name": replacement_display,
+            },
+            "reason": reason,
+        },
+    )
+    if commit:
+        audit_service.audit_events.create(db=db, payload=audit_payload)
+    else:
+        audit_service.audit_events.stage(db=db, payload=audit_payload)
+    if commit:
+        db.commit()
+        db.refresh(subscriber)
+    return subscriber
