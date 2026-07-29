@@ -1,0 +1,31 @@
+name: Set up shared CI Python
+description: Restore the Python environment prepared once for this workflow.
+
+inputs:
+  python-version:
+    description: Python version used to build the shared environment
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+
+    - name: Download shared Python environment
+      uses: actions/download-artifact@v4
+      with:
+        name: python-venv
+        path: ${{ runner.temp }}/python-venv
+
+    - name: Restore shared Python environment
+      shell: bash
+      run: tar -xzf "$RUNNER_TEMP/python-venv/python-venv.tar.gz"
