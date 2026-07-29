@@ -16,10 +16,13 @@ Application changes retain all release gates:
   promotion branches; and
 - one production Docker build followed by migration and health checks.
 
-The image that passes the Docker checks is tagged and pushed to GHCR on a
-successful `main` push. No other workflow rebuilds that commit. The BuildKit
-cache scope `dotmac-sub-application` is reserved for this application image so
-unrelated builds cannot overwrite its layer history.
+Pull requests receive the Docker migration and health gate. Branch pushes do
+not repeat that build in CI: `ghcr.yml` is the sole publisher for `dev` and
+`main` and remains the named trigger for staging deployment. Dev receives only
+its immutable SHA tag; only the default branch receives `latest`. The BuildKit
+cache scope `dotmac-sub-application` is shared by pre-merge validation and
+publication so unchanged layers are reused without unrelated builds
+overwriting the cache history.
 
 Browser E2E remains nightly and manually dispatchable in `e2e.yml`. It pulls
 the immutable `sha-<commit>` image published by CI, rather than rebuilding it,

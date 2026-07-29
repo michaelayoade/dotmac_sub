@@ -26,16 +26,21 @@ def test_unit_shards_partition_all_unit_test_files_once() -> None:
     assert sum(len(group) for group in groups) == len(expected)
 
 
-def test_ci_uses_one_named_application_image_cache_and_no_duplicate_publisher() -> None:
+def test_ci_uses_one_named_application_cache_and_one_branch_publisher() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     e2e_workflow = (ROOT / ".github/workflows/e2e.yml").read_text(encoding="utf-8")
+    ghcr_workflow = (ROOT / ".github/workflows/ghcr.yml").read_text(encoding="utf-8")
 
     assert workflow.count("uses: docker/build-push-action@v6") == 1
     assert "scope=dotmac-sub-application" in workflow
-    assert "Publish the health-checked image" in workflow
+    assert "github.event_name != 'push'" in workflow
+    assert "docker push" not in workflow
     assert "docker/build-push-action" not in e2e_workflow
     assert 'image_tag="sha-${GITHUB_SHA::7}"' in e2e_workflow
-    assert not (ROOT / ".github/workflows/ghcr.yml").exists()
+    assert ghcr_workflow.count("uses: docker/build-push-action@v6") == 1
+    assert "branches: [main, dev]" in ghcr_workflow
+    assert "type=raw,value=latest,enable={{is_default_branch}}" in ghcr_workflow
+    assert "scope=dotmac-sub-application" in ghcr_workflow
 
 
 def test_ci_removes_workstation_venv_pointer_before_cache_and_restore() -> None:

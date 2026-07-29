@@ -378,21 +378,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
-      - name: Documentation-only change
-        if: needs.changes.outputs.docs-only == 'true'
-        run: echo "Docker build and health checks are not needed for documentation-only changes."
+      - name: Docker validation not required
+        if: needs.changes.outputs.docs-only == 'true' || github.event_name == 'push'
+        run: echo "Docker validation runs before merge; branch pushes use the sole GHCR publisher."
 
       - uses: actions/checkout@v4
-        if: needs.changes.outputs.docs-only != 'true'
+        if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
 
       - name: Set up Docker Buildx
-        if: needs.changes.outputs.docs-only != 'true'
+        if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image once
-        if: needs.changes.outputs.docs-only != 'true'
+        if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -402,7 +401,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=dotmac-sub-application
 
       - name: Create CI network and services
-        if: needs.changes.outputs.docs-only != 'true'
+        if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
         run: |
           docker network create ci-net
           docker run -d --name ci-db --network ci-net \
@@ -417,7 +416,7 @@ jobs:
           done
 
       - name: Run migrations and application health check
-        if: needs.changes.outputs.docs-only != 'true'
+        if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
         run: |
           common_args="--network ci-net \
             -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
@@ -439,29 +438,8 @@ jobs:
           docker logs ci-app
           exit 1
 
-      - name: Log in to GitHub Container Registry
-        if: needs.changes.outputs.docs-only != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish the health-checked image
-        if: needs.changes.outputs.docs-only != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
-        env:
-          IMAGE_NAME: ghcr.io/${{ github.repository }}
-        run: |
-          image_name="$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')"
-          short_sha="${GITHUB_SHA::7}"
-          release_date="$(date -u +%F)"
-          for tag in "sha-$short_sha" latest "$release_date"; do
-            docker tag dotmac-sub:ci "$image_name:$tag"
-            docker push "$image_name:$tag"
-          done
-
       - name: Cleanup
-        if: always() && needs.changes.outputs.docs-only != 'true'
+        if: always() && needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
         run: |
           docker rm -f ci-app ci-db ci-redis 2>/dev/null || true
           docker network rm ci-net 2>/dev/null || true
