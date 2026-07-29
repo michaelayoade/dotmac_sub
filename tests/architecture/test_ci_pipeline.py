@@ -20,9 +20,7 @@ def _load_shard_module():
 def test_unit_shards_partition_all_unit_test_files_once() -> None:
     module = _load_shard_module()
     expected = set(module._test_files())
-    groups = [
-        set(module.select_shard(shard=shard, shards=4)) for shard in range(1, 5)
-    ]
+    groups = [set(module.select_shard(shard=shard, shards=4)) for shard in range(1, 5)]
 
     assert set().union(*groups) == expected
     assert sum(len(group) for group in groups) == len(expected)
