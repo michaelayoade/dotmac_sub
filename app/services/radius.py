@@ -1029,6 +1029,7 @@ def reconcile_subscription_connectivity(
         nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
         if nas_device:
             radius_clients_changed = ensure_radius_clients_for_nas(db, nas_device)
+            db.flush()
 
     external_nas_synced = 0
     external_credentials_synced = 0

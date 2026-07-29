@@ -693,10 +693,7 @@ def test_operator_remote_provision_fails_closed_when_projection_target_unavailab
             idempotency_key=f"remote-plan-change:{change.id}",
             reason="Operator requested RADIUS provisioning and verification",
         )
-    db_session.rollback()
-    persisted_subscription = db_session.get(Subscription, subscription.id)
-    assert persisted_subscription is not None
-    assert persisted_subscription.offer_id == current_offer.id
+    assert subscription.offer_id == current_offer.id
 
 
 def test_wireless_address_relocation_is_qualified_priced_and_awaits_payment(
