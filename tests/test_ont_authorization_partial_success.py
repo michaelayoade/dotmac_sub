@@ -619,7 +619,12 @@ def test_new_rows_are_scoped_to_the_authorizing_olt(db_session):
 def test_unclaimed_legacy_rows_are_adopted_by_the_authorizing_olt(db_session):
     olt = _olt(db_session, "OLT-Adopt")
     legacy = OntUnit(serial_number="HWTCLEGACY001", is_active=True)
-    db_session.add(legacy)
+    db_session.add_all(
+        [
+            legacy,
+            PonPort(olt_id=olt.id, name="0/1/6", is_active=True),
+        ]
+    )
     db_session.commit()
 
     ont_id, message = ont_authorization.create_or_find_ont_for_authorized_serial(

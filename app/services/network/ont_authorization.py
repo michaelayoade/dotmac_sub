@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -260,7 +259,7 @@ def record_device_authorization_landed(
             },
         )
         _commit_without_expiring(db)
-    except (HTTPException, SQLAlchemyError):
+    except SQLAlchemyError:
         db.rollback()
         logger.error(
             "Failed to persist landed ONT authorization for operation %s "
@@ -547,7 +546,22 @@ def create_or_find_ont_for_authorized_serial(
             # log line the operator never sees.
             set_authorization_status(existing, OntAuthorizationStatus.authorized)
             if existing.olt_device_id is None:
-                existing.olt_device_id = olt.id
+                from app.services.network.ont_assignment_alignment import (
+                    project_ont_topology_from_fsp_observation,
+                )
+
+                topology = project_ont_topology_from_fsp_observation(
+                    db,
+                    ont=existing,
+                    olt_id=olt.id,
+                    fsp=fsp,
+                )
+                if topology is None or existing.olt_device_id is None:
+                    db.rollback()
+                    return None, (
+                        "The canonical topology owner could not adopt the legacy "
+                        f"ONT record for OLT observation {fsp}."
+                    )
             if ont_id_on_olt is not None:
                 existing.external_id = scoped_external_id or str(ont_id_on_olt)
             if observed_olt_status is not None:
