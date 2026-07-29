@@ -866,7 +866,7 @@ def _plan_acs_wan_ppp(
     target_inst = _desired_wan_ppp_instance(desired, observed)
     # If ACS doesn't have a WAN PPP instance, addObject first.
     created = target_inst is None
-    if created:
+    if target_inst is None:
         actions.append(
             AcsAddObject(
                 device_id=device_id,
