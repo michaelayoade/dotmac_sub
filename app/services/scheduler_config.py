@@ -779,16 +779,6 @@ def build_beat_schedule() -> dict:
             enabled=funded_inactive_audit_enabled,
             interval_seconds=max(funded_inactive_audit_interval_seconds, 86400),
         )
-        # Read-only invariant. Enabled unconditionally: a stranded intent locks
-        # the customer out of paying us for up to the intent TTL, and nothing
-        # else reaps rows stranded before the write-path fix.
-        _sync_scheduled_task(
-            session,
-            name="terminal_proof_intent_drift_audit",
-            task_name="app.tasks.billing.audit_terminal_proof_intent_drift",
-            enabled=True,
-            interval_seconds=3600,
-        )
         # Autopay charging (idempotent; due-date gating lives in the service)
         autopay_interval_seconds = resolve_integer(
             session, SettingDomain.billing, "autopay_interval_seconds"

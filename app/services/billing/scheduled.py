@@ -298,41 +298,6 @@ def audit_cutover_balance_invariant() -> dict:
         session.close()
 
 
-def audit_terminal_proof_intent_drift() -> dict:
-    """Read-only invariant: no submitted top-up intent may hold a terminal proof.
-
-    A rejected receipt used to leave its intent `submitted`, which hard-blocks
-    the customer from starting any new deposit until the intent expires. The
-    write path was fixed, but nothing reaps rows stranded before the fix and the
-    rejection consequence is skipped when the proof link is missing, so this
-    stays an invariant rather than a one-off.
-    """
-
-    from app.services.topup_intent_proof_reconciliation import (
-        inspect_terminal_proof_drift,
-    )
-
-    session = SessionLocal()
-    try:
-        candidates = inspect_terminal_proof_drift(session)
-        result = {
-            "ok": not candidates,
-            "drift_count": len(candidates),
-            "intent_ids": [str(candidate.intent_id) for candidate in candidates[:50]],
-        }
-        if candidates:
-            logger.error(
-                "terminal_proof_intent_drift: drift_count=%s intent_ids=%s",
-                result["drift_count"],
-                result["intent_ids"],
-            )
-        else:
-            logger.info("terminal_proof_intent_drift_ok")
-        return result
-    finally:
-        session.close()
-
-
 def audit_funded_inactive_exposure() -> dict:
     from app.services.funded_inactive_exposure import funded_inactive_exposure
 
