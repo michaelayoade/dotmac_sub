@@ -1,4 +1,4 @@
-"""Exercise the PostgreSQL migration boundary that introduces revisions 430-436."""
+"""Exercise the PostgreSQL migration boundary that introduces revisions 430-437."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from app import config as app_config
 ROOT = Path(__file__).resolve().parents[2]
 REVISION_423 = "423_prepaid_opening_funding_reconciliation"
 
-TABLES_430_TO_436 = (
+TABLES_430_TO_437 = (
     "billing_contracts",
     "billing_contract_versions",
     "billing_contract_lines",
@@ -37,6 +37,13 @@ TABLES_430_TO_436 = (
     "erp_billing_exports",
     "billing_shadow_delivery_evidence",
     "billing_cutover_verification_runs",
+    "service_team_capability_definitions",
+    "service_team_capabilities",
+    "service_team_member_responsibilities",
+    "service_team_relationships",
+    "service_team_scope_bindings",
+    "service_team_external_references",
+    "service_team_routing_policies",
 )
 
 ENUMS_430_TO_434 = (
@@ -164,7 +171,7 @@ def _restore_pre_430_shape(database_url: URL) -> None:
     """
 
     with psycopg.connect(_psycopg_url(database_url), autocommit=True) as connection:
-        for table_name in reversed(TABLES_430_TO_436):
+        for table_name in reversed(TABLES_430_TO_437):
             connection.execute(
                 sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(
                     sql.Identifier(table_name)
@@ -203,7 +210,7 @@ def test_postgres_upgrades_revision_423_through_current_head(
     try:
         inspector = inspect(engine)
         table_names = set(inspector.get_table_names())
-        assert set(TABLES_430_TO_436) <= table_names
+        assert set(TABLES_430_TO_437) <= table_names
 
         with engine.connect() as connection:
             enum_names = list(

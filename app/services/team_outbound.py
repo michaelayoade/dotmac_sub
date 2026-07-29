@@ -6,29 +6,19 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import ServiceTeam
 from app.services import email as email_service
+from app.services import service_team_composition
 
 OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY = "outbound_email_activity"
 OUTBOUND_EMAIL_SENDER_METADATA_KEY = "outbound_email_sender_key"
 LEGACY_EMAIL_SENDER_METADATA_KEYS = ("email_sender_key", "smtp_sender_key")
 
-TEAM_TYPE_EMAIL_ACTIVITY_DEFAULTS = {
-    ServiceTeamType.billing.value: "billing_invoice",
-    "finance": "billing_invoice",
-    ServiceTeamType.support.value: "support_ticket",
-    ServiceTeamType.field_service.value: "field_service",
-    ServiceTeamType.project_management.value: "project_update",
-    "projects": "project_update",
-    "project": "project_update",
-    ServiceTeamType.operations.value: "operations",
-}
-
 
 @dataclass(frozen=True)
 class TeamEmailSenderResolution:
     service_team_id: str | None
-    team_type: str | None
+    capability_keys: tuple[str, ...]
     sender_key: str | None
     activity: str | None
     config: dict[str, Any]
@@ -84,6 +74,7 @@ def get_team_outbound_sender_key(
 
 
 def get_team_outbound_activity(
+    db: Session,
     team: ServiceTeam | None,
     *,
     fallback_activity: str | None = None,
@@ -97,12 +88,11 @@ def get_team_outbound_activity(
     configured = _metadata_string(metadata, OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY)
     if configured:
         return configured
-    team_type = str(getattr(team, "team_type", "") or "").strip().lower()
-    if team_type:
-        activity = TEAM_TYPE_EMAIL_ACTIVITY_DEFAULTS.get(team_type)
-        if activity:
-            return activity
-    return fallback_activity
+    if fallback_activity:
+        return fallback_activity
+    if team is None:
+        return None
+    return service_team_composition.outbound_activity_for_team(db, team.id)
 
 
 def resolve_team_email_sender(
@@ -123,6 +113,7 @@ def resolve_team_email_sender(
         resolved_team, metadata_override=metadata_override
     )
     activity = get_team_outbound_activity(
+        db,
         resolved_team,
         fallback_activity=fallback_activity,
         metadata_override=metadata_override,
@@ -134,7 +125,16 @@ def resolve_team_email_sender(
     )
     return TeamEmailSenderResolution(
         service_team_id=str(resolved_team.id) if resolved_team is not None else None,
-        team_type=str(resolved_team.team_type) if resolved_team is not None else None,
+        capability_keys=(
+            tuple(
+                capability.value
+                for capability in service_team_composition.capabilities_for_team(
+                    db, resolved_team.id
+                )
+            )
+            if resolved_team is not None
+            else ()
+        ),
         sender_key=sender_key,
         activity=activity,
         config=config,
