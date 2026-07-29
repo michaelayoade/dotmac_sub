@@ -663,7 +663,6 @@ def pipeline_status_update(
             is_active=is_active,
         )
     except (HTTPException, ValidationError, ValueError):
-        db.rollback()
         return _pipeline_settings_redirect("operation_failed")
     return _pipeline_settings_redirect(
         "pipeline_activated" if is_active else "pipeline_deactivated"
@@ -705,7 +704,6 @@ def pipeline_stage_create(
             icon=icon,
         )
     except (HTTPException, ValidationError, ValueError):
-        db.rollback()
         return _pipeline_settings_redirect("operation_failed")
     return _pipeline_settings_redirect("stage_created")
 
@@ -747,7 +745,6 @@ def pipeline_stage_update(
             icon=icon,
         )
     except (HTTPException, ValidationError, ValueError):
-        db.rollback()
         return _pipeline_settings_redirect("operation_failed")
     return _pipeline_settings_redirect("stage_updated")
 
@@ -784,7 +781,6 @@ def pipeline_stage_status_update(
             is_active=is_active,
         )
     except (HTTPException, ValidationError, ValueError):
-        db.rollback()
         return _pipeline_settings_redirect("operation_failed")
     return _pipeline_settings_redirect(
         "stage_activated" if is_active else "stage_deactivated"
@@ -810,7 +806,6 @@ def pipeline_stage_reorder(
             stage_ids=stage_ids,
         )
     except (HTTPException, ValidationError, ValueError):
-        db.rollback()
         return _pipeline_settings_redirect("operation_failed")
     return _pipeline_settings_redirect("stages_reordered")
 
@@ -839,7 +834,6 @@ def pipeline_bulk_assign_leads(
             db, pipeline_id=pipeline_id, stage_id=stage_id, scope=scope
         )
     except (HTTPException, ValidationError, ValueError):
-        db.rollback()
         return _pipeline_settings_redirect("operation_failed")
     return _pipeline_settings_redirect("bulk_assigned", bulk_count=count)
 
