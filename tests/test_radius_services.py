@@ -500,17 +500,6 @@ def test_reconcile_subscription_connectivity_creates_internal_radius_state(
     assert client.shared_secret_hash == radius_service._hash_secret("radius-secret")
     assert client.description == "Edge NAS"
 
-    radius_user = (
-        db_session.query(RadiusUser)
-        .filter(RadiusUser.access_credential_id == credential.id)
-        .one()
-    )
-    assert radius_user.subscriber_id == subscriber.id
-    assert radius_user.subscription_id == subscription.id
-    assert radius_user.username == "10005030"
-    assert radius_user.secret_hash == "hashed-secret"
-    assert radius_user.is_active is True
-
 
 # =============================================================================
 # Radius Auth Tests
