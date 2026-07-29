@@ -26,6 +26,13 @@ runs:
         name: python-venv
         path: ${{ runner.temp }}/python-venv
 
+    - name: Remove repository development environment pointer
+      shell: bash
+      run: |
+        if [ -L .venv ]; then
+          rm .venv
+        fi
+
     - name: Restore shared Python environment
       shell: bash
       run: tar -xzf "$RUNNER_TEMP/python-venv/python-venv.tar.gz"

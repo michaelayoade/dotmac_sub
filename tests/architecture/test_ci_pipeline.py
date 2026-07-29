@@ -38,6 +38,22 @@ def test_ci_uses_one_named_application_image_cache_and_no_duplicate_publisher() 
     assert not (ROOT / ".github/workflows/ghcr.yml").exists()
 
 
+def test_ci_removes_workstation_venv_pointer_before_cache_and_restore() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    setup_action = (ROOT / ".github/actions/setup-ci-python/action.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "if [ -L .venv ]; then" in workflow
+    assert "if [ -L .venv ]; then" in setup_action
+    assert workflow.index("if [ -L .venv ]; then") < workflow.index(
+        "uses: actions/cache@v4"
+    )
+    assert setup_action.index("if [ -L .venv ]; then") < setup_action.index(
+        'tar -xzf "$RUNNER_TEMP/python-venv/python-venv.tar.gz"'
+    )
+
+
 def test_ci_retains_pre_merge_and_promotion_postgresql_gate() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 

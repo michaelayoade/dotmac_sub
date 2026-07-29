@@ -32,7 +32,9 @@ dependencies. Its exact environment cache is keyed by operating system, Python
 version, `poetry.lock`, and `pyproject.toml`. The environment is then packed as
 a one-day workflow artifact and restored by the local
 `setup-ci-python` composite action. Parallel jobs therefore do not each install
-the full dependency set on a cold workflow.
+the full dependency set on a cold workflow. Both setup paths first remove the
+repository's workstation-only `.venv` symlink from the runner checkout so the
+CI environment is always created inside the writable workspace.
 
 ## Change classification
 
