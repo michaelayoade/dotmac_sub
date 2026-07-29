@@ -52,6 +52,12 @@ def audit_cutover_balance_invariant_task() -> dict:
     return scheduled_billing.audit_cutover_balance_invariant()
 
 
+@celery_app.task(name="app.tasks.billing.audit_terminal_proof_intent_drift")
+def audit_terminal_proof_intent_drift_task() -> dict:
+    """Read-only guard for rejected receipts stranding a customer's deposit."""
+    return scheduled_billing.audit_terminal_proof_intent_drift()
+
+
 @celery_app.task(name="app.tasks.billing.audit_funded_inactive_exposure")
 def audit_funded_inactive_exposure_task() -> dict:
     """Read-only report for inactive accounts carrying positive balances."""
