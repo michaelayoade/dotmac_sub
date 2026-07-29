@@ -1,7 +1,8 @@
 # CI/CD pipeline
 
-The `CI` workflow is the deployment-quality owner for pull requests, merge
-groups, and promotion through `dev`, `develop`, and `main`.
+The `CI` workflow is the deployment-quality owner for pull requests targeting
+`dev` or `main`, merge groups, and promotion through `dev`, `develop`, and
+`main`.
 
 ## Required gates
 

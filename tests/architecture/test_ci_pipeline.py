@@ -42,6 +42,7 @@ def test_ci_retains_pre_merge_and_promotion_postgresql_gate() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     assert "pull_request:" in workflow
+    assert "branches: [main, dev]" in workflow
     assert "branches: [main, develop, dev]" in workflow
     assert "make test-integration" in workflow
     assert "poetry run alembic upgrade head" in workflow
