@@ -85,6 +85,69 @@ class OperationalDeliveryStatus:
     suppressed = "suppressed"
 
 
+class OutageTeamRoutingPurpose:
+    primary_owner = "primary_owner"
+    lead_watcher = "lead_watcher"
+    watcher = "watcher"
+
+
+class OutageTeamRoutingPolicy(Base):
+    """Exact, domain-owned team selection for outage coordination."""
+
+    __tablename__ = "outage_team_routing_policies"
+    __table_args__ = (
+        UniqueConstraint(
+            "purpose",
+            "service_team_id",
+            name="uq_outage_team_routing_policy",
+        ),
+        Index(
+            "ix_outage_team_routing_policies_active",
+            "purpose",
+            "is_active",
+            "priority",
+        ),
+        Index(
+            "uq_outage_team_routing_primary_active",
+            "purpose",
+            unique=True,
+            sqlite_where=text("is_active IS TRUE AND purpose = 'primary_owner'"),
+            postgresql_where=text("is_active IS TRUE AND purpose = 'primary_owner'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    purpose: Mapped[str] = mapped_column(String(40), nullable=False)
+    service_team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("service_teams.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    required_capability_key: Mapped[str] = mapped_column(
+        String(80),
+        ForeignKey(
+            "service_team_capability_definitions.key",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    service_team = relationship("ServiceTeam")
+
+
 class OperationalOwner(Base):
     __tablename__ = "operational_owners"
     __table_args__ = (

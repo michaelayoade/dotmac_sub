@@ -13091,6 +13091,137 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.outage_team_routing",
+                module="app.services.topology.outage_team_routing",
+                owns=("outage team routing policy",),
+                depends_on=(
+                    "operations.service_team_lifecycle",
+                    "events.store",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "This owner binds an exact active team to each outage routing "
+                    "purpose and verifies the governed capability required by that "
+                    "purpose. Outage operations consume these rows and never select "
+                    "a team by scalar type or creation order."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="outage team routing policy",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "typed outage team route command",
+                                "native service-team capability state",
+                            ),
+                            canonical_writer="network.outage_team_routing",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="typed outage team route command",
+                            owner="network.outage_team_routing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed purpose, exact service-team identifier, "
+                                "priority, active state, CommandContext, and stable "
+                                "policy identifier"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native service-team capability state",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active ServiceTeam and registered active capability "
+                                "assignment required by the route purpose"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "set_outage_team_route enters execute_owner_command once; "
+                            "policy, audit, and event changes commit atomically."
+                        ),
+                        locking=(
+                            "The selected team and capability are locked before the "
+                            "route row and any active primary conflict."
+                        ),
+                        idempotency=(
+                            "A caller-supplied policy UUID binds one purpose/team pair; "
+                            "exact desired state replays and identity reuse fails closed."
+                        ),
+                        retries=(
+                            "Adapters may retry the complete command after rollback; "
+                            "capability and primary-route conflicts require new state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "outage_team_route_invalid",
+                            "outage_team_route_team_invalid",
+                            "outage_team_route_capability_missing",
+                            "outage_team_route_primary_conflict",
+                            "outage_team_route_identity_collision",
+                            *owner_command_boundary_error_codes(
+                                "network.outage_team_routing"
+                            ),
+                        ),
+                        mapping_owner="outage routing administrative adapter",
+                        fail_closed_on=(
+                            "unknown purpose",
+                            "missing or inactive exact team",
+                            "missing governed capability",
+                            "multiple active primary routes",
+                            "policy identity reuse",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("outage.team_route_changed",),
+                        schema_version=1,
+                        delivery_owner="events.store",
+                        compatibility=(
+                            "Version 1 carries policy, exact team, purpose, required "
+                            "capability, priority, active state, and command evidence."
+                        ),
+                        replay=(
+                            "Policy rows plus transactional audit/outbox evidence "
+                            "reconstruct every routing change."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.CUTOVER_READY,
+                        old_owner=(
+                            "app.services.topology.outage_operations oldest active "
+                            "team-by-type selection"
+                        ),
+                        new_owner="network.outage_team_routing",
+                        verification=(
+                            "route command, required capability, no-default, exact "
+                            "owner/watcher, and architecture tests"
+                        ),
+                        cutover_gate=(
+                            "Every required outage purpose has an explicitly reviewed "
+                            "active route before automatic coordination is enabled."
+                        ),
+                        fallback_retirement=(
+                            "No team_type query or creation-order fallback remains."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/designs/SERVICE_TEAM_LIFECYCLE_SOT.md",
+                        "docs/designs/NETWORK_OUTAGE_RESPONSE_LIFECYCLE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/services/topology/test_outage_team_routing.py",
+                        "tests/services/topology/test_outage_operations.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="network.outage_auto_notify",
                 module="app.services.topology.outage_auto_notify",
                 owns=(
@@ -15529,11 +15660,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="workforce_operations",
         services=(
             SOTService(
-                name="operations.service_team_party_cutover",
-                module="app.services.service_team_party_cutover",
+                name="operations.service_team_pointer_retirement",
+                module="app.services.service_team_pointer_retirement",
                 owns=(
-                    "service-team Party cutover readiness",
-                    "approved service-team Party cutover adoption",
+                    "legacy service-team pointer retirement readiness",
+                    "approved legacy service-team pointer retirement",
                 ),
                 depends_on=(
                     "operations.service_team_lifecycle",
@@ -15544,17 +15675,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "observability.audit_log",
                 ),
                 notes=(
-                    "A pre-migration coordinator consumes an expiring, "
-                    "digest-bound review of the exact CRM Person, SystemUser, "
-                    "and membership snapshot. It preserves CRM Person UUIDs as "
-                    "Person Party IDs, delegates identity links to party.registry, "
-                    "adopts exact native memberships, and records only PII-free "
-                    "receipt evidence before migration 426."
+                    "A one-time pre-migration owner clears only the complete, "
+                    "digest-bound, separately approved set of unresolved legacy "
+                    "manager UUIDs. It never reads CRM, creates identities, imports "
+                    "memberships, copies topology, or grants access."
                 ),
                 contract=ServiceContract(
                     concerns=(
                         ConcernContract(
-                            name="service-team Party cutover readiness",
+                            name="legacy service-team pointer retirement readiness",
                             role=OwnerRole.RESOLVER,
                             input_names=(
                                 "current native service-team cutover state",
@@ -15564,36 +15693,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         ConcernContract(
-                            name="approved service-team Party cutover adoption",
-                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            name="approved legacy service-team pointer retirement",
+                            role=OwnerRole.COMMAND_WRITER,
                             input_names=(
-                                "CRM service-team identity snapshot",
-                                "reviewed service-team identity decisions",
+                                "reviewed legacy pointer retirement plan",
                                 "current native service-team cutover state",
-                                "canonical Person Party identity",
-                                "staff authentication principal state",
+                            ),
+                            canonical_writer=(
+                                "operations.service_team_pointer_retirement"
                             ),
                         ),
                     ),
                     authoritative_inputs=(
                         AuthorityInput(
-                            name="CRM service-team identity snapshot",
-                            owner="external:dotmac_crm",
-                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
-                            source=(
-                                "repeatable-read CRM service-team, membership, "
-                                "manager, and referenced Person rows captured in "
-                                "one SHA-256-bound private plan"
-                            ),
-                        ),
-                        AuthorityInput(
-                            name="reviewed service-team identity decisions",
-                            owner="operations.service_team_party_cutover",
+                            name="reviewed legacy pointer retirement plan",
+                            owner="operations.service_team_pointer_retirement",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "private explicit CRM Person to SystemUser or "
-                                "identity-only decisions, separate expiring "
-                                "approval, file digests, limits, actor, and reason"
+                                "private exact unresolved team/manager UUID set, "
+                                "snapshot digest, expiring separate approval, actor, "
+                                "reason, and bounded pointer maximum"
                             ),
                         ),
                         AuthorityInput(
@@ -15601,141 +15720,110 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="operations.service_team_lifecycle",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
-                                "locked ServiceTeam and ServiceTeamMember rows "
-                                "plus migration-426 readiness invariants"
+                                "locked native teams, memberships, and migration-426 "
+                                "readiness invariants; no CRM snapshot"
                             ),
                         ),
                         AuthorityInput(
                             name="canonical Person Party identity",
                             owner="party.registry",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source=(
-                                "Person Party, CRM external reference, and reviewed "
-                                "SystemUser principal binding"
-                            ),
+                            source="current Person Party identity",
                         ),
                         AuthorityInput(
                             name="staff authentication principal state",
                             owner="auth.staff_provisioning",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source="SystemUser identity and active state",
+                            source="current SystemUser-to-Party binding and active state",
                         ),
                         AuthorityInput(
                             name="legacy workflow team settings",
                             owner="control.settings_spec",
                             kind=AuthorityKind.CONTROL_INPUT,
-                            source=(
-                                "typed aggregate resolver over the active legacy "
-                                "workflow settings retired by migration 426"
-                            ),
+                            source="typed migration-426 workflow-setting resolver",
                         ),
                     ),
                     transaction=TransactionContract(
-                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "The public adoption enters execute_owner_command once "
-                            "on a transaction-free session and commits Party, "
-                            "principal-binding, membership, audit, and event state "
-                            "in one SERIALIZABLE transaction."
+                            "The public retirement enters execute_owner_command once; "
+                            "all exact pointer clears, audit, and events commit atomically."
                         ),
                         locking=(
-                            "A plan-digest advisory transaction lock serializes "
-                            "execution; the coordinator then locks its receipt, "
-                            "teams, SystemUsers, Parties, external references, and "
-                            "memberships in stable identifier order."
+                            "Every planned team is locked in UUID order after the full "
+                            "current pointer snapshot is verified."
                         ),
                         idempotency=(
-                            "The canonical plan digest and private file hashes "
-                            "identify one execution. Exact replay verifies the "
-                            "PII-free audit receipt and every applied identity and "
-                            "membership; changed evidence fails closed."
+                            "The source digest and exact pointer set bind one plan; any "
+                            "changed, missing, additional, or newly resolvable pointer "
+                            "fails closed and requires a new plan."
                         ),
                         retries=(
-                            "An adapter may retry the complete owner command with "
-                            "the same unexpired approval after full rollback. "
-                            "Validation, stale source, drift, and identity conflicts "
-                            "are not retryable without a new reviewed plan."
+                            "Only the complete owner command may retry after rollback "
+                            "with the same unexpired approval."
                         ),
                     ),
                     errors=ErrorContract(
                         domain_codes=(
-                            "operations.service_team_party_cutover.invalid_plan",
-                            "operations.service_team_party_cutover.approval_invalid",
-                            "operations.service_team_party_cutover.stale_source",
-                            "operations.service_team_party_cutover.identity_conflict",
-                            (
-                                "operations.service_team_party_cutover."
-                                "membership_conflict"
-                            ),
-                            "operations.service_team_party_cutover.not_ready",
+                            "operations.service_team_pointer_retirement.invalid_plan",
+                            "operations.service_team_pointer_retirement.approval_invalid",
+                            "operations.service_team_pointer_retirement.stale_source",
+                            "operations.service_team_pointer_retirement.not_ready",
                             *owner_command_boundary_error_codes(
-                                "operations.service_team_party_cutover"
+                                "operations.service_team_pointer_retirement"
                             ),
                         ),
                         mapping_owner=(
-                            "scripts.migration.execute_service_team_party_cutover"
+                            "scripts.migration.execute_service_team_pointer_retirement"
                         ),
                         fail_closed_on=(
-                            "missing, malformed, stale, expired, or digest-mismatched approval",
-                            "incomplete CRM Person decisions",
-                            "inactive manager or active-member principals",
-                            "Party, external-reference, binding, membership, or receipt conflicts",
-                            "remaining migration-426 blockers",
+                            "missing, stale, expired, or digest-mismatched approval",
+                            "pointer-set drift",
+                            "membership or workflow-setting blockers",
+                            "duplicate case-insensitive team names",
                         ),
                     ),
                     events=EventContract(
-                        event_types=("service_team.party_cutover_adopted",),
+                        event_types=("service_team.changed",),
                         schema_version=1,
                         delivery_owner="events.store",
                         compatibility=(
-                            "Version 1 carries only plan/source/file hashes, "
-                            "aggregate counts, and command/correlation identifiers."
+                            "Version 1 records operation, team, source/plan hashes, "
+                            "and command/correlation evidence without identity payloads."
                         ),
                         replay=(
-                            "The immutable audit receipt plus current Party, "
-                            "principal, external-reference, and membership state "
-                            "prove exact replay; the private plan remains the "
-                            "identity-level operator evidence."
+                            "The exact private plan and transactional team audit/event "
+                            "evidence prove the bounded source-retirement operation."
                         ),
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.CUTOVER_READY,
-                        old_owner=(
-                            "dotmac_crm service-team membership rows and CRM Person "
-                            "UUIDs copied into Sub without Party adoption"
-                        ),
-                        new_owner="operations.service_team_party_cutover",
+                        old_owner="unresolved CRM-era manager UUID pointers",
+                        new_owner="operations.service_team_pointer_retirement",
                         verification=(
-                            "Aggregate audit, plan/approval, owner-command, exact "
-                            "replay, rollback, forward staff-bootstrap, migration "
-                            "rehearsal, and architecture tests."
+                            "aggregate audit, stale snapshot, approval, rollback, "
+                            "no-CRM/no-membership-import, and migration tests"
                         ),
                         cutover_gate=(
-                            "The protected reviewed plan is applied, readiness has "
-                            "zero blockers, migration 426 succeeds on a restored "
-                            "revision-423/424 database, and production evidence is "
-                            "attached before authorization."
+                            "Only unresolved legacy pointers are retired; readiness "
+                            "reaches zero blockers before immutable migration 426."
                         ),
                         fallback_retirement=(
-                            "The one-time executor remains unavailable without an "
-                            "exact approval; CRM membership writes and the legacy "
-                            "workflow settings are retired only through the "
-                            "service-team lifecycle cutover gate."
+                            "The broad CRM Person/membership adoption planner and "
+                            "executor are absent."
                         ),
                     ),
                     steward="operations administration and identity governance",
                     design_refs=(
                         "docs/designs/SERVICE_TEAM_LIFECYCLE_SOT.md",
-                        "docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md",
-                        "docs/runbooks/SERVICE_TEAM_PARTY_CUTOVER.md",
+                        "docs/runbooks/SERVICE_TEAM_POINTER_RETIREMENT.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
                     test_refs=(
-                        "tests/test_service_team_party_cutover.py",
-                        "tests/test_staff_provisioning_owner.py",
+                        "tests/test_service_team_pointer_retirement.py",
                         (
                             "tests/architecture/"
-                            "test_service_team_party_cutover_boundary.py"
+                            "test_service_team_pointer_retirement_boundary.py"
                         ),
                     ),
                 ),
@@ -15745,15 +15833,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.service_team_lifecycle",
                 owns=(
                     "service-team lifecycle",
+                    "service-team composition lifecycle",
                     "service-team membership lifecycle",
+                    "service-team relationship lifecycle",
+                    "service-team external reference observations",
                     "staff service-team resolution",
                     "staff service-team scope projection",
                     "active service-team selector projection",
                     "service-team administration projection",
+                    "service-team legacy-shadow verification",
                 ),
                 depends_on=(
                     "party.registry",
                     "auth.staff_provisioning",
+                    "gis.spatial_sync",
                     "events.store",
                     "observability.audit_log",
                 ),
@@ -15771,12 +15864,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             canonical_writer="operations.service_team_lifecycle",
                         ),
                         ConcernContract(
+                            name="service-team composition lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed service-team command",
+                                "current native service-team state",
+                                "governed service-team vocabulary",
+                                "authoritative geographic scope",
+                            ),
+                            canonical_writer="operations.service_team_lifecycle",
+                        ),
+                        ConcernContract(
                             name="service-team membership lifecycle",
                             role=OwnerRole.AUTHORITATIVE_RECORD,
                             input_names=(
                                 "typed service-team command",
                                 "active staff authentication principal",
                                 "canonical Person Party identity",
+                                "current native service-team state",
+                            ),
+                            canonical_writer="operations.service_team_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="service-team relationship lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "typed service-team command",
+                                "current native service-team state",
+                            ),
+                            canonical_writer="operations.service_team_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="service-team external reference observations",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "typed service-team command",
                                 "current native service-team state",
                             ),
                             canonical_writer="operations.service_team_lifecycle",
@@ -15811,6 +15933,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "active staff authentication principal",
                                 "canonical Person Party identity",
                                 "current native service-team state",
+                                "retained legacy service-team scalar evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="service-team legacy-shadow verification",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "current native service-team state",
+                                "retained legacy service-team scalar evidence",
                             ),
                         ),
                     ),
@@ -15820,9 +15951,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="operations.service_team_lifecycle",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "typed create, update, activation, membership, and role "
-                                "commands with CommandContext and expected state"
+                                "typed create, update, activation, membership, and "
+                                "responsibility-set commands with CommandContext and "
+                                "expected state"
                             ),
+                        ),
+                        AuthorityInput(
+                            name="governed service-team vocabulary",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active capability and responsibility definitions "
+                                "registered by forward migration"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authoritative geographic scope",
+                            owner="gis.spatial_sync",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active GeoArea identifiers and lifecycle",
                         ),
                         AuthorityInput(
                             name="active staff authentication principal",
@@ -15845,7 +15992,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             name="current native service-team state",
                             owner="operations.service_team_lifecycle",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                            source="ServiceTeam and ServiceTeamMember rows",
+                            source=(
+                                "ServiceTeam identity/lifecycle plus capability, "
+                                "GeoArea scope, membership, responsibility, relationship, "
+                                "and external-reference rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="retained legacy service-team scalar evidence",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "retained ServiceTeam team_type, region, and "
+                                "manager_person_id plus ServiceTeamMember role "
+                                "fields during the expand/shadow window"
+                            ),
                         ),
                     ),
                     transaction=TransactionContract(
@@ -15886,6 +16047,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "service_team_has_active_members",
                             "service_team_member_not_found",
                             "service_team_member_inactive",
+                            "service_team_capability_required",
+                            "service_team_capability_unregistered",
+                            "service_team_responsibility_unregistered",
+                            "service_team_geo_area_invalid",
+                            "service_team_relationship_invalid",
+                            "service_team_relationship_identity_collision",
+                            "service_team_relationship_cycle",
+                            "service_team_external_reference_invalid",
+                            "service_team_external_reference_conflict",
+                            "service_team_external_reference_kind_conflict",
+                            "service_team_external_reference_identity_collision",
                             *owner_command_boundary_error_codes(
                                 "operations.service_team_lifecycle"
                             ),
@@ -15893,11 +16065,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         mapping_owner="service-team web and API adapters",
                         fail_closed_on=(
                             "unknown, inactive, or Party-unbound selected staff identity",
-                            "reactivation or role change with retired staff identity",
+                            "responsibility change with retired staff identity",
                             "stale lifecycle evidence",
                             "team identity collision",
                             "deactivation with active members",
-                            "zero or multiple active memberships during staff-team resolution",
+                            "unregistered capability/responsibility vocabulary",
+                            "missing or inactive GeoArea scope",
                         ),
                     ),
                     events=EventContract(
@@ -15908,8 +16081,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         schema_version=1,
                         delivery_owner="events.store",
                         compatibility=(
-                            "Version 1 carries team, command/correlation, operation, member, "
-                            "role, and actor identifiers without private staff payloads."
+                            "Version 1 carries team, command/correlation, operation, "
+                            "member, capability/responsibility, and actor identifiers "
+                            "without private staff payloads."
                         ),
                         replay=(
                             "Native team/member rows plus transactional event and audit evidence "
@@ -15927,12 +16101,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             writer="operations.service_team_lifecycle",
                             freshness="Transaction-current native database state.",
                             stale_behavior=(
-                                "Return identity-unavailable, no-membership, or ambiguous; "
-                                "never select by row age or compare principal IDs to Party IDs."
+                                "Return identity-unavailable, no-membership, or the full "
+                                "matching team set; never select by row age or compare "
+                                "principal IDs to Party IDs."
                             ),
                             drift_signal=(
-                                "An active staff principal has zero or multiple matching active "
-                                "Party-backed memberships for a caller requiring one team."
+                                "A consumer that requires one team ignores its exact work "
+                                "assignment or domain routing policy and tries to collapse "
+                                "a valid membership set."
                             ),
                             rebuild_operation=(
                                 "Requery the reviewed SystemUser-to-Party binding and native "
@@ -15960,7 +16136,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             rebuild_operation=(
                                 "Requery active native teams, Party-backed memberships, "
-                                "lead roles, managers, and active SystemUser bindings."
+                                "responsibility assignments, and active SystemUser bindings."
                             ),
                             repair_owner="operations.service_team_lifecycle",
                         ),
@@ -15987,6 +16163,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "active staff authentication principal",
                                 "canonical Person Party identity",
                                 "current native service-team state",
+                                "retained legacy service-team scalar evidence",
                             ),
                             writer="operations.service_team_lifecycle",
                             freshness="Transaction-current native database state.",
@@ -16002,6 +16179,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             repair_owner="operations.service_team_lifecycle",
                         ),
+                        ProjectionContract(
+                            name="service-team legacy-shadow verification",
+                            input_names=(
+                                "current native service-team state",
+                                "retained legacy service-team scalar evidence",
+                            ),
+                            writer="operations.service_team_lifecycle",
+                            freshness="Transaction-current native database state.",
+                            stale_behavior=(
+                                "Keep the contract gate closed; never infer capability, "
+                                "GeoArea, membership, or responsibility authority from a "
+                                "retained scalar."
+                            ),
+                            drift_signal=(
+                                "Typed team-type/capability, region/GeoArea, "
+                                "manager/responsibility, or active legacy-role/"
+                                "responsibility mismatch counts are non-zero."
+                            ),
+                            rebuild_operation=(
+                                "Requery all native teams, composed capabilities, "
+                                "active memberships/responsibilities, reviewed staff "
+                                "identity bindings, and retained scalar evidence."
+                            ),
+                            repair_owner="operations.service_team_lifecycle",
+                        ),
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.CUTOVER_READY,
@@ -16011,8 +16213,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         new_owner="operations.service_team_lifecycle",
                         verification=(
-                            "service-team owner behavior, migration, admin-surface, caller, and "
-                            "architecture tests"
+                            "service-team owner behavior, typed legacy-shadow audit, "
+                            "migration, admin-surface, caller, and architecture tests"
                         ),
                         cutover_gate=(
                             "settings payloads are backfilled and verified; every caller reads "
@@ -16126,8 +16328,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="operations.service_team_lifecycle",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "Party-backed active member, lead, manager, accessible-team, "
-                                "and active team-member SystemUser projections"
+                                "Party-backed active membership, queue-lead and accountable-"
+                                "manager responsibility scope, and active member "
+                                "SystemUser projections"
                             ),
                         ),
                         AuthorityInput(

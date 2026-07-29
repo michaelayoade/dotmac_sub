@@ -10,7 +10,10 @@ import pytest
 from app.models.service_team import (
     ServiceTeam,
     ServiceTeamMember,
+    ServiceTeamMemberResponsibility,
     ServiceTeamMemberRole,
+    ServiceTeamResponsibilityDefinition,
+    ServiceTeamResponsibilityKey,
     ServiceTeamType,
 )
 from app.models.support import Ticket
@@ -61,8 +64,28 @@ def _team(db, name="Support"):
 
 def _member(db, team, person_id, *, role=ServiceTeamMemberRole.member.value):
     _user, person = add_bound_staff_user(db, system_user_id=person_id)
-    db.add(ServiceTeamMember(team_id=team.id, person_id=person.id, role=role))
+    member = ServiceTeamMember(team_id=team.id, person_id=person.id, role=role)
+    db.add(member)
     db.flush()
+    if role == ServiceTeamMemberRole.lead.value:
+        key = ServiceTeamResponsibilityKey.queue_lead.value
+        if db.get(ServiceTeamResponsibilityDefinition, key) is None:
+            db.add(
+                ServiceTeamResponsibilityDefinition(
+                    key=key,
+                    name="Queue lead",
+                    description="Coordinates the team queue.",
+                    operational_scope="workqueue",
+                )
+            )
+            db.flush()
+        db.add(
+            ServiceTeamMemberResponsibility(
+                membership_id=member.id,
+                responsibility_key=key,
+            )
+        )
+        db.flush()
 
 
 def test_channel_names_match_the_documented_shape():

@@ -6,29 +6,17 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import ServiceTeam
 from app.services import email as email_service
 
 OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY = "outbound_email_activity"
 OUTBOUND_EMAIL_SENDER_METADATA_KEY = "outbound_email_sender_key"
 LEGACY_EMAIL_SENDER_METADATA_KEYS = ("email_sender_key", "smtp_sender_key")
 
-TEAM_TYPE_EMAIL_ACTIVITY_DEFAULTS = {
-    ServiceTeamType.billing.value: "billing_invoice",
-    "finance": "billing_invoice",
-    ServiceTeamType.support.value: "support_ticket",
-    ServiceTeamType.field_service.value: "field_service",
-    ServiceTeamType.project_management.value: "project_update",
-    "projects": "project_update",
-    "project": "project_update",
-    ServiceTeamType.operations.value: "operations",
-}
-
 
 @dataclass(frozen=True)
 class TeamEmailSenderResolution:
     service_team_id: str | None
-    team_type: str | None
     sender_key: str | None
     activity: str | None
     config: dict[str, Any]
@@ -97,11 +85,6 @@ def get_team_outbound_activity(
     configured = _metadata_string(metadata, OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY)
     if configured:
         return configured
-    team_type = str(getattr(team, "team_type", "") or "").strip().lower()
-    if team_type:
-        activity = TEAM_TYPE_EMAIL_ACTIVITY_DEFAULTS.get(team_type)
-        if activity:
-            return activity
     return fallback_activity
 
 
@@ -134,7 +117,6 @@ def resolve_team_email_sender(
     )
     return TeamEmailSenderResolution(
         service_team_id=str(resolved_team.id) if resolved_team is not None else None,
-        team_type=str(resolved_team.team_type) if resolved_team is not None else None,
         sender_key=sender_key,
         activity=activity,
         config=config,

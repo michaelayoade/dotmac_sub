@@ -363,6 +363,7 @@ class EventType(enum.Enum):
     outage_rerooted = "outage.rerooted"
     outage_discarded = "outage.discarded"
     outage_resolved = "outage.resolved"
+    outage_team_route_changed = "outage.team_route_changed"
 
     # Custom event type for extensibility
     custom = "custom"

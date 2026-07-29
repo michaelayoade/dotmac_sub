@@ -22,7 +22,12 @@ from fastapi.testclient import TestClient
 
 from app.api.field import router
 from app.db import get_db
-from app.models.dispatch import TechnicianProfile
+from app.models.dispatch import (
+    DispatchQueueStatus,
+    DispatchRule,
+    TechnicianProfile,
+    WorkOrderAssignmentQueue,
+)
 from app.models.party import (
     Party,
     PartyDataClassification,
@@ -31,9 +36,10 @@ from app.models.party import (
 )
 from app.models.service_team import (
     ServiceTeam,
+    ServiceTeamCapability,
+    ServiceTeamCapabilityDefinition,
+    ServiceTeamCapabilityKey,
     ServiceTeamMember,
-    ServiceTeamMemberRole,
-    ServiceTeamType,
 )
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
@@ -88,15 +94,32 @@ def _auth(user: SystemUser) -> dict:
 def _team_member(db_session, person_id) -> ServiceTeam:
     team = ServiceTeam(
         name=f"Field Ops {uuid4().hex[:6]}",
-        team_type=ServiceTeamType.support.value,
+        team_type="composable",
     )
     db_session.add(team)
     db_session.flush()
+    capability = ServiceTeamCapabilityKey.field_service_work_orders
+    if db_session.get(ServiceTeamCapabilityDefinition, capability.value) is None:
+        db_session.add(
+            ServiceTeamCapabilityDefinition(
+                key=capability.value,
+                name="Field work orders",
+                description="Test field work assignment capability",
+                contract_owner="operations.work_order_commands",
+            )
+        )
+        db_session.flush()
+    db_session.add(
+        ServiceTeamCapability(
+            team_id=team.id,
+            capability_key=capability.value,
+        )
+    )
     db_session.add(
         ServiceTeamMember(
             team_id=team.id,
             person_id=person_id,
-            role=ServiceTeamMemberRole.member.value,
+            role="member",
             is_active=True,
         )
     )
@@ -121,7 +144,8 @@ def _profile(
     db_session.flush()
     if with_team:
         assert user.person_party_id is not None
-        _team_member(db_session, user.person_party_id)
+        team = _team_member(db_session, user.person_party_id)
+        profile._test_service_team_id = team.id
     return profile
 
 
@@ -154,6 +178,24 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
 
 
 def _depart(db_session, work_order, profile):
+    team_id = getattr(profile, "_test_service_team_id", None)
+    if team_id is not None:
+        rule = DispatchRule(
+            name=f"Exact chat assignment {uuid4()}",
+            service_team_id=team_id,
+            priority=10,
+        )
+        db_session.add(rule)
+        db_session.flush()
+        db_session.add(
+            WorkOrderAssignmentQueue(
+                work_order_mirror_id=work_order.id,
+                status=DispatchQueueStatus.assigned,
+                dispatch_rule_id=rule.id,
+                assigned_technician_id=profile.id,
+            )
+        )
+        db_session.flush()
     conversation, outcome = team_inbox_field_job.open_for_departure(
         db_session, work_order=work_order, profile=profile
     )
@@ -194,8 +236,8 @@ def test_departure_opens_the_chat(db_session):
     assert conversation.subscriber_id == subscriber.id
 
 
-def test_departure_fails_closed_when_staff_has_multiple_active_teams(db_session):
-    user = _user(db_session, "Ambiguous")
+def test_departure_uses_exact_assignment_despite_multiple_memberships(db_session):
+    user = _user(db_session, "MultiTeam")
     profile = _profile(db_session, user)
     assert user.person_party_id is not None
     _team_member(db_session, user.person_party_id)
@@ -209,8 +251,8 @@ def test_departure_fails_closed_when_staff_has_multiple_active_teams(db_session)
 
     conversation, outcome = _depart(db_session, work_order, profile)
 
-    assert conversation is None
-    assert outcome == team_inbox_field_job.NO_TEAM
+    assert conversation is not None
+    assert outcome == team_inbox_field_job.OPENED
 
 
 def test_the_departing_technician_holds_the_conversation(db_session):

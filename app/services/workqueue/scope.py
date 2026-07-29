@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.services import service_team_lifecycle
 from app.services.workqueue.permissions import (
+    AUDIENCE_TEAM_SCOPE,
     WorkqueuePermissionError,
     WorkqueuePrincipal,
     require_workqueue_view,
@@ -101,18 +102,24 @@ def get_workqueue_scope(
         principal.person_id,
     )
     member_team_ids = frozenset(team_scope.member_team_ids)
-    managed_team_ids = frozenset(team_scope.managed_team_ids)
+    queue_scope_team_ids = frozenset(team_scope.queue_scope_team_ids)
 
     audience = resolve_audience(
         principal,
         requested_audience,
-        leads_team=team_scope.leads_team,
+        leads_team=team_scope.coordinates_queue,
     )
     is_org_wide = audience is WorkqueueAudience.org
 
-    # Even at `self` audience a principal sees unassigned work sitting in their
-    # own teams — that is the queue they are expected to pull from.
-    accessible_team_ids = member_team_ids | frozenset(managed_team_ids)
+    # RBAC controls whether team audience may be requested. Operational
+    # responsibility narrows which of the principal's memberships that wider
+    # audience covers; an explicit RBAC team scope may cover every membership.
+    if audience is WorkqueueAudience.team and not (
+        principal.is_admin or AUDIENCE_TEAM_SCOPE in principal.scopes
+    ):
+        accessible_team_ids = queue_scope_team_ids
+    else:
+        accessible_team_ids = member_team_ids
 
     query_team_ids = (
         frozenset({service_team_id})

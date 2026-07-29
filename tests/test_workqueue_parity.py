@@ -11,7 +11,10 @@ from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.service_team import (
     ServiceTeam,
     ServiceTeamMember,
+    ServiceTeamMemberResponsibility,
     ServiceTeamMemberRole,
+    ServiceTeamResponsibilityDefinition,
+    ServiceTeamResponsibilityKey,
     ServiceTeamType,
 )
 from app.models.support import Ticket, TicketPriority, TicketStatus
@@ -91,6 +94,25 @@ def _member(
     member = ServiceTeamMember(team_id=team.id, person_id=person.id, role=role)
     db.add(member)
     db.flush()
+    if role == ServiceTeamMemberRole.lead.value:
+        key = ServiceTeamResponsibilityKey.queue_lead.value
+        if db.get(ServiceTeamResponsibilityDefinition, key) is None:
+            db.add(
+                ServiceTeamResponsibilityDefinition(
+                    key=key,
+                    name="Queue lead",
+                    description="Coordinates the team queue.",
+                    operational_scope="workqueue",
+                )
+            )
+            db.flush()
+        db.add(
+            ServiceTeamMemberResponsibility(
+                membership_id=member.id,
+                responsibility_key=key,
+            )
+        )
+        db.flush()
     return member
 
 

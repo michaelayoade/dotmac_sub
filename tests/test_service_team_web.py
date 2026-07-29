@@ -23,6 +23,10 @@ def test_service_team_web_exposes_native_capabilities_without_hard_delete():
         "/system/service-teams/{team_id}/members",
         frozenset({"POST"}),
     ) in routes
+    assert (
+        "/system/service-teams/{team_id}/members/{member_id}/responsibilities",
+        frozenset({"POST"}),
+    ) in routes
     assert not any(path.endswith("/delete") for path, _methods in routes)
 
 
@@ -42,15 +46,22 @@ def test_service_team_forms_are_csrf_protected_and_keep_identity_evidence():
     assert "detail.actions.can_edit" in detail
     assert "detail.actions.can_activate or detail.actions.can_deactivate" in detail
     assert "detail.actions.lifecycle_block_reason" in detail
+    assert "detail.team.legacy_shadow_issues" in detail
+    assert "issue.operator_message" in detail
     assert "can(request, service_team_permissions.membership)" in detail
     assert "can(request, service_team_permissions.retire)" in detail
-    assert "member.role.value == role.value" in detail
-    assert "member.role == role" not in detail
+    assert 'name="responsibility_keys"' in detail
+    assert "key in member.responsibilities" in detail
+    assert 'name="capability_keys"' in form
+    assert 'name="geo_area_ids"' in form
+    assert 'name="team_type"' not in form
+    assert 'name="region"' not in form
+    assert 'name="manager_system_user_id"' not in form
     assert "can(request, service_team_permissions.create)" in index
     assert "Page {{ page }} of {{ total_pages }}" in index
     assert "result.search|urlencode" in index
-    assert "Agent roles by region" in index
-    assert "role_region_groups" in index
+    assert "Operational responsibilities" in index
+    assert "responsibility_groups" in index
     settings_hub = Path("templates/admin/system/settings_hub.html").read_text(
         encoding="utf-8"
     )

@@ -14,8 +14,10 @@ from app.models.operational_escalation import (
     OperationalRoomProvider,
     OperationalWatcher,
     OperationalWatcherRole,
+    OutageTeamRoutingPolicy,
+    OutageTeamRoutingPurpose,
 )
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import ServiceTeam, ServiceTeamCapability
 from app.services import operational_escalation
 from app.services.topology.affected import affected_customers
 
@@ -55,13 +57,40 @@ def _scope_name(session, incident: OutageIncident) -> str:
     return str(incident.id)
 
 
-def _active_team_by_type(session, team_type: str) -> ServiceTeam | None:
-    return (
-        session.query(ServiceTeam)
-        .filter(ServiceTeam.team_type == team_type)
-        .filter(ServiceTeam.is_active.is_(True))
-        .order_by(ServiceTeam.created_at.asc())
-        .first()
+def _routed_teams(
+    session,
+    purpose: str,
+) -> tuple[ServiceTeam, ...]:
+    """Resolve exact active outage routes with their required capability."""
+
+    return tuple(
+        team
+        for _policy, team in (
+            session.query(OutageTeamRoutingPolicy, ServiceTeam)
+            .join(
+                ServiceTeam,
+                ServiceTeam.id == OutageTeamRoutingPolicy.service_team_id,
+            )
+            .join(
+                ServiceTeamCapability,
+                (ServiceTeamCapability.team_id == ServiceTeam.id)
+                & (
+                    ServiceTeamCapability.capability_key
+                    == OutageTeamRoutingPolicy.required_capability_key
+                ),
+            )
+            .filter(
+                OutageTeamRoutingPolicy.purpose == purpose,
+                OutageTeamRoutingPolicy.is_active.is_(True),
+                ServiceTeam.is_active.is_(True),
+                ServiceTeamCapability.is_active.is_(True),
+            )
+            .order_by(
+                OutageTeamRoutingPolicy.priority.asc(),
+                OutageTeamRoutingPolicy.id.asc(),
+            )
+            .all()
+        )
     )
 
 
@@ -86,18 +115,19 @@ def ensure_outage_operations(session, incident: OutageIncident) -> None:
     """
 
     entity_id = str(incident.id)
-    operations = _active_team_by_type(session, ServiceTeamType.operations.value)
-    support = _active_team_by_type(session, ServiceTeamType.support.value)
-    field = _active_team_by_type(session, ServiceTeamType.field_service.value)
+    primary_routes = _routed_teams(
+        session,
+        OutageTeamRoutingPurpose.primary_owner,
+    )
 
-    if operations is not None and not _has_active_primary_owner(session, incident):
+    if len(primary_routes) == 1 and not _has_active_primary_owner(session, incident):
         operational_escalation.set_owner(
             session,
             entity_type=OperationalEntityType.outage,
             entity_id=entity_id,
-            service_team_id=operations.id,
-            source="outage_lifecycle",
-            reason="Default outage owner",
+            service_team_id=primary_routes[0].id,
+            source="outage_team_routing_policy",
+            reason="Explicit outage team route",
             metadata={
                 "status": incident.status,
                 "severity": incident.severity,
@@ -105,27 +135,25 @@ def ensure_outage_operations(session, incident: OutageIncident) -> None:
             },
         )
 
-    for team, role in (
-        (operations, OperationalWatcherRole.lead),
-        (support, OperationalWatcherRole.watcher),
-        (field, OperationalWatcherRole.watcher),
+    for purpose, role in (
+        (OutageTeamRoutingPurpose.lead_watcher, OperationalWatcherRole.lead),
+        (OutageTeamRoutingPurpose.watcher, OperationalWatcherRole.watcher),
     ):
-        if team is None:
-            continue
-        operational_escalation.add_watcher(
-            session,
-            entity_type=OperationalEntityType.outage,
-            entity_id=entity_id,
-            service_team_id=team.id,
-            role=role,
-            source="outage_lifecycle",
-            reason="Outage coordination",
-            metadata={
-                "status": incident.status,
-                "severity": incident.severity,
-                "affected_count": incident.affected_count,
-            },
-        )
+        for team in _routed_teams(session, purpose):
+            operational_escalation.add_watcher(
+                session,
+                entity_type=OperationalEntityType.outage,
+                entity_id=entity_id,
+                service_team_id=team.id,
+                role=role,
+                source="outage_team_routing_policy",
+                reason="Explicit outage team route",
+                metadata={
+                    "status": incident.status,
+                    "severity": incident.severity,
+                    "affected_count": incident.affected_count,
+                },
+            )
 
     room_name = f"OUTAGE-{_scope_name(session, incident)}-{str(incident.id)[:8]}"
     operational_escalation.link_room(

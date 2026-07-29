@@ -66,12 +66,12 @@ existing Party by name or email. The explicit local-admin seeder follows the
 same fresh-Party rule for bootstrap. Existing staff remain a separate reviewed
 backfill concern, and conflicting bindings remain fail-closed.
 
-The one-time `operations.service_team_party_cutover` coordinator may also
-create predetermined Person Parties and bind explicitly reviewed SystemUsers
-for CRM service-team manager/membership adoption. Its plan preserves CRM Person
-UUIDs as Party IDs, is separately approved and digest-bound, and cannot change
-credentials, RBAC, active state, or identity targets outside the plan. This
-narrow cutover does not authorize a general SystemUser Party backfill.
+Service-team migration does not authorize Party creation or principal binding.
+The one-time `operations.service_team_pointer_retirement` command may only
+clear the exact separately approved set of unresolved CRM-era manager pointers.
+It cannot read CRM, import memberships, create identities, change credentials
+or RBAC, or repoint any principal. Existing staff identity backfill remains a
+separate reviewed concern.
 
 ### ResellerUser
 

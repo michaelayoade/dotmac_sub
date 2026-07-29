@@ -11,7 +11,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.service_team import ServiceTeamMemberRole, ServiceTeamType
+from app.models.service_team import (
+    ServiceTeamCapabilityKey,
+    ServiceTeamResponsibilityKey,
+)
 from app.services import service_team_lifecycle
 from app.services.auth_dependencies import require_permission
 from app.services.db_session_adapter import db_session_adapter
@@ -109,8 +112,8 @@ def _team_form_response(
             "values": values or {},
             "error": error,
             "request_id": str(uuid4()),
-            "team_types": tuple(ServiceTeamType),
-            "staff_options": service_team_lifecycle.list_staff_options(db),
+            "capability_options": (service_team_lifecycle.list_capability_options(db)),
+            "geo_area_options": service_team_lifecycle.list_geo_area_options(db),
         },
         status_code=status_code,
     )
@@ -137,7 +140,9 @@ def _detail_response(
         {
             **_base_context(request, db),
             "detail": detail,
-            "member_roles": tuple(ServiceTeamMemberRole),
+            "responsibility_options": (
+                service_team_lifecycle.list_responsibility_options(db)
+            ),
             "error": error,
             "request_ids": {
                 "active": str(uuid4()),
@@ -177,7 +182,7 @@ def service_team_list(
         offset=(page - 1) * per_page,
         limit=per_page,
     )
-    role_region_groups = service_team_lifecycle.list_role_region_groups(
+    responsibility_groups = service_team_lifecycle.list_responsibility_groups(
         db,
         search=q,
     )
@@ -200,7 +205,7 @@ def service_team_list(
             "page": safe_page,
             "per_page": per_page,
             "total_pages": total_pages,
-            "role_region_groups": role_region_groups,
+            "responsibility_groups": responsibility_groups,
         },
     )
 
@@ -220,17 +225,15 @@ def service_team_create(
     team_id: UUID = Form(...),
     request_id: UUID = Form(...),
     name: str = Form(...),
-    team_type: ServiceTeamType = Form(...),
-    region: str | None = Form(default=None),
-    manager_system_user_id: str | None = Form(default=None),
+    capability_keys: list[ServiceTeamCapabilityKey] = Form(...),
+    geo_area_ids: list[UUID] = Form(default=[]),
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission(CREATE_PERMISSION)),
 ):
     values = {
         "name": name,
-        "team_type": team_type.value,
-        "region": str(region or ""),
-        "manager_system_user_id": str(manager_system_user_id or ""),
+        "capability_keys": ",".join(item.value for item in capability_keys),
+        "geo_area_ids": ",".join(str(item) for item in geo_area_ids),
     }
     try:
         db_session_adapter.release_read_transaction(db)
@@ -245,9 +248,8 @@ def service_team_create(
                 ),
                 team_id=team_id,
                 name=name,
-                team_type=team_type,
-                region=region,
-                manager_system_user_id=_parse_optional_uuid(manager_system_user_id),
+                capability_keys=tuple(capability_keys),
+                geo_area_ids=tuple(geo_area_ids),
             ),
         )
     except (DomainError, ValueError) as exc:
@@ -310,9 +312,8 @@ def service_team_update(
     request_id: UUID = Form(...),
     expected_updated_at: str = Form(...),
     name: str = Form(...),
-    team_type: ServiceTeamType = Form(...),
-    region: str | None = Form(default=None),
-    manager_system_user_id: str | None = Form(default=None),
+    capability_keys: list[ServiceTeamCapabilityKey] = Form(...),
+    geo_area_ids: list[UUID] = Form(default=[]),
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission(UPDATE_PERMISSION)),
 ):
@@ -330,9 +331,8 @@ def service_team_update(
                 team_id=team_id,
                 expected_updated_at=_parse_timestamp(expected_updated_at),
                 name=name,
-                team_type=team_type,
-                region=region,
-                manager_system_user_id=_parse_optional_uuid(manager_system_user_id),
+                capability_keys=tuple(capability_keys),
+                geo_area_ids=tuple(geo_area_ids),
             ),
         )
     except (DomainError, ValueError) as exc:
@@ -349,9 +349,8 @@ def service_team_update(
             team=detail.team if detail else None,
             values={
                 "name": name,
-                "team_type": team_type.value,
-                "region": str(region or ""),
-                "manager_system_user_id": str(manager_system_user_id or ""),
+                "capability_keys": ",".join(item.value for item in capability_keys),
+                "geo_area_ids": ",".join(str(item) for item in geo_area_ids),
             },
             error=message,
             status_code=_error_status(exc) if isinstance(exc, DomainError) else 400,
@@ -410,7 +409,7 @@ def service_team_add_member(
     team_id: UUID,
     request_id: UUID = Form(...),
     system_user_id: UUID = Form(...),
-    role: ServiceTeamMemberRole = Form(...),
+    responsibility_keys: list[ServiceTeamResponsibilityKey] = Form(default=[]),
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission(MEMBERSHIP_PERMISSION)),
 ):
@@ -427,7 +426,7 @@ def service_team_add_member(
                 ),
                 team_id=team_id,
                 system_user_id=system_user_id,
-                role=role,
+                responsibility_keys=tuple(responsibility_keys),
             ),
         )
     except DomainError as exc:
@@ -444,30 +443,33 @@ def service_team_add_member(
     )
 
 
-@router.post("/{team_id}/members/{member_id}/role", response_class=HTMLResponse)
+@router.post(
+    "/{team_id}/members/{member_id}/responsibilities",
+    response_class=HTMLResponse,
+)
 def service_team_update_member(
     request: Request,
     team_id: UUID,
     member_id: UUID,
     request_id: UUID = Form(...),
-    role: ServiceTeamMemberRole = Form(...),
+    responsibility_keys: list[ServiceTeamResponsibilityKey] = Form(default=[]),
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission(MEMBERSHIP_PERMISSION)),
 ):
     try:
         db_session_adapter.release_read_transaction(db)
-        service_team_lifecycle.update_member(
+        service_team_lifecycle.set_member_responsibilities(
             db,
-            service_team_lifecycle.UpdateServiceTeamMember(
+            service_team_lifecycle.SetServiceTeamMemberResponsibilities(
                 context=_context(
                     auth,
                     scope=MEMBERSHIP_PERMISSION,
-                    reason="Change service-team member role",
+                    reason="Change service-team member responsibilities",
                     request_id=request_id,
                 ),
                 team_id=team_id,
                 member_id=member_id,
-                role=role,
+                responsibility_keys=tuple(responsibility_keys),
             ),
         )
     except DomainError as exc:

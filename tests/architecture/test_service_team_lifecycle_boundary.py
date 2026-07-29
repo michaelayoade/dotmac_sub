@@ -22,6 +22,8 @@ def test_service_team_owner_has_complete_typed_contract() -> None:
         "service-team lifecycle",
         "service-team membership lifecycle",
         "staff service-team resolution",
+        "service-team composition lifecycle",
+        "service-team legacy-shadow verification",
     }
     inputs = {item.name: item.owner for item in owner.contract.authoritative_inputs}
     assert inputs["canonical Person Party identity"] == "party.registry"
@@ -102,7 +104,9 @@ def test_party_identity_is_enforced_at_team_storage_and_consumers() -> None:
         "_rewrite_compatibility_person_ids(bind)"
     ) < migration.rindex("_backfill_setting_members(bind)")
     field_job = _source("app/services/team_inbox_field_job.py")
-    assert "resolve_staff_service_team" in field_job
+    assert "WorkOrderAssignmentQueue" in field_job
+    assert "DispatchRule.service_team_id" in field_job
+    assert "field_service_work_orders" in field_job
     assert "ServiceTeamMember" not in field_job
 
 
@@ -110,7 +114,6 @@ def test_no_second_application_service_team_writer_exists() -> None:
     allowed = {
         ROOT / "app/models/service_team.py",
         ROOT / "app/services/service_team_lifecycle.py",
-        ROOT / "app/services/service_team_party_cutover.py",
     }
     constructor = re.compile(r"\b(?:ServiceTeam|ServiceTeamMember)\(")
     offenders = [

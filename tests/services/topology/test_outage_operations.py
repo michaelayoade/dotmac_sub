@@ -15,8 +15,15 @@ from app.models.operational_escalation import (
     OperationalParticipantType,
     OperationalRoomLink,
     OperationalWatcher,
+    OutageTeamRoutingPolicy,
+    OutageTeamRoutingPurpose,
 )
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import (
+    ServiceTeam,
+    ServiceTeamCapability,
+    ServiceTeamCapabilityDefinition,
+    ServiceTeamCapabilityKey,
+)
 from app.models.subscriber import Subscriber
 from app.services import operational_escalation
 from app.services.topology.outage import (
@@ -29,31 +36,96 @@ from app.services.topology.outage import (
 from app.services.topology.outage_operations import plan_outage_escalations
 
 
-def _team(db_session, name: str, team_type: str) -> ServiceTeam:
-    team = ServiceTeam(name=name, team_type=team_type)
+def _team(
+    db_session,
+    name: str,
+    capability: ServiceTeamCapabilityKey,
+) -> ServiceTeam:
+    team = ServiceTeam(name=name, team_type="composable")
     db_session.add(team)
     db_session.flush()
+    db_session.add(
+        ServiceTeamCapability(
+            team_id=team.id,
+            capability_key=capability.value,
+        )
+    )
     return team
 
 
 def _seed_ops_teams(db_session):
-    return {
+    for capability in (
+        ServiceTeamCapabilityKey.network_outages_coordinate,
+        ServiceTeamCapabilityKey.network_outages_observe,
+    ):
+        if db_session.get(ServiceTeamCapabilityDefinition, capability.value) is None:
+            db_session.add(
+                ServiceTeamCapabilityDefinition(
+                    key=capability.value,
+                    name=capability.value,
+                    description="Test outage capability",
+                    contract_owner="network.outage_team_routing",
+                )
+            )
+    db_session.flush()
+    teams = {
         "operations": _team(
-            db_session,
-            "NOC",
-            ServiceTeamType.operations.value,
+            db_session, "NOC", ServiceTeamCapabilityKey.network_outages_coordinate
         ),
         "support": _team(
-            db_session,
-            "Support",
-            ServiceTeamType.support.value,
+            db_session, "Support", ServiceTeamCapabilityKey.network_outages_observe
         ),
         "field": _team(
             db_session,
             "Field Service",
-            ServiceTeamType.field_service.value,
+            ServiceTeamCapabilityKey.network_outages_observe,
         ),
     }
+    db_session.add(
+        ServiceTeamCapability(
+            team_id=teams["operations"].id,
+            capability_key=ServiceTeamCapabilityKey.network_outages_observe.value,
+        )
+    )
+    db_session.flush()
+    db_session.add_all(
+        [
+            OutageTeamRoutingPolicy(
+                purpose=OutageTeamRoutingPurpose.primary_owner,
+                service_team_id=teams["operations"].id,
+                required_capability_key=(
+                    ServiceTeamCapabilityKey.network_outages_observe.value
+                ),
+                priority=10,
+            ),
+            OutageTeamRoutingPolicy(
+                purpose=OutageTeamRoutingPurpose.lead_watcher,
+                service_team_id=teams["operations"].id,
+                required_capability_key=(
+                    ServiceTeamCapabilityKey.network_outages_coordinate.value
+                ),
+                priority=10,
+            ),
+            OutageTeamRoutingPolicy(
+                purpose=OutageTeamRoutingPurpose.watcher,
+                service_team_id=teams["support"].id,
+                required_capability_key=(
+                    ServiceTeamCapabilityKey.network_outages_observe.value
+                ),
+                priority=20,
+            ),
+            OutageTeamRoutingPolicy(
+                purpose=OutageTeamRoutingPurpose.watcher,
+                service_team_id=teams["field"].id,
+                required_capability_key=(
+                    ServiceTeamCapabilityKey.network_outages_observe.value
+                ),
+                priority=30,
+            ),
+        ]
+    )
+    db_session.flush()
+    return teams
 
 
 def _node(db_session) -> NetworkDevice:

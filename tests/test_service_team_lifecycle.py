@@ -15,13 +15,42 @@ from app.models.party import (
 )
 from app.models.service_team import (
     ServiceTeam,
+    ServiceTeamCapabilityDefinition,
+    ServiceTeamCapabilityKey,
+    ServiceTeamExternalReference,
     ServiceTeamMember,
-    ServiceTeamMemberRole,
-    ServiceTeamType,
+    ServiceTeamMemberResponsibility,
+    ServiceTeamRelationship,
+    ServiceTeamRelationshipType,
+    ServiceTeamResponsibilityDefinition,
+    ServiceTeamResponsibilityKey,
 )
 from app.models.system_user import SystemUser
 from app.services import service_team_lifecycle
 from app.services.owner_commands import CommandContext
+
+
+@pytest.fixture(autouse=True)
+def _registered_team_vocabulary(db_session):
+    for key in ServiceTeamCapabilityKey:
+        db_session.add(
+            ServiceTeamCapabilityDefinition(
+                key=key.value,
+                name=key.value,
+                description=f"Test definition for {key.value}",
+                contract_owner="test",
+            )
+        )
+    for key in ServiceTeamResponsibilityKey:
+        db_session.add(
+            ServiceTeamResponsibilityDefinition(
+                key=key.value,
+                name=key.value,
+                description=f"Test definition for {key.value}",
+                operational_scope="membership",
+            )
+        )
+    db_session.commit()
 
 
 def _context(operation: str) -> CommandContext:
@@ -36,29 +65,22 @@ def _context(operation: str) -> CommandContext:
     )
 
 
-def _staff(
-    db_session,
-    *,
-    email: str,
-    is_active: bool = True,
-    party_status: PartyIdentityStatus = PartyIdentityStatus.active,
-) -> tuple[UUID, UUID]:
+def _staff(db_session, *, email: str, is_active: bool = True) -> tuple[UUID, UUID]:
     person = Party(
         party_type=PartyType.person.value,
         display_name="Ada Operator",
-        status=party_status.value,
+        status=PartyIdentityStatus.active.value,
         data_classification=PartyDataClassification.test.value,
     )
     db_session.add(person)
     db_session.flush()
-    person_id = person.id
     user = SystemUser(
         first_name="Ada",
         last_name="Operator",
         display_name="Ada Operator",
         email=email,
         is_active=is_active,
-        person_party_id=person_id,
+        person_party_id=person.id,
         party_bound_at=datetime.now(UTC),
         party_binding_source="service-team-test",
         party_binding_reason="Reviewed fixture identity",
@@ -66,6 +88,7 @@ def _staff(
     db_session.add(user)
     db_session.flush()
     user_id = user.id
+    person_id = person.id
     db_session.commit()
     return user_id, person_id
 
@@ -73,167 +96,85 @@ def _staff(
 def _create_team(
     db_session,
     *,
-    name: str = "Field Operations",
-    manager_system_user_id: UUID | None = None,
+    name: str = "Unified Operations",
+    capabilities: tuple[ServiceTeamCapabilityKey, ...] = (
+        ServiceTeamCapabilityKey.operations_general,
+        ServiceTeamCapabilityKey.support_tickets,
+    ),
 ) -> UUID:
     team_id = uuid4()
-    outcome = service_team_lifecycle.create_team(
+    result = service_team_lifecycle.create_team(
         db_session,
         service_team_lifecycle.CreateServiceTeam(
             context=_context("create"),
             team_id=team_id,
             name=name,
-            team_type=ServiceTeamType.field_service,
-            region="Abuja",
-            manager_system_user_id=manager_system_user_id,
+            capability_keys=capabilities,
         ),
     )
-    assert outcome.replayed is False
+    assert result.replayed is False
     return team_id
 
 
-def test_create_is_idempotent_and_stages_audit_and_event(db_session):
-    manager_id, manager_party_id = _staff(db_session, email="manager@example.com")
-    team_id = _create_team(db_session, manager_system_user_id=manager_id)
+def test_team_has_many_capabilities_and_create_replays_exact_state(db_session):
+    team_id = _create_team(db_session)
 
     replay = service_team_lifecycle.create_team(
         db_session,
         service_team_lifecycle.CreateServiceTeam(
             context=_context("create-replay"),
             team_id=team_id,
-            name="Field Operations",
-            team_type=ServiceTeamType.field_service,
-            region="Abuja",
-            manager_system_user_id=manager_id,
+            name="Unified Operations",
+            capability_keys=(
+                ServiceTeamCapabilityKey.support_tickets,
+                ServiceTeamCapabilityKey.operations_general,
+            ),
         ),
     )
 
+    team = db_session.get(ServiceTeam, team_id)
     assert replay.replayed is True
-    assert db_session.get(ServiceTeam, team_id).manager_person_id == manager_party_id
-    assert db_session.query(ServiceTeam).count() == 1
+    assert team is not None
+    assert team.team_type == "composable"
+    assert team.region is None
+    assert team.manager_person_id is None
+    assert {item.capability_key for item in team.capabilities if item.is_active} == {
+        ServiceTeamCapabilityKey.operations_general.value,
+        ServiceTeamCapabilityKey.support_tickets.value,
+    }
     assert (
-        db_session.query(AuditEvent)
-        .filter(AuditEvent.action == "service_team.created")
-        .count()
+        db_session.query(AuditEvent).filter_by(action="service_team.created").count()
         == 1
     )
     assert (
         db_session.query(EventStore)
-        .filter(EventStore.event_type == "service_team.changed")
+        .filter_by(event_type="service_team.changed")
         .count()
         == 1
     )
 
 
-def test_create_rejects_identity_collision_and_casefolded_duplicate(db_session):
-    team_id = _create_team(db_session)
-
-    with pytest.raises(
-        service_team_lifecycle.ServiceTeamLifecycleError,
-        match="identifier is already bound",
-    ) as collision:
-        service_team_lifecycle.create_team(
-            db_session,
-            service_team_lifecycle.CreateServiceTeam(
-                context=_context("collision"),
-                team_id=team_id,
-                name="Different Team",
-                team_type=ServiceTeamType.support,
-            ),
-        )
-    assert collision.value.code == "service_team_identity_collision"
-
-    with pytest.raises(
-        service_team_lifecycle.ServiceTeamLifecycleError,
-        match="already uses this name",
-    ) as duplicate:
-        service_team_lifecycle.create_team(
-            db_session,
-            service_team_lifecycle.CreateServiceTeam(
-                context=_context("duplicate"),
-                team_id=uuid4(),
-                name="field operations",
-                team_type=ServiceTeamType.operations,
-            ),
-        )
-    assert duplicate.value.code == "service_team_name_conflict"
-
-
-def test_create_does_not_replay_a_deactivated_team_as_active(db_session):
-    team_id = _create_team(db_session)
-    team = db_session.get(ServiceTeam, team_id)
-    assert team is not None
-    expected = team.updated_at
-    db_session.commit()
-    service_team_lifecycle.set_team_active(
-        db_session,
-        service_team_lifecycle.SetServiceTeamActive(
-            context=_context("deactivate-before-create-replay"),
-            team_id=team_id,
-            expected_updated_at=expected,
-            is_active=False,
-            reason="Retire the original team.",
-        ),
+def test_create_requires_registered_capability(db_session):
+    definition = db_session.get(
+        ServiceTeamCapabilityDefinition,
+        ServiceTeamCapabilityKey.operations_general.value,
     )
-
-    with pytest.raises(
-        service_team_lifecycle.ServiceTeamLifecycleError,
-        match="identifier is already bound",
-    ) as collision:
-        service_team_lifecycle.create_team(
-            db_session,
-            service_team_lifecycle.CreateServiceTeam(
-                context=_context("create-after-deactivation"),
-                team_id=team_id,
-                name="Field Operations",
-                team_type=ServiceTeamType.field_service,
-                region="Abuja",
-            ),
-        )
-
-    assert collision.value.code == "service_team_identity_collision"
-
-
-def test_update_replays_exact_state_and_rejects_stale_change(db_session):
-    team_id = _create_team(db_session)
-    original = db_session.get(ServiceTeam, team_id)
-    assert original is not None
-    expected = original.updated_at
+    assert definition is not None
+    definition.is_active = False
     db_session.commit()
 
-    replay = service_team_lifecycle.update_team(
-        db_session,
-        service_team_lifecycle.UpdateServiceTeam(
-            context=_context("update-replay"),
-            team_id=team_id,
-            expected_updated_at=expected - timedelta(days=1),
-            name="Field Operations",
-            team_type=ServiceTeamType.field_service,
-            region="Abuja",
-        ),
-    )
-    assert replay.replayed is True
-
     with pytest.raises(
         service_team_lifecycle.ServiceTeamLifecycleError,
-        match="changed after this form",
-    ) as stale:
-        service_team_lifecycle.update_team(
+        match="not registered and active",
+    ):
+        _create_team(
             db_session,
-            service_team_lifecycle.UpdateServiceTeam(
-                context=_context("stale-update"),
-                team_id=team_id,
-                expected_updated_at=expected - timedelta(days=1),
-                name="Field Delivery",
-                team_type=ServiceTeamType.field_service,
-                region="Lagos",
-            ),
+            capabilities=(ServiceTeamCapabilityKey.operations_general,),
         )
-    assert stale.value.code == "service_team_stale"
 
 
-def test_membership_and_team_deactivation_are_fail_closed(db_session):
-    staff_id, staff_party_id = _staff(db_session, email="field@example.com")
+def test_membership_has_many_responsibilities_and_no_manager_pointer(db_session):
+    system_user_id, person_id = _staff(db_session, email="manager@example.com")
     team_id = _create_team(db_session)
 
     added = service_team_lifecycle.add_member(
@@ -241,289 +182,300 @@ def test_membership_and_team_deactivation_are_fail_closed(db_session):
         service_team_lifecycle.AddServiceTeamMember(
             context=_context("add-member"),
             team_id=team_id,
-            system_user_id=staff_id,
-            role=ServiceTeamMemberRole.lead,
-        ),
-    )
-    assert added.member_id is not None
-    stored_member = db_session.get(ServiceTeamMember, added.member_id)
-    assert stored_member.person_id == staff_party_id
-    assert stored_member.role == ServiceTeamMemberRole.lead.value
-
-    team = db_session.get(ServiceTeam, team_id)
-    assert team is not None
-    expected = team.updated_at
-    db_session.commit()
-    with pytest.raises(
-        service_team_lifecycle.ServiceTeamLifecycleError,
-        match="active member",
-    ) as active_members:
-        service_team_lifecycle.set_team_active(
-            db_session,
-            service_team_lifecycle.SetServiceTeamActive(
-                context=_context("deactivate-blocked"),
-                team_id=team_id,
-                expected_updated_at=expected,
-                is_active=False,
-                reason="Team was replaced.",
+            system_user_id=system_user_id,
+            responsibility_keys=(
+                ServiceTeamResponsibilityKey.accountable_manager,
+                ServiceTeamResponsibilityKey.queue_lead,
+                ServiceTeamResponsibilityKey.on_call,
             ),
-        )
-    assert active_members.value.code == "service_team_has_active_members"
-
-    removed = service_team_lifecycle.remove_member(
-        db_session,
-        service_team_lifecycle.RemoveServiceTeamMember(
-            context=_context("remove-member"),
-            team_id=team_id,
-            member_id=added.member_id,
-            reason="Staff moved to another team.",
         ),
     )
-    assert removed.replayed is False
-    member = db_session.get(ServiceTeamMember, added.member_id)
-    assert member is not None
-    assert member.is_active is False
-    db_session.commit()
 
+    member = db_session.get(ServiceTeamMember, added.member_id)
+    team = db_session.get(ServiceTeam, team_id)
+    assert member is not None
+    assert member.person_id == person_id
+    assert member.role == "member"
+    assert team is not None and team.manager_person_id is None
+    assert {
+        row.responsibility_key for row in member.responsibilities if row.is_active
+    } == {
+        ServiceTeamResponsibilityKey.accountable_manager.value,
+        ServiceTeamResponsibilityKey.queue_lead.value,
+        ServiceTeamResponsibilityKey.on_call.value,
+    }
+
+
+def test_legacy_manager_pointer_remains_drift_until_explicit_composition(db_session):
+    system_user_id, person_id = _staff(
+        db_session,
+        email="legacy-manager@example.com",
+    )
+    team_id = _create_team(db_session, name="Legacy Manager Shadow")
     team = db_session.get(ServiceTeam, team_id)
     assert team is not None
-    expected = team.updated_at
+    team.manager_person_id = person_id
     db_session.commit()
-    deactivated = service_team_lifecycle.set_team_active(
-        db_session,
-        service_team_lifecycle.SetServiceTeamActive(
-            context=_context("deactivate"),
-            team_id=team_id,
-            expected_updated_at=expected,
-            is_active=False,
-            reason="Team was replaced.",
-        ),
+
+    before = next(
+        item
+        for item in service_team_lifecycle.list_teams(db_session).items
+        if item.team_id == team_id
     )
-    assert deactivated.replayed is False
-    assert db_session.get(ServiceTeam, team_id).is_active is False
+    assert before.accountable_manager_labels == ()
+    assert before.legacy_shadow_drift is True
+    assert before.legacy_shadow_issues == (
+        service_team_lifecycle.ServiceTeamLegacyShadowIssue.manager_requires_explicit_composition,
+    )
+    assert db_session.query(ServiceTeamMember).filter_by(team_id=team_id).count() == 0
+    db_session.commit()
 
-
-def test_native_projections_resolve_staff_and_members(db_session):
-    manager_id, manager_party_id = _staff(db_session, email="projection@example.com")
-    team_id = _create_team(db_session, manager_system_user_id=manager_id)
     service_team_lifecycle.add_member(
         db_session,
         service_team_lifecycle.AddServiceTeamMember(
-            context=_context("projection-member"),
+            context=_context("explicit-manager-composition"),
             team_id=team_id,
-            system_user_id=manager_id,
-            role=ServiceTeamMemberRole.manager,
+            system_user_id=system_user_id,
+            responsibility_keys=(ServiceTeamResponsibilityKey.accountable_manager,),
         ),
     )
 
-    result = service_team_lifecycle.list_teams(
+    after = next(
+        item
+        for item in service_team_lifecycle.list_teams(db_session).items
+        if item.team_id == team_id
+    )
+    assert after.accountable_manager_labels == ("Ada Operator",)
+    assert after.legacy_shadow_drift is False
+    assert after.legacy_shadow_issues == ()
+    assert db_session.get(ServiceTeam, team_id).manager_person_id == person_id
+
+
+def test_legacy_shadow_audit_classifies_scalar_and_member_role_drift(db_session):
+    _system_user_id, person_id = _staff(
         db_session,
-        search="field",
-        is_active=True,
+        email="legacy-lead@example.com",
     )
-    detail = service_team_lifecycle.get_team(db_session, team_id)
-
-    assert result.total == 1
-    assert result.active_count == 1
-    assert result.inactive_count == 0
-    assert result.items[0].manager_label == "Ada Operator"
-    assert result.items[0].manager_person_id == manager_party_id
-    assert result.items[0].manager_system_user_id == manager_id
-    assert result.items[0].manager_identity_active is True
-    assert result.items[0].active_member_count == 1
-    assert detail.team.team_id == team_id
-    assert detail.members[0].person_email == "projection@example.com"
-    assert detail.members[0].role is ServiceTeamMemberRole.manager
-    assert detail.members[0].staff_identity_active is True
-    assert detail.available_staff == ()
-    assert detail.actions.can_add_member is True
-    assert detail.actions.can_deactivate is False
-
-
-def test_inactive_staff_cannot_be_assigned(db_session):
-    inactive_id, _inactive_party_id = _staff(
-        db_session,
-        email="inactive@example.com",
-        is_active=False,
-    )
-    team_id = _create_team(db_session)
-
-    with pytest.raises(
-        service_team_lifecycle.ServiceTeamLifecycleError,
-        match="not active",
-    ) as rejected:
-        service_team_lifecycle.add_member(
-            db_session,
-            service_team_lifecycle.AddServiceTeamMember(
-                context=_context("inactive-member"),
-                team_id=team_id,
-                system_user_id=inactive_id,
-                role=ServiceTeamMemberRole.member,
-            ),
-        )
-    assert rejected.value.code == "service_team_staff_not_found"
-
-
-def test_inactive_party_is_not_selectable_and_member_role_change_fails_closed(
-    db_session,
-):
-    staff_id, staff_party_id = _staff(
-        db_session,
-        email="identity-state@example.com",
-    )
-    team_id = _create_team(db_session)
-    added = service_team_lifecycle.add_member(
-        db_session,
-        service_team_lifecycle.AddServiceTeamMember(
-            context=_context("add-before-party-retirement"),
-            team_id=team_id,
-            system_user_id=staff_id,
-            role=ServiceTeamMemberRole.member,
-        ),
-    )
-    party = db_session.get(Party, staff_party_id)
-    assert party is not None
-    party.status = PartyIdentityStatus.archived.value
-    db_session.commit()
-
-    assert all(
-        option.system_user_id != staff_id
-        for option in service_team_lifecycle.list_staff_options(db_session)
-    )
-    db_session.commit()
-    with pytest.raises(
-        service_team_lifecycle.ServiceTeamLifecycleError,
-        match="Person Party binding is not active",
-    ) as rejected:
-        service_team_lifecycle.update_member(
-            db_session,
-            service_team_lifecycle.UpdateServiceTeamMember(
-                context=_context("role-after-party-retirement"),
-                team_id=team_id,
-                member_id=added.member_id,
-                role=ServiceTeamMemberRole.lead,
-            ),
-        )
-
-    assert rejected.value.code == "service_team_staff_identity_invalid"
-
-
-def test_reactivation_eligibility_and_command_recheck_manager_identity(db_session):
-    manager_id, manager_party_id = _staff(
-        db_session,
-        email="retired-manager@example.com",
-    )
-    team_id = _create_team(db_session, manager_system_user_id=manager_id)
+    team_id = _create_team(db_session, name="Legacy Shadow Audit")
     team = db_session.get(ServiceTeam, team_id)
     assert team is not None
-    expected = team.updated_at
-    db_session.commit()
-    service_team_lifecycle.set_team_active(
-        db_session,
-        service_team_lifecycle.SetServiceTeamActive(
-            context=_context("deactivate-before-manager-retirement"),
-            team_id=team_id,
-            expected_updated_at=expected,
-            is_active=False,
-            reason="Pause this team.",
-        ),
-    )
-    party = db_session.get(Party, manager_party_id)
-    assert party is not None
-    party.status = PartyIdentityStatus.archived.value
-    db_session.commit()
-
-    detail = service_team_lifecycle.get_team(db_session, team_id)
-    assert detail.team.manager_identity_active is False
-    assert detail.actions.can_activate is False
-    assert "active, Party-bound manager" in str(detail.actions.lifecycle_block_reason)
-    db_session.commit()
-
-    with pytest.raises(
-        service_team_lifecycle.ServiceTeamLifecycleError,
-        match="Person Party binding is not active",
-    ) as rejected:
-        service_team_lifecycle.set_team_active(
-            db_session,
-            service_team_lifecycle.SetServiceTeamActive(
-                context=_context("reactivate-after-manager-retirement"),
-                team_id=team_id,
-                expected_updated_at=detail.team.updated_at,
-                is_active=True,
-                reason="Resume this team.",
-            ),
-        )
-
-    assert rejected.value.code == "service_team_staff_identity_invalid"
-
-
-def test_timezone_compatible_timestamp_comparison(db_session):
-    team_id = _create_team(db_session)
-    team = db_session.get(ServiceTeam, team_id)
-    assert team is not None
-    expected = team.updated_at
-    if expected.tzinfo is None:
-        expected = expected.replace(tzinfo=UTC)
-    db_session.commit()
-
-    with pytest.raises(service_team_lifecycle.ServiceTeamLifecycleError) as stale:
-        service_team_lifecycle.update_team(
-            db_session,
-            service_team_lifecycle.UpdateServiceTeam(
-                context=_context("timestamp"),
-                team_id=team_id,
-                expected_updated_at=datetime.now(UTC),
-                name="Updated",
-                team_type=ServiceTeamType.support,
-            ),
-        )
-    assert stale.value.code == "service_team_stale"
-
-
-def test_staff_team_resolution_translates_principal_to_party_and_fails_ambiguous(
-    db_session,
-):
-    staff_id, staff_party_id = _staff(
-        db_session,
-        email="team-resolution@example.com",
-    )
-    first_team_id = _create_team(db_session, name="Resolution One")
-    first_member = ServiceTeamMember(
-        team_id=first_team_id,
-        person_id=staff_party_id,
-        role=ServiceTeamMemberRole.member.value,
+    team.team_type = "support"
+    team.region = "Abuja"
+    member = ServiceTeamMember(
+        team_id=team_id,
+        person_id=person_id,
+        role="lead",
         is_active=True,
     )
-    db_session.add(first_member)
+    db_session.add(member)
     db_session.commit()
 
-    resolved = service_team_lifecycle.resolve_staff_service_team(
-        db_session,
-        staff_id,
-    )
+    audit = service_team_lifecycle.audit_legacy_service_team_shadow(db_session)
 
-    assert resolved.kind is service_team_lifecycle.ServiceTeamResolutionKind.resolved
-    assert resolved.person_party_id == staff_party_id
-    assert resolved.team_id == first_team_id
-    assert resolved.candidate_team_ids == (first_team_id,)
-    db_session.commit()
+    assert audit.ready is False
+    assert audit.team_count == 1
+    assert audit.drift_team_count == 1
+    assert dict(audit.issue_counts) == {
+        (
+            service_team_lifecycle.ServiceTeamLegacyShadowIssue.team_type_capability_mismatch
+        ): 1,
+        (
+            service_team_lifecycle.ServiceTeamLegacyShadowIssue.region_requires_geo_area_review
+        ): 1,
+        (
+            service_team_lifecycle.ServiceTeamLegacyShadowIssue.manager_requires_explicit_composition
+        ): 0,
+        (
+            service_team_lifecycle.ServiceTeamLegacyShadowIssue.member_role_responsibility_mismatch
+        ): 1,
+    }
 
-    second_team_id = _create_team(db_session, name="Resolution Two")
     db_session.add(
-        ServiceTeamMember(
-            team_id=second_team_id,
-            person_id=staff_party_id,
-            role=ServiceTeamMemberRole.member.value,
+        ServiceTeamMemberResponsibility(
+            membership_id=member.id,
+            responsibility_key=ServiceTeamResponsibilityKey.queue_lead.value,
             is_active=True,
         )
     )
     db_session.commit()
 
-    ambiguous = service_team_lifecycle.resolve_staff_service_team(
-        db_session,
-        staff_id,
+    after = service_team_lifecycle.audit_legacy_service_team_shadow(db_session)
+    assert (
+        dict(after.issue_counts)[
+            (
+                service_team_lifecycle.ServiceTeamLegacyShadowIssue.member_role_responsibility_mismatch
+            )
+        ]
+        == 0
     )
 
-    assert ambiguous.kind is service_team_lifecycle.ServiceTeamResolutionKind.ambiguous
-    assert ambiguous.team_id is None
-    assert set(ambiguous.candidate_team_ids) == {first_team_id, second_team_id}
+
+def test_responsibilities_can_be_replaced_compositionally(db_session):
+    system_user_id, _ = _staff(db_session, email="agent@example.com")
+    team_id = _create_team(db_session)
+    added = service_team_lifecycle.add_member(
+        db_session,
+        service_team_lifecycle.AddServiceTeamMember(
+            context=_context("add"),
+            team_id=team_id,
+            system_user_id=system_user_id,
+            responsibility_keys=(ServiceTeamResponsibilityKey.agent,),
+        ),
+    )
+
+    service_team_lifecycle.set_member_responsibilities(
+        db_session,
+        service_team_lifecycle.SetServiceTeamMemberResponsibilities(
+            context=_context("responsibilities"),
+            team_id=team_id,
+            member_id=added.member_id,
+            responsibility_keys=(
+                ServiceTeamResponsibilityKey.dispatcher,
+                ServiceTeamResponsibilityKey.on_call,
+            ),
+        ),
+    )
+
+    active = set(
+        db_session.scalars(
+            ServiceTeamMemberResponsibility.__table__.select()
+            .with_only_columns(ServiceTeamMemberResponsibility.responsibility_key)
+            .where(
+                ServiceTeamMemberResponsibility.membership_id == added.member_id,
+                ServiceTeamMemberResponsibility.is_active.is_(True),
+            )
+        ).all()
+    )
+    assert active == {"dispatcher", "on_call"}
+
+
+def test_multi_team_resolution_returns_a_set_not_an_ambiguity(db_session):
+    system_user_id, _ = _staff(db_session, email="multi@example.com")
+    first = _create_team(db_session, name="Support and NOC")
+    second = _create_team(
+        db_session,
+        name="Field and NOC",
+        capabilities=(ServiceTeamCapabilityKey.field_service_work_orders,),
+    )
+    for team_id in (first, second):
+        service_team_lifecycle.add_member(
+            db_session,
+            service_team_lifecycle.AddServiceTeamMember(
+                context=_context(f"member-{team_id}"),
+                team_id=team_id,
+                system_user_id=system_user_id,
+                responsibility_keys=(ServiceTeamResponsibilityKey.agent,),
+            ),
+        )
+
+    resolved = service_team_lifecycle.resolve_staff_service_teams(
+        db_session, system_user_id
+    )
+
+    assert resolved.kind is service_team_lifecycle.ServiceTeamResolutionKind.resolved
+    assert set(resolved.team_ids) == {first, second}
+
+
+def test_queue_scope_uses_responsibility_without_granting_rbac(db_session):
+    system_user_id, _ = _staff(db_session, email="lead@example.com")
+    first = _create_team(db_session, name="Lead Team")
+    second = _create_team(db_session, name="Agent Team")
+    for team_id, responsibility in (
+        (first, ServiceTeamResponsibilityKey.queue_lead),
+        (second, ServiceTeamResponsibilityKey.agent),
+    ):
+        service_team_lifecycle.add_member(
+            db_session,
+            service_team_lifecycle.AddServiceTeamMember(
+                context=_context(f"scope-{team_id}"),
+                team_id=team_id,
+                system_user_id=system_user_id,
+                responsibility_keys=(responsibility,),
+            ),
+        )
+
+    scope = service_team_lifecycle.resolve_staff_team_scope(db_session, system_user_id)
+
+    assert set(scope.member_team_ids) == {first, second}
+    assert scope.queue_lead_team_ids == (first,)
+    assert scope.accountable_manager_team_ids == ()
+    assert scope.queue_scope_team_ids == (first,)
+
+
+def test_team_relationship_rejects_cycles(db_session):
+    parent = _create_team(db_session, name="Parent")
+    child = _create_team(db_session, name="Child")
+    service_team_lifecycle.set_team_relationship(
+        db_session,
+        service_team_lifecycle.SetServiceTeamRelationship(
+            context=_context("parent-child"),
+            relationship_id=uuid4(),
+            parent_team_id=parent,
+            child_team_id=child,
+            relationship_type=ServiceTeamRelationshipType.organizational_parent,
+            is_active=True,
+        ),
+    )
+
+    with pytest.raises(
+        service_team_lifecycle.ServiceTeamLifecycleError,
+        match="cycle",
+    ):
+        service_team_lifecycle.set_team_relationship(
+            db_session,
+            service_team_lifecycle.SetServiceTeamRelationship(
+                context=_context("child-parent"),
+                relationship_id=uuid4(),
+                parent_team_id=child,
+                child_team_id=parent,
+                relationship_type=ServiceTeamRelationshipType.organizational_parent,
+                is_active=True,
+            ),
+        )
+    assert db_session.query(ServiceTeamRelationship).count() == 1
+
+
+def test_multiple_external_references_are_observations(db_session):
+    team_id = _create_team(db_session)
+    for system, reference in (("crm", "department-7"), ("workforce", "unit-22")):
+        service_team_lifecycle.observe_external_reference(
+            db_session,
+            service_team_lifecycle.ObserveServiceTeamExternalReference(
+                context=_context(system),
+                reference_id=uuid4(),
+                team_id=team_id,
+                system=system,
+                entity_type="department",
+                external_reference=reference,
+                observed_at=datetime.now(UTC),
+                is_active=True,
+            ),
+        )
+
+    references = db_session.query(ServiceTeamExternalReference).all()
+    assert {(item.system, item.external_reference) for item in references} == {
+        ("crm", "department-7"),
+        ("workforce", "unit-22"),
+    }
+
+
+def test_update_fails_closed_on_stale_state(db_session):
+    team_id = _create_team(db_session)
+    team = db_session.get(ServiceTeam, team_id)
+    assert team is not None
+    stale_updated_at = team.updated_at - timedelta(days=1)
+    db_session.commit()
+
+    with pytest.raises(service_team_lifecycle.ServiceTeamLifecycleError) as error:
+        service_team_lifecycle.update_team(
+            db_session,
+            service_team_lifecycle.UpdateServiceTeam(
+                context=_context("stale"),
+                team_id=team_id,
+                expected_updated_at=stale_updated_at,
+                name="Changed",
+                capability_keys=(ServiceTeamCapabilityKey.support_tickets,),
+            ),
+        )
+
+    assert error.value.code == "service_team_stale"

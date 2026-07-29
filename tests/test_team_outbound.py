@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import ServiceTeam
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import email as email_service
@@ -41,68 +41,73 @@ def _activity_sender(db_session, activity: str, sender_key: str) -> None:
     )
 
 
-def test_support_team_resolves_support_ticket_sender(db_session):
+def test_explicit_support_activity_resolves_support_ticket_sender(db_session):
     _smtp_sender(db_session, "support", host="smtp.support.local")
     _activity_sender(db_session, "support_ticket", "support")
-    team = ServiceTeam(name="Support", team_type=ServiceTeamType.support.value)
+    team = ServiceTeam(name="Support", team_type="legacy-shadow")
     db_session.add(team)
     db_session.commit()
 
     resolved = team_outbound.resolve_team_email_sender(
-        db_session, service_team_id=str(team.id)
+        db_session,
+        service_team_id=str(team.id),
+        fallback_activity="support_ticket",
     )
 
     assert resolved.service_team_id == str(team.id)
-    assert resolved.team_type == ServiceTeamType.support.value
     assert resolved.sender_key is None
     assert resolved.activity == "support_ticket"
     assert resolved.config["sender_key"] == "support"
     assert resolved.config["host"] == "smtp.support.local"
 
 
-def test_billing_team_resolves_billing_invoice_sender(db_session):
+def test_explicit_billing_activity_resolves_billing_invoice_sender(db_session):
     _smtp_sender(db_session, "billing", host="smtp.billing.local")
     _activity_sender(db_session, "billing_invoice", "billing")
-    team = ServiceTeam(name="Finance", team_type=ServiceTeamType.billing.value)
+    team = ServiceTeam(name="Finance", team_type="legacy-shadow")
     db_session.add(team)
     db_session.commit()
 
-    resolved = team_outbound.resolve_team_email_sender(db_session, team=team)
+    resolved = team_outbound.resolve_team_email_sender(
+        db_session, team=team, fallback_activity="billing_invoice"
+    )
 
     assert resolved.activity == "billing_invoice"
     assert resolved.config["sender_key"] == "billing"
     assert resolved.config["from_email"] == "billing@example.com"
 
 
-def test_field_service_team_resolves_work_order_sender(db_session):
+def test_explicit_field_activity_resolves_work_order_sender(db_session):
     _smtp_sender(db_session, "field", host="smtp.field.local")
     _activity_sender(db_session, "field_service", "field")
-    team = ServiceTeam(
-        name="Field Service", team_type=ServiceTeamType.field_service.value
-    )
+    team = ServiceTeam(name="Field Service", team_type="legacy-shadow")
     db_session.add(team)
     db_session.commit()
 
-    resolved = team_outbound.resolve_team_email_sender(db_session, team=team)
+    resolved = team_outbound.resolve_team_email_sender(
+        db_session, team=team, fallback_activity="field_service"
+    )
 
     assert resolved.activity == "field_service"
     assert resolved.config["sender_key"] == "field"
     assert resolved.config["host"] == "smtp.field.local"
 
 
-def test_team_metadata_sender_key_overrides_type_activity(db_session):
+def test_team_metadata_sender_key_overrides_explicit_activity(db_session):
     _smtp_sender(db_session, "support", host="smtp.support.local")
     _smtp_sender(db_session, "vip_support", host="smtp.vip.local")
     _activity_sender(db_session, "support_ticket", "support")
     team = ServiceTeam(
         name="VIP Support",
-        team_type=ServiceTeamType.support.value,
+        team_type="legacy-shadow",
         metadata_={"outbound_email_sender_key": "VIP_Support"},
     )
     db_session.add(team)
     db_session.commit()
 
-    resolved = team_outbound.resolve_team_email_sender(db_session, team=team)
+    resolved = team_outbound.resolve_team_email_sender(
+        db_session, team=team, fallback_activity="support_ticket"
+    )
 
     assert resolved.sender_key == "vip_support"
     assert resolved.activity == "support_ticket"
@@ -115,7 +120,7 @@ def test_route_metadata_sender_key_overrides_team_metadata(db_session):
     _smtp_sender(db_session, "route_support", host="smtp.route.local")
     team = ServiceTeam(
         name="Support",
-        team_type=ServiceTeamType.support.value,
+        team_type="legacy-shadow",
         metadata_={"outbound_email_sender_key": "team_support"},
     )
     db_session.add(team)
@@ -149,3 +154,13 @@ def test_unknown_team_uses_fallback_activity(db_session):
     assert resolved.service_team_id is None
     assert resolved.activity == "operations"
     assert resolved.config["sender_key"] == "ops"
+
+
+def test_legacy_team_type_never_selects_outbound_behavior(db_session):
+    team = ServiceTeam(name="Legacy Support", team_type="support")
+    db_session.add(team)
+    db_session.commit()
+
+    resolved = team_outbound.resolve_team_email_sender(db_session, team=team)
+
+    assert resolved.activity is None
