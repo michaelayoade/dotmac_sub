@@ -8,8 +8,8 @@ with ``lifecycle_state`` instead.
 The second constraint is the release gate — an inactive device projecting
 ``working`` becomes unrepresentable rather than merely improbable.
 
-Revision ID: 435_device_projection_lifecycle_state
-Revises: 434_sales_funding_erp_exports
+Revision ID: 437_device_projection_lifecycle_state
+Revises: 436_billing_shadow_verification_evidence
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "435_device_projection_lifecycle_state"
-down_revision = "434_sales_funding_erp_exports"
+revision = "437_device_projection_lifecycle_state"
+down_revision = "436_billing_shadow_verification_evidence"
 branch_labels = None
 depends_on = None
 
