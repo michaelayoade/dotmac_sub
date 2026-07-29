@@ -133,11 +133,11 @@ class BillingLifecycleProjectionHandler:
             event_id=event.event_id,
             event_type=_WALLED_HEALING_TRIGGER,
         )
+        generation_raw = event.payload.get("generation")
         try:
             account_id = UUID(account_text)
             timer_id = UUID(timer_text)
-            generation = int(event.payload.get("generation"))
-        except (TypeError, ValueError) as exc:
+        except ValueError as exc:
             raise invalid_output_payload(
                 consumer=consumer,
                 event_id=event.event_id,
@@ -145,6 +145,15 @@ class BillingLifecycleProjectionHandler:
                 field="timer_identity",
                 reason="invalid_uuid_or_generation",
             ) from exc
+        if not isinstance(generation_raw, int) or isinstance(generation_raw, bool):
+            raise invalid_output_payload(
+                consumer=consumer,
+                event_id=event.event_id,
+                event_type=_WALLED_HEALING_TRIGGER,
+                field="generation",
+                reason="expected_integer",
+            )
+        generation = generation_raw
 
         from app.services.billing.unwall_paid_accounts import (
             consume_walled_account_healing_due,
