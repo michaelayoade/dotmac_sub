@@ -14,17 +14,11 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-
     - name: Download shared Python environment
       uses: actions/download-artifact@v4
       with:
-        name: python-venv
-        path: ${{ runner.temp }}/python-venv
+        name: python-environment
+        path: ${{ runner.temp }}/python-environment
 
     - name: Remove repository development environment pointer
       shell: bash
@@ -35,4 +29,13 @@ runs:
 
     - name: Restore shared Python environment
       shell: bash
-      run: tar -xzf "$RUNNER_TEMP/python-venv/python-venv.tar.gz"
+      run: |
+        tar -xzf "$RUNNER_TEMP/python-environment/python-venv.tar.gz"
+        tar -xzf "$RUNNER_TEMP/python-environment/poetry-home.tar.gz" -C "$HOME"
+
+    - name: Configure shared Poetry
+      shell: bash
+      run: |
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/poetry" config virtualenvs.create true
+        "$HOME/.local/bin/poetry" config virtualenvs.in-project true
