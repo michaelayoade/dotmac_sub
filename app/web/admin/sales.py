@@ -139,7 +139,6 @@ def sales_dashboard_data(
         )
         status_code = 200
     except Exception:
-        db.rollback()
         logger.exception("sales_dashboard_projection_failed")
         context.update(
             {

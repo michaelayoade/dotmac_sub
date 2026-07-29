@@ -62,7 +62,7 @@ def build_dashboard_shell_context(
         limit=200,
         offset=0,
     )
-    query = {"period_days": selected_period_days}
+    query: dict[str, int | str] = {"period_days": selected_period_days}
     if selected_pipeline_id is not None:
         query["pipeline_id"] = str(selected_pipeline_id)
     return {
