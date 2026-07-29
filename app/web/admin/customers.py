@@ -695,6 +695,7 @@ def person_detail(
     usage_period: str = Query("current"),
     usage_page: int = Query(1, ge=1),
     usage_per_page: int = Query(25, ge=10, le=100),
+    usage_view: str = Query("chart", pattern="^(chart|table)$"),
     db: Session = Depends(get_db),
 ):
     """View customer details (unified — person and org members)."""
@@ -751,6 +752,7 @@ def person_detail(
             f"?usage_period={usage_period}"
             f"&usage_page={usage_page}"
             f"&usage_per_page={usage_per_page}"
+            f"&usage_view={usage_view}"
         ),
         "detailUrl": f"/admin/customers/person/{customer.id}",
         "customerId": str(customer.id),
@@ -768,6 +770,7 @@ def person_detail(
             "usage_period": usage_period,
             "usage_page": usage_page,
             "usage_per_page": usage_per_page,
+            "usage_view": usage_view,
             "customer_type": customer_type,
             "detail_config": detail_config,
             "bulk_notification_channels": notification_channels,
@@ -791,6 +794,7 @@ def person_detail_stats(
     usage_period: str = Query("current"),
     usage_page: int = Query(1, ge=1),
     usage_per_page: int = Query(25, ge=10, le=100),
+    usage_view: str = Query("chart", pattern="^(chart|table)$"),
     db: Session = Depends(get_db),
 ):
     usage_period = _normalize_usage_period(usage_period)
@@ -821,6 +825,7 @@ def person_detail_stats(
             "usage_subscription_id": (
                 str(usage_subscription.id) if usage_subscription else None
             ),
+            "usage_view": usage_view,
         },
     )
 
