@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
-from app.services.network.huawei_cli_response import is_huawei_cli_unsupported
 
 logger = logging.getLogger(__name__)
 
