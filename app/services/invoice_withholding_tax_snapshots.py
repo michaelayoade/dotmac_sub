@@ -59,6 +59,44 @@ class InvoiceWithholdingTaxSnapshot:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class InvoiceWithholdingTaxDisplay:
+    """Read-only presentation projection of persisted invoice WHT evidence."""
+
+    taxable_basis: Decimal
+    vat_amount: Decimal
+    gross_amount: Decimal
+    rate_percent: Decimal
+    withholding_tax_amount: Decimal
+    net_bank_transfer_payable: Decimal
+    policy_version: int
+    rate_provenance: str
+
+
+def invoice_withholding_tax_display(
+    invoice: Invoice,
+) -> InvoiceWithholdingTaxDisplay | None:
+    """Return stored WHT facts for rendering without consulting live policy/rate."""
+    if not invoice.withholding_tax_policy_enabled:
+        return None
+    if (
+        invoice.withholding_tax_rate is None
+        or invoice.withholding_tax_taxable_basis is None
+        or invoice.bank_transfer_net_payable is None
+    ):
+        return None
+    return InvoiceWithholdingTaxDisplay(
+        taxable_basis=round_money(invoice.withholding_tax_taxable_basis),
+        vat_amount=round_money(invoice.tax_total or 0),
+        gross_amount=round_money(invoice.total or 0),
+        rate_percent=round_money(invoice.withholding_tax_rate),
+        withholding_tax_amount=round_money(invoice.withholding_tax_amount or 0),
+        net_bank_transfer_payable=round_money(invoice.bank_transfer_net_payable),
+        policy_version=int(invoice.withholding_tax_policy_version or 0),
+        rate_provenance=str(invoice.withholding_tax_rate_provenance or ""),
+    )
+
+
 def _rate_percent(db: Session) -> Decimal:
     raw = resolve_value(db, SettingDomain.billing, WITHHOLDING_TAX_RATE_SETTING)
     try:

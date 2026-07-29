@@ -36,6 +36,9 @@ from app.services.customer_portal_context import (
 )
 from app.services.customer_portal_flow_common import _compute_total_pages
 from app.services.status_presentation import invoice_status_presentation
+from app.services.invoice_withholding_tax_snapshots import (
+    invoice_withholding_tax_display,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -557,6 +560,7 @@ def get_invoice_detail(
         "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "billing_name": billing_contact["billing_name"],
         "billing_email": billing_contact["billing_email"],
+        "withholding_tax": invoice_withholding_tax_display(invoice),
     }
 
 
