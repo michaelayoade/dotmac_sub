@@ -1477,7 +1477,7 @@ def confirm_financial_access_restoration(
         )
 
     has_effect = bool(resolved_lock_ids or resolved_case_ids or restored_credentials)
-    outcome = (
+    consequence_outcome = (
         "restored"
         if restored_subscriptions
         else ("reconciled" if has_effect else preview.outcome)
@@ -1488,7 +1488,7 @@ def confirm_financial_access_restoration(
         requested_reason=None,
         origin=origin,
         eligible=preview.eligible,
-        outcome=outcome,
+        outcome=consequence_outcome,
         preview_fingerprint=preview.fingerprint,
         idempotency_key=key,
         decision_inputs=preview.decision_inputs,

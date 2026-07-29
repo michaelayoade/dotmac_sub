@@ -1179,10 +1179,11 @@ def project_prepaid_billing_anchor_for_invoice(
             if coverage_end is not None
             else unfunded_start
         )
+        target: datetime
         if coverage_end is None and previous is not None and previous < unfunded_start:
             # Nothing survives and an earlier unpaid period is already due.
             # Never push a due anchor later.
-            target: datetime | None = previous
+            target = previous
         elif (
             authority is BillingAnchorAuthority.funding_observation
             and invoice_still_funds.get(subscription_id)
