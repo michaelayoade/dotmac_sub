@@ -947,3 +947,10 @@ def test_sidebar_has_sales_entry():
     assert '"/admin/sales"' in source or "'/admin/sales'" in source
     assert "'sales-quotes': 'sales'" in source
     assert "'sales-orders': 'sales'" in source
+
+
+def test_sales_dashboard_more_menu_links_sales_worklists():
+    source = Path("templates/admin/sales/dashboard.html").read_text()
+    assert 'href="/admin/sales/leads"' in source
+    assert 'href="/admin/sales/quotes"' in source
+    assert 'href="/admin/sales/sales-orders"' in source

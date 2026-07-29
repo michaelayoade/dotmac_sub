@@ -9,7 +9,7 @@ system.
 
 The header exposes three navigation actions:
 
-- `More` contains Leads and Sales Orders.
+- `More` contains Leads, Quotes, and Sales Orders.
 - `Pipeline Board` opens the native lead Kanban board.
 - `Pipeline Settings` opens native pipeline administration.
 
