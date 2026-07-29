@@ -47,7 +47,6 @@ class InvoiceWithholdingTaxSnapshot:
             "schema_version": 1,
             "account_id": str(invoice.account_id),
             "policy_version": self.policy_version,
-            "rate_provenance": WITHHOLDING_TAX_RATE_SETTING,
             "source_invoice_id": str(invoice.id),
             "currency": str(invoice.currency or "").strip().upper(),
             "vat_exclusive_amount": str(self.taxable_basis),
@@ -69,8 +68,6 @@ class InvoiceWithholdingTaxDisplay:
     rate_percent: Decimal
     withholding_tax_amount: Decimal
     net_bank_transfer_payable: Decimal
-    policy_version: int
-    rate_provenance: str
 
 
 def invoice_withholding_tax_display(
@@ -92,8 +89,6 @@ def invoice_withholding_tax_display(
         rate_percent=round_money(invoice.withholding_tax_rate),
         withholding_tax_amount=round_money(invoice.withholding_tax_amount or 0),
         net_bank_transfer_payable=round_money(invoice.bank_transfer_net_payable),
-        policy_version=int(invoice.withholding_tax_policy_version or 0),
-        rate_provenance=str(invoice.withholding_tax_rate_provenance or ""),
     )
 
 
@@ -176,7 +171,6 @@ def stage_invoice_withholding_tax_snapshot(
     invoice.bank_transfer_net_payable = total
     invoice.withholding_tax_amount = Decimal("0.00")
     invoice.withholding_tax_rate = None
-    invoice.withholding_tax_rate_provenance = None
 
     if policy.withholding_tax_enabled:
         if subtotal <= Decimal("0.00") or total <= Decimal("0.00"):
@@ -197,7 +191,6 @@ def stage_invoice_withholding_tax_snapshot(
                 invoice_id=str(invoice.id),
             )
         invoice.withholding_tax_rate = rate_percent
-        invoice.withholding_tax_rate_provenance = WITHHOLDING_TAX_RATE_SETTING
         invoice.withholding_tax_amount = withholding_tax_amount
         invoice.bank_transfer_net_payable = net_payable
 

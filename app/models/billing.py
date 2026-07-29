@@ -556,7 +556,6 @@ class Invoice(Base):
     # Immutable customer-WHT snapshot.  It is populated once for an eligible
     # issued invoice and is the sole source for direct-transfer instructions.
     withholding_tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    withholding_tax_rate_provenance: Mapped[str | None] = mapped_column(String(80))
     withholding_tax_amount: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), default=Decimal("0.00")
     )

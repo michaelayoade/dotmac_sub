@@ -44,7 +44,6 @@ def test_invoice_wht_snapshot_migration_upgrades_and_downgrades_sqlite(monkeypat
     }
     assert {
         "withholding_tax_rate",
-        "withholding_tax_rate_provenance",
         "withholding_tax_amount",
         "withholding_tax_taxable_basis",
         "bank_transfer_net_payable",

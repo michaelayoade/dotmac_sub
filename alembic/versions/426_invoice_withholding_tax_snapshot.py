@@ -17,7 +17,6 @@ depends_on = None
 def upgrade() -> None:
     columns = (
         sa.Column("withholding_tax_rate", sa.Numeric(5, 2)),
-        sa.Column("withholding_tax_rate_provenance", sa.String(80)),
         sa.Column(
             "withholding_tax_amount",
             sa.Numeric(12, 2),
@@ -74,7 +73,6 @@ def downgrade() -> None:
         "bank_transfer_net_payable",
         "withholding_tax_taxable_basis",
         "withholding_tax_amount",
-        "withholding_tax_rate_provenance",
         "withholding_tax_rate",
     )
     _validate_downgrade()

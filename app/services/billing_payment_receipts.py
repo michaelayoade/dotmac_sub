@@ -240,6 +240,11 @@ def render_receipt_document_html(context: dict[str, Any]) -> str:
             "</div>"
             for renewal in context["renewals"]
         )
+        renewal_section = (
+            "<div class='details'>"
+            "<div class='details-title'>SERVICE RENEWAL CONFIRMED</div>"
+            f"{renewal_items}</div>"
+        )
 
     wht_section = ""
     if withholding_tax_record is not None:
@@ -250,11 +255,6 @@ def render_receipt_document_html(context: dict[str, Any]) -> str:
             f"<div>Net cash received: {html.escape(_format_amount(context['currency'], withholding_tax_record.net_amount))}</div>"
             f"<div>WHT receivable ({html.escape(str(withholding_tax_record.wht_rate or 0))}%): {html.escape(_format_amount(context['currency'], withholding_tax_record.wht_amount))}</div>"
             "</div>"
-        )
-        renewal_section = (
-            "<div class='details'>"
-            "<div class='details-title'>SERVICE RENEWAL CONFIRMED</div>"
-            f"{renewal_items}</div>"
         )
 
     date_value = context["receipt_date"].strftime("%Y-%m-%d")
