@@ -174,7 +174,9 @@
         <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">This removes the order from active sales views. Linked quote, customer and project records are retained.</p>
         <div class="mt-5 flex justify-end gap-2"><button class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold dark:border-slate-600">Cancel</button><button type="button" data-delete-confirm class="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">Delete Sales Order</button></div>
     </form>
-    <form data-delete-form method="post" action="/admin/sales/sales-order/{{ order.id }}/delete"></form>
+    <form data-delete-form method="post" action="/admin/sales/sales-order/{{ order.id }}/delete">
+        {% include "components/forms/csrf_input.html" %}
+    </form>
 </dialog>
 {% endif %}
 {% endblock %}

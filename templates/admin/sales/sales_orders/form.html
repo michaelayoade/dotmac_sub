@@ -32,6 +32,7 @@
   <header><a href="{{ '/admin/sales/sales-order/' ~ order.id if order else '/admin/sales/sales-order' }}" class="text-sm font-semibold text-cyan-700 hover:underline dark:text-cyan-400">← {{ 'Back to order' if order else 'Sales Orders' }}</a><h1 class="mt-2 font-display text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Sales Order' if order else 'Create Sales Order' }}</h1><p class="mt-1 text-sm text-slate-500 dark:text-slate-400">The native sales-order owner generates the order number and applies the fixed 7.5% VAT.</p></header>
   {% if form_error %}<div role="alert" class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"><strong>Could not save the sales order.</strong> {{ form_error }}</div>{% endif %}
   <form method="post" action="{{ '/admin/sales/sales-order/' ~ order.id ~ '/edit' if order else '/admin/sales/sales-order/new' }}" class="space-y-5">
+    {% include "components/forms/csrf_input.html" %}
     <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
       <h2 class="font-semibold text-slate-900 dark:text-white">Order Information</h2>
       <div class="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
