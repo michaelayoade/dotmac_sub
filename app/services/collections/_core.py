@@ -1541,7 +1541,7 @@ def confirm_financial_access_restoration(
             metadata_={
                 "consequence_id": str(consequence.id),
                 "origin": origin.value,
-                "outcome": outcome,
+                "outcome": consequence_outcome,
                 "preview_fingerprint": preview.fingerprint,
                 "resolved_lock_ids": [str(value) for value in resolved_lock_ids],
                 "resolved_case_ids": [str(value) for value in resolved_case_ids],

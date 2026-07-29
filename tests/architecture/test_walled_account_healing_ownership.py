@@ -1,8 +1,8 @@
-"""Walled-account healing is a registered, scheduled, gated owner command.
+"""Walled-account healing is an account-bound durable-timer owner command.
 
-Before this it was a helper with no Celery task and no beat entry, reachable
-only from `scripts/one_off/unwall_paid_accounts.py`, while the scheduled
-detector hard-coded `apply=False`.
+Before this it was reachable only from a one-off script while the scheduled
+detector hard-coded ``apply=False``. The repair must not add another cohort
+scan: committed funding schedules one exact account timer under ADR 0007 §7.
 """
 
 from __future__ import annotations
@@ -11,16 +11,13 @@ import ast
 from decimal import Decimal
 from pathlib import Path
 
-from app.models.domain_settings import SettingDomain
-from app.models.subscription_engine import SettingValueType
-from app.services.settings_spec import SCHEDULER_BOOLEAN_SETTING_KEYS, get_spec
 from app.services.sot_relationships import all_services
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BASELINE = PROJECT_ROOT / "tests" / "architecture" / "sot_writer_baseline.txt"
 OWNER_MODULE = "app.services.billing.unwall_paid_accounts"
 OWNER_NAME = "financial.walled_account_healing"
-TASK_NAME = "app.tasks.enforcement.heal_walled_paid_accounts"
+TIMER_TRIGGER = "financial.walled_account_healing_due"
 
 
 def _source(relative: str) -> str:
@@ -32,6 +29,7 @@ def test_the_healing_owner_is_declared_in_the_registry() -> None:
     owner = services.get(OWNER_NAME)
     assert owner is not None, "walled-account healing has no declared owner"
     assert owner.module == OWNER_MODULE
+    assert owner.contract is not None, "new healing owner has no typed contract"
 
 
 def test_the_healing_owner_left_the_undeclared_writer_baseline() -> None:
@@ -44,52 +42,34 @@ def test_the_healing_owner_left_the_undeclared_writer_baseline() -> None:
     assert OWNER_MODULE not in entries
 
 
-def test_healing_has_a_registered_task_and_beat_entry() -> None:
+def test_funding_events_schedule_an_exact_durable_timer_and_consume_its_fire() -> None:
+    handler = _source("app/services/events/handlers/billing_lifecycle_projection.py")
+    owner = _source("app/services/billing/unwall_paid_accounts.py")
+
+    assert "EventType.payment_received" in handler
+    assert "EventType.account_credit_deposited" in handler
+    assert "schedule_walled_account_healing(" in handler
+    assert "consume_walled_account_healing_due(" in handler
+    assert f'"{TIMER_TRIGGER}"' in owner
+    assert "ScheduleTimerCommand(" in owner
+    assert "consume_owner_output(" in owner
+    assert 'entity_kind="subscriber"' in owner
+
+
+def test_healing_adds_no_business_wide_scheduler_or_celery_task() -> None:
     tasks = _source("app/tasks/enforcement.py")
     scheduled = _source("app/services/enforcement_scheduled.py")
     beat = _source("app/services/scheduler_config.py")
+    owner = _source("app/services/billing/unwall_paid_accounts.py")
 
-    assert f'name="{TASK_NAME}"' in tasks
-    assert "def heal_walled_paid_accounts(" in tasks
-    assert "def heal_walled_paid_accounts(" in scheduled
-    assert f'task_name="{TASK_NAME}"' in beat
-    assert 'name="walled_account_healing"' in beat
-
-
-def test_the_task_gate_is_a_registered_scheduler_boolean() -> None:
-    """The beat task's on/off switch belongs to the scheduler-boolean registry."""
-    assert (
-        SettingDomain.billing,
-        "walled_account_healing_enabled",
-    ) in SCHEDULER_BOOLEAN_SETTING_KEYS
+    assert "heal_walled_paid_accounts" not in tasks
+    assert "heal_walled_paid_accounts" not in scheduled
+    assert 'name="walled_account_healing"' not in beat
+    assert "run_scheduled_walled_account_healing" not in owner
+    assert 'name="durable_timer_dispatch_runner"' in beat
 
 
-def test_application_is_gated_and_defaults_off() -> None:
-    """The apply gate is a registered boolean that must default to False.
-
-    It is deliberately NOT in ``SCHEDULER_BOOLEAN_SETTING_KEYS``: that set is
-    required to equal exactly the ``_scheduler_setting_enabled`` call sites in
-    ``scheduler_config.py``, and this gate is a per-run decision input resolved
-    in ``enforcement_scheduled.py`` — not a beat-task switch. It still goes
-    through the registered ``resolve_boolean`` path, never an ad-hoc
-    environment/default fallback.
-    """
-    spec = get_spec(SettingDomain.billing, "walled_account_healing_apply_enabled")
-    assert spec is not None, "the apply gate is not a registered setting"
-    assert spec.value_type is SettingValueType.boolean
-    assert spec.default is False, "scheduled application must default to off"
-    assert (
-        SettingDomain.billing,
-        "walled_account_healing_apply_enabled",
-    ) not in SCHEDULER_BOOLEAN_SETTING_KEYS
-
-    scheduled = _source("app/services/enforcement_scheduled.py")
-    assert '"walled_account_healing_apply_enabled"' in scheduled
-    assert "resolve_boolean(" in scheduled
-    assert "apply=apply" in scheduled
-
-
-def test_scheduled_application_requires_proven_zero_overdue_receivable() -> None:
+def test_automated_application_requires_proven_zero_overdue_receivable() -> None:
     owner = _source("app/services/billing/unwall_paid_accounts.py")
 
     assert "def decide_unwall(" in owner

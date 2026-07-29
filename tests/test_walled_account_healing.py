@@ -20,17 +20,28 @@ from uuid import uuid4
 from app.models.admin_alert import AdminAlert
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import BillingMode
+from app.models.durable_timer import DurableTimer
 from app.models.enforcement_lock import EnforcementReason
 from app.models.network_monitoring import AlertStatus
+from app.models.owner_output import OwnerOutputReceipt
 from app.models.subscriber import SubscriberStatus
 from app.services.account_lifecycle import suspend_subscription
 from app.services.billing.unwall_paid_accounts import (
     UNWALL_EXCEPTION_PREFIX,
+    UNWALL_OWNER,
+    UNWALL_TIMER_TRIGGER,
     UnwallDisposition,
+    consume_walled_account_healing_due,
     decide_unwall,
     heal_walled_account,
-    run_scheduled_walled_account_healing,
+    schedule_walled_account_healing,
 )
+from app.services.events.handlers.billing_lifecycle_projection import (
+    BillingLifecycleProjectionHandler,
+)
+from app.services.events.types import Event, EventType
+from app.services.owner_commands import CommandContext
+from app.services.runtime_durable_timers import fire_due_timers
 
 RESIDUE = Decimal("0.50")
 
@@ -76,6 +87,41 @@ def _exception_alert(db, account_id) -> AdminAlert | None:
         .filter(AdminAlert.fingerprint == f"{UNWALL_EXCEPTION_PREFIX}{account_id}")
         .one_or_none()
     )
+
+
+def _context(*, actor: str, scope: str, reason: str) -> CommandContext:
+    return CommandContext.system(
+        actor=actor,
+        scope=scope,
+        reason=reason,
+        idempotency_key=f"pytest:{actor}:{scope}:{uuid4()}",
+    )
+
+
+def _schedule_and_fire(db, account_id):
+    now = datetime.now(UTC)
+    scheduled = schedule_walled_account_healing(
+        db,
+        account_id=account_id,
+        due_at=now,
+        context=_context(
+            actor="pytest:payment-event",
+            scope=str(account_id),
+            reason="settled payment",
+        ),
+    )
+    fired = fire_due_timers(
+        db,
+        now=now + timedelta(minutes=1),
+        context=_context(
+            actor="pytest:timer-runtime",
+            scope="runtime.durable_timers",
+            reason="fire due timers",
+        ),
+    )
+    assert len(fired) == 1
+    assert fired[0].timer_id == scheduled.timer_id
+    return scheduled, fired[0]
 
 
 def test_decision_recomputes_the_exact_overdue_receivable(
@@ -202,32 +248,130 @@ def test_healing_is_idempotent_once_the_account_is_active(
     assert second.restored is False
 
 
-def test_detect_only_pass_records_the_exception_without_restoring(
+def test_payment_schedules_one_exact_account_timer_idempotently(
+    db_session, subscriber, subscription
+):
+    account_id = subscriber.id
+    _wall(db_session, subscription)
+
+    now = datetime.now(UTC)
+    context = _context(
+        actor="pytest:payment-event",
+        scope=str(account_id),
+        reason="settled payment",
+    )
+    first = schedule_walled_account_healing(
+        db_session,
+        account_id=account_id,
+        due_at=now,
+        context=context,
+    )
+    replay = schedule_walled_account_healing(
+        db_session,
+        account_id=account_id,
+        due_at=now,
+        context=context,
+    )
+
+    assert replay.replayed is True
+    assert replay.timer_id == first.timer_id
+    assert db_session.query(DurableTimer).count() == 1
+
+
+def test_payment_event_adapter_schedules_the_named_account_only(
     db_session, subscriber, subscription
 ):
     _wall(db_session, subscription)
-    _overdue_invoice(db_session, subscriber, amount=RESIDUE)
+    event = Event(
+        event_type=EventType.payment_received,
+        payload={"payment_id": str(uuid4())},
+        account_id=subscriber.id,
+    )
 
-    stats = run_scheduled_walled_account_healing(db_session, apply=False)
+    BillingLifecycleProjectionHandler().handle(db_session, event)
 
-    assert stats["applied"] == 0
-    assert stats["blocked_overdue_receivable"] == 1
-    assert stats["exceptions"] == 1
-    assert stats["restored"] == 0
-    db_session.refresh(subscriber)
-    assert subscriber.status is not SubscriberStatus.active
-    assert _exception_alert(db_session, subscriber.id) is not None
+    timers = db_session.query(DurableTimer).all()
+    assert len(timers) == 1
+    assert timers[0].owner == UNWALL_OWNER
+    assert timers[0].entity_kind == "subscriber"
+    assert timers[0].entity_id == subscriber.id
 
 
-def test_applying_pass_heals_only_the_unambiguous_account(
+def test_fired_account_timer_heals_only_the_named_zero_debt_account(
     db_session, subscriber, subscription
 ):
+    account_id = subscriber.id
     _wall(db_session, subscription)
+    scheduled, fired = _schedule_and_fire(db_session, account_id)
 
-    stats = run_scheduled_walled_account_healing(db_session, apply=True)
+    result = consume_walled_account_healing_due(
+        db_session,
+        account_id=account_id,
+        timer_id=scheduled.timer_id,
+        generation=scheduled.generation,
+        event_id=fired.event_id,
+        context=CommandContext.system(
+            actor="pytest:billing-timer-consumer",
+            scope=str(account_id),
+            reason=UNWALL_TIMER_TRIGGER,
+            command_id=fired.event_id,
+            correlation_id=fired.event_id,
+            causation_id=fired.event_id,
+            idempotency_key=f"event:{fired.event_id}",
+        ),
+    )
 
-    assert stats["applied"] == 1
-    assert stats["restored"] == 1
-    assert stats["exceptions"] == 0
+    # The durable dispatcher delivered the fired event after commit; an
+    # explicit redelivery is therefore an exact receipt-backed replay.
+    assert result == "replayed"
     db_session.refresh(subscriber)
     assert subscriber.status is SubscriberStatus.active
+
+
+def test_fired_timer_keeps_fifty_kobo_and_records_one_exception(
+    db_session, subscriber, subscription
+):
+    account_id = subscriber.id
+    _wall(db_session, subscription)
+    _overdue_invoice(db_session, subscriber, amount=RESIDUE)
+    scheduled, fired = _schedule_and_fire(db_session, account_id)
+    context = CommandContext.system(
+        actor="pytest:billing-timer-consumer",
+        scope=str(account_id),
+        reason=UNWALL_TIMER_TRIGGER,
+        command_id=fired.event_id,
+        correlation_id=fired.event_id,
+        causation_id=fired.event_id,
+        idempotency_key=f"event:{fired.event_id}",
+    )
+
+    first = consume_walled_account_healing_due(
+        db_session,
+        account_id=account_id,
+        timer_id=scheduled.timer_id,
+        generation=scheduled.generation,
+        event_id=fired.event_id,
+        context=context,
+    )
+    replay = consume_walled_account_healing_due(
+        db_session,
+        account_id=account_id,
+        timer_id=scheduled.timer_id,
+        generation=scheduled.generation,
+        event_id=fired.event_id,
+        context=context,
+    )
+
+    assert first == "replayed"
+    assert replay == "replayed"
+    db_session.refresh(subscriber)
+    assert subscriber.status is not SubscriberStatus.active
+    alert = _exception_alert(db_session, subscriber.id)
+    assert alert is not None
+    assert alert.details["overdue_receivable_total"] == "0.50"
+    assert (
+        db_session.query(OwnerOutputReceipt)
+        .filter(OwnerOutputReceipt.consumer == UNWALL_OWNER)
+        .count()
+        == 1
+    )

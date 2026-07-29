@@ -27,27 +27,71 @@ from __future__ import annotations
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import BillingMode
 from app.models.collections import FinancialAccessOrigin
+from app.models.durable_timer import DurableTimer, TimerStatus
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.access_resolution import resolve_prepaid_funding
 from app.services.billing_profile import resolve_billing_profile
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 from app.services.notification_suppression import suppress_notifications
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 logger = logging.getLogger(__name__)
 
 _WALLED_STATUSES = (SubscriberStatus.suspended, SubscriberStatus.blocked)
 UNWALL_OWNER = "financial.walled_account_healing"
 UNWALL_EXCEPTION_PREFIX = "walled_account_healing:"
+UNWALL_TIMER_PURPOSE = "walled_account_healing_due"
+UNWALL_TIMER_TRIGGER = "financial.walled_account_healing_due"
+
+_SCHEDULE_HEALING_COMMAND = OwnerCommandDefinition(
+    owner=UNWALL_OWNER,
+    concern="per-account healing timer lifecycle",
+    name="schedule_walled_account_healing",
+)
+_CONSUME_HEALING_COMMAND = OwnerCommandDefinition(
+    owner=UNWALL_OWNER,
+    concern="locked zero-overdue-receivable healing decision",
+    name="consume_walled_account_healing_due",
+)
+
+
+class WalledAccountHealingError(DomainError):
+    """Fail-closed account-bound healing error."""
+
+
+def _error(suffix: str, message: str, **details: object) -> WalledAccountHealingError:
+    return WalledAccountHealingError(
+        code=f"{UNWALL_OWNER}.{suffix}",
+        message=message,
+        details=dict(details),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class WalledHealingTimerSchedule:
+    """Durable identity of one account-bound healing timer."""
+
+    timer_id: UUID
+    account_id: UUID
+    generation: int
+    due_at: datetime
+    replayed: bool
 
 
 @dataclass
@@ -271,6 +315,161 @@ def _clear_unwall_exception(db: Session, account_id: str) -> None:
     )
 
 
+def schedule_walled_account_healing(
+    db: Session,
+    *,
+    account_id: UUID,
+    due_at: datetime,
+    context: CommandContext,
+) -> WalledHealingTimerSchedule:
+    """Schedule one exact account recheck after committed funding arrives.
+
+    The payment event adapter calls this owner command after commit. It never
+    scans subscribers: one payment fact names one account and creates or
+    replaces only that account's timer. Event redelivery is idempotent by the
+    timer's recorded command id.
+    """
+
+    if due_at.tzinfo is None:
+        raise _error(
+            "invalid_timer_due_at",
+            "Walled-account healing requires a timezone-aware due time.",
+            account_id=str(account_id),
+        )
+
+    def _schedule() -> WalledHealingTimerSchedule:
+        from app.services.runtime_durable_timers import (
+            ScheduleTimerCommand,
+            schedule_timer,
+        )
+
+        replay = db.scalar(
+            select(DurableTimer).where(
+                DurableTimer.owner == UNWALL_OWNER,
+                DurableTimer.entity_kind == "subscriber",
+                DurableTimer.entity_id == account_id,
+                DurableTimer.purpose == UNWALL_TIMER_PURPOSE,
+                DurableTimer.command_id == context.command_id,
+            )
+        )
+        if replay is not None:
+            return WalledHealingTimerSchedule(
+                timer_id=replay.id,
+                account_id=account_id,
+                generation=replay.generation,
+                due_at=replay.due_at,
+                replayed=True,
+            )
+        timer = schedule_timer(
+            db,
+            ScheduleTimerCommand(
+                owner=UNWALL_OWNER,
+                entity_kind="subscriber",
+                entity_id=account_id,
+                purpose=UNWALL_TIMER_PURPOSE,
+                due_at=due_at,
+                output_event_type=UNWALL_TIMER_TRIGGER,
+            ),
+            context=context,
+        )
+        return WalledHealingTimerSchedule(
+            timer_id=timer.id,
+            account_id=account_id,
+            generation=timer.generation,
+            due_at=timer.due_at,
+            replayed=False,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_SCHEDULE_HEALING_COMMAND,
+        context=context,
+        operation=_schedule,
+    )
+
+
+def consume_walled_account_healing_due(
+    db: Session,
+    *,
+    account_id: UUID,
+    timer_id: UUID,
+    generation: int,
+    event_id: UUID,
+    context: CommandContext,
+) -> str:
+    """Receipt one fired account timer into locked restoration evaluation."""
+
+    def _consume() -> str:
+        from app.services.events.owner_outputs import consume_owner_output
+
+        def _effect() -> str:
+            timer = db.execute(
+                select(DurableTimer)
+                .where(DurableTimer.id == timer_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if (
+                timer is None
+                or timer.owner != UNWALL_OWNER
+                or timer.entity_kind != "subscriber"
+                or timer.entity_id != account_id
+                or timer.purpose != UNWALL_TIMER_PURPOSE
+                or timer.generation != generation
+                or timer.output_event_type != UNWALL_TIMER_TRIGGER
+                or timer.status is not TimerStatus.fired
+                or timer.fired_event_id != event_id
+            ):
+                raise _error(
+                    "invalid_timer_evidence",
+                    "The healing trigger does not match its durable timer.",
+                    account_id=str(account_id),
+                    timer_id=str(timer_id),
+                    generation=generation,
+                    event_id=str(event_id),
+                )
+            latest_generation = db.scalar(
+                select(func.max(DurableTimer.generation)).where(
+                    DurableTimer.owner == UNWALL_OWNER,
+                    DurableTimer.entity_kind == "subscriber",
+                    DurableTimer.entity_id == account_id,
+                    DurableTimer.purpose == UNWALL_TIMER_PURPOSE,
+                )
+            )
+            if latest_generation != generation:
+                return "skipped_stale_generation"
+            outcome = heal_walled_account(
+                db,
+                str(account_id),
+                require_zero_overdue_receivable=True,
+                actor=context.actor,
+                reason=context.reason,
+                commit=False,
+            )
+            return (
+                outcome.disposition.value
+                if outcome.disposition is not None
+                else UnwallDisposition.failed.value
+            )
+
+        result, _receipt = consume_owner_output(
+            db,
+            consumer=UNWALL_OWNER,
+            event_id=event_id,
+            event_type=UNWALL_TIMER_TRIGGER,
+            producer_owner="runtime.durable_timers",
+            context=context,
+            operation=_effect,
+        )
+        return result if result is not None else "replayed"
+
+    return execute_owner_command(
+        db,
+        definition=_CONSUME_HEALING_COMMAND,
+        context=context,
+        operation=_consume,
+    )
+
+
 def heal_walled_account(
     db: Session,
     account_id: str,
@@ -278,21 +477,29 @@ def heal_walled_account(
     require_zero_overdue_receivable: bool,
     actor: str,
     reason: str,
+    commit: bool = True,
 ) -> UnwallResult:
     """Idempotent owner command: restore one walled account or explain why not.
 
-    ``require_zero_overdue_receivable`` is the scheduled-application gate. A
-    scheduled pass may only apply when the locked recomputation above proves
-    there is no overdue receivable at all; every other row becomes an operator
-    exception with durable evidence rather than an automated guess. Operator-
-    driven runs may pass ``False`` and let the restoration owner apply its own
-    reason-scoped gates.
+    ``require_zero_overdue_receivable`` is the automated-application gate. A
+    fired account timer may only apply when the locked recomputation above
+    proves there is no overdue receivable at all; every other row becomes an
+    operator exception with durable evidence rather than an automated guess.
+    Operator-driven runs may pass ``False`` and let the restoration owner apply
+    its own reason-scoped gates.
 
     Idempotent: healing an already-active account is a no-op that reports
-    ``not_walled`` and resolves any stale exception.
+    ``not_walled`` and resolves any stale exception. ``commit=False`` is the
+    flush-only participant path used inside the contracted timer consumer.
     """
     from app.services.account_lifecycle import compute_account_status
     from app.services.collections import restore_account_services_detailed
+
+    def _finish() -> None:
+        if commit:
+            db.commit()
+        else:
+            db.flush()
 
     decision = decide_unwall(db, account_id)
     result = UnwallResult(
@@ -308,7 +515,7 @@ def heal_walled_account(
         result.disposition = UnwallDisposition.not_walled
         result.new_status = decision.prior_status
         _clear_unwall_exception(db, str(account_id))
-        db.commit()
+        _finish()
         return result
     if require_zero_overdue_receivable and not decision.unambiguous:
         result.disposition = UnwallDisposition.blocked_overdue_receivable
@@ -317,14 +524,14 @@ def heal_walled_account(
             decision,
             disposition=UnwallDisposition.blocked_overdue_receivable,
             detail=(
-                f"Scheduled healing refused: exact overdue receivable "
+                f"Automated healing refused: exact overdue receivable "
                 f"{decision.overdue_receivable_total} across "
                 f"{len(decision.overdue_receivable_invoice_ids)} invoice(s). "
                 "No tolerance is applied; clear or write off the residue, then "
-                "the next pass heals the account automatically."
+                "retry healing or let the next settled funding event recheck it."
             ),
         )
-        db.commit()
+        _finish()
         return result
 
     try:
@@ -354,8 +561,10 @@ def heal_walled_account(
                     "typed restoration outcomes for this account."
                 ),
             )
-        db.commit()
+        _finish()
     except Exception as exc:  # noqa: BLE001 — isolate one bad account from the batch
+        if not commit:
+            raise
         db.rollback()
         result.error = str(exc)
         result.disposition = UnwallDisposition.failed
@@ -375,78 +584,6 @@ def unwall_account(db: Session, account_id: str) -> UnwallResult:
         actor="operator:unwall",
         reason="funded-or-covered account un-wall",
     )
-
-
-def run_scheduled_walled_account_healing(
-    db: Session,
-    *,
-    limit: int = 100,
-    apply: bool = False,
-) -> dict[str, int]:
-    """Bounded scheduled healing pass over the walled cohort.
-
-    Unambiguous only. A candidate is healed automatically ONLY when the locked
-    recomputation proves zero overdue receivable; everything else becomes a
-    durable operator exception. ``apply=False`` still records those exceptions
-    so the cohort is visible before automation is switched on, but changes no
-    service state.
-    """
-    stats = {
-        "candidates": 0,
-        "restored": 0,
-        "not_walled": 0,
-        "blocked_overdue_receivable": 0,
-        "ambiguous_no_change": 0,
-        "exceptions": 0,
-        "errors": 0,
-        "applied": int(apply),
-    }
-    targets = find_walled_paid_account_ids(db, limit=limit)
-    stats["candidates"] = len(targets)
-    for account_id in targets:
-        if not apply:
-            decision = decide_unwall(db, account_id)
-            if decision.walled and not decision.unambiguous:
-                _stage_unwall_exception(
-                    db,
-                    decision,
-                    disposition=UnwallDisposition.blocked_overdue_receivable,
-                    detail=(
-                        "Detected walled account with exact overdue receivable "
-                        f"{decision.overdue_receivable_total}. Scheduled healing "
-                        "is not applying; review or clear the receivable."
-                    ),
-                )
-                stats["blocked_overdue_receivable"] += 1
-                stats["exceptions"] += 1
-            db.commit()
-            continue
-        result = heal_walled_account(
-            db,
-            account_id,
-            require_zero_overdue_receivable=True,
-            actor="service:walled_account_healing",
-            reason="scheduled zero-overdue-receivable healing",
-        )
-        if result.error:
-            stats["errors"] += 1
-            continue
-        disposition = result.disposition
-        if disposition is UnwallDisposition.restored:
-            stats["restored"] += 1
-        elif disposition is UnwallDisposition.not_walled:
-            stats["not_walled"] += 1
-        elif disposition is UnwallDisposition.blocked_overdue_receivable:
-            stats["blocked_overdue_receivable"] += 1
-            stats["exceptions"] += 1
-        elif disposition is UnwallDisposition.ambiguous_no_change:
-            stats["ambiguous_no_change"] += 1
-            stats["exceptions"] += 1
-    logger.info(
-        "walled_account_healing_pass",
-        extra={"event": "walled_account_healing_pass", **stats},
-    )
-    return stats
 
 
 def _account_subscription_ids(db: Session, account_id: str) -> list[str]:

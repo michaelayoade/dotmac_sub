@@ -1514,6 +1514,22 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   exception: `_reanchor_paid_prepaid_invoice_if_lapsed` in `financial.payments`
   still advances the anchor while re-anchoring a lapsed prepaid invoice's
   documentary period; retiring that second writer is a separate, wider change.
+- Walled-account self-heal boundary:
+  `financial.walled_account_healing` owns the exact account-bound repair
+  lifecycle. Every committed `payment_received` or
+  `account_credit_deposited` event schedules or replaces one
+  `runtime.durable_timers` row for that subscriber; no billing task scans the
+  customer or invoice cohort. When the timer fires, the billing lifecycle
+  adapter enters the healing owner once, receipts the timer event, validates
+  timer/entity/generation identity, locks the account, recomputes the exact
+  overdue receivable, and delegates reason-scoped restoration to
+  `access.subscription_lifecycle`. It applies only when the exact overdue
+  receivable is zero. NGN 0.50 therefore remains real debt and produces a
+  durable, deduplicated operator exception rather than being rounded away.
+  Admin, fraud, FUP, and lifecycle-override blockers are never cleared by this
+  owner. Historical accounts predating the event/timer path remain repairable
+  only through the reviewed targeted one-off command; that command is a
+  backfill, not a scheduled decision path.
 - Retired payment-application evidence boundary: the former
   `PaymentPrepaidApplication` runtime is not a current financial or coverage
   owner. Revision `394_retire_payment_prepaid_applications` renames its physical
