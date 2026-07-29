@@ -237,7 +237,7 @@ def _run_command(cutoff: datetime) -> RecordPhase2VerificationCommand:
         observation_started_at=cutoff - timedelta(hours=1),
         observation_ended_at=cutoff,
         code_version="test-phase2-code",
-        database_schema_version="437_billing_phase2_verification_counts",
+        database_schema_version="439_billing_obligation_rating_provenance",
     )
 
 

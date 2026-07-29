@@ -4,8 +4,8 @@ The generic cutover run needs distinct evidence for approved new-cadence
 differences and for obligation gaps/overlaps. These columns remain migration
 evidence only; no billing authority or read path moves.
 
-Revision ID: 437_billing_phase2_verification_counts
-Revises: 436_billing_shadow_verification_evidence
+Revision ID: 438_billing_phase2_verification_counts
+Revises: 437_add_pon_port_admin_enabled
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "437_billing_phase2_verification_counts"
-down_revision = "436_billing_shadow_verification_evidence"
+revision = "438_billing_phase2_verification_counts"
+down_revision = "437_add_pon_port_admin_enabled"
 branch_labels = None
 depends_on = None
 

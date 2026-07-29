@@ -1,4 +1,4 @@
-"""Exercise the PostgreSQL migration boundary that introduces revisions 430-438."""
+"""Exercise the PostgreSQL migration boundary that introduces revisions 430-439."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from app import config as app_config
 ROOT = Path(__file__).resolve().parents[2]
 REVISION_423 = "423_prepaid_opening_funding_reconciliation"
 
-TABLES_430_TO_438 = (
+TABLES_430_TO_439 = (
     "billing_contracts",
     "billing_contract_versions",
     "billing_contract_lines",
@@ -164,7 +164,7 @@ def _restore_pre_430_shape(database_url: URL) -> None:
     """
 
     with psycopg.connect(_psycopg_url(database_url), autocommit=True) as connection:
-        for table_name in reversed(TABLES_430_TO_438):
+        for table_name in reversed(TABLES_430_TO_439):
             connection.execute(
                 sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(
                     sql.Identifier(table_name)
@@ -203,7 +203,7 @@ def test_postgres_upgrades_revision_423_through_current_head(
     try:
         inspector = inspect(engine)
         table_names = set(inspector.get_table_names())
-        assert set(TABLES_430_TO_438) <= table_names
+        assert set(TABLES_430_TO_439) <= table_names
         verification_columns = {
             column["name"]
             for column in inspector.get_columns("billing_cutover_verification_runs")

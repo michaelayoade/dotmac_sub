@@ -4,8 +4,8 @@ New shadow obligations retain every material rating replay input. Existing
 rows remain explicitly incomplete: this migration does not infer historical
 coverage or tax configuration.
 
-Revision ID: 438_billing_obligation_rating_provenance
-Revises: 437_billing_phase2_verification_counts
+Revision ID: 439_billing_obligation_rating_provenance
+Revises: 438_billing_phase2_verification_counts
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "438_billing_obligation_rating_provenance"
-down_revision = "437_billing_phase2_verification_counts"
+revision = "439_billing_obligation_rating_provenance"
+down_revision = "438_billing_phase2_verification_counts"
 branch_labels = None
 depends_on = None
 

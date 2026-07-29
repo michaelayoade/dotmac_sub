@@ -241,7 +241,7 @@ def test_phase2_rating_replay_uses_immutable_provenance() -> None:
         encoding="utf-8"
     )
     migration = (
-        root / "alembic/versions/438_billing_obligation_rating_provenance.py"
+        root / "alembic/versions/439_billing_obligation_rating_provenance.py"
     ).read_text(encoding="utf-8")
 
     for field in (
