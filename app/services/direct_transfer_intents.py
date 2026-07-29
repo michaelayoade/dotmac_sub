@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.domain_settings import SettingDomain
-from app.services import customer_tax_policies, topup_intents
+from app.services import topup_intents
 from app.services.account_credit_deposits import (
     SUPPORTED_CURRENCY,
     AccountCreditDeposits,
@@ -23,6 +23,10 @@ from app.services.account_credit_deposits import (
 from app.services.billing._common import lock_account
 from app.services.common import round_money, to_decimal
 from app.services.domain_errors import DomainError
+from app.services.invoice_withholding_tax_snapshots import (
+    InvoiceWithholdingTaxSnapshotError,
+    stage_invoice_withholding_tax_snapshot,
+)
 from app.services.locking import lock_for_update
 from app.services.owner_commands import (
     CommandContext,
@@ -41,7 +45,6 @@ _CREATE_COMMAND = OwnerCommandDefinition(
 _MINIMUM_SETTING = "topup_min_amount"
 _MAXIMUM_SETTING = "topup_max_amount"
 _TTL_SETTING = "direct_bank_transfer_intent_ttl_days"
-_WITHHOLDING_TAX_RATE_SETTING = "withholding_tax_rate_percent"
 
 
 class DirectTransferIntentError(DomainError, ValueError):
@@ -103,83 +106,26 @@ class DirectTransferIntentResult:
         }
 
 
-def _withholding_tax_rate_percent(db: Session) -> Decimal:
-    raw = resolve_value(db, SettingDomain.billing, _WITHHOLDING_TAX_RATE_SETTING)
-    try:
-        value = round_money(to_decimal(raw))
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise _error(
-            "withholding_tax_configuration_invalid",
-            "Configured withholding-tax percentage is invalid",
-            setting=_WITHHOLDING_TAX_RATE_SETTING,
-        ) from exc
-    if value <= Decimal("0.00") or value >= Decimal("100.00"):
-        raise _error(
-            "withholding_tax_configuration_invalid",
-            "Configured withholding-tax percentage must be greater than 0 and less than 100",
-            setting=_WITHHOLDING_TAX_RATE_SETTING,
-        )
-    return value
-
-
 def _invoice_withholding_tax_snapshot(
     db: Session,
     *,
     account_id: UUID,
     invoice: Invoice,
 ) -> dict[str, object] | None:
-    policy = customer_tax_policies.get_customer_withholding_tax_policy(
-        db,
-        account_id=account_id,
-    )
-    if not policy.withholding_tax_enabled:
-        return None
-
-    subtotal = round_money(invoice.subtotal or 0)
-    vat_amount = round_money(invoice.tax_total or 0)
-    total = round_money(invoice.total or 0)
-    balance_due = round_money(invoice.balance_due or total)
-    if subtotal <= Decimal("0.00") or total <= Decimal("0.00"):
+    if invoice.account_id != account_id:
+        raise _error(
+            "invoice_account_mismatch",
+            "Invoice does not belong to the requested account",
+        )
+    try:
+        snapshot = stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
+    except InvoiceWithholdingTaxSnapshotError as exc:
         raise _error(
             "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax because the tax basis is unavailable",
+            exc.message,
             invoice_id=str(invoice.id),
-        )
-    if total != round_money(subtotal + vat_amount):
-        raise _error(
-            "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax because the tax basis is inconsistent",
-            invoice_id=str(invoice.id),
-        )
-    if balance_due != total:
-        raise _error(
-            "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax after partial settlement or adjustments",
-            invoice_id=str(invoice.id),
-        )
-
-    rate_percent = _withholding_tax_rate_percent(db)
-    wht_amount = round_money(subtotal * rate_percent / Decimal("100.00"))
-    net_amount = round_money(total - wht_amount)
-    if wht_amount <= Decimal("0.00") or net_amount <= Decimal("0.00"):
-        raise _error(
-            "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax with the current configuration",
-            invoice_id=str(invoice.id),
-        )
-    return {
-        "schema_version": 1,
-        "account_id": str(account_id),
-        "policy_version": policy.version,
-        "source_invoice_id": str(invoice.id),
-        "currency": str(invoice.currency or "").strip().upper(),
-        "vat_exclusive_amount": str(subtotal),
-        "vat_amount": str(vat_amount),
-        "gross_amount": str(total),
-        "withholding_tax_rate_percent": str(rate_percent),
-        "withholding_tax_amount": str(wht_amount),
-        "net_amount": str(net_amount),
-    }
+        ) from exc
+    return snapshot.transfer_metadata(invoice)
 
 
 def _configured_integer(db: Session, key: str) -> int:

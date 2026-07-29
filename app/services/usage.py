@@ -1635,6 +1635,12 @@ class UsageCharges(ListResponseMixin):
         from app.services import billing as billing_service
 
         billing_service._recalculate_invoice_totals(db, invoice)
+        if invoice.status == InvoiceStatus.issued:
+            from app.services.invoice_withholding_tax_snapshots import (
+                stage_invoice_withholding_tax_snapshot,
+            )
+
+            stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
         if commit:
             db.commit()
             db.refresh(charge)
