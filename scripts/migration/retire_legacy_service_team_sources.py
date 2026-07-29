@@ -7,7 +7,7 @@ import argparse
 import json
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.services.db_session_adapter import db_session_adapter
@@ -51,7 +51,21 @@ def main() -> int:
     try:
         if args.check:
             with db_session_adapter.read_session() as db:
-                if db.get_bind().dialect.name == "postgresql":
+                bind = db.get_bind()
+                # This gate exists only to protect migration 426's one-time
+                # cutover. Once the composable schema from 438 is present the
+                # cutover has happened, and ordinary later identity drift must
+                # never block a deploy behind a destructive retirement tool.
+                if inspect(bind).has_table("service_team_capability_definitions"):
+                    print(
+                        json.dumps(
+                            {"ready": True, "skipped": "cutover_complete"},
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                    return 0
+                if bind.dialect.name == "postgresql":
                     db.execute(
                         text(
                             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
@@ -86,6 +100,12 @@ def main() -> int:
                     ),
                     "removed_migration_blocking_membership_count": (
                         outcome.removed_migration_blocking_membership_count
+                    ),
+                    "reactivated_native_membership_count": (
+                        outcome.reactivated_native_membership_count
+                    ),
+                    "abandoned_legacy_member_entry_count": (
+                        outcome.abandoned_legacy_member_entry_count
                     ),
                 },
                 indent=2,

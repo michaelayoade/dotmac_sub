@@ -52,6 +52,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
 )
 from app.models.work_order import WorkOrder
+from app.services import service_team_lifecycle
 from app.services.team_inbox_assignment import assign_conversation_to_agent
 
 FIELD_JOB_CHANNEL = InboxChannelType.field_job.value
@@ -97,14 +98,17 @@ def _service_team_id(
     db: Session,
     *,
     work_order_id: uuid.UUID,
-    technician_id: uuid.UUID,
+    profile: TechnicianProfile,
 ) -> uuid.UUID | None:
-    """Resolve the exact team selected by this work assignment.
+    """Resolve the exact team holding this visit.
 
     Multi-team membership is valid and cannot answer which team owns a
     particular visit. The dispatch assignment and its explicit rule are the
-    authoritative decision evidence; missing or conflicting assignments fail
-    closed instead of guessing from membership age or team identity.
+    authoritative decision evidence, and conflicting assignments fail closed
+    instead of guessing from membership age or team identity. A manager-made
+    assignment carries no dispatch rule at all; for that no-evidence case the
+    technician's single active membership is still an unambiguous answer, and
+    only a genuinely ambiguous multi-team technician yields no chat.
     """
 
     team_ids = tuple(
@@ -117,7 +121,7 @@ def _service_team_id(
             .join(ServiceTeam, ServiceTeam.id == DispatchRule.service_team_id)
             .where(
                 WorkOrderAssignmentQueue.work_order_mirror_id == work_order_id,
-                WorkOrderAssignmentQueue.assigned_technician_id == technician_id,
+                WorkOrderAssignmentQueue.assigned_technician_id == profile.id,
                 WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
                 DispatchRule.service_team_id.is_not(None),
                 DispatchRule.is_active.is_(True),
@@ -127,7 +131,18 @@ def _service_team_id(
             .order_by(DispatchRule.service_team_id.asc())
         ).all()
     )
-    return team_ids[0] if len(team_ids) == 1 else None
+    if len(team_ids) == 1:
+        return team_ids[0]
+    if team_ids:
+        return None
+    if profile.system_user_id is None:
+        return None
+    resolution = service_team_lifecycle.resolve_staff_service_teams(
+        db, profile.system_user_id
+    )
+    if resolution.kind is not service_team_lifecycle.ServiceTeamResolutionKind.resolved:
+        return None
+    return resolution.team_ids[0] if len(resolution.team_ids) == 1 else None
 
 
 def _open_conversations_for_technician(
@@ -163,7 +178,7 @@ def open_for_departure(
     team_id = _service_team_id(
         db,
         work_order_id=work_order.id,
-        technician_id=profile.id,
+        profile=profile,
     )
     if team_id is None:
         # No team means no assignment row is possible, and an unassigned job

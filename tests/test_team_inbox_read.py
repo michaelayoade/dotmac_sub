@@ -30,29 +30,31 @@ from app.web.admin import inbox as admin_inbox
 
 
 def _team(db_session, name: str, team_type: str = ServiceTeamType.support.value):
-    capability = service_team_composition.LEGACY_TYPE_CAPABILITIES[team_type]
-    contract = service_team_composition.CAPABILITY_CONTRACTS[capability]
-    if db_session.get(ServiceTeamCapabilityDefinition, capability.value) is None:
-        db_session.add(
-            ServiceTeamCapabilityDefinition(
-                key=capability.value,
-                display_name=contract.display_name,
-                contract_owner=contract.contract_owner,
-                contract_version=contract.contract_version,
-                description=f"Test definition for {capability.value}",
-                is_active=True,
+    capabilities = service_team_composition.LEGACY_TYPE_CAPABILITIES[team_type]
+    for capability in capabilities:
+        contract = service_team_composition.CAPABILITY_CONTRACTS[capability]
+        if db_session.get(ServiceTeamCapabilityDefinition, capability.value) is None:
+            db_session.add(
+                ServiceTeamCapabilityDefinition(
+                    key=capability.value,
+                    display_name=contract.display_name,
+                    contract_owner=contract.contract_owner,
+                    contract_version=contract.contract_version,
+                    description=f"Test definition for {capability.value}",
+                    is_active=True,
+                )
             )
-        )
     team = ServiceTeam(name=name, team_type=team_type)
     db_session.add(team)
     db_session.flush()
-    db_session.add(
-        ServiceTeamCapability(
-            team_id=team.id,
-            capability_key=capability.value,
-            is_active=True,
+    for capability in capabilities:
+        db_session.add(
+            ServiceTeamCapability(
+                team_id=team.id,
+                capability_key=capability.value,
+                is_active=True,
+            )
         )
-    )
     db_session.flush()
     return team
 

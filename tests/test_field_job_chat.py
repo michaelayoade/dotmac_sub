@@ -269,6 +269,70 @@ def test_departure_fails_closed_on_conflicting_work_assignments(db_session):
     assert outcome == team_inbox_field_job.NO_TEAM
 
 
+def test_departure_falls_back_to_single_membership_without_dispatch_rule(db_session):
+    """A manager-made assignment carries no dispatch rule; one membership still
+    answers unambiguously, so the customer keeps their chat."""
+    user = _user(db_session, "ManagerAssigned")
+    profile = _profile(db_session, user)
+    membership_team_id = profile._test_service_team_id
+    subscriber = _subscriber(db_session)
+    work_order = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-manager-assigned",
+    )
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=work_order.id,
+            status=DispatchQueueStatus.assigned,
+            dispatch_rule_id=None,
+            assigned_technician_id=profile.id,
+        )
+    )
+    db_session.commit()
+
+    conversation, outcome = team_inbox_field_job.open_for_departure(
+        db_session, work_order=work_order, profile=profile
+    )
+    db_session.commit()
+
+    assert outcome == team_inbox_field_job.OPENED
+    assert conversation is not None
+    assert conversation.primary_service_team_id == membership_team_id
+
+
+def test_departure_stays_closed_for_multi_team_technician_without_rule(db_session):
+    """Without assignment evidence, a multi-team technician is genuinely
+    ambiguous and the chat must not guess."""
+    user = _user(db_session, "MultiNoRule")
+    profile = _profile(db_session, user)
+    assert user.person_party_id is not None
+    _team_member(db_session, user.person_party_id)
+    subscriber = _subscriber(db_session)
+    work_order = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-multi-no-rule",
+    )
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=work_order.id,
+            status=DispatchQueueStatus.assigned,
+            dispatch_rule_id=None,
+            assigned_technician_id=profile.id,
+        )
+    )
+    db_session.commit()
+
+    conversation, outcome = team_inbox_field_job.open_for_departure(
+        db_session, work_order=work_order, profile=profile
+    )
+    db_session.commit()
+
+    assert conversation is None
+    assert outcome == team_inbox_field_job.NO_TEAM
+
+
 def test_the_departing_technician_holds_the_conversation(db_session):
     """1:1 means the assignment names the technician, not just their team."""
     user = _user(db_session)

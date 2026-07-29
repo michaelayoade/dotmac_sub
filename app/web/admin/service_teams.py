@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.service_team import (
     ServiceTeamCapabilityKey,
+    ServiceTeamRelationshipKind,
     ServiceTeamResponsibilityKey,
+    ServiceTeamScopeType,
 )
 from app.services import service_team_composition, service_team_lifecycle
 from app.services.auth_dependencies import require_permission
@@ -73,7 +75,12 @@ def _base_context(request: Request, db: Session) -> dict:
 def _error_status(error: DomainError) -> int:
     if error.code == "service_team_not_found":
         return 404
-    if error.code in {"service_team_stale", "service_team_name_conflict"}:
+    if error.code in {
+        "service_team_stale",
+        "service_team_name_conflict",
+        "service_team_external_reference_conflict",
+        "service_team_routing_identity_collision",
+    }:
         return 409
     return 400
 
@@ -85,6 +92,20 @@ def _parse_timestamp(value: str) -> datetime:
         raise service_team_lifecycle.ServiceTeamLifecycleError(
             code="service_team_stale",
             message="The lifecycle evidence is invalid; reload the page.",
+        ) from exc
+
+
+def _parse_optional_uuid(value: str, *, field: str) -> UUID | None:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    try:
+        return UUID(cleaned)
+    except ValueError as exc:
+        raise service_team_composition.ServiceTeamCompositionError(
+            code="service_team_composition_invalid",
+            message="The submitted form reference is invalid; reload the page.",
+            details={"field": field},
         ) from exc
 
 
@@ -135,11 +156,21 @@ def _detail_response(
             "detail": detail,
             "capability_keys": tuple(ServiceTeamCapabilityKey),
             "responsibility_keys": tuple(ServiceTeamResponsibilityKey),
+            "scope_types": tuple(ServiceTeamScopeType),
+            "relationship_kinds": tuple(ServiceTeamRelationshipKind),
+            "routing_policy_contracts": tuple(
+                service_team_composition.ROUTING_POLICY_CONTRACTS.values()
+            ),
             "error": error,
             "request_ids": {
                 "active": str(uuid4()),
                 "add_member": str(uuid4()),
                 "capability": str(uuid4()),
+                "scope": str(uuid4()),
+                "relationship": str(uuid4()),
+                "external_reference": str(uuid4()),
+                "routing_policy": str(uuid4()),
+                "routing_policy_id": str(uuid4()),
                 "member_responsibility": {
                     member.member_id: str(uuid4()) for member in detail.members
                 },
@@ -440,6 +471,190 @@ def service_team_set_capability(
                 ),
                 team_id=team_id,
                 capability=capability,
+                is_active=is_active,
+            ),
+        )
+    except DomainError as exc:
+        return _detail_response(
+            request,
+            db,
+            team_id,
+            error=exc.message,
+            status_code=_error_status(exc),
+        )
+    return RedirectResponse(
+        url=f"/admin/system/service-teams/{team_id}",
+        status_code=303,
+    )
+
+
+@router.post("/{team_id}/scopes", response_class=HTMLResponse)
+def service_team_set_scope(
+    request: Request,
+    team_id: UUID,
+    request_id: UUID = Form(...),
+    scope_type: ServiceTeamScopeType = Form(...),
+    geo_area_id: str = Form(default=""),
+    is_active: bool = Form(...),
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission(UPDATE_PERMISSION)),
+):
+    try:
+        parsed_geo_area_id = _parse_optional_uuid(geo_area_id, field="geo_area_id")
+        db_session_adapter.release_read_transaction(db)
+        service_team_composition.set_scope(
+            db,
+            service_team_composition.SetTeamScope(
+                context=_context(
+                    auth,
+                    scope=UPDATE_PERMISSION,
+                    reason="Set service-team scope",
+                    request_id=request_id,
+                ),
+                team_id=team_id,
+                scope_type=scope_type,
+                geo_area_id=parsed_geo_area_id,
+                is_active=is_active,
+            ),
+        )
+    except DomainError as exc:
+        return _detail_response(
+            request,
+            db,
+            team_id,
+            error=exc.message,
+            status_code=_error_status(exc),
+        )
+    return RedirectResponse(
+        url=f"/admin/system/service-teams/{team_id}",
+        status_code=303,
+    )
+
+
+@router.post("/{team_id}/relationships", response_class=HTMLResponse)
+def service_team_set_relationship(
+    request: Request,
+    team_id: UUID,
+    request_id: UUID = Form(...),
+    child_team_id: UUID = Form(...),
+    kind: ServiceTeamRelationshipKind = Form(...),
+    is_active: bool = Form(...),
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission(UPDATE_PERMISSION)),
+):
+    try:
+        db_session_adapter.release_read_transaction(db)
+        service_team_composition.set_relationship(
+            db,
+            service_team_composition.SetTeamRelationship(
+                context=_context(
+                    auth,
+                    scope=UPDATE_PERMISSION,
+                    reason="Set service-team relationship",
+                    request_id=request_id,
+                ),
+                parent_team_id=team_id,
+                child_team_id=child_team_id,
+                kind=kind,
+                is_active=is_active,
+            ),
+        )
+    except DomainError as exc:
+        return _detail_response(
+            request,
+            db,
+            team_id,
+            error=exc.message,
+            status_code=_error_status(exc),
+        )
+    return RedirectResponse(
+        url=f"/admin/system/service-teams/{team_id}",
+        status_code=303,
+    )
+
+
+@router.post("/{team_id}/external-references", response_class=HTMLResponse)
+def service_team_record_external_reference(
+    request: Request,
+    team_id: UUID,
+    request_id: UUID = Form(...),
+    provider: str = Form(...),
+    account_scope: str = Form(...),
+    external_id: str = Form(...),
+    provenance: str = Form(...),
+    is_active: bool = Form(default=True),
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission(UPDATE_PERMISSION)),
+):
+    try:
+        db_session_adapter.release_read_transaction(db)
+        service_team_composition.record_external_reference(
+            db,
+            service_team_composition.RecordTeamExternalReference(
+                context=_context(
+                    auth,
+                    scope=UPDATE_PERMISSION,
+                    reason="Record service-team external reference",
+                    request_id=request_id,
+                ),
+                team_id=team_id,
+                provider=provider,
+                account_scope=account_scope,
+                external_id=external_id,
+                provenance=provenance,
+                observed_at=datetime.now(UTC),
+                is_active=is_active,
+            ),
+        )
+    except DomainError as exc:
+        return _detail_response(
+            request,
+            db,
+            team_id,
+            error=exc.message,
+            status_code=_error_status(exc),
+        )
+    return RedirectResponse(
+        url=f"/admin/system/service-teams/{team_id}",
+        status_code=303,
+    )
+
+
+@router.post("/{team_id}/routing-policies", response_class=HTMLResponse)
+def service_team_set_routing_policy(
+    request: Request,
+    team_id: UUID,
+    request_id: UUID = Form(...),
+    policy_id: UUID = Form(...),
+    route: str = Form(...),
+    priority: int = Form(...),
+    scope_binding_id: str = Form(default=""),
+    is_active: bool = Form(...),
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission(UPDATE_PERMISSION)),
+):
+    domain, _separator, route_key = str(route).partition("|")
+    try:
+        parsed_scope_binding_id = _parse_optional_uuid(
+            scope_binding_id,
+            field="scope_binding_id",
+        )
+        db_session_adapter.release_read_transaction(db)
+        service_team_composition.set_routing_policy(
+            db,
+            service_team_composition.SetTeamRoutingPolicy(
+                context=_context(
+                    auth,
+                    scope=UPDATE_PERMISSION,
+                    reason="Set service-team routing policy",
+                    request_id=request_id,
+                ),
+                policy_id=policy_id,
+                domain=domain,
+                route_key=route_key,
+                team_id=team_id,
+                priority=priority,
+                scope_binding_id=parsed_scope_binding_id,
                 is_active=is_active,
             ),
         )

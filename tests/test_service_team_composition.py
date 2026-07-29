@@ -26,6 +26,14 @@ from app.services import service_team_composition
 from app.services.owner_commands import CommandContext
 
 
+@pytest.fixture(autouse=True)
+def _plain_reads_after_commit(db_session):
+    # Owner commands require a transaction-free session at entry. Keep fixture
+    # attributes loaded across commits (as app adapters do via fresh_reads) so
+    # reading `team.id` between commands does not autobegin a transaction.
+    db_session.expire_on_commit = False
+
+
 def _context(operation: str) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
@@ -151,26 +159,10 @@ def test_team_can_hold_many_capabilities_and_member_responsibilities(db_session)
     )
 
 
-def test_outbound_activity_is_explicit_when_capabilities_disagree(db_session):
-    _seed_capability_vocabulary(db_session)
-    team, _user, _member = _team_and_member(db_session)
-    for capability in (
-        ServiceTeamCapabilityKey.customer_support,
-        ServiceTeamCapabilityKey.field_service,
-    ):
-        service_team_composition.set_capability(
-            db_session,
-            service_team_composition.SetTeamCapability(
-                context=_context(capability.value),
-                team_id=team.id,
-                capability=capability,
-                is_active=True,
-            ),
-        )
-
-    assert (
-        service_team_composition.outbound_activity_for_team(db_session, team.id) is None
-    )
+def test_composition_owns_no_outbound_delivery_decision():
+    # Delivery is a transport concern: domain callers declare the notification
+    # activity explicitly, and capability never derives sender behavior.
+    assert not hasattr(service_team_composition, "outbound_activity_for_team")
 
 
 def test_routing_policy_selects_exact_capability_eligible_team(db_session):
@@ -210,6 +202,8 @@ def test_routing_policy_selects_exact_capability_eligible_team(db_session):
     assert routed.policy_id == policy_id
     assert routed.team_id == team.id
 
+    # Release the read transaction before entering the next public owner command.
+    db_session.commit()
     disabled = service_team_composition.set_routing_policy(
         db_session,
         service_team_composition.SetTeamRoutingPolicy(
@@ -405,6 +399,8 @@ def test_scope_relationship_and_external_observations_are_independent_facts(
         ("workforce provider", "department-42"),
     }
 
+    # Release the read transaction before entering the next public owner command.
+    db_session.commit()
     with pytest.raises(service_team_composition.ServiceTeamCompositionError) as error:
         service_team_composition.set_relationship(
             db_session,
@@ -423,3 +419,73 @@ def test_scope_relationship_and_external_observations_are_independent_facts(
     with pytest.raises(service_team_composition.ServiceTeamCompositionError) as error:
         service_team_composition.scope_bindings_for_team(db_session, team.id)
     assert error.value.code == "service_team_scope_geo_area_inactive"
+
+
+def test_equal_priority_scoped_and_unscoped_routes_resolve_as_ambiguous(db_session):
+    """A genuine winning-priority tie is refused, never broken by row age.
+
+    The partial-unique index only forbids two active *unscoped* policies at the
+    same (domain, route_key, priority). An unscoped policy and a global-scoped
+    one may legally coexist at the same priority, and both match a resolution
+    without a geo area — so the resolver must refuse to pick one.
+    """
+    _seed_capability_vocabulary(db_session)
+    unscoped_team, _user_a, _member_a = _team_and_member(db_session)
+    scoped_team, _user_b, _member_b = _team_and_member(db_session)
+
+    for index, team in enumerate((unscoped_team, scoped_team)):
+        service_team_composition.set_capability(
+            db_session,
+            service_team_composition.SetTeamCapability(
+                context=_context(f"tie-capability-{index}"),
+                team_id=team.id,
+                capability=ServiceTeamCapabilityKey.outage_response,
+                is_active=True,
+            ),
+        )
+    global_scope = service_team_composition.set_scope(
+        db_session,
+        service_team_composition.SetTeamScope(
+            context=_context("tie-global-scope"),
+            team_id=scoped_team.id,
+            scope_type=ServiceTeamScopeType.global_,
+            geo_area_id=None,
+            is_active=True,
+        ),
+    )
+    service_team_composition.set_routing_policy(
+        db_session,
+        service_team_composition.SetTeamRoutingPolicy(
+            context=_context("tie-unscoped-route"),
+            policy_id=uuid4(),
+            domain="network.outage",
+            route_key="incident.primary",
+            team_id=unscoped_team.id,
+            priority=10,
+            scope_binding_id=None,
+            is_active=True,
+        ),
+    )
+    service_team_composition.set_routing_policy(
+        db_session,
+        service_team_composition.SetTeamRoutingPolicy(
+            context=_context("tie-scoped-route"),
+            policy_id=uuid4(),
+            domain="network.outage",
+            route_key="incident.primary",
+            team_id=scoped_team.id,
+            priority=10,
+            scope_binding_id=global_scope.record_id,
+            is_active=True,
+        ),
+    )
+
+    with pytest.raises(service_team_composition.ServiceTeamCompositionError) as error:
+        service_team_composition.resolve_routing_team(
+            db_session,
+            domain="network.outage",
+            route_key="incident.primary",
+        )
+    assert error.value.code == "service_team_routing_ambiguous"
+    assert error.value.details["priority"] == 10
+    assert len(error.value.details["policy_ids"]) == 2

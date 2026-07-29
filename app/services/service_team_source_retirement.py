@@ -103,6 +103,8 @@ class ServiceTeamSourceRetirementOutcome:
     cleared_manager_pointer_count: int
     removed_migration_blocking_membership_count: int
     replayed: bool
+    reactivated_native_membership_count: int = 0
+    abandoned_legacy_member_entry_count: int = 0
 
 
 def _error(
@@ -139,11 +141,29 @@ def _dangling_pointer_count(db: Session) -> int:
     return total
 
 
+@dataclass(frozen=True)
+class _MigrationBlockingMemberResolution:
+    blocker_ids: tuple[UUID, ...]
+    #: Inactive native rows whose active duplicate compat row is being removed;
+    #: restoring them preserves the person's effective membership.
+    reactivate_native_ids: tuple[UUID, ...]
+
+
 def _migration_blocking_member_ids(
     db: Session,
     *,
     lock_identities: bool = False,
 ) -> tuple[UUID, ...]:
+    return _resolve_migration_blocking_members(
+        db, lock_identities=lock_identities
+    ).blocker_ids
+
+
+def _resolve_migration_blocking_members(
+    db: Session,
+    *,
+    lock_identities: bool = False,
+) -> _MigrationBlockingMemberResolution:
     """Return exactly the compatibility rows that migration 426 would reject."""
 
     members = db.scalars(
@@ -235,17 +255,28 @@ def _migration_blocking_member_ids(
             (member.team_id, targets[member.id]),
             [],
         ).append(member)
+    reactivate_native: set[UUID] = set()
     for (_team_id, target_party_id), group in target_groups.items():
         if len(group) <= 1:
             continue
         native = [member for member in group if member.person_id == target_party_id]
         if len(native) == 1:
-            blockers.update(member.id for member in group if member.id != native[0].id)
+            duplicates = [member for member in group if member.id != native[0].id]
+            blockers.update(member.id for member in duplicates)
+            if not native[0].is_active and any(
+                member.is_active for member in duplicates
+            ):
+                # Deleting the person's only active row would silently end
+                # their membership; the native row is restored instead.
+                reactivate_native.add(native[0].id)
         else:
             # Several compatibility principals resolving to one Party are
             # conflicting observations. Do not choose a membership winner.
             blockers.update(member.id for member in group)
-    return tuple(sorted(blockers, key=str))
+    return _MigrationBlockingMemberResolution(
+        blocker_ids=tuple(sorted(blockers, key=str)),
+        reactivate_native_ids=tuple(sorted(reactivate_native, key=str)),
+    )
 
 
 def audit_legacy_service_team_sources(
@@ -351,14 +382,21 @@ def retire_legacy_service_team_sources(
                         "Legacy and native team identity disagree.",
                     )
 
-        migration_blockers = set(
-            _migration_blocking_member_ids(db, lock_identities=True)
-        )
+        resolution = _resolve_migration_blocking_members(db, lock_identities=True)
+        migration_blockers = set(resolution.blocker_ids)
         removed_members = len(migration_blockers)
+        reactivated_members = 0
+        for member in members:
+            if member.id in resolution.reactivate_native_ids and not member.is_active:
+                # The person's only active row is a duplicate compat row being
+                # removed; keeping their effective membership means restoring
+                # the native row, not inventing a new one.
+                member.is_active = True
+                reactivated_members += 1
         if migration_blockers:
             # Core deletion is intentional: this command runs before migration
-            # 437, so ORM relationship cascades must not query the not-yet-created
-            # responsibility table. After 437 the FK itself cascades safely.
+            # 438, so ORM relationship cascades must not query the not-yet-created
+            # responsibility table. After 438 the FK itself cascades safely.
             db.execute(
                 delete(ServiceTeamMember).where(
                     ServiceTeamMember.id.in_(migration_blockers)
@@ -370,8 +408,15 @@ def retire_legacy_service_team_sources(
                 team.manager_person_id = None
                 cleared_managers += 1
         retired_sources = 0
+        abandoned_member_entries = 0
         for setting in settings:
             if setting.is_active:
+                if setting.key == "support_service_team_members" and isinstance(
+                    setting.value_json, list
+                ):
+                    # Deliberately not imported; counted so the operator record
+                    # shows how many legacy member entries were left behind.
+                    abandoned_member_entries = len(setting.value_json)
                 setting.is_active = False
                 retired_sources += 1
 
@@ -394,6 +439,8 @@ def retire_legacy_service_team_sources(
             "retired_source_count": retired_sources,
             "cleared_manager_pointer_count": cleared_managers,
             "removed_migration_blocking_membership_count": removed_members,
+            "reactivated_native_membership_count": reactivated_members,
+            "abandoned_legacy_member_entry_count": abandoned_member_entries,
         }
         stage_audit_event(
             db,
@@ -420,6 +467,8 @@ def retire_legacy_service_team_sources(
             cleared_manager_pointer_count=cleared_managers,
             removed_migration_blocking_membership_count=removed_members,
             replayed=False,
+            reactivated_native_membership_count=reactivated_members,
+            abandoned_legacy_member_entry_count=abandoned_member_entries,
         )
 
     return execute_owner_command(

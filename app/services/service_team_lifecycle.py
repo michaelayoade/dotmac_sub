@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
+from app.models.gis import GeoArea
 from app.models.party import Party, PartyIdentityStatus, PartyType
 from app.models.service_team import (
     ServiceTeam,
@@ -158,6 +159,16 @@ class ServiceTeamDetail:
     members: tuple[ServiceTeamMemberView, ...]
     available_staff: tuple[StaffOption, ...]
     actions: ServiceTeamActionEligibility
+    scope_bindings: tuple[service_team_composition.TeamScopeBinding, ...]
+    relationships: tuple[service_team_composition.TeamRelationshipEdge, ...]
+    external_references: tuple[
+        service_team_composition.TeamExternalReferenceObservation, ...
+    ]
+    routing_policies: tuple[service_team_composition.TeamRoutingPolicyBinding, ...]
+    geo_area_labels: dict[UUID, str]
+    geo_area_options: tuple[tuple[UUID, str], ...]
+    related_team_names: dict[UUID, str]
+    related_team_options: tuple[tuple[UUID, str], ...]
 
 
 @dataclass(frozen=True)
@@ -888,11 +899,84 @@ def get_team(db: Session, team_id: UUID) -> ServiceTeamDetail:
             can_deactivate=False,
             lifecycle_block_reason=None,
         )
+    scope_bindings = service_team_composition.scope_bindings_for_team(
+        db,
+        team.id,
+        active_only=False,
+    )
+    relationships = service_team_composition.relationships_for_team(
+        db,
+        team.id,
+        active_only=False,
+    )
+    external_references = service_team_composition.external_references_for_team(
+        db,
+        team.id,
+        active_only=False,
+    )
+    routing_policies = service_team_composition.routing_policies_for_team(
+        db,
+        team.id,
+        active_only=False,
+    )
+    bound_geo_area_ids = {
+        binding.geo_area_id
+        for binding in scope_bindings
+        if binding.geo_area_id is not None
+    }
+    geo_area_labels = (
+        {
+            geo_area_id: name
+            for geo_area_id, name in db.execute(
+                select(GeoArea.id, GeoArea.name).where(
+                    GeoArea.id.in_(bound_geo_area_ids)
+                )
+            ).all()
+        }
+        if bound_geo_area_ids
+        else {}
+    )
+    geo_area_options = tuple(
+        (geo_area_id, name)
+        for geo_area_id, name in db.execute(
+            select(GeoArea.id, GeoArea.name)
+            .where(GeoArea.is_active.is_(True))
+            .order_by(GeoArea.name.asc(), GeoArea.id.asc())
+        ).all()
+    )
+    related_team_ids = {edge.parent_team_id for edge in relationships} | {
+        edge.child_team_id for edge in relationships
+    }
+    related_team_names = (
+        {
+            related_team_id: name
+            for related_team_id, name in db.execute(
+                select(ServiceTeam.id, ServiceTeam.name).where(
+                    ServiceTeam.id.in_(related_team_ids)
+                )
+            ).all()
+        }
+        if related_team_ids
+        else {}
+    )
+    related_team_options = tuple(
+        (option_team_id, name)
+        for option_team_id, name in list_active_team_options(db)
+        if option_team_id != team.id
+    )
     return ServiceTeamDetail(
         team=team_view,
         members=members,
         available_staff=available_staff,
         actions=actions,
+        scope_bindings=scope_bindings,
+        relationships=relationships,
+        external_references=external_references,
+        routing_policies=routing_policies,
+        geo_area_labels=geo_area_labels,
+        geo_area_options=geo_area_options,
+        related_team_names=related_team_names,
+        related_team_options=related_team_options,
     )
 
 

@@ -606,6 +606,52 @@ def test_team_lead_sees_the_whole_team_queue(db_session):
     assert theirs.id in seen
 
 
+def test_a_lead_responsibility_without_the_rbac_scope_stays_self(db_session):
+    """Operational responsibility alone never widens the audience."""
+    lead = uuid4()
+    teammate = uuid4()
+    team = _team(db_session)
+    _member(
+        db_session,
+        team,
+        lead,
+        responsibility=ServiceTeamResponsibilityKey.queue_lead,
+    )
+    _member(db_session, team, teammate)
+    theirs = _ticket(db_session, title="Theirs", team=team, assigned_to=teammate)
+
+    scope = _scope(db_session, _principal(lead))
+    assert scope.audience is WorkqueueAudience.self_
+    seen = {item.item_id for item in _fetch(ticket_provider, db_session, scope)}
+    assert theirs.id not in seen
+
+    # Explicitly asking for `team` is clamped back to `self` too.
+    requested = _scope(db_session, _principal(lead), requested_audience="team")
+    assert requested.audience is WorkqueueAudience.self_
+
+
+def test_the_rbac_scope_without_a_responsibility_stays_self(db_session):
+    """RBAC alone cannot invent operational team ownership."""
+    person = uuid4()
+    teammate = uuid4()
+    team = _team(db_session)
+    _member(db_session, team, person)
+    _member(db_session, team, teammate)
+    theirs = _ticket(db_session, title="Theirs", team=team, assigned_to=teammate)
+
+    scope = _scope(db_session, _principal(person, scopes=(AUDIENCE_TEAM_SCOPE,)))
+    assert scope.audience is WorkqueueAudience.self_
+    seen = {item.item_id for item in _fetch(ticket_provider, db_session, scope)}
+    assert theirs.id not in seen
+
+    requested = _scope(
+        db_session,
+        _principal(person, scopes=(AUDIENCE_TEAM_SCOPE,)),
+        requested_audience="team",
+    )
+    assert requested.audience is WorkqueueAudience.self_
+
+
 def test_org_audience_is_clamped_to_what_the_principal_holds(db_session):
     person = uuid4()
     other_team = _team(db_session, "Other")

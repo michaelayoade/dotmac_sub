@@ -69,6 +69,22 @@ membership rows, inactive or ambiguous identity blockers, missing-principal
 rows, or conflicting duplicate targets, and stages aggregate audit/event
 evidence atomically. Exact replay makes no changes.
 
+Duplicate resolution details worth reviewing in the evidence counters:
+
+- When a native Party row and a compatibility row resolve to the same
+  (team, Party), the compatibility row is removed. If the native row was
+  inactive while the removed compatibility row was the person's only active
+  membership, the native row is reactivated so the person's effective
+  membership survives (`reactivated_native_membership_count`).
+- When several compatibility rows resolve to one Party with no native row,
+  none wins and all are removed.
+- Entries in the retired `support_service_team_members` setting are counted
+  (`abandoned_legacy_member_entry_count`) but never imported.
+
+The deploy gate is self-retiring: once the composable schema from migration
+438 exists, `--check` reports ready and skips the audit, so later ordinary
+identity drift can never block a deploy behind this one-time tool.
+
 Rerun `--check`, then rehearse `alembic upgrade heads` against a restored
 pre-cutover backup. Do not stamp past migration 426, edit migration 426, infer
 GeoArea from a region label, or create CRM membership/Party identity to make the
@@ -78,8 +94,26 @@ gate pass.
 
 Migration 438 is the expand/backfill phase. It registers capability vocabulary,
 adds capability, responsibility, topology, typed scope, external-reference,
-and routing-policy tables, and copies existing scalar state only into shadow
-bindings. It seeds no team, member, manager, assignment, route, or access grant.
+and routing-policy tables, and copies existing scalar state into shadow
+bindings: legacy `team_type` becomes capabilities (legacy `operations` teams
+also receive `outage_response`), legacy member `role` becomes responsibilities
+for active members, a still-set `manager_person_id` is preserved as a
+membership row (never reactivating a deactivated one) with the
+`accountable_manager` responsibility, and `workforce_*` pairs become external
+references with a casefolded provider. It also seeds three `network.outage`
+continuity routes replicating the retired oldest-active-team-of-type
+selection, each only when a matching team exists and no policy for the route
+exists yet. It creates no new team, no new person identity, and no access
+grant, and it never overrides an operator-configured route.
+
+After cutover, verify shadow agreement with the read-only drift gate:
+
+```bash
+python -m scripts.migration.inspect_service_team_shadow_drift
+```
+
+It prints the five drift counters and exits nonzero while any legacy pointer
+lacks its composed equivalent.
 
 Legacy scalar columns remain nullable shadow inputs. They may be removed only
 after the five-field composition drift query is zero for a reviewed complete

@@ -58,13 +58,39 @@ def test_migration_adds_every_composable_relation_and_only_seeds_vocabulary():
     ):
         assert f'"{table}"' in source
 
-    assert set(migration.LEGACY_TYPE_CAPABILITIES.values()) <= {
+    backfilled_capabilities = {
+        capability
+        for capabilities in migration.LEGACY_TYPE_CAPABILITIES.values()
+        for capability in capabilities
+    }
+    assert backfilled_capabilities <= {
         item[0] for item in migration.CAPABILITY_DEFINITIONS
     }
     assert "INSERT INTO service_teams" not in source
     assert "INSERT INTO system_users" not in source
     assert "INSERT INTO parties" not in source
-    assert "INSERT INTO service_team_routing_policies" not in source
+
+
+def test_routing_backfill_is_legacy_derived_continuity_only():
+    """Routing rows come only from legacy scalar authority, never invented.
+
+    The continuity backfill replicates the retired oldest-active-team-of-type
+    outage selection so incidents keep an owner at cutover. It must be guarded
+    so operator-configured routes are never overridden.
+    """
+
+    migration = _load_migration()
+    source = MIGRATION.read_text(encoding="utf-8")
+
+    routing_inserts = source.count("INSERT INTO service_team_routing_policies")
+    assert routing_inserts == 1
+    assert "NOT EXISTS" in source
+    assert "WHERE teams.team_type = :legacy_type" in source
+    assert {route_key for route_key, _ in migration.LEGACY_OUTAGE_ROUTES} == {
+        "incident.primary",
+        "incident.support_watcher",
+        "incident.field_watcher",
+    }
 
 
 def test_migration_is_forward_fix_only():

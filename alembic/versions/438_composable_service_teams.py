@@ -18,6 +18,8 @@ must not reconstruct scalar authority.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -69,12 +71,21 @@ CAPABILITY_DEFINITIONS = (
 )
 
 LEGACY_TYPE_CAPABILITIES = {
-    "support": "customer_support",
-    "billing": "billing_operations",
-    "field_service": "field_service",
-    "project_management": "project_delivery",
-    "operations": "network_operations",
+    "support": ("customer_support",),
+    "billing": ("billing_operations",),
+    "field_service": ("field_service",),
+    "project_management": ("project_delivery",),
+    # Legacy operations teams owned outages, so they carry both capabilities.
+    "operations": ("network_operations", "outage_response"),
 }
+
+# Continuity routes replicating the retired oldest-active-team-of-type
+# selection, so outages keep an owner and watchers at cutover.
+LEGACY_OUTAGE_ROUTES = (
+    ("incident.primary", "operations"),
+    ("incident.support_watcher", "support"),
+    ("incident.field_watcher", "field_service"),
+)
 
 LEGACY_ROLE_RESPONSIBILITIES = {
     "member": ("agent",),
@@ -113,7 +124,13 @@ def _create_capability_tables() -> None:
         sa.column("contract_version", sa.Integer()),
         sa.column("description", sa.Text()),
         sa.column("is_active", sa.Boolean()),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
     )
+    # Timestamps are explicit: on squash-path databases this table is created
+    # from model metadata without server defaults, so relying on the
+    # server_default declared above raises NotNullViolation.
+    seeded_at = datetime.now(UTC)
     op.bulk_insert(
         definition_table,
         [
@@ -124,6 +141,8 @@ def _create_capability_tables() -> None:
                 "contract_version": 1,
                 "description": description,
                 "is_active": True,
+                "created_at": seeded_at,
+                "updated_at": seeded_at,
             }
             for key, display_name, owner, description in CAPABILITY_DEFINITIONS
         ],
@@ -413,17 +432,18 @@ def _create_scope_reference_and_routing_tables() -> None:
 
 
 def _backfill_shadow_bindings(bind) -> None:
-    for legacy_type, capability_key in LEGACY_TYPE_CAPABILITIES.items():
-        bind.execute(
-            sa.text(
-                "INSERT INTO service_team_capabilities "
-                "(id, team_id, capability_key, is_active, created_at, updated_at) "
-                "SELECT gen_random_uuid(), id, :capability_key, TRUE, now(), now() "
-                "FROM service_teams WHERE team_type = :legacy_type "
-                "ON CONFLICT (team_id, capability_key) DO NOTHING"
-            ),
-            {"legacy_type": legacy_type, "capability_key": capability_key},
-        )
+    for legacy_type, capability_keys in LEGACY_TYPE_CAPABILITIES.items():
+        for capability_key in capability_keys:
+            bind.execute(
+                sa.text(
+                    "INSERT INTO service_team_capabilities "
+                    "(id, team_id, capability_key, is_active, created_at, updated_at) "
+                    "SELECT gen_random_uuid(), id, :capability_key, TRUE, now(), now() "
+                    "FROM service_teams WHERE team_type = :legacy_type "
+                    "ON CONFLICT (team_id, capability_key) DO NOTHING"
+                ),
+                {"legacy_type": legacy_type, "capability_key": capability_key},
+            )
 
     for legacy_role, responsibility_keys in LEGACY_ROLE_RESPONSIBILITIES.items():
         for responsibility_key in responsibility_keys:
@@ -434,7 +454,7 @@ def _backfill_shadow_bindings(bind) -> None:
                     "created_at, updated_at) "
                     "SELECT gen_random_uuid(), id, :responsibility_key, TRUE, "
                     "now(), now() FROM service_team_members "
-                    "WHERE role = :legacy_role "
+                    "WHERE role = :legacy_role AND is_active IS TRUE "
                     "ON CONFLICT (membership_id, responsibility_key) DO NOTHING"
                 ),
                 {
@@ -445,13 +465,15 @@ def _backfill_shadow_bindings(bind) -> None:
 
     # manager_person_id is a legacy pointer, not a second manager authority.
     # Preserve its current meaning only as a responsibility on a membership.
+    # DO NOTHING: a deliberately deactivated membership must stay deactivated
+    # even when a stale manager pointer still references it.
     bind.execute(
         sa.text(
             "INSERT INTO service_team_members "
             "(id, team_id, person_id, role, is_active, created_at) "
             "SELECT gen_random_uuid(), id, manager_person_id, NULL, TRUE, now() "
             "FROM service_teams WHERE manager_person_id IS NOT NULL "
-            "ON CONFLICT (team_id, person_id) DO UPDATE SET is_active = TRUE"
+            "ON CONFLICT (team_id, person_id) DO NOTHING"
         )
     )
     bind.execute(
@@ -465,6 +487,7 @@ def _backfill_shadow_bindings(bind) -> None:
             "ON teams.id = members.team_id "
             "AND teams.manager_person_id = members.person_id "
             "WHERE teams.manager_person_id IS NOT NULL "
+            "AND members.is_active IS TRUE "
             "ON CONFLICT (membership_id, responsibility_key) DO NOTHING"
         )
     )
@@ -473,7 +496,7 @@ def _backfill_shadow_bindings(bind) -> None:
             "INSERT INTO service_team_external_references "
             "(id, team_id, provider, account_scope, external_id, provenance, "
             "observed_at, is_active, created_at, updated_at) "
-            "SELECT gen_random_uuid(), id, workforce_system, 'default', "
+            "SELECT gen_random_uuid(), id, lower(workforce_system), 'default', "
             "workforce_department_reference, 'legacy_service_team_observation', "
             "COALESCE(updated_at, created_at, now()), TRUE, now(), now() "
             "FROM service_teams "
@@ -482,6 +505,40 @@ def _backfill_shadow_bindings(bind) -> None:
             "ON CONFLICT (provider, account_scope, external_id) DO NOTHING"
         )
     )
+
+
+def _seed_outage_continuity_routes(bind) -> None:
+    """Replicate the retired oldest-active-team-of-type outage selection.
+
+    Explicit routing replaces implicit selection; without these rows every
+    outage would activate with no operational owner or watchers until an
+    operator configures routes by hand. Idempotent: each route is seeded only
+    when no policy (active or not) exists for it, so operator changes are
+    never overridden on re-run.
+    """
+
+    for route_key, legacy_type in LEGACY_OUTAGE_ROUTES:
+        bind.execute(
+            sa.text(
+                "INSERT INTO service_team_routing_policies "
+                "(id, domain, route_key, team_id, scope_binding_id, priority, "
+                "is_active, created_at, updated_at) "
+                "SELECT gen_random_uuid(), 'network.outage', "
+                "CAST(:route_key AS VARCHAR), teams.id, "
+                "NULL, 100, TRUE, now(), now() "
+                "FROM service_teams AS teams "
+                "WHERE teams.team_type = :legacy_type "
+                "AND teams.is_active IS TRUE "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM service_team_routing_policies AS existing "
+                "  WHERE existing.domain = 'network.outage' "
+                "  AND existing.route_key = CAST(:route_key AS VARCHAR)"
+                ") "
+                "ORDER BY teams.created_at ASC "
+                "LIMIT 1"
+            ),
+            {"route_key": route_key, "legacy_type": legacy_type},
+        )
 
 
 def upgrade() -> None:
@@ -499,6 +556,7 @@ def upgrade() -> None:
         server_default=None,
     )
     _backfill_shadow_bindings(bind)
+    _seed_outage_continuity_routes(bind)
 
 
 def downgrade() -> None:

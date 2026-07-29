@@ -81,7 +81,6 @@ class CapabilityContract:
     display_name: str
     contract_owner: str
     contract_version: int
-    outbound_activity: str
 
 
 @dataclass(frozen=True)
@@ -101,42 +100,36 @@ CAPABILITY_CONTRACTS: Mapping[ServiceTeamCapabilityKey, CapabilityContract] = (
                 display_name="Customer support",
                 contract_owner="support.ticket_lifecycle",
                 contract_version=1,
-                outbound_activity="support_ticket",
             ),
             ServiceTeamCapabilityKey.billing_operations: CapabilityContract(
                 key=ServiceTeamCapabilityKey.billing_operations,
                 display_name="Billing operations",
                 contract_owner="billing.account_lifecycle",
                 contract_version=1,
-                outbound_activity="billing_invoice",
             ),
             ServiceTeamCapabilityKey.field_service: CapabilityContract(
                 key=ServiceTeamCapabilityKey.field_service,
                 display_name="Field service",
                 contract_owner="operations.work_orders",
                 contract_version=1,
-                outbound_activity="field_service",
             ),
             ServiceTeamCapabilityKey.project_delivery: CapabilityContract(
                 key=ServiceTeamCapabilityKey.project_delivery,
                 display_name="Project delivery",
                 contract_owner="operations.project_lifecycle",
                 contract_version=1,
-                outbound_activity="project_update",
             ),
             ServiceTeamCapabilityKey.network_operations: CapabilityContract(
                 key=ServiceTeamCapabilityKey.network_operations,
                 display_name="Network operations",
                 contract_owner="network.topology",
                 contract_version=1,
-                outbound_activity="operations",
             ),
             ServiceTeamCapabilityKey.outage_response: CapabilityContract(
                 key=ServiceTeamCapabilityKey.outage_response,
                 display_name="Outage response",
                 contract_owner="network.outage_lifecycle",
                 contract_version=1,
-                outbound_activity="operations",
             ),
         }
     )
@@ -171,14 +164,20 @@ ROUTING_POLICY_CONTRACTS: Mapping[
     }
 )
 
-LEGACY_TYPE_CAPABILITIES: Mapping[str, ServiceTeamCapabilityKey] = MappingProxyType(
-    {
-        "support": ServiceTeamCapabilityKey.customer_support,
-        "billing": ServiceTeamCapabilityKey.billing_operations,
-        "field_service": ServiceTeamCapabilityKey.field_service,
-        "project_management": ServiceTeamCapabilityKey.project_delivery,
-        "operations": ServiceTeamCapabilityKey.network_operations,
-    }
+LEGACY_TYPE_CAPABILITIES: Mapping[str, tuple[ServiceTeamCapabilityKey, ...]] = (
+    MappingProxyType(
+        {
+            "support": (ServiceTeamCapabilityKey.customer_support,),
+            "billing": (ServiceTeamCapabilityKey.billing_operations,),
+            "field_service": (ServiceTeamCapabilityKey.field_service,),
+            "project_management": (ServiceTeamCapabilityKey.project_delivery,),
+            # Legacy operations teams owned outages, so they carry both.
+            "operations": (
+                ServiceTeamCapabilityKey.network_operations,
+                ServiceTeamCapabilityKey.outage_response,
+            ),
+        }
+    )
 )
 
 LEGACY_ROLE_RESPONSIBILITIES: Mapping[str, tuple[ServiceTeamResponsibilityKey, ...]] = (
@@ -304,6 +303,16 @@ class TeamExternalReferenceObservation:
     external_id: str
     provenance: str
     observed_at: datetime
+    is_active: bool
+
+
+@dataclass(frozen=True)
+class TeamRoutingPolicyBinding:
+    policy_id: UUID
+    domain: str
+    route_key: str
+    priority: int
+    scope_binding_id: UUID | None
     is_active: bool
 
 
@@ -1009,16 +1018,6 @@ def capabilities_by_team(
     )
 
 
-def outbound_activity_for_team(db: Session, team_id: UUID) -> str | None:
-    """Return one governed activity or require the caller to choose explicitly."""
-
-    activities = {
-        CAPABILITY_CONTRACTS[key].outbound_activity
-        for key in capabilities_for_team(db, team_id)
-    }
-    return next(iter(activities)) if len(activities) == 1 else None
-
-
 def scope_bindings_for_team(
     db: Session,
     team_id: UUID,
@@ -1194,6 +1193,38 @@ def external_references_for_team(
             external_id=row.external_id,
             provenance=row.provenance,
             observed_at=row.observed_at,
+            is_active=row.is_active,
+        )
+        for row in rows
+    )
+
+
+def routing_policies_for_team(
+    db: Session,
+    team_id: UUID,
+    *,
+    active_only: bool = True,
+) -> tuple[TeamRoutingPolicyBinding, ...]:
+    statement = select(ServiceTeamRoutingPolicy).where(
+        ServiceTeamRoutingPolicy.team_id == team_id
+    )
+    if active_only:
+        statement = statement.where(ServiceTeamRoutingPolicy.is_active.is_(True))
+    rows = db.scalars(
+        statement.order_by(
+            ServiceTeamRoutingPolicy.domain.asc(),
+            ServiceTeamRoutingPolicy.route_key.asc(),
+            ServiceTeamRoutingPolicy.priority.asc(),
+            ServiceTeamRoutingPolicy.id.asc(),
+        )
+    ).all()
+    return tuple(
+        TeamRoutingPolicyBinding(
+            policy_id=row.id,
+            domain=row.domain,
+            route_key=row.route_key,
+            priority=row.priority,
+            scope_binding_id=row.scope_binding_id,
             is_active=row.is_active,
         )
         for row in rows
@@ -1466,23 +1497,24 @@ def inspect_shadow_drift(db: Session) -> CompositionShadowDrift:
     """Five-pointer verification before the legacy scalar columns may contract."""
 
     missing_type_team_ids: set[UUID] = set()
-    for legacy_type, capability in LEGACY_TYPE_CAPABILITIES.items():
-        capability_binding = aliased(ServiceTeamCapability)
-        missing_type_team_ids.update(
-            db.scalars(
-                select(ServiceTeam.id)
-                .outerjoin(
-                    capability_binding,
-                    (capability_binding.team_id == ServiceTeam.id)
-                    & (capability_binding.capability_key == capability.value)
-                    & (capability_binding.is_active.is_(True)),
-                )
-                .where(
-                    ServiceTeam.team_type == legacy_type,
-                    capability_binding.id.is_(None),
-                )
-            ).all()
-        )
+    for legacy_type, capabilities in LEGACY_TYPE_CAPABILITIES.items():
+        for capability in capabilities:
+            capability_binding = aliased(ServiceTeamCapability)
+            missing_type_team_ids.update(
+                db.scalars(
+                    select(ServiceTeam.id)
+                    .outerjoin(
+                        capability_binding,
+                        (capability_binding.team_id == ServiceTeam.id)
+                        & (capability_binding.capability_key == capability.value)
+                        & (capability_binding.is_active.is_(True)),
+                    )
+                    .where(
+                        ServiceTeam.team_type == legacy_type,
+                        capability_binding.id.is_(None),
+                    )
+                ).all()
+            )
     unknown_type_team_ids = db.scalars(
         select(ServiceTeam.id).where(
             ServiceTeam.team_type.is_not(None),
@@ -1564,7 +1596,10 @@ def inspect_shadow_drift(db: Session) -> CompositionShadowDrift:
         .outerjoin(
             ServiceTeamExternalReference,
             (ServiceTeamExternalReference.team_id == ServiceTeam.id)
-            & (ServiceTeamExternalReference.provider == ServiceTeam.workforce_system)
+            & (
+                ServiceTeamExternalReference.provider
+                == func.lower(ServiceTeam.workforce_system)
+            )
             & (
                 ServiceTeamExternalReference.external_id
                 == ServiceTeam.workforce_department_reference

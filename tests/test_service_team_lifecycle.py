@@ -27,6 +27,14 @@ from app.services import service_team_composition, service_team_lifecycle
 from app.services.owner_commands import CommandContext
 
 
+@pytest.fixture(autouse=True)
+def _plain_reads_after_commit(db_session):
+    # Owner commands require a transaction-free session at entry. Keep fixture
+    # attributes loaded across commits (as app adapters do via fresh_reads) so
+    # reading `team.id` between commands does not autobegin a transaction.
+    db_session.expire_on_commit = False
+
+
 def _context(operation: str) -> CommandContext:
     command_id = uuid4()
     return CommandContext(
@@ -95,6 +103,8 @@ def test_team_identity_create_replays_without_scalar_authority(db_session):
     assert team.workforce_system is None
     assert team.workforce_department_reference is None
 
+    # Release the read transaction before entering the next public owner command.
+    db_session.commit()
     replay = service_team_lifecycle.create_team(
         db_session,
         service_team_lifecycle.CreateServiceTeam(
