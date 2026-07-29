@@ -1868,8 +1868,7 @@ def save_template_tasks_from_editor(
         )
 
     task_order = {
-        str(task_data["client_id"]): index
-        for index, task_data in enumerate(normalized)
+        str(task_data["client_id"]): index for index, task_data in enumerate(normalized)
     }
     for task_data in normalized:
         task_index = task_order[str(task_data["client_id"])]

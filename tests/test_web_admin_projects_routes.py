@@ -176,9 +176,7 @@ def test_all_project_templates_compile():
 
 
 def test_template_management_actions_are_permission_aware():
-    list_template = Path(
-        "templates/admin/projects/project_templates.html"
-    ).read_text()
+    list_template = Path("templates/admin/projects/project_templates.html").read_text()
     detail_template = Path(
         "templates/admin/projects/project_template_detail.html"
     ).read_text()
