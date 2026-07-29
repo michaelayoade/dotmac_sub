@@ -26,7 +26,10 @@
 {% set bandwidth_chart_direct_live_endpoint = '/api/v1/bandwidth/mikrotik-live/' ~ usage_subscription_id if usage_subscription_id else none %}
 {% set usage_theme = 'admin' %}
 {% set usage_enable_records_chart = true %}
-{% set usage_records_default_view = usage_view | default('chart') %}
+{% set usage_records_default_view = 'chart' %}
+{% if usage_view is defined and usage_view == 'table' %}
+{% set usage_records_default_view = 'table' %}
+{% endif %}
 {% set usage_records_chart_id = 'customer-stats-records-chart-' ~ customer_id %}
 {% set usage_records_panel_id = 'customer-stats-records-panel-' ~ customer_id %}
 {% include "admin/customers/_stats_usage_content.html" %}

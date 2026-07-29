@@ -218,6 +218,13 @@ def _normalize_usage_period(value: str | None) -> str:
     return "current"
 
 
+def _normalize_usage_view(value: object) -> Literal["chart", "table"]:
+    """Resolve the records view when route handlers are called outside FastAPI."""
+    if value == "table":
+        return "table"
+    return "chart"
+
+
 def _format_bps(value: float | int | None) -> str:
     amount = float(value or 0)
     if amount <= 0:
@@ -700,6 +707,7 @@ def person_detail(
 ):
     """View customer details (unified — person and org members)."""
     usage_period = _normalize_usage_period(usage_period)
+    usage_view = _normalize_usage_view(usage_view)
     request_auth = getattr(getattr(request, "state", None), "auth", None) or {}
     # Same gate the inbox workspace uses, decided here and honoured by the
     # snapshot builder so unpermitted conversation data is never assembled.
@@ -746,14 +754,16 @@ def person_detail(
     notification_templates = (
         notification_context.get("bulk_notification_templates") or []
     )
+    stats_url = (
+        f"/admin/customers/person/{customer.id}/stats"
+        f"?usage_period={usage_period}"
+        f"&usage_page={usage_page}"
+        f"&usage_per_page={usage_per_page}"
+    )
+    if usage_view == "table":
+        stats_url += "&usage_view=table"
     detail_config = {
-        "statsUrl": (
-            f"/admin/customers/person/{customer.id}/stats"
-            f"?usage_period={usage_period}"
-            f"&usage_page={usage_page}"
-            f"&usage_per_page={usage_per_page}"
-            f"&usage_view={usage_view}"
-        ),
+        "statsUrl": stats_url,
         "detailUrl": f"/admin/customers/person/{customer.id}",
         "customerId": str(customer.id),
         "customerType": customer_type,
@@ -798,6 +808,7 @@ def person_detail_stats(
     db: Session = Depends(get_db),
 ):
     usage_period = _normalize_usage_period(usage_period)
+    usage_view = _normalize_usage_view(usage_view)
     subscriber = _get_subscriber(db=db, subscriber_id=customer_id)
 
     usage_customer = {"subscriber_id": str(subscriber.id)}
