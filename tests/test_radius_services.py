@@ -440,7 +440,7 @@ def test_reconcile_subscription_connectivity_creates_internal_radius_state(
     catalog_offer,
     radius_server,
 ):
-    """Test reconciliation creates RadiusClient and RadiusUser without sync jobs."""
+    """Keep the user observation unchanged when no user target can converge."""
     nas_device = NasDevice(
         name="Edge NAS",
         vendor=NasVendor.mikrotik,
@@ -480,9 +480,15 @@ def test_reconcile_subscription_connectivity_creates_internal_radius_state(
         radius_service.ConnectivityProjectionDisposition.target_unavailable
     )
     assert result.radius_clients_changed == 1
-    assert result.radius_users_changed == 1
+    assert result.radius_users_changed == 0
     assert result.external_nas_synced == 0
     assert result.external_credentials_synced == 0
+    assert (
+        db_session.query(RadiusUser)
+        .filter(RadiusUser.access_credential_id == credential.id)
+        .one_or_none()
+        is None
+    )
 
     client = (
         db_session.query(RadiusClient)
