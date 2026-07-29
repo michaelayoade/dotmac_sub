@@ -701,7 +701,7 @@ async def reconcile_payment_settlement_evidence(
     form = await request.form()
     evidence = billing_service.payments.inspect_settlement_evidence(db, str(payment_id))
     allocation_ledger_entry_ids = {}
-    for allocation_id in evidence.active_allocation_ids:
+    for allocation_id in cast(list[UUID], evidence["active_allocation_ids"]):
         selected = form.get(f"allocation_{allocation_id}")
         if selected:
             allocation_ledger_entry_ids[allocation_id] = UUID(str(selected))
