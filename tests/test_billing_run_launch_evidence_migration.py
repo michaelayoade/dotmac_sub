@@ -25,7 +25,7 @@ def test_billing_run_evidence_is_the_single_migration_head() -> None:
     # reconciliation (423), conversation handoff (422), service-extension
     # activity (421), billing-run evidence (420), and
     # customer WHT (419).
-    assert script.get_heads() == ["439_billing_obligation_rating_provenance"]
+    assert script.get_heads() == ["440_customer_vat_exemption_policy"]
     assert (
         script.get_revision("439_billing_obligation_rating_provenance").down_revision
         == "438_billing_phase2_verification_counts"

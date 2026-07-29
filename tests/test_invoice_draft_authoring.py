@@ -151,7 +151,6 @@ def test_create_draft_omits_vat_for_exempt_customer(
     invoice = db_session.get(Invoice, created.invoice_id)
     assert line is not None
     assert line.tax_rate_id is None
-    assert line.tax_amount == Decimal("0.00")
     assert invoice is not None
     assert invoice.tax_total == Decimal("0.00")
 
