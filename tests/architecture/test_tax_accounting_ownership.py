@@ -142,19 +142,15 @@ def test_tax_owner_stages_wht_audit_and_events_once() -> None:
 
 
 def test_wht_policy_and_basis_stay_server_owned() -> None:
-    direct_transfer_source = _read("app/services/direct_transfer_intents.py")
+    snapshot_source = _read("app/services/invoice_withholding_tax_snapshots.py")
     proof_source = _read("app/services/payment_proofs.py")
     reseller_route = _read("app/web/reseller/routes.py")
     reseller_template = _read("templates/reseller/billing/index.html")
     customer_template = _read("templates/customer/billing/topup_transfer.html")
 
-    assert "customer_tax_policies.get_customer_withholding_tax_policy" in (
-        direct_transfer_source
-    )
-    assert "subtotal * rate_percent" in direct_transfer_source
-    assert "wht_amount = round_money(total * rate_percent" not in (
-        direct_transfer_source
-    )
+    assert "customer_tax_policies.get_customer_withholding_tax_policy" in snapshot_source
+    assert "subtotal * rate_percent" in snapshot_source
+    assert "withholding_tax_amount = round_money(total * rate_percent" not in snapshot_source
     assert "withholding_tax_basis_unavailable" in proof_source
     assert "allow_server_wht_snapshot=True" in proof_source
     assert 'name="wht_rate"' not in reseller_template

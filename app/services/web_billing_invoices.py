@@ -39,6 +39,9 @@ from app.services.audit_helpers import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.status_presentation import invoice_status_presentation
+from app.services.invoice_withholding_tax_snapshots import (
+    invoice_withholding_tax_display,
+)
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -764,6 +767,7 @@ def load_invoice_detail_data(
     )
     return {
         "invoice": invoice,
+        "withholding_tax": invoice_withholding_tax_display(invoice),
         "invoice_financial_summary": billing_service.invoices.financial_summary(
             db, invoice_id
         ),

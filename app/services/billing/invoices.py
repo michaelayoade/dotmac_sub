@@ -70,6 +70,9 @@ from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_classification import collectible_ar_invoice_filter
+from app.services.invoice_withholding_tax_snapshots import (
+    stage_invoice_withholding_tax_snapshot,
+)
 from app.services.locking import lock_for_update
 from app.services.response import ListResponseMixin
 from app.services.sync_feeds import apply_sync_page, sync_page_response
@@ -571,6 +574,7 @@ class Invoices(ListResponseMixin):
             if target_status == InvoiceStatus.issued:
                 invoice.status = InvoiceStatus.issued
                 invoice.issued_at = payload.issued_at or datetime.now(UTC)
+                stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
             AuditEvents.stage(
                 db,
                 AuditEventCreate(
@@ -1499,6 +1503,7 @@ class Invoices(ListResponseMixin):
         invoice.status = InvoiceStatus.issued
         invoice.issued_at = issued_at
         invoice.due_at = due_at
+        stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
         AuditEvents.stage(
             db,
             AuditEventCreate(
@@ -1830,6 +1835,8 @@ class Invoices(ListResponseMixin):
         invoice = Invoice(**data)
         db.add(invoice)
         db.flush()
+        if invoice.status == InvoiceStatus.issued and not invoice.is_proforma:
+            stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
         emit_event(
             db,
             EventType.invoice_created,
@@ -1959,6 +1966,7 @@ class Invoices(ListResponseMixin):
         )
         db.add(invoice)
         db.flush()
+        stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
 
         # Create line item
         line = InvoiceLine(
@@ -2185,6 +2193,7 @@ class Invoices(ListResponseMixin):
             }
 
             if new_status == InvoiceStatus.issued:
+                stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
                 emit_event(
                     db,
                     EventType.invoice_sent,

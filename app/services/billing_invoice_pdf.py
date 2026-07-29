@@ -291,6 +291,13 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
                 f'<div class="bank-grid">{bank_markup}</div>'
                 "</div>"
             )
+    wht_rows = ""
+    if invoice.withholding_tax_policy_enabled and invoice.withholding_tax_rate is not None:
+        wht_rows = (
+            f"<tr><td>WHT taxable basis</td><td class='num'>{NAIRA_SIGN}{_money(invoice.withholding_tax_taxable_basis)}</td></tr>"
+            f"<tr><td>WHT ({_money(invoice.withholding_tax_rate)}%)</td><td class='num'>{NAIRA_SIGN}{_money(invoice.withholding_tax_amount)}</td></tr>"
+            f"<tr><td>Net bank-transfer payable</td><td class='num'>{NAIRA_SIGN}{_money(invoice.bank_transfer_net_payable)}</td></tr>"
+        )
 
     return f"""
 <!doctype html>
@@ -441,6 +448,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           <table>
             <tr><td>Subtotal</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.subtotal)}</td></tr>
             <tr><td>{tax_label}</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.tax_total)}</td></tr>
+            {wht_rows}
             <tr class=\"grand-total\"><td>Total</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.total)}</td></tr>
           </table>
         </div>

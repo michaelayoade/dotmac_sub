@@ -16,7 +16,10 @@ from app.models.billing import (
 )
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.event_store import EventStore
+from app.schemas.billing import InvoiceCreate
+from app.services.billing.invoices import Invoices
 from app.services import direct_transfer_intents as svc
+from app.services import invoice_withholding_tax_snapshots as snapshots
 from app.services import topup_intents
 from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.db_session_adapter import db_session_adapter
@@ -72,6 +75,7 @@ def _patch_policy(monkeypatch, *, enabled: bool = True) -> None:
         }[key]
 
     monkeypatch.setattr(svc, "resolve_value", resolve_policy)
+    monkeypatch.setattr(snapshots, "resolve_value", resolve_policy)
 
 
 def _create(
@@ -400,10 +404,10 @@ def test_invoice_creation_snapshots_customer_wht_from_vat_exclusive_basis(
 ):
     _patch_policy(monkeypatch)
     monkeypatch.setattr(
-        svc.customer_tax_policies,
+        snapshots.customer_tax_policies,
         "get_customer_withholding_tax_policy",
         lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
+            snapshots.customer_tax_policies.CustomerWithholdingTaxPolicy(
                 account_id=subscriber.id,
                 withholding_tax_enabled=True,
                 version=3,
@@ -456,10 +460,10 @@ def test_invoice_creation_omits_wht_snapshot_when_customer_policy_disabled(
 ):
     _patch_policy(monkeypatch)
     monkeypatch.setattr(
-        svc.customer_tax_policies,
+        snapshots.customer_tax_policies,
         "get_customer_withholding_tax_policy",
         lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
+            snapshots.customer_tax_policies.CustomerWithholdingTaxPolicy(
                 account_id=subscriber.id,
                 withholding_tax_enabled=False,
                 version=0,
@@ -498,10 +502,10 @@ def test_invoice_creation_snapshot_survives_later_setting_change(
 ):
     _patch_policy(monkeypatch)
     monkeypatch.setattr(
-        svc.customer_tax_policies,
+        snapshots.customer_tax_policies,
         "get_customer_withholding_tax_policy",
         lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
+            snapshots.customer_tax_policies.CustomerWithholdingTaxPolicy(
                 account_id=subscriber.id,
                 withholding_tax_enabled=True,
                 version=7,
@@ -538,6 +542,16 @@ def test_invoice_creation_snapshot_survives_later_setting_change(
             "withholding_tax_rate_percent": "10.00",
         }[key],
     )
+    monkeypatch.setattr(
+        snapshots,
+        "resolve_value",
+        lambda _db, _domain, key: {
+            "topup_min_amount": 1000,
+            "topup_max_amount": 500000,
+            "direct_bank_transfer_intent_ttl_days": 7,
+            "withholding_tax_rate_percent": "10.00",
+        }[key],
+    )
 
     same = _create(
         db_session,
@@ -553,3 +567,108 @@ def test_invoice_creation_snapshot_survives_later_setting_change(
         persisted.metadata_["withholding_tax"]["withholding_tax_rate_percent"] == "5.00"
     )
     assert persisted.metadata_["withholding_tax"]["withholding_tax_amount"] == "5000.00"
+
+
+def test_invoice_snapshot_is_immutable_and_transfer_intents_reuse_it(
+    db_session, subscriber, monkeypatch
+):
+    _patch_policy(monkeypatch)
+    monkeypatch.setattr(
+        snapshots.customer_tax_policies,
+        "get_customer_withholding_tax_policy",
+        lambda *_args, **_kwargs: snapshots.customer_tax_policies.CustomerWithholdingTaxPolicy(
+            account_id=subscriber.id,
+            withholding_tax_enabled=True,
+            version=9,
+            updated_by="admin-1",
+            updated_at=None,
+        ),
+    )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        subtotal=Decimal("100000.00"),
+        tax_total=Decimal("7500.00"),
+        total=Decimal("107500.00"),
+        balance_due=Decimal("107500.00"),
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    first_snapshot = snapshots.stage_invoice_withholding_tax_snapshot(
+        db_session, invoice=invoice
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        snapshots.customer_tax_policies,
+        "get_customer_withholding_tax_policy",
+        lambda *_args, **_kwargs: snapshots.customer_tax_policies.CustomerWithholdingTaxPolicy(
+            account_id=subscriber.id,
+            withholding_tax_enabled=False,
+            version=10,
+            updated_by="admin-2",
+            updated_at=None,
+        ),
+    )
+    monkeypatch.setattr(snapshots, "resolve_value", lambda *_args, **_kwargs: "10.00")
+    second_snapshot = snapshots.stage_invoice_withholding_tax_snapshot(
+        db_session, invoice=invoice
+    )
+    first_intent = _create(
+        db_session,
+        account_id=subscriber.id,
+        invoice_id=invoice.id,
+        idempotency_key="stored-wht-first-intent",
+    )
+    second_intent = _create(
+        db_session,
+        account_id=subscriber.id,
+        invoice_id=invoice.id,
+        idempotency_key="stored-wht-second-intent",
+    )
+
+    assert first_snapshot == second_snapshot
+    assert invoice.withholding_tax_policy_version == 9
+    assert invoice.withholding_tax_rate == Decimal("5.00")
+    assert invoice.withholding_tax_amount == Decimal("5000.00")
+    assert invoice.bank_transfer_net_payable == Decimal("102500.00")
+    assert first_intent.requested_amount == Decimal("102500.00")
+    assert second_intent.requested_amount == Decimal("102500.00")
+
+
+def test_issued_invoice_creation_persists_disabled_wht_snapshot(
+    db_session, subscriber, monkeypatch
+):
+    _patch_policy(monkeypatch)
+    monkeypatch.setattr(
+        snapshots.customer_tax_policies,
+        "get_customer_withholding_tax_policy",
+        lambda *_args, **_kwargs: snapshots.customer_tax_policies.CustomerWithholdingTaxPolicy(
+            account_id=subscriber.id,
+            withholding_tax_enabled=False,
+            version=4,
+            updated_by="admin-1",
+            updated_at=None,
+        ),
+    )
+
+    invoice = Invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber.id,
+            status=InvoiceStatus.issued,
+            currency="NGN",
+            subtotal=Decimal("100000.00"),
+            tax_total=Decimal("7500.00"),
+            total=Decimal("107500.00"),
+            balance_due=Decimal("107500.00"),
+        ),
+    )
+
+    assert invoice.withholding_tax_policy_enabled is False
+    assert invoice.withholding_tax_policy_version == 4
+    assert invoice.withholding_tax_rate is None
+    assert invoice.withholding_tax_amount == Decimal("0.00")
+    assert invoice.withholding_tax_taxable_basis == Decimal("100000.00")
+    assert invoice.bank_transfer_net_payable == Decimal("107500.00")

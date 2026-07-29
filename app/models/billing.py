@@ -478,6 +478,22 @@ class ConsolidatedCreditConsumptionReconciliationEvidence(Base):
 class Invoice(Base):
     __tablename__ = "invoices"
     __table_args__ = (
+        CheckConstraint(
+            "withholding_tax_policy_enabled IS NULL OR withholding_tax_taxable_basis IS NOT NULL",
+            name="ck_invoices_wht_snapshot_basis_present",
+        ),
+        CheckConstraint(
+            "withholding_tax_policy_enabled IS NULL OR bank_transfer_net_payable IS NOT NULL",
+            name="ck_invoices_wht_snapshot_net_payable_present",
+        ),
+        CheckConstraint(
+            "withholding_tax_rate IS NULL OR (withholding_tax_rate > 0 AND withholding_tax_rate < 100)",
+            name="ck_invoices_wht_snapshot_rate_range",
+        ),
+        CheckConstraint(
+            "withholding_tax_amount >= 0",
+            name="ck_invoices_wht_snapshot_amount_nonnegative",
+        ),
         Index(
             "uq_invoices_active_splynx_invoice_id",
             "splynx_invoice_id",
@@ -537,6 +553,20 @@ class Invoice(Base):
     balance_due: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), default=Decimal("0.00")
     )
+    # Immutable customer-WHT snapshot.  It is populated once for an eligible
+    # issued invoice and is the sole source for direct-transfer instructions.
+    withholding_tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    withholding_tax_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00")
+    )
+    withholding_tax_taxable_basis: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2)
+    )
+    bank_transfer_net_payable: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2)
+    )
+    withholding_tax_policy_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    withholding_tax_policy_version: Mapped[int | None] = mapped_column(Integer)
     billing_period_start: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )

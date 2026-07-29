@@ -107,6 +107,7 @@ def get_payment_receipt_context(
             selectinload(Payment.payment_method),
             selectinload(Payment.provider),
             selectinload(Payment.settlement),
+            selectinload(Payment.withholding_tax_record),
             selectinload(Payment.allocations).selectinload(PaymentAllocation.invoice),
         )
         .filter(Payment.id == coerce_uuid(payment_id))
@@ -132,6 +133,7 @@ def get_payment_receipt_context(
     unallocated_credit = application.unallocated_credit
     occurred_at = payment.paid_at or payment.created_at or datetime.now(UTC)
     account = payment.account
+    withholding_tax_record = payment.withholding_tax_record
 
     allocation_rows = []
     for allocation in allocations:
@@ -192,6 +194,7 @@ def get_payment_receipt_context(
         "method": _payment_method(payment),
         "allocations": allocation_rows,
         "renewals": renewal_rows,
+        "withholding_tax_record": withholding_tax_record,
     }
 
 
@@ -212,6 +215,7 @@ def render_receipt_document_html(context: dict[str, Any]) -> str:
         context.get("amount_credited", context.get("amount_received"))
     )
     prepaid_amount_applied = _money(context.get("prepaid_amount_applied"))
+    withholding_tax_record = context.get("withholding_tax_record")
     rows = []
     for allocation in context["allocations"]:
         rows.append(
@@ -240,6 +244,17 @@ def render_receipt_document_html(context: dict[str, Any]) -> str:
             "<div class='details'>"
             "<div class='details-title'>SERVICE RENEWAL CONFIRMED</div>"
             f"{renewal_items}</div>"
+        )
+
+    wht_section = ""
+    if withholding_tax_record is not None:
+        wht_section = (
+            "<div class='details'>"
+            "<div class='details-title'>WITHHOLDING TAX RECEIVABLE</div>"
+            f"<div>Gross invoice settlement: {html.escape(_format_amount(context['currency'], withholding_tax_record.gross_amount))}</div>"
+            f"<div>Net cash received: {html.escape(_format_amount(context['currency'], withholding_tax_record.net_amount))}</div>"
+            f"<div>WHT receivable ({html.escape(str(withholding_tax_record.wht_rate or 0))}%): {html.escape(_format_amount(context['currency'], withholding_tax_record.wht_amount))}</div>"
+            "</div>"
         )
 
     date_value = context["receipt_date"].strftime("%Y-%m-%d")
@@ -311,7 +326,8 @@ td {{ padding: 14px; font-size: 13px; height: 38px; border-top: 1px solid #f3f4f
       <div class="summary-row"><span>Applied to Service</span><strong>{html.escape(_format_amount(context["currency"], prepaid_amount_applied))}</strong></div>
       <div class="summary-row green"><span>Account Credit Remaining</span><strong>{html.escape(_format_amount(context["currency"], context["unallocated_credit"]))}</strong></div>
     </div>
-    {renewal_section}
+{renewal_section}
+{wht_section}
     <div class="details">
       <div class="details-title">PAYMENT DETAILS</div>
       <div>Payment Date: {html.escape(payment_date)}</div>

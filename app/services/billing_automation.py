@@ -41,6 +41,9 @@ from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
 from app.services.billing.invoices import InvoiceLines, Invoices, next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
+from app.services.invoice_withholding_tax_snapshots import (
+    stage_invoice_withholding_tax_snapshot,
+)
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
     accounts_with_collectible_service,
@@ -1482,6 +1485,8 @@ def run_invoice_cycle(
         # Recalculate totals for all invoices
         for invoice in invoices.values():
             _recalculate_invoice_totals(db, invoice)
+        for invoice in newly_created_invoices:
+            stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
         # Recalc writes balance_due/status onto the invoice objects; flush so the
         # credit settlement below sees the open balance via its query.
         db.flush()
@@ -1777,6 +1782,7 @@ def generate_prorated_invoice(
     subscription.next_billing_at = period_end
 
     _recalculate_invoice_totals(db, invoice)
+    stage_invoice_withholding_tax_snapshot(db, invoice=invoice)
     db.commit()
     db.refresh(invoice)
 

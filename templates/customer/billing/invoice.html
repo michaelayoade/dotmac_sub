@@ -79,12 +79,28 @@
                             <span>Tax</span>
                             <span class="font-semibold text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.tax_total or 0) }}</span>
                         </div>
+                        {% if withholding_tax %}
+                        <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
+                            <span>WHT taxable basis</span>
+                            <span class="font-semibold text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(withholding_tax.taxable_basis) }}</span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
+                            <span>WHT ({{ withholding_tax.rate_percent }}%)</span>
+                            <span class="font-semibold text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(withholding_tax.withholding_tax_amount) }}</span>
+                        </div>
+                        {% endif %}
                         <div class="border-t border-stone-200 pt-3 dark:border-stone-700">
                             <div class="flex items-center justify-between">
                                 <span class="text-base font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Total</span>
                                 <span class="text-xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total or 0) }}</span>
                             </div>
                         </div>
+                        {% if withholding_tax %}
+                        <div class="mt-3 flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2 text-sm dark:bg-emerald-900/20">
+                            <span class="font-semibold text-emerald-800 dark:text-emerald-200">Net bank-transfer payable</span>
+                            <span class="font-bold text-emerald-800 dark:text-emerald-200">{{ invoice_currency }} {{ "{:,.2f}".format(withholding_tax.net_bank_transfer_payable) }}</span>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>

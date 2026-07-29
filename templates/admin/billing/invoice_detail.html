@@ -173,6 +173,11 @@
                 <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
                     {{ metric_row("Subtotal", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.subtotal or 0), color="slate", mono=True) }}
                     {{ metric_row("Tax", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.tax_total or 0), color="slate", mono=True) }}
+                    {% if withholding_tax %}
+                    {{ metric_row("WHT taxable basis", invoice_currency ~ " " ~ '{:,.2f}'.format(withholding_tax.taxable_basis), color="slate", mono=True) }}
+                    {{ metric_row("WHT (" ~ withholding_tax.rate_percent ~ "%)", invoice_currency ~ " " ~ '{:,.2f}'.format(withholding_tax.withholding_tax_amount), color="amber", mono=True) }}
+                    {{ metric_row("Net bank-transfer payable", invoice_currency ~ " " ~ '{:,.2f}'.format(withholding_tax.net_bank_transfer_payable), color="emerald", mono=True) }}
+                    {% endif %}
                     <div class="flex items-center justify-between py-2.5 mt-2">
                         <span class="text-base font-semibold text-slate-900 dark:text-white">Total</span>
                         <span class="text-base font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</span>

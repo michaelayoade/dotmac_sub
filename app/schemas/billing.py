@@ -1481,6 +1481,12 @@ class InvoiceRead(InvoiceBase):
     # Money fields inherit unbounded from InvoiceBase (bounds are create-only),
     # so stored signed/zero values serialize without a per-field override.
     id: UUID
+    withholding_tax_rate: Decimal | None = None
+    withholding_tax_amount: Decimal = Decimal("0.00")
+    withholding_tax_taxable_basis: Decimal | None = None
+    bank_transfer_net_payable: Decimal | None = None
+    withholding_tax_policy_enabled: bool | None = None
+    withholding_tax_policy_version: int | None = None
     created_at: datetime
     updated_at: datetime
     lines: list[InvoiceLineRead] = Field(default_factory=list)
