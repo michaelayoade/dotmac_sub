@@ -1,7 +1,7 @@
 """Add the granular CRM lead delete permission.
 
-Revision ID: 443_crm_lead_delete_permission
-Revises: 442_customer_vat_exemption_policy
+Revision ID: 444_crm_lead_delete_permission
+Revises: 443_device_projection_lifecycle_state
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "443_crm_lead_delete_permission"
-down_revision = "442_customer_vat_exemption_policy"
+revision = "444_crm_lead_delete_permission"
+down_revision = "443_device_projection_lifecycle_state"
 branch_labels = None
 depends_on = None
 

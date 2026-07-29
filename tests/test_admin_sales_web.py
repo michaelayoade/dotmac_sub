@@ -281,9 +281,7 @@ def test_create_quote_context_preselects_lead_and_subscriber(db_session):
     subscriber = _make_subscriber(db_session)
     lead = _make_lead(db_session, subscriber)
 
-    context = web_sales.build_quote_new_context(
-        db_session, lead_id=str(lead.id)
-    )
+    context = web_sales.build_quote_new_context(db_session, lead_id=str(lead.id))
 
     assert context["quote_form"]["lead_id"] == str(lead.id)
     assert context["quote_form"]["subscriber_id"] == str(subscriber.id)

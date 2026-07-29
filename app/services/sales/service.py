@@ -1113,8 +1113,7 @@ class Leads(ListResponseMixin):
         return LeadPipelineSummary(
             total_leads=total,
             open_leads=sum(
-                by_status.get(status_key, 0)
-                for status_key in _OPEN_LEAD_STATUSES
+                by_status.get(status_key, 0) for status_key in _OPEN_LEAD_STATUSES
             ),
             won_leads=by_status.get(LeadStatus.won.value, 0),
             pipeline_value=pipeline_value,
@@ -1132,9 +1131,7 @@ class Leads(ListResponseMixin):
             data["status"] = _enum_str(data["status"], LeadStatus, "status")
         if "lead_source" in data:
             data["lead_source"] = _normalize_lead_source_or_400(data.get("lead_source"))
-        prospective_stage_id = (
-            data["stage_id"] if "stage_id" in data else lead.stage_id
-        )
+        prospective_stage_id = data["stage_id"] if "stage_id" in data else lead.stage_id
         prospective_pipeline_id = (
             data["pipeline_id"] if "pipeline_id" in data else lead.pipeline_id
         )

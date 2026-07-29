@@ -50,9 +50,7 @@ class TestSalesLeads:
         admin_page.get_by_label("Lead Name").fill("E2E fibre opportunity")
         contact_search = admin_page.get_by_label("Person/Contact")
         contact_search.fill(lead_contact["email"])
-        option = admin_page.get_by_role("option").filter(
-            has_text=lead_contact["email"]
-        )
+        option = admin_page.get_by_role("option").filter(has_text=lead_contact["email"])
         expect(option).to_be_visible()
         option.click()
         admin_page.get_by_label("Probability").fill("55")

@@ -69,9 +69,7 @@ def _lead_field_errors(exc: Exception) -> dict[str, str]:
             return {"stage_id": "Select a stage from the chosen pipeline."}
         if "subscriber" in detail or "party" in detail:
             return {
-                "subscriber_id": (
-                    "Select a valid existing Person/Contact identity."
-                )
+                "subscriber_id": ("Select a valid existing Person/Contact identity.")
             }
     return {"form": "The lead change was rejected. Review the form and try again."}
 
@@ -265,9 +263,7 @@ def lead_detail(request: Request, lead_id: str, db: Session = Depends(get_db)):
     if result == "created":
         context["success"] = "Lead created successfully."
     elif result == "existing":
-        context["success"] = (
-            "An existing open lead matched this contact and pipeline."
-        )
+        context["success"] = "An existing open lead matched this contact and pipeline."
     elif result == "updated":
         context["success"] = "Lead updated successfully."
     elif result == "status-updated":
@@ -397,9 +393,7 @@ def lead_status_update(
         HTTPException,
     ):
         context = _ctx(request, db, "sales-leads")
-        context.update(
-            web_sales_service.build_lead_detail_context(db, lead_id=lead_id)
-        )
+        context.update(web_sales_service.build_lead_detail_context(db, lead_id=lead_id))
         context["api_error"] = (
             "The status could not be updated. Review the current lead and retry."
         )
@@ -419,9 +413,7 @@ def lead_status_update(
 )
 def lead_delete(lead_id: str, db: Session = Depends(get_db)):
     web_sales_service.deactivate_lead(db, lead_id=lead_id)
-    return RedirectResponse(
-        url="/admin/sales/leads?result=deleted", status_code=303
-    )
+    return RedirectResponse(url="/admin/sales/leads?result=deleted", status_code=303)
 
 
 # ---------------------------------------------------------------------------

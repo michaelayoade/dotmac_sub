@@ -337,9 +337,7 @@ def _lead_contact_views(
 ) -> tuple[dict[str, LeadContactView], dict[str, Subscriber]]:
     subscriber_map = _subscriber_map(db, [lead.subscriber_id for lead in leads])
     party_ids = {lead.party_id for lead in leads if lead.party_id is not None}
-    parties = (
-        db.query(Party).filter(Party.id.in_(party_ids)).all() if party_ids else []
-    )
+    parties = db.query(Party).filter(Party.id.in_(party_ids)).all() if party_ids else []
     party_map = {party.id: party for party in parties}
     contact_points = (
         db.query(PartyContactPoint)
@@ -720,9 +718,7 @@ def build_lead_new_context(db: Session) -> dict[str, Any]:
     )
 
 
-def build_lead_edit_context(
-    db: Session, *, lead_id: str
-) -> dict[str, Any]:
+def build_lead_edit_context(db: Session, *, lead_id: str) -> dict[str, Any]:
     lead = sales_service.leads.get(db, lead_id)
     contact_map, _ = _lead_contact_views(db, [lead])
     contact = contact_map.get(str(lead.id))
@@ -733,17 +729,13 @@ def build_lead_edit_context(
             status=lead.status,
             subscriber_id=str(lead.subscriber_id) if lead.subscriber_id else None,
             contact_label=contact.name if contact else None,
-            owner_agent_id=(
-                str(lead.owner_agent_id) if lead.owner_agent_id else None
-            ),
+            owner_agent_id=(str(lead.owner_agent_id) if lead.owner_agent_id else None),
             pipeline_id=str(lead.pipeline_id) if lead.pipeline_id else None,
             stage_id=str(lead.stage_id) if lead.stage_id else None,
             lead_source=lead.lead_source,
             region=lead.region,
             estimated_value=(
-                str(lead.estimated_value)
-                if lead.estimated_value is not None
-                else None
+                str(lead.estimated_value) if lead.estimated_value is not None else None
             ),
             currency=lead.currency,
             address=lead.address,
@@ -1034,9 +1026,7 @@ def update_lead_from_form(
         is_active=values.is_active,
     )
     if values.subscriber_id is not None:
-        payload = payload.model_copy(
-            update={"subscriber_id": values.subscriber_id}
-        )
+        payload = payload.model_copy(update={"subscriber_id": values.subscriber_id})
     sales_service.leads.update(db, lead_id, payload)
 
 

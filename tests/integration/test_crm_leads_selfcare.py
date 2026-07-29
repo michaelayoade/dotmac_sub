@@ -63,9 +63,7 @@ def test_selfcare_lead_create_update_summary_and_delete(db_session):
     assert detail["contact"].email == subscriber.email
     assert summary.won_leads >= 1
     assert summary.open_leads == open_summary.open_leads - 1
-    assert summary.pipeline_value == (
-        open_summary.pipeline_value - Decimal("1000000")
-    )
+    assert summary.pipeline_value == (open_summary.pipeline_value - Decimal("1000000"))
 
     web_sales.deactivate_lead(db_session, lead_id=lead_id)
     assert sales.leads.get(db_session, lead_id).is_active is False
