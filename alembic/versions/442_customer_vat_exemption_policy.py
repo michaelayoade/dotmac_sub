@@ -1,7 +1,7 @@
 """Add customer VAT exemption policy.
 
-Revision ID: 440_customer_vat_exemption_policy
-Revises: 439_billing_obligation_rating_provenance
+Revision ID: 442_customer_vat_exemption_policy
+Revises: 441_network_zone_geo_area_binding
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "440_customer_vat_exemption_policy"
-down_revision = "439_billing_obligation_rating_provenance"
+revision = "442_customer_vat_exemption_policy"
+down_revision = "441_network_zone_geo_area_binding"
 branch_labels = None
 depends_on = None
 
