@@ -2,6 +2,10 @@
 
 All notable changes to DotMac Sub are tracked here.
 
+## 7.59.0 - 2026-07-29
+
+- Replace scalar ServiceTeam types, roles, regions, and managers with composable capabilities, responsibilities, typed scopes, relationships, external references, and explicit routing.
+
 ## 7.58.1 - 2026-07-28
 
 - Version bump.
