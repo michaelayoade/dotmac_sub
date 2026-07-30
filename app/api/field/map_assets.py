@@ -13,6 +13,7 @@ from app.schemas.field import (
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.map_assets import field_map_assets
 from app.services.field.map_search import field_map_search
+from app.services.field.principals import require_field_principal
 
 router = APIRouter(tags=["field-map-assets"])
 
@@ -74,7 +75,7 @@ def update_field_map_asset_location(
     asset_type: str,
     asset_id: str,
     payload: FieldMapAssetLocationUpdate,
-    auth: dict = Depends(require_user_auth),
+    auth: dict = Depends(require_field_principal),
     db: Session = Depends(get_db),
 ):
     return field_map_assets.update_location(
@@ -99,7 +100,7 @@ def update_field_map_asset_location(
 def revert_field_map_asset_location(
     asset_type: str,
     asset_id: str,
-    auth: dict = Depends(require_user_auth),
+    auth: dict = Depends(require_field_principal),
     db: Session = Depends(get_db),
 ):
     return field_map_assets.revert_location(
