@@ -592,7 +592,7 @@ def ont_assignment_edit(
     assignment_id: str,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    result = web_network_ont_assignments_service.get_ont_for_assignment_form(
+    result = web_network_ont_assignments_service.get_assignment_edit_form(
         db,
         ont_id=ont_id,
         assignment_id=assignment_id,
