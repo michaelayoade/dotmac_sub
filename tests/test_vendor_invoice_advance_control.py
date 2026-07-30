@@ -258,3 +258,107 @@ def test_a_project_without_advances_is_unaffected(db_session):
     result = _approve(db_session, invoice, reviewer)
 
     assert result["status"] == VendorPurchaseInvoiceStatus.approved.value
+
+
+def test_an_operator_records_the_disbursement_that_no_transport_reports(db_session):
+    """Payment happens outside Sub, so the operator who paid is the observation.
+
+    Without this the settled state is unreachable and Sub cannot tell money it
+    has committed from money the vendor actually holds.
+    """
+
+    from app.services import vendor_advances
+    from app.services.vendor_supply_views import (
+        VendorSupplyReviewAction,
+        advance_review_preview,
+    )
+
+    reviewer = _reviewer(db_session)
+    installation, vendor = _project(db_session, quote_total=Decimal("1000000.00"))
+    _advance(
+        db_session,
+        installation,
+        vendor,
+        Decimal("300000.00"),
+        VendorAdvanceStatus.approved.value,
+    )
+    advance = db_session.query(VendorAdvance).one()
+    db_session.commit()
+
+    preview = advance_review_preview(
+        db_session,
+        advance_id=str(advance.id),
+        action=VendorSupplyReviewAction.disburse,
+        reason="NIBSS-TRF-99812",
+    )
+    assert "paid" in preview.summary
+
+    settled = vendor_advances.apply_payables_observation(
+        db_session,
+        advance.id,
+        payables_system="operator",
+        payables_reference="NIBSS-TRF-99812",
+        payables_status="paid",
+    )
+
+    assert settled.status == VendorAdvanceStatus.settled.value
+    assert settled.payables_reference == "NIBSS-TRF-99812"
+    # A settled advance still counts against what may be invoiced.
+    assert vendor_advances.authorised_total(db_session, installation.id) == Decimal(
+        "300000.00"
+    )
+    assert reviewer is not None
+
+
+def test_a_disbursement_record_requires_the_payment_reference(db_session):
+    from app.services.vendor_supply_views import (
+        VendorSupplyProjectionError,
+        VendorSupplyReviewAction,
+        advance_review_preview,
+    )
+
+    installation, vendor = _project(db_session, quote_total=Decimal("1000000.00"))
+    _advance(
+        db_session,
+        installation,
+        vendor,
+        Decimal("300000.00"),
+        VendorAdvanceStatus.approved.value,
+    )
+    advance = db_session.query(VendorAdvance).one()
+    db_session.commit()
+
+    with pytest.raises(VendorSupplyProjectionError):
+        advance_review_preview(
+            db_session,
+            advance_id=str(advance.id),
+            action=VendorSupplyReviewAction.disburse,
+            reason="   ",
+        )
+
+
+def test_only_an_approved_advance_can_be_recorded_as_paid(db_session):
+    from app.services.vendor_supply_views import (
+        VendorSupplyProjectionError,
+        VendorSupplyReviewAction,
+        advance_review_preview,
+    )
+
+    installation, vendor = _project(db_session, quote_total=Decimal("1000000.00"))
+    _advance(
+        db_session,
+        installation,
+        vendor,
+        Decimal("300000.00"),
+        VendorAdvanceStatus.requested.value,
+    )
+    advance = db_session.query(VendorAdvance).one()
+    db_session.commit()
+
+    with pytest.raises(VendorSupplyProjectionError):
+        advance_review_preview(
+            db_session,
+            advance_id=str(advance.id),
+            action=VendorSupplyReviewAction.disburse,
+            reason="NIBSS-TRF-11111",
+        )

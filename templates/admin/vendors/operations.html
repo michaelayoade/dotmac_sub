@@ -150,6 +150,14 @@
           <button class="w-full rounded-md border border-rose-500 px-3 py-2 text-sm font-semibold text-rose-700">{{ advance.reject_action.label }}</button>
         </form>
         {% endif %}
+        {% if action_permitted(request, advance.disburse_action) %}
+        <form method="post" action="{{ advance.disburse_action.preview_url }}" class="space-y-2 sm:col-span-2">
+          {% include "components/forms/csrf_input.html" %}
+          <label class="block text-xs text-slate-500">Payment reference<input name="review_notes" maxlength="2000" required placeholder="Bank transfer / voucher reference" class="mt-1 w-full rounded-md border-slate-300 text-sm"></label>
+          <p class="text-xs text-slate-500">Records that this advance was actually paid, so it is netted against the vendor's invoice.</p>
+          <button class="w-full rounded-md bg-amber-600 px-3 py-2 text-sm font-semibold text-white">{{ advance.disburse_action.label }}</button>
+        </form>
+        {% endif %}
       </div>
     </article>
     {% else %}<p class="p-8 text-center text-sm text-slate-500">No vendor advances waiting.</p>{% endfor %}
