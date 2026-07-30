@@ -286,7 +286,7 @@ def project_accepted_as_built(
     )
 
 
-def _activation_id(value: str, *, code: str, subject: str):
+def _activation_id(value: str | None, *, code: str, subject: str):
     """Coerce an operator-supplied id, refusing malformed input in-domain.
 
     The ids arrive from a form, so a malformed one is an operator mistake with
