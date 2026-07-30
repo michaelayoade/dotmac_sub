@@ -362,3 +362,82 @@ def test_only_an_approved_advance_can_be_recorded_as_paid(db_session):
             action=VendorSupplyReviewAction.disburse,
             reason="NIBSS-TRF-11111",
         )
+
+
+def test_approved_advances_surface_as_outstanding_disbursement_work(db_session):
+    """The disbursement action needs somewhere that shows the work.
+
+    The review queue lists only *requested* advances, so an approved one would
+    be invisible and its payment record would never be made — leaving the
+    vendor's invoice blocked with nothing explaining why.
+    """
+
+    from app.services.vendor_supply_views import (
+        advance_disbursement_queue,
+        advance_review_queue,
+    )
+
+    installation, vendor = _project(db_session, quote_total=Decimal("1000000.00"))
+    _advance(
+        db_session,
+        installation,
+        vendor,
+        Decimal("300000.00"),
+        VendorAdvanceStatus.approved.value,
+    )
+    _advance(
+        db_session,
+        installation,
+        vendor,
+        Decimal("50000.00"),
+        VendorAdvanceStatus.requested.value,
+    )
+    db_session.commit()
+
+    outstanding = advance_disbursement_queue(db_session)
+    review = advance_review_queue(db_session)
+
+    assert outstanding.count == 1
+    assert outstanding.items[0].amount == Decimal("300000.00")
+    assert outstanding.items[0].disburse_action.allowed is True
+    # The requested one is still review work, not disbursement work.
+    assert review.count == 1
+    assert review.items[0].amount == Decimal("50000.00")
+    assert review.items[0].disburse_action.allowed is False
+
+
+def test_a_settled_advance_leaves_the_outstanding_queue(db_session):
+    from app.services import vendor_advances
+    from app.services.vendor_supply_views import advance_disbursement_queue
+
+    installation, vendor = _project(db_session, quote_total=Decimal("1000000.00"))
+    _advance(
+        db_session,
+        installation,
+        vendor,
+        Decimal("300000.00"),
+        VendorAdvanceStatus.approved.value,
+    )
+    advance = db_session.query(VendorAdvance).one()
+    db_session.commit()
+
+    vendor_advances.apply_payables_observation(
+        db_session,
+        advance.id,
+        payables_system="operator",
+        payables_reference="NIBSS-TRF-40021",
+        payables_status="paid",
+    )
+    db_session.commit()
+
+    assert advance_disbursement_queue(db_session).count == 0
+
+
+def test_the_operations_page_surfaces_outstanding_disbursements():
+    from pathlib import Path
+
+    source = Path("templates/admin/vendors/operations.html").read_text(encoding="utf-8")
+
+    assert "Advances awaiting disbursement record" in source
+    assert "advances_awaiting_disbursement | length" in source
+    assert "their invoice can be refused" in source

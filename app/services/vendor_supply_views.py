@@ -549,6 +549,38 @@ def advance_review_queue(
     )
 
 
+def advance_disbursement_queue(
+    db: Session, *, limit: int = 100, offset: int = 0
+) -> VendorSupplyQueue:
+    """Approved advances that nobody has recorded as paid yet.
+
+    Payment happens outside Sub, so an approved advance is outstanding work
+    for whoever pays it — and until it is recorded, Sub must treat the money
+    as committed, which holds up the vendor's invoice. Without this queue the
+    disbursement action would exist with nothing surfacing the work.
+    """
+
+    normalized_limit = max(1, min(limit, 200))
+    rows = (
+        _advance_query(db)
+        .filter(
+            VendorAdvance.status == VendorAdvanceStatus.approved.value,
+            VendorAdvance.is_active.is_(True),
+        )
+        .order_by(VendorAdvance.reviewed_at.asc(), VendorAdvance.id.asc())
+        .offset(max(0, offset))
+        .limit(normalized_limit + 1)
+        .all()
+    )
+    return VendorSupplyQueue(
+        items=tuple(advance_view(row) for row in rows[:normalized_limit]),
+        count=min(len(rows), normalized_limit),
+        limit=normalized_limit,
+        offset=max(0, offset),
+        has_next=len(rows) > normalized_limit,
+    )
+
+
 def material_detail(db: Session, release_id: UUID | str) -> MaterialReleaseView:
     row = (
         _material_query(db)
