@@ -1976,7 +1976,6 @@ def customer_unsuspend_account(
             actor_id=_get_actor_id(request),
         )
     except (DomainError, ValueError) as exc:
-        db.rollback()
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
@@ -1985,7 +1984,6 @@ def customer_unsuspend_account(
             message=str(exc),
         )
     except Exception:
-        db.rollback()
         logger.exception("Failed to unsuspend customer account %s", customer_id)
         return _toast_response(
             request=request,
