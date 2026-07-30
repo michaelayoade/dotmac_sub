@@ -18191,6 +18191,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "typed ticket command",
                                 "canonical ticket state",
                                 "ticket configuration",
+                                "portal team-routing resolution",
                                 "customer identity evidence",
                                 "assignment policy proposal",
                                 "automation policy proposal",
@@ -18240,6 +18241,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             source=(
                                 "validated status subset, priorities, types, defaults, routing, "
                                 "and SLA target settings"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="portal team-routing resolution",
+                            owner="support.ticket_configuration",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "typed active-team fallback resolution plus the explicit "
+                                "TicketCreationRoutingMode supplied by the customer portal"
                             ),
                         ),
                         AuthorityInput(
@@ -18391,12 +18401,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operator-visible ticket status subset",
                     "ticket priority and type options",
                     "ticket routing and priority/type SLA target policy",
+                    "canonical support-ticket region projection",
+                    "customer-portal ticket fallback team routing",
                 ),
-                depends_on=("support.ticket_lifecycle",),
+                depends_on=(
+                    "support.ticket_lifecycle",
+                    "operations.service_team_lifecycle",
+                ),
                 notes=(
                     "Configured status choices are constrained to the lifecycle "
                     "vocabulary and do not own semantic colors or tones. Every "
-                    "ticket SLA target is operator-managed in the ticket settings UI."
+                    "ticket SLA target is operator-managed in the ticket settings UI. "
+                    "Customer-portal routing resolves current native Service Teams by "
+                    "exact case-insensitive name without owning their identity."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -18417,6 +18434,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "ticket priority and type options",
                                 "ticket routing and priority/type SLA target policy",
                             )
+                        ),
+                        ConcernContract(
+                            name="canonical support-ticket region projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "current ticket configuration",
+                                "canonical ticket regions",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="customer-portal ticket fallback team routing",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("active service-team identity",),
                         ),
                     ),
                     authoritative_inputs=(
@@ -18444,6 +18474,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "ServiceTeamMember records"
                             ),
                         ),
+                        AuthorityInput(
+                            name="canonical ticket regions",
+                            owner="support.ticket_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "distinct non-empty Region values on current active Ticket rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active service-team identity",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "current active ServiceTeam rows matched exactly after "
+                                "case normalization"
+                            ),
+                        ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
@@ -18468,7 +18515,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "support.ticket_configuration"
                             ),
                         ),
-                        mapping_owner="admin system ticket-settings adapter",
+                        mapping_owner=(
+                            "admin system ticket-settings and customer-portal adapters"
+                        ),
                         fail_closed_on=(
                             "status outside lifecycle vocabulary",
                             "invalid team/person identity",
@@ -18492,9 +18541,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         state=AuthorityMigrationState.COMPLETE,
                         old_owner="ticket settings form and multi-commit settings helpers",
                         new_owner="support.ticket_configuration",
-                        verification="ticket settings, SLA, assignment, and architecture tests",
-                        cutover_gate="one typed owner command replaces the complete settings set",
-                        fallback_retirement="mid-command commit and settings-route writes are absent",
+                        verification=(
+                            "ticket settings, portal routing, SLA, assignment, and "
+                            "architecture tests"
+                        ),
+                        cutover_gate=(
+                            "one typed owner command replaces the complete settings set; "
+                            "portal routing uses the typed exact-name resolver"
+                        ),
+                        fallback_retirement=(
+                            "mid-command commit, settings-route writes, portal hard-coded "
+                            "team identifiers, and parallel fallback routing are absent"
+                        ),
                     ),
                     steward="support operations",
                     design_refs=(
