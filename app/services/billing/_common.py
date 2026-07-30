@@ -148,12 +148,7 @@ def get_account_credit_balance(
         .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
         .filter(LedgerEntry.is_active.is_(True))
-        .filter(
-            or_(
-                LedgerEntry.affects_customer_position.is_(True),
-                LedgerEntry.source != LedgerSource.adjustment,
-            )
-        )
+        .filter(LedgerEntry.affects_customer_position.is_(True))
     )
     if currency is not None:
         credit_query = credit_query.filter(LedgerEntry.currency == currency)
@@ -169,6 +164,9 @@ def get_account_credit_balance(
         .filter(
             or_(
                 LedgerEntry.affects_customer_position.is_(True),
+                # Account-credit consumption is structural ledger evidence and
+                # is intentionally non-position. It must still reduce reusable
+                # credit, unlike cutover adjustment projections.
                 LedgerEntry.source != LedgerSource.adjustment,
             )
         )
