@@ -27,6 +27,10 @@ from app.services import web_network_operations as web_network_operations_servic
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import has_permission, require_permission
 from app.services.network import ont_web_forms as ont_web_forms_service
+from app.services.network.ont_commissioning import (
+    active_candidate_for_ont,
+    latest_intent_for_ont,
+)
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.web.request_parsing import parse_form_data_sync
 from app.web.templates import templates
@@ -49,6 +53,8 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
         "can_redrive_network_operations": bool(auth)
         and has_permission(auth, db, "network:operation:redrive"),
+        "can_commission_ont": bool(auth)
+        and has_permission(auth, db, "network:ont:commission"),
     }
 
 
@@ -368,6 +374,8 @@ def ont_detail(
             "now": datetime.now(UTC),
             "authorization_result": _authorization_result_from_request(request),
             "ont_feedback": _ont_feedback_from_request(request),
+            "commissioning_intent": latest_intent_for_ont(db, ont_id),
+            "commissioning_candidate": active_candidate_for_ont(db, page_data["ont"]),
         }
     )
     total_duration_ms = round((monotonic() - started_at) * 1000.0, 2)
