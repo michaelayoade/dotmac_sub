@@ -1,7 +1,7 @@
 """add durable duplicate payment-proof correction evidence
 
-Revision ID: 446_payment_proof_corrections
-Revises: 445_social_comment_channels
+Revision ID: 447_payment_proof_corrections
+Revises: 446_ont_commissioning_intents
 Create Date: 2026-07-30
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "446_payment_proof_corrections"
-down_revision: str | None = "445_social_comment_channels"
+revision: str = "447_payment_proof_corrections"
+down_revision: str | None = "446_ont_commissioning_intents"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
