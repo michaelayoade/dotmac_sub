@@ -25,6 +25,7 @@ from app.models.team_inbox import (
     InboxConversationTeam,
 )
 from app.services import (
+    conversation_ticket_handoff,
     subscriber_summary,
     team_inbox_contact_links,
     team_inbox_metrics,
@@ -741,7 +742,6 @@ def build_ai_reply_projection(
     if timeline is None:
         return None
 
-    from app.models.support import Ticket
     from app.services.brand_profiles import resolve_brand
 
     active_assignment = next(
@@ -763,13 +763,10 @@ def build_ai_reply_projection(
             )
 
     labels = team_inbox_operations.conversation_labels(db, conversation_id)[:8]
-    ticket = (
-        db.query(Ticket)
-        .filter(Ticket.origin_conversation_id == conversation_id)
-        .filter(Ticket.is_active.is_(True))
-        .order_by(Ticket.created_at.desc())
-        .first()
+    linked_tickets = conversation_ticket_handoff.list_for_conversation(
+        db, conversation_id
     )
+    ticket = linked_tickets[0] if linked_tickets else None
     recent_messages = timeline.messages[-12:]
     metadata = timeline.metadata if isinstance(timeline.metadata, dict) else {}
     contact_name = next(
