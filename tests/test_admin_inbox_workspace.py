@@ -27,6 +27,7 @@ from app.services import (
     team_inbox_projection,
     team_inbox_read,
 )
+from app.services.list_query import PageMeta
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 
@@ -51,11 +52,53 @@ def test_inbox_workspace_templates_compile():
         "admin/inbox/index.html",
         "admin/inbox/_sidebar.html",
         "admin/inbox/_conversation.html",
+        "admin/inbox/_comment_thread.html",
         "admin/inbox/_contact_drawer.html",
+        "admin/inbox/_contact_preview.html",
         "admin/inbox/_empty_state.html",
+        "admin/inbox/_floating_surfaces.html",
         "admin/inbox/_overlays.html",
+        "admin/inbox/_ticket_panel.html",
     ):
         assert environment.get_template(template_name) is not None
+
+
+@pytest.mark.parametrize(
+    ("page", "total_items", "previous_page", "next_page"),
+    (
+        (1, 1, None, None),
+        (2, 75, 1, 3),
+        (3, 75, 2, None),
+    ),
+)
+def test_inbox_pagination_builds_only_available_navigation_links(
+    page,
+    total_items,
+    previous_page,
+    next_page,
+):
+    environment = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+    pagination = environment.get_template(
+        "admin/inbox/_queue_macros.html"
+    ).module.inbox_pagination
+    list_query = team_inbox_projection.INBOX_LIST_DEFINITION.build_query(
+        search=None,
+        filters={},
+        page=page,
+        per_page=25,
+    )
+    page_meta = PageMeta.from_query(list_query, total_items)
+
+    rendered = str(pagination(list_query, page_meta, "/admin/inbox"))
+
+    assert f"Page {page}" in rendered
+    assert ("page=0" in rendered) is False
+    assert (">Back</a>" in rendered) is (previous_page is not None)
+    assert (">Next</a>" in rendered) is (next_page is not None)
+    if previous_page is not None:
+        assert f"page={previous_page}" in rendered
+    if next_page is not None:
+        assert f"page={next_page}" in rendered
 
 
 def test_workspace_exposes_responsive_realtime_and_accessible_controls():
