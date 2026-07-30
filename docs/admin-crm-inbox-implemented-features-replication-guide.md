@@ -1118,4 +1118,3 @@ The replacement platform is complete only when all of the following are true:
 - WhatsApp templates are approved, dynamically parameterized and sent as Meta template payloads.
 - CC/BCC are actual SMTP envelope recipients, with BCC omitted from email headers.
 - Refreshing the page shows stored social replies and sent/failed outbound messages accurately.
-
