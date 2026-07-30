@@ -119,6 +119,9 @@ indent-style = "space"
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = false
+# Most of this codebase is untyped defs, so without this the gate reports
+# "Success" while checking almost none of the bodies it was pointed at.
+check_untyped_defs = true
 warn_unused_ignores = false
 disallow_untyped_defs = false
 ignore_missing_imports = true
