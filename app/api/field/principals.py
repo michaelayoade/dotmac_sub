@@ -1,4 +1,8 @@
-"""Field-plane principal guards.
+"""Field-plane principal guards (transport layer).
+
+These are FastAPI dependencies, so they live with the API adapters: the
+service layer raises typed domain errors and never imports transport
+exceptions.
 
 Routes under ``/field`` are self-scoped: the caller's authority comes from
 being a technician or a vendor member, not from staff RBAC. ``require_user_auth``

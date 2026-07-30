@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.field.principals import require_field_principal
 from app.schemas.common import ListResponse
 from app.schemas.field import (
     FieldMapAsset,
@@ -13,7 +14,6 @@ from app.schemas.field import (
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.map_assets import field_map_assets
 from app.services.field.map_search import field_map_search
-from app.services.field.principals import require_field_principal
 
 router = APIRouter(tags=["field-map-assets"])
 
