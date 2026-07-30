@@ -335,7 +335,7 @@ class OltReadCache:
 
                 return result
 
-            return wrapper  # type: ignore
+            return wrapper  # type: ignore[return-value]
 
         return decorator
 

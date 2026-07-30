@@ -122,7 +122,9 @@ warn_return_any = false
 # Most of this codebase is untyped defs, so without this the gate reports
 # "Success" while checking almost none of the bodies it was pointed at.
 check_untyped_defs = true
-warn_unused_ignores = false
+# Without this a `# type: ignore` outlives the error it was added for and
+# silently masks the next one to land on that line.
+warn_unused_ignores = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
 mypy_path = "stubs"
