@@ -148,7 +148,15 @@ def get_account_credit_balance(
         .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
         .filter(LedgerEntry.is_active.is_(True))
-        .filter(LedgerEntry.affects_customer_position.is_(True))
+        .filter(
+            or_(
+                LedgerEntry.affects_customer_position.is_(True),
+                # Reversing structural consumption appends a non-position
+                # credit with the original non-adjustment source. That exact
+                # release must restore reusable credit.
+                LedgerEntry.source != LedgerSource.adjustment,
+            )
+        )
     )
     if currency is not None:
         credit_query = credit_query.filter(LedgerEntry.currency == currency)
