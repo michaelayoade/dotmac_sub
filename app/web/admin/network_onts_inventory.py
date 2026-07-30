@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
+from app.models.network import OntUnit
 from app.services import web_admin as web_admin_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
@@ -375,7 +376,9 @@ def ont_detail(
             "authorization_result": _authorization_result_from_request(request),
             "ont_feedback": _ont_feedback_from_request(request),
             "commissioning_intent": latest_intent_for_ont(db, ont_id),
-            "commissioning_candidate": active_candidate_for_ont(db, page_data["ont"]),
+            "commissioning_candidate": active_candidate_for_ont(
+                db, cast(OntUnit, page_data["ont"])
+            ),
         }
     )
     total_duration_ms = round((monotonic() - started_at) * 1000.0, 2)
@@ -446,7 +449,7 @@ def ont_assign_modal(
     if result.not_found:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": result.not_found_message},
+            {"request": request, "message": "ONT not found"},
             status_code=404,
         )
 
@@ -589,7 +592,7 @@ def ont_assignment_edit(
     assignment_id: str,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    result = web_network_ont_assignments_service.get_assignment_edit_form(
+    result = web_network_ont_assignments_service.get_ont_for_assignment_form(
         db,
         ont_id=ont_id,
         assignment_id=assignment_id,
@@ -685,7 +688,7 @@ def ont_assignment_remove(
     if result.not_found:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": result.not_found_message},
+            {"request": request, "message": "ONT not found"},
             status_code=404,
         )
 
