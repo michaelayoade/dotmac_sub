@@ -331,6 +331,11 @@ def _resolve_activation_target(
                 "as_built_not_found", "As-built route not found.", kind="not_found"
             )
     else:
+        if segment_id is None:  # Defensive narrowing after the exclusive-target guard.
+            raise AsBuiltPlantProjectionError(
+                "activation_target_required",
+                "Name exactly one of as_built_id or segment_id.",
+            )
         as_built = db.scalars(
             select(AsBuiltRoute).where(
                 AsBuiltRoute.fiber_segment_id
