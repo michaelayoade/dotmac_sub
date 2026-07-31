@@ -106,6 +106,15 @@ class VendorSpliceCreate(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class VendorStrandColorRead(BaseModel):
+    strand_number: int
+    color_standard: str
+    tube_number: int | None = None
+    tube_color: str | None = None
+    core_number_in_tube: int
+    core_color: str
+
+
 class VendorSpliceProposalResponse(BaseModel):
     change_request_id: UUID
     status: str
@@ -116,6 +125,8 @@ class VendorSpliceProposalResponse(BaseModel):
     to_strand_id: UUID
     to_strand_end: Literal["a", "b"]
     work_order_public_id: str | None = None
+    from_strand_colors: VendorStrandColorRead | None = None
+    to_strand_colors: VendorStrandColorRead | None = None
 
 
 class VendorSpliceProposalStatusRead(BaseModel):
@@ -130,6 +141,8 @@ class VendorSpliceProposalStatusRead(BaseModel):
     splice_type: str | None = None
     loss_db: float | None = None
     work_order_public_id: str | None = None
+    from_strand_colors: VendorStrandColorRead | None = None
+    to_strand_colors: VendorStrandColorRead | None = None
     review_notes: str | None = None
     reviewed_at: datetime | None = None
     applied_at: datetime | None = None

@@ -34,6 +34,10 @@ from app.models.work_order import WorkOrder
 from app.services import fiber_change_requests
 from app.services.common import coerce_uuid
 from app.services.network import fiber_physical_continuity
+from app.services.network.fiber_color_code import (
+    StrandColorCode,
+    derive_segment_strand_colors,
+)
 
 _SPLICEABLE_STRAND_STATUSES = {
     FiberStrandStatus.available,
@@ -74,6 +78,8 @@ class SpliceProposalReceipt:
     to_strand_id: uuid.UUID
     to_strand_end: str
     work_order_public_id: str | None
+    from_strand_colors: StrandColorCode | None
+    to_strand_colors: StrandColorCode | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,6 +92,12 @@ class SpliceProposalReceipt:
             "to_strand_id": self.to_strand_id,
             "to_strand_end": self.to_strand_end,
             "work_order_public_id": self.work_order_public_id,
+            "from_strand_colors": self.from_strand_colors.to_dict()
+            if self.from_strand_colors
+            else None,
+            "to_strand_colors": self.to_strand_colors.to_dict()
+            if self.to_strand_colors
+            else None,
         }
 
 
@@ -104,6 +116,8 @@ class SpliceProposalStatus:
     splice_type: str | None
     loss_db: float | None
     work_order_public_id: str | None
+    from_strand_colors: StrandColorCode | None
+    to_strand_colors: StrandColorCode | None
     review_notes: str | None
     reviewed_at: datetime | None
     applied_at: datetime | None
@@ -122,6 +136,12 @@ class SpliceProposalStatus:
             "splice_type": self.splice_type,
             "loss_db": self.loss_db,
             "work_order_public_id": self.work_order_public_id,
+            "from_strand_colors": self.from_strand_colors.to_dict()
+            if self.from_strand_colors
+            else None,
+            "to_strand_colors": self.to_strand_colors.to_dict()
+            if self.to_strand_colors
+            else None,
             "review_notes": self.review_notes,
             "reviewed_at": self.reviewed_at,
             "applied_at": self.applied_at,
@@ -192,6 +212,10 @@ def proposal_receipt(
         to_strand_id=coerce_uuid(str(payload["to_strand_id"])),
         to_strand_end=str(payload["to_strand_end"]),
         work_order_public_id=payload.get("work_order_public_id"),
+        from_strand_colors=StrandColorCode.from_payload(
+            payload.get("from_strand_colors")
+        ),
+        to_strand_colors=StrandColorCode.from_payload(payload.get("to_strand_colors")),
     )
 
 
@@ -210,6 +234,10 @@ def proposal_status(request: FiberChangeRequest) -> SpliceProposalStatus:
         splice_type=payload.get("splice_type"),
         loss_db=float(loss_db) if loss_db is not None else None,
         work_order_public_id=payload.get("work_order_public_id"),
+        from_strand_colors=StrandColorCode.from_payload(
+            payload.get("from_strand_colors")
+        ),
+        to_strand_colors=StrandColorCode.from_payload(payload.get("to_strand_colors")),
         review_notes=request.review_notes,
         reviewed_at=request.reviewed_at,
         applied_at=request.applied_at,
@@ -279,8 +307,8 @@ def propose_splice(
     if closure is None or not closure.is_active:
         raise HTTPException(status_code=404, detail="Splice closure not found")
 
-    _load_spliceable_strand(db, from_uuid, "from")
-    _load_spliceable_strand(db, to_uuid, "to")
+    from_strand = _load_spliceable_strand(db, from_uuid, "from")
+    to_strand = _load_spliceable_strand(db, to_uuid, "to")
 
     tray_uuid = uuid_or_422(tray_id, "tray_id") if tray_id else None
     if tray_uuid is not None:
@@ -350,6 +378,10 @@ def propose_splice(
     except fiber_physical_continuity.FiberPhysicalContinuityError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    from_colors = derive_segment_strand_colors(
+        from_strand.segment, from_strand.strand_number
+    )
+    to_colors = derive_segment_strand_colors(to_strand.segment, to_strand.strand_number)
     payload = {
         "closure_id": str(closure.id),
         "from_strand_id": str(from_uuid),
@@ -363,6 +395,8 @@ def propose_splice(
         "notes": note,
         "work_order_id": str(work_order.id) if work_order else None,
         "work_order_public_id": work_order.public_id if work_order else None,
+        "from_strand_colors": from_colors.to_dict() if from_colors else None,
+        "to_strand_colors": to_colors.to_dict() if to_colors else None,
         "physical_link_decision_id": str(decision.id),
         **actor_payload,
     }

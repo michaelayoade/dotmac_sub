@@ -506,6 +506,44 @@ def test_propose_splice_links_scoped_work_order(db_session):
     assert rows[0].work_order_public_id == "wo-fiber"
 
 
+def test_propose_splice_records_derived_strand_colors(db_session):
+    user = _user(db_session)
+    _profile(db_session, user)
+    closure, tray, strand_a, strand_b, _access_point = _plant(db_session)
+    strand_a.segment.fibers_per_tube = 1
+    strand_a.segment.color_standard = "eia_tia_598"
+    strand_b.segment.color_standard = "eia_tia_598"
+    db_session.commit()
+
+    receipt = field_fiber.propose_splice(
+        db_session,
+        _auth(user),
+        closure_id=str(closure.id),
+        from_strand_id=str(strand_a.id),
+        from_strand_end="b",
+        to_strand_id=str(strand_b.id),
+        to_strand_end="a",
+        tray_id=str(tray.id),
+        position=1,
+        splice_type="fusion",
+    )
+
+    assert receipt.from_strand_colors is not None
+    assert receipt.from_strand_colors.tube_number == 1
+    assert receipt.from_strand_colors.tube_color == "blue"
+    assert receipt.from_strand_colors.core_color == "blue"
+    assert receipt.to_strand_colors is not None
+    assert receipt.to_strand_colors.tube_number is None
+    assert receipt.to_strand_colors.core_color == "blue"
+
+    change = db_session.get(FiberChangeRequest, receipt.change_request_id)
+    assert change.payload["from_strand_colors"]["core_color"] == "blue"
+
+    rows = field_fiber.list_splice_proposals(db_session, _auth(user))
+    assert rows[0].from_strand_colors == receipt.from_strand_colors
+    FieldSpliceProposalStatusRead(**rows[0].to_dict())
+
+
 def test_propose_splice_rejects_out_of_scope_work_order(db_session):
     user = _user(db_session)
     profile = _profile(db_session, user)

@@ -703,6 +703,15 @@ class FieldSpliceCreate(BaseModel):
     work_order_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class FieldStrandColorRead(BaseModel):
+    strand_number: int
+    color_standard: str
+    tube_number: int | None = None
+    tube_color: str | None = None
+    core_number_in_tube: int
+    core_color: str
+
+
 class FieldSpliceProposalResponse(BaseModel):
     change_request_id: UUID
     status: str
@@ -713,6 +722,8 @@ class FieldSpliceProposalResponse(BaseModel):
     to_strand_id: UUID
     to_strand_end: Literal["a", "b"]
     work_order_public_id: str | None = None
+    from_strand_colors: FieldStrandColorRead | None = None
+    to_strand_colors: FieldStrandColorRead | None = None
 
 
 class FieldSpliceProposalStatusRead(BaseModel):
@@ -727,6 +738,8 @@ class FieldSpliceProposalStatusRead(BaseModel):
     splice_type: str | None = None
     loss_db: float | None = None
     work_order_public_id: str | None = None
+    from_strand_colors: FieldStrandColorRead | None = None
+    to_strand_colors: FieldStrandColorRead | None = None
     review_notes: str | None = None
     reviewed_at: datetime | None = None
     applied_at: datetime | None = None
