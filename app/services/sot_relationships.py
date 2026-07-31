@@ -407,6 +407,118 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="customer.account_visibility",
+                module="app.services.customer_account_visibility",
+                owns=("legacy imported Subscriber deletion classification",),
+                depends_on=(
+                    "customer.accounts",
+                    "access.subscription_lifecycle",
+                ),
+                notes=(
+                    "An explicit retained splynx_deleted value is authoritative for "
+                    "legacy import deletion classification. The canceled/inactive "
+                    "historical-status compatibility inference runs only when that "
+                    "value is absent or unrecognized; historical Splynx status never "
+                    "overrides canonical current lifecycle state."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=("legacy imported Subscriber deletion classification"),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical Subscriber account record",
+                                "canonical Subscriber lifecycle projection",
+                                "retained Splynx deletion observation",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical Subscriber account record",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "canonical Subscriber identity and retained legacy "
+                                "system provenance"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Subscriber lifecycle projection",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "Subscriber status and active flag projected from "
+                                "canonical subscription lifecycle state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="retained Splynx deletion observation",
+                            owner="external:splynx_import",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "splynx_deleted and historical splynx_status values "
+                                "retained in Subscriber metadata at migration"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Callers own the session; object and SQL classifiers read "
+                            "committed Subscriber facts without mutation or transaction "
+                            "completion."
+                        ),
+                        locking=(
+                            "No read locks are required because the classifier does not "
+                            "write lifecycle or provenance state."
+                        ),
+                        idempotency=(
+                            "The same account, lifecycle, and retained import evidence "
+                            "produce the same deletion classification."
+                        ),
+                        retries="Read-only classification is safe to retry.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "customer list, reporting, and subscriber query adapters"
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "inline legacy Splynx deletion inference in customer list "
+                            "and reporting callers"
+                        ),
+                        new_owner="customer.account_visibility",
+                        verification=(
+                            "Object/SQL classifier parity and customer-list visibility "
+                            "regression tests"
+                        ),
+                        cutover_gate=(
+                            "All imported-customer visibility consumers use the shared "
+                            "classifier and explicit false evidence wins"
+                        ),
+                        fallback_retirement=(
+                            "Only absent or unrecognized deletion observations retain "
+                            "the compatibility inference until those imports are "
+                            "adjudicated or backfilled"
+                        ),
+                    ),
+                    steward="customer operations",
+                    design_refs=(
+                        "docs/designs/SPLYNX_RETIREMENT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_subscriber_splynx_soft_delete.py",
+                        "tests/test_web_customer_lists.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="customer.crm_subscriber_provisioning",
                 module="app.services.crm_subscriber_provisioning",
                 owns=("authenticated CRM Subscriber provisioning coordination",),
@@ -9271,6 +9383,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Reviewed confirmation consumes payment settlements first and "
                     "then records only the exact remainder as typed opening-funding "
                     "consumption; opening funding is never represented as a Payment. "
+                    "When an active reviewed opening baseline exists, current "
+                    "account-credit evidence is scoped to native payment and ledger "
+                    "facts crossing its position timestamp; pre-boundary mirror rows "
+                    "are absorbed by the signed opening and cannot be reused or "
+                    "quarantined again. "
                     "Automatic funding changes create a durable operator exception "
                     "instead of silently leaving an authoritatively funded draft. "
                     "Every existing draft blocks the parallel invoice-less renewal "
@@ -9354,9 +9471,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="financial.account_credit_applications",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "exact active succeeded settlement capacity, current "
-                                "account-credit projection, source payments, and "
-                                "shortfall"
+                                "exact active succeeded settlement capacity and "
+                                "account-credit facts crossing the active reviewed "
+                                "opening-position boundary when present, source "
+                                "payments, and shortfall; pre-boundary mirror residue "
+                                "is excluded"
                             ),
                         ),
                         AuthorityInput(
@@ -9452,7 +9571,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         retryable_codes=(),
                         fail_closed_on=(
                             "any funding shortfall including NGN 0.50",
-                            "legacy or unbacked account credit",
+                            "unbacked account credit crossing the active reviewed "
+                            "opening-position boundary, or any unbacked account "
+                            "credit when no active baseline exists",
                             "multiple drafts or positive lines",
                             "partial or ambiguous entitlement overlap",
                             "stale preview, changed payment capacity, or already "
@@ -9513,7 +9634,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         new_owner="financial.prepaid_draft_reconciliation",
                         verification=(
                             "Exact mixed funding, partial funding, fifty-kobo "
-                            "shortfall, unbacked or reversed payment evidence, "
+                            "shortfall, pre-boundary residue absorption, post-boundary "
+                            "unbacked or reversed payment evidence, "
                             "direct-renewal overlap, multiple drafts, stale preview, "
                             "replay, concurrency, lapsed re-anchoring, opening-funding "
                             "double-spend, Restore guard, and architecture tests."
@@ -12165,6 +12287,431 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.fiber_job_evidence",
+                module="app.services.network.fiber_job_evidence",
+                owns=("per-job fiber evidence summary projection",),
+                depends_on=(
+                    "network.fiber_asset_changes",
+                    "network.fiber_splice_plans",
+                ),
+                notes=(
+                    "Read-only aggregation of the fiber evidence naming one "
+                    "native work order: tests with derived-verdict failures and "
+                    "assertion conflicts, topology source observations, splice "
+                    "proposals by review status, live cut-sheet progress, "
+                    "attachments, and pending inventory proposals. Every fact "
+                    "belongs to its named owner; this projection only counts and "
+                    "labels, and decides nothing."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="per-job fiber evidence summary projection",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "owner-recorded fiber evidence facts",
+                                "reviewed splice change-request state",
+                                "live cut-sheet progress",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="owner-recorded fiber evidence facts",
+                            owner="network.fiber_job_evidence",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "FieldFiberTestResult, "
+                                "FiberTopologyFieldObservation, and "
+                                "FieldAttachment rows naming the exact work order"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed splice change-request state",
+                            owner="network.fiber_asset_changes",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "fiber_splice, fiber_segment, and fiber_strand "
+                                "change requests with typed work-order provenance"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="live cut-sheet progress",
+                            owner="network.fiber_splice_plans",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "the work order's live plan view and derived "
+                                "execution counts"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Pure aggregation over committed state; nothing is written."
+                        ),
+                        locking="None; the projection reads committed state only.",
+                        idempotency=(
+                            "Deterministic for identical committed inputs; safe to "
+                            "recompute at any time."
+                        ),
+                        retries="Safe to re-read; no side effects exist.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "field and vendor transports surface the summary as "
+                            "data; scoping errors belong to their job resolvers"
+                        ),
+                        fail_closed_on=(
+                            "unscoped work orders (transports resolve scope "
+                            "before this projection runs)",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        old_owner=None,
+                        new_owner="network.fiber_job_evidence",
+                        verification=(
+                            "Focused summary-count and gate-composition tests."
+                        ),
+                        cutover_gate=(
+                            "Native new projection; the staged-verification "
+                            "evidence map remains authoritative for its campaign."
+                        ),
+                        fallback_retirement=(
+                            "No fallback exists; owners remain the source of "
+                            "every underlying fact."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/FIBER_TECH_JOURNEY_GAP_LIST.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=("tests/test_fiber_field_inventory_journey.py",),
+                ),
+            ),
+            SOTService(
+                name="network.fiber_test_acceptance",
+                module="app.services.network.fiber_test_acceptance",
+                owns=(
+                    "derived fiber test acceptance verdicts",
+                    "expected downstream link budget derivation",
+                ),
+                depends_on=("network.fiber_topology",),
+                notes=(
+                    "Observations stay facts: the technician's measurement and "
+                    "self-assessment are never altered. This policy derives a "
+                    "typed verdict from declared per-test-type thresholds "
+                    "(snapshotted beside the assertion with the policy version at "
+                    "capture time) and an expected downstream link budget from "
+                    "the canonical trace with every assumption named. Unknown "
+                    "test types and incomplete inputs yield explicit no_policy / "
+                    "incomplete outcomes, never a guess."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="derived fiber test acceptance verdicts",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "declared acceptance thresholds",
+                                "field fiber test measurement facts",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="expected downstream link budget derivation",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "declared acceptance thresholds",
+                                "canonical customer trace evidence",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="declared acceptance thresholds",
+                            owner="network.fiber_test_acceptance",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "versioned typed threshold table and planning "
+                                "coefficients declared in the policy module"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="field fiber test measurement facts",
+                            owner="network.fiber_test_acceptance",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "FieldFiberTestResult measurements captured by the "
+                                "scoped field transport; the capture path stores "
+                                "the derived snapshot beside the assertion"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer trace evidence",
+                            owner="network.fiber_topology",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "trace_fiber_subscription hops, reviewed splitter "
+                                "stage losses, and traced segment lengths"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Pure derivation: verdicts and budgets are computed "
+                            "from inputs without mutating state; the field capture "
+                            "path persists the verdict snapshot inside its own "
+                            "existing transaction."
+                        ),
+                        locking="None; derivation reads committed state only.",
+                        idempotency=(
+                            "Deterministic for identical inputs and policy "
+                            "version; snapshots carry the version so replays are "
+                            "distinguishable from policy changes."
+                        ),
+                        retries=(
+                            "Safe to recompute at any time; recorded snapshots "
+                            "are never rewritten by recomputation."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner=(
+                            "field/vendor transports surface derived outcomes as "
+                            "data; no transport error mapping is required"
+                        ),
+                        fail_closed_on=(
+                            "unknown test types (explicit no_policy verdict)",
+                            "missing measurements (explicit no_measurement verdict)",
+                            "incomplete traces (budget labelled incomplete, "
+                            "never presented as the whole path)",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        old_owner=None,
+                        new_owner="network.fiber_test_acceptance",
+                        verification=(
+                            "Focused verdict-matrix, capture-snapshot, conflict, "
+                            "and link-budget tests."
+                        ),
+                        cutover_gate=(
+                            "Native new authority; the technician assertion "
+                            "remains recorded and unaltered beside the verdict."
+                        ),
+                        fallback_retirement=(
+                            "No fallback exists; tests without policy coverage "
+                            "carry an explicit no_policy verdict."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/FIBER_TECH_JOURNEY_GAP_LIST.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=("tests/test_fiber_test_acceptance.py",),
+                ),
+            ),
+            SOTService(
+                name="network.fiber_splice_plans",
+                module="app.services.network.fiber_splice_plans",
+                owns=(
+                    "planned splice work (cut sheet) lifecycle",
+                    "planned splice execution linkage",
+                ),
+                depends_on=(
+                    "network.fiber_asset_changes",
+                    "network.fiber_plant_integrity",
+                    "operations.work_order_commands",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "The design-first owner for splicing: draft, issued, and "
+                    "cancelled cut sheets of exact strand-end pairs bound to one "
+                    "work order, at most one live plan each. Execution stays with "
+                    "the reviewed splice intake and review with "
+                    "network.fiber_asset_changes; an item records only the link to "
+                    "its executing change request, so plan progress is derived "
+                    "from review state and never drifts on its own. Field "
+                    "completion of a work order with an issued plan requires every "
+                    "item executed."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="planned splice work (cut sheet) lifecycle",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "operator cut-sheet command evidence",
+                                "native work-order identity",
+                                "passive plant closure, tray, and exact strand identity",
+                            ),
+                            canonical_writer="network.fiber_splice_plans",
+                        ),
+                        ConcernContract(
+                            name="planned splice execution linkage",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "operator cut-sheet command evidence",
+                                "reviewed splice change-request state",
+                            ),
+                            canonical_writer="network.fiber_splice_plans",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="operator cut-sheet command evidence",
+                            owner="network.fiber_splice_plans",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "network:fiber:write (or scoped field/vendor "
+                                "execution) plus typed CommandContext actor, scope, "
+                                "and reason"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="native work-order identity",
+                            owner="operations.work_order_commands",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the active WorkOrder public identity a plan binds to"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name=(
+                                "passive plant closure, tray, and exact strand identity"
+                            ),
+                            owner="network.fiber_plant_integrity",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active FiberSpliceClosure and FiberSpliceTray rows "
+                                "and exact numbered plannable FiberStrand identities"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed splice change-request state",
+                            owner="network.fiber_asset_changes",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the fiber_splice FiberChangeRequest linked by "
+                                "executed_change_request_id and its review status"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Every plan mutation (create, add/remove item, issue, "
+                            "cancel, execution linkage) enters execute_owner_command "
+                            "once on a transaction-free session; internals stay "
+                            "flush-only and the command boundary commits or rolls "
+                            "back atomically with staged events."
+                        ),
+                        locking=(
+                            "The partial unique live-plan index arbitrates concurrent "
+                            "plan creation per work order; item position and "
+                            "executed-change-request uniqueness are schema-enforced. "
+                            "No advisory locks are required."
+                        ),
+                        idempotency=(
+                            "cancel_plan replays as a no-op; execution linkage "
+                            "carries a plan-item/change-request idempotency key and "
+                            "each item holds at most one non-rejected executing "
+                            "request."
+                        ),
+                        retries=(
+                            "Callers may retry failed commands with fresh state; "
+                            "live-plan and executed-item conflicts fail closed for "
+                            "operator review instead of overwriting."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.fiber_splice_plans.plan_not_found",
+                            "network.fiber_splice_plans.work_order_not_found",
+                            "network.fiber_splice_plans.name_required",
+                            "network.fiber_splice_plans.live_plan_exists",
+                            "network.fiber_splice_plans.invalid_identifier",
+                            "network.fiber_splice_plans.invalid_strand_end",
+                            "network.fiber_splice_plans.self_splice",
+                            "network.fiber_splice_plans.splice_type_required",
+                            "network.fiber_splice_plans.closure_not_found",
+                            "network.fiber_splice_plans.strand_not_found",
+                            "network.fiber_splice_plans.strand_not_plannable",
+                            "network.fiber_splice_plans.tray_not_found",
+                            "network.fiber_splice_plans.tray_closure_mismatch",
+                            "network.fiber_splice_plans.duplicate_planned_pair",
+                            "network.fiber_splice_plans.plan_not_editable",
+                            "network.fiber_splice_plans.plan_full",
+                            "network.fiber_splice_plans.item_not_found",
+                            "network.fiber_splice_plans.plan_not_issuable",
+                            "network.fiber_splice_plans.plan_empty",
+                            "network.fiber_splice_plans.plan_not_issued",
+                            "network.fiber_splice_plans.plan_work_order_mismatch",
+                            "network.fiber_splice_plans.plan_item_mismatch",
+                            "network.fiber_splice_plans.item_already_executed",
+                            *owner_command_boundary_error_codes(
+                                "network.fiber_splice_plans"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "admin fiber API and field/vendor transport adapters"
+                        ),
+                        fail_closed_on=(
+                            "a proposed splice that does not exactly match its named "
+                            "cut-sheet entry",
+                            "a second live plan for the same work order",
+                            "editing or issuing outside the draft lifecycle",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "fiber.splice_plan_issued",
+                            "fiber.splice_plan_cancelled",
+                            "fiber.splice_plan_item_executed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "New PII-free schemas carrying plan, work-order, item, "
+                            "and change-request identifiers only."
+                        ),
+                        replay=(
+                            "Events stage only on a successful command commit; "
+                            "execution linkage is unique per item, so a replayed "
+                            "command cannot double-link or double-emit."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        old_owner=None,
+                        new_owner="network.fiber_splice_plans",
+                        verification=(
+                            "Focused lifecycle, execution-matching, diff, completion-"
+                            "gate, and permission tests."
+                        ),
+                        cutover_gate=(
+                            "Native new authority; capture-first proposals remain "
+                            "valid and appear as unplanned work in the diff."
+                        ),
+                        fallback_retirement=(
+                            "No fallback exists; unplanned proposals are surfaced, "
+                            "not blocked."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/FIBER_TECH_JOURNEY_GAP_LIST.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=("tests/test_fiber_splice_plans.py",),
+                ),
+            ),
+            SOTService(
                 name="network.fiber_support_structures",
                 module="app.services.network.fiber_support_structures",
                 owns=(
@@ -13564,9 +14111,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.operation_dispatch",
                 ),
                 notes=(
-                    "Admin, API, and bulk adapters submit typed intent here. "
-                    "They never publish provisioning device tasks directly, and "
-                    "workers never create their own operation after broker delivery."
+                    "Assigned authorization adapters submit only "
+                    "RequestAssignedOntAuthorization with CommandContext and an exact "
+                    "UUID/OLT/F/S/P/serial value-object target; admission returns "
+                    "OntAuthorizationAdmission. The owner evaluates the active "
+                    "assignment and exact PON before staging the operation and typed "
+                    "dispatch. Admin, API, and bulk adapters never publish provisioning "
+                    "device tasks directly, and workers never create their own operation "
+                    "after broker delivery."
                 ),
             ),
             SOTService(
@@ -13581,14 +14133,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=(
                     "network.ont_provisioning_commands",
+                    "network.identity",
                     "network.operation_ledger",
                 ),
                 notes=(
-                    "Celery tasks claim a durable dispatch and delegate here. "
-                    "Inform-driven confirmation and scheduled verification share "
-                    "the same parent/child completion projection. A pre-cutover "
-                    "broker envelope may only re-submit intent to the command "
-                    "owner and cannot enter device code."
+                    "Celery tasks claim a durable dispatch, reconstruct "
+                    "ExecuteAssignedOntAuthorization, and delegate here. The execution "
+                    "owner repeats the exact assignment/PON decision immediately before "
+                    "device I/O and returns OntAuthorizationExecutionOutcome; stale "
+                    "assignment fails closed without an OLT write. Inform-driven "
+                    "confirmation and scheduled verification share the same parent/child "
+                    "completion projection. A pre-cutover broker envelope may only "
+                    "re-submit typed assigned intent to the command owner and cannot "
+                    "enter device code."
                 ),
             ),
             SOTService(
@@ -13617,7 +14174,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "F/S/P filtering where scoped Huawei syntax is unsupported. "
                     "Its dependency audit includes only registration and management "
                     "profiles; customer traffic-table and WAN inventories remain "
-                    "normal authorization dependencies. "
+                    "normal authorization dependencies. Separate named capabilities "
+                    "replace a public provisioning switch: only this owner may request "
+                    "commissioning registration, while assigned authorization and "
+                    "reauthorization enter through the exact-assignment command owner. "
                     "It never creates an assignment or applies internet, PPPoE, "
                     "WAN, LAN, or Wi-Fi intent. Assignment converts a "
                     "management-ready intent; expiry without assignment stages "
@@ -14246,7 +14806,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Subscription.ipv4_address copy; its durable event delegates "
                     "RADIUS and old-IP session consequences to their owners. Normal "
                     "provisioning writers remain declared migration debt until the "
-                    "later runtime cutover."
+                    "later runtime cutover. The admin subscription replacement "
+                    "adapter is cut over to the two reviewed owner commands and is "
+                    "isolated from recurring add-on and billing writes."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -28465,7 +29027,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "admin customer row and page projection",
                     "legacy customer offset API compatibility mapping",
                 ),
-                depends_on=("ui.list_contracts",),
+                depends_on=(
+                    "ui.list_contracts",
+                    "customer.account_visibility",
+                ),
             ),
             SOTService(
                 name="ui.subscriber_list_projection",

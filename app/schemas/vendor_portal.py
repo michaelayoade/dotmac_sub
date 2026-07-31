@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.network import FiberSplicePlanDiffRead, FiberSplicePlanRead
+
 
 class VendorQuoteCreate(BaseModel):
     project_id: UUID
@@ -104,6 +106,80 @@ class VendorSpliceCreate(BaseModel):
     splice_type: str = Field(min_length=1, max_length=80)
     loss_db: float | None = Field(default=None, ge=0, le=5)
     note: str | None = Field(default=None, max_length=2000)
+    plan_item_id: UUID | None = None
+
+
+class VendorSplicePlanResponse(BaseModel):
+    """The assigned work order's live cut sheet and diff (None when absent)."""
+
+    work_order_id: str
+    plan: FiberSplicePlanRead | None = None
+    diff: FiberSplicePlanDiffRead | None = None
+
+
+class VendorCableRegistrationCreate(BaseModel):
+    work_order_id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=160)
+    fiber_count: int = Field(ge=1, le=1728)
+    segment_type: Literal["feeder", "distribution", "drop"] | None = None
+    cable_type: str | None = Field(default=None, max_length=40)
+    fibers_per_tube: int | None = Field(default=None, ge=1, le=48)
+    color_standard: str | None = Field(default=None, max_length=40)
+    length_m: float | None = Field(default=None, ge=0)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class VendorCableRegistrationResponse(BaseModel):
+    change_request_id: UUID
+    status: str
+    name: str
+    fiber_count: int
+    work_order_public_id: str | None = None
+
+
+class VendorStrandDamageCreate(BaseModel):
+    work_order_id: str = Field(min_length=1, max_length=64)
+    note: str = Field(min_length=1, max_length=2000)
+    strand_id: UUID | None = None
+    segment_id: UUID | None = None
+    tube_number: int | None = Field(default=None, ge=1)
+
+
+class VendorStrandDamageResponse(BaseModel):
+    change_request_ids: list[UUID] = Field(default_factory=list)
+    strand_ids: list[UUID] = Field(default_factory=list)
+    tube_number: int | None = None
+    work_order_public_id: str | None = None
+
+
+class VendorSpliceProposalCountsRead(BaseModel):
+    pending: int
+    applied: int
+    rejected: int
+
+
+class VendorJobPlanSummaryRead(BaseModel):
+    plan_id: UUID
+    status: str
+    item_count: int
+    executed_count: int
+    unexecuted_count: int
+
+
+class VendorJobEvidenceRead(BaseModel):
+    work_order_id: UUID
+    work_order_public_id: str
+    fiber_test_count: int
+    derived_failed_count: int
+    assertion_conflict_count: int
+    source_observation_count: int
+    splice_proposals: VendorSpliceProposalCountsRead
+    unplanned_splice_count: int
+    plan: VendorJobPlanSummaryRead | None = None
+    attachment_count: int
+    pending_inventory_proposals: int
+    as_built_required: bool
+    as_built_satisfied: bool
 
 
 class VendorStrandColorRead(BaseModel):
@@ -127,6 +203,8 @@ class VendorSpliceProposalResponse(BaseModel):
     work_order_public_id: str | None = None
     from_strand_colors: VendorStrandColorRead | None = None
     to_strand_colors: VendorStrandColorRead | None = None
+    plan_id: UUID | None = None
+    plan_item_id: UUID | None = None
 
 
 class VendorSpliceProposalStatusRead(BaseModel):
@@ -143,6 +221,8 @@ class VendorSpliceProposalStatusRead(BaseModel):
     work_order_public_id: str | None = None
     from_strand_colors: VendorStrandColorRead | None = None
     to_strand_colors: VendorStrandColorRead | None = None
+    plan_id: UUID | None = None
+    plan_item_id: UUID | None = None
     review_notes: str | None = None
     reviewed_at: datetime | None = None
     applied_at: datetime | None = None
