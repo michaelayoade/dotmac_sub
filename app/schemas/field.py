@@ -774,6 +774,26 @@ class FieldFiberOntLiveRead(BaseModel):
     rx_observed_at: datetime | None = None
 
 
+class FieldStrandTerminationDetailRead(BaseModel):
+    strand_number: int
+    strand_end: str
+    port_label: str | None = None
+    port_number: int | None = None
+    panel_name: str | None = None
+    rack_code: str | None = None
+    rack_name: str | None = None
+    colors: FieldStrandColorRead | None = None
+
+
+class FieldSegmentPhysicalDetailRead(BaseModel):
+    segment_id: UUID
+    termination_count: int
+    truncated: bool
+    terminations: list[FieldStrandTerminationDetailRead] = Field(
+        default_factory=list
+    )
+
+
 class FieldFiberCustomerTraceRead(BaseModel):
     subscription_id: UUID
     customer_label: str
@@ -788,6 +808,9 @@ class FieldFiberCustomerTraceRead(BaseModel):
     upstream_scope: str
     upstream_message: str
     ont_live: FieldFiberOntLiveRead | None = None
+    physical_details: list[FieldSegmentPhysicalDetailRead] = Field(
+        default_factory=list
+    )
 
 
 class FieldFiberTestCreate(BaseModel):

@@ -13,6 +13,12 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import AccessType, CatalogOffer, Subscription
 from app.models.fiber_change_request import FiberChangeRequest
+from app.models.fiber_physical import (
+    FiberConnectorPort,
+    FiberPatchPanel,
+    FiberRack,
+    FiberStrandTermination,
+)
 from app.models.field_attachment import FieldAttachment
 from app.models.field_fiber import FIELD_FIBER_TEST_TYPES, FieldFiberTestResult
 from app.models.network import (
@@ -37,6 +43,10 @@ from app.services.network import (
     fiber_splice_proposals,
     fiber_topology_field_observations,
     fiber_topology_work_order_evidence_map,
+)
+from app.services.network.fiber_color_code import (
+    StrandColorCode,
+    derive_segment_strand_colors,
 )
 from app.services.network.fiber_splice_proposals import (
     FieldTechnicianActor,
@@ -339,15 +349,63 @@ class FieldOntLiveStatus:
 
 
 @dataclass(frozen=True)
+class FieldStrandTerminationDetail:
+    """Where one exact strand end lands: connector port, panel, rack."""
+
+    strand_number: int
+    strand_end: str
+    port_label: str | None
+    port_number: int | None
+    panel_name: str | None
+    rack_code: str | None
+    rack_name: str | None
+    colors: StrandColorCode | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strand_number": self.strand_number,
+            "strand_end": self.strand_end,
+            "port_label": self.port_label,
+            "port_number": self.port_number,
+            "panel_name": self.panel_name,
+            "rack_code": self.rack_code,
+            "rack_name": self.rack_name,
+            "colors": self.colors.to_dict() if self.colors else None,
+        }
+
+
+@dataclass(frozen=True)
+class FieldSegmentPhysicalDetail:
+    """Exact reviewed strand terminations recorded for one traced segment."""
+
+    segment_id: uuid.UUID
+    termination_count: int
+    truncated: bool
+    terminations: tuple[FieldStrandTerminationDetail, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "segment_id": self.segment_id,
+            "termination_count": self.termination_count,
+            "truncated": self.truncated,
+            "terminations": [item.to_dict() for item in self.terminations],
+        }
+
+
+@dataclass(frozen=True)
 class FieldCustomerFiberTrace:
     """One customer fiber trace projected into the technician's job scope."""
 
     trace: FiberSubscriptionTrace
     ont_live: FieldOntLiveStatus | None
+    physical_details: tuple[FieldSegmentPhysicalDetail, ...]
 
     def to_dict(self) -> dict[str, Any]:
         payload = self.trace.to_dict()
         payload["ont_live"] = self.ont_live.to_dict() if self.ont_live else None
+        payload["physical_details"] = [
+            detail.to_dict() for detail in self.physical_details
+        ]
         return payload
 
 
@@ -377,13 +435,96 @@ def list_customer_traces(
         .limit(_MAX_TRACE_SUBSCRIPTIONS)
         .all()
     )
-    return [
-        FieldCustomerFiberTrace(
-            trace=trace_fiber_subscription(db, subscription.id),
-            ont_live=_latest_ont_live(db, subscription.id),
+    results: list[FieldCustomerFiberTrace] = []
+    for subscription in subscriptions:
+        trace = trace_fiber_subscription(db, subscription.id)
+        results.append(
+            FieldCustomerFiberTrace(
+                trace=trace,
+                ont_live=_latest_ont_live(db, subscription.id),
+                physical_details=_segment_physical_details(db, trace),
+            )
         )
-        for subscription in subscriptions
-    ]
+    return results
+
+
+_MAX_TERMINATIONS_PER_SEGMENT = 24
+
+
+def _segment_physical_details(
+    db: Session, trace: FiberSubscriptionTrace
+) -> tuple[FieldSegmentPhysicalDetail, ...]:
+    """Annotate traced segments with their exact reviewed ODF terminations.
+
+    Read-only projection over the physical-continuity records; segments with
+    no recorded terminations still appear so the absence is visible.
+    """
+
+    segment_ids: list[uuid.UUID] = []
+    for hop in trace.hops:
+        if hop.kind.endswith("_segment") and hop.asset_id is not None:
+            if hop.asset_id not in segment_ids:
+                segment_ids.append(hop.asset_id)
+    if not segment_ids:
+        return ()
+
+    rows = (
+        db.query(
+            FiberStrand,
+            FiberStrandTermination,
+            FiberConnectorPort,
+            FiberPatchPanel,
+            FiberRack,
+        )
+        .join(
+            FiberStrandTermination,
+            FiberStrandTermination.strand_id == FiberStrand.id,
+        )
+        .join(
+            FiberConnectorPort,
+            FiberConnectorPort.id == FiberStrandTermination.connector_port_id,
+        )
+        .outerjoin(
+            FiberPatchPanel,
+            FiberPatchPanel.id == FiberConnectorPort.patch_panel_id,
+        )
+        .outerjoin(FiberRack, FiberRack.id == FiberPatchPanel.rack_id)
+        .filter(FiberStrand.segment_id.in_(segment_ids))
+        .filter(FiberStrandTermination.active.is_(True))
+        .order_by(
+            FiberStrand.strand_number.asc(),
+            FiberStrandTermination.strand_end.asc(),
+        )
+        .all()
+    )
+    grouped: dict[uuid.UUID, list[FieldStrandTerminationDetail]] = {}
+    for strand, termination, port, panel, rack in rows:
+        grouped.setdefault(strand.segment_id, []).append(
+            FieldStrandTerminationDetail(
+                strand_number=strand.strand_number,
+                strand_end=termination.strand_end,
+                port_label=port.label,
+                port_number=port.port_number,
+                panel_name=panel.name if panel else None,
+                rack_code=rack.code if rack else None,
+                rack_name=rack.name if rack else None,
+                colors=derive_segment_strand_colors(
+                    strand.segment, strand.strand_number
+                ),
+            )
+        )
+    details = []
+    for segment_id in segment_ids:
+        items = grouped.get(segment_id, [])
+        details.append(
+            FieldSegmentPhysicalDetail(
+                segment_id=segment_id,
+                termination_count=len(items),
+                truncated=len(items) > _MAX_TERMINATIONS_PER_SEGMENT,
+                terminations=tuple(items[:_MAX_TERMINATIONS_PER_SEGMENT]),
+            )
+        )
+    return tuple(details)
 
 
 def _latest_ont_live(

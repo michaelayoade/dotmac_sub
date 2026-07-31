@@ -422,6 +422,111 @@ def test_customer_trace_returns_latest_ont_signal(
     FieldFiberCustomerTraceRead(**traces[0].to_dict())
 
 
+def test_customer_trace_annotates_segment_odf_terminations(
+    db_session, subscriber, subscription, olt_device, network_device
+):
+    from app.models.fiber_physical import FiberPatchPanel, FiberRack
+    from app.services.network.fiber_physical_continuity import (
+        approve_physical_link,
+        execute_physical_link,
+        propose_physical_link,
+    )
+    from app.services.network.fiber_plant_integrity import (
+        ensure_segment_strand_inventory,
+    )
+    from tests.test_fiber_physical_continuity import _connector
+    from tests.test_fiber_subscription_trace import _complete_path
+
+    user = _user(db_session)
+    _profile(db_session, user)
+    _work_order(db_session, subscriber)
+    assets = _complete_path(
+        db_session, subscription, subscriber, olt_device, network_device
+    )
+    feeder = assets["feeder"]
+    feeder.color_standard = "eia_tia_598"
+    ensure_segment_strand_inventory(db_session, feeder)
+    feeder_core = (
+        db_session.query(FiberStrand)
+        .filter(FiberStrand.segment_id == feeder.id, FiberStrand.strand_number == 1)
+        .one()
+    )
+
+    rack = FiberRack(
+        code=f"RACK-{uuid4().hex[:10]}",
+        name="Serving POP fiber rack",
+        pop_site_id=network_device.pop_site_id,
+        rack_units=42,
+        is_active=True,
+    )
+    db_session.add(rack)
+    db_session.flush()
+    odf = FiberPatchPanel(
+        rack_id=rack.id,
+        name="OLT ODF 01",
+        panel_type="odf",
+        rack_unit_start=1,
+        rack_unit_height=1,
+        port_capacity=24,
+        connector_type="sc",
+        polish_type="apc",
+        fiber_mode="single_mode",
+        is_active=True,
+    )
+    db_session.add(odf)
+    db_session.flush()
+    odf_port = _connector(
+        patch_panel_id=odf.id,
+        port_number=1,
+        label="ODF-01/01",
+    )
+    db_session.add(odf_port)
+    db_session.commit()
+
+    decision = propose_physical_link(
+        db_session,
+        "strand_termination",
+        "connect",
+        proposed_by="planner@example.com",
+        reason="Exact installed optical continuity independently verified",
+        first_strand_id=feeder_core.id,
+        first_strand_end="a",
+        connector_port_id=odf_port.id,
+    )
+    approve_physical_link(
+        db_session,
+        decision.id,
+        reviewed_by="reviewer@example.com",
+        review_notes="Connector, strand end, location, and labels checked",
+    )
+    applied = execute_physical_link(
+        db_session, decision.id, executed_by="executor@example.com"
+    )
+    assert applied.status == "applied"
+    db_session.commit()
+
+    traces = field_fiber.list_customer_traces(
+        db_session, _auth(user), crm_work_order_id="wo-fiber"
+    )
+
+    assert len(traces) == 1
+    item = traces[0]
+    details = {detail.segment_id: detail for detail in item.physical_details}
+    feeder_detail = details[feeder.id]
+    assert feeder_detail.termination_count == 1
+    termination = feeder_detail.terminations[0]
+    assert termination.strand_number == 1
+    assert termination.strand_end == "a"
+    assert termination.port_label == "ODF-01/01"
+    assert termination.panel_name == "OLT ODF 01"
+    assert termination.rack_name == "Serving POP fiber rack"
+    assert termination.colors is not None
+    assert termination.colors.core_color == "blue"
+    drop_detail = details[assets["drop"].id]
+    assert drop_detail.termination_count == 0
+    FieldFiberCustomerTraceRead(**item.to_dict())
+
+
 def test_splice_proposal_listing_is_scoped_to_the_technician(db_session):
     user = _user(db_session)
     _profile(db_session, user)
