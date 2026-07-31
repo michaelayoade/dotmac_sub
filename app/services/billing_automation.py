@@ -135,6 +135,7 @@ class PostpaidChargePreview:
     billing_cycle: BillingCycle
     tax_application: TaxApplication
     tax_rate_percent: Decimal
+    tax_rate_id: UUID | None
     disposition: PostpaidChargePreviewDisposition
     components: tuple[PostpaidChargeComponentPreview, ...]
     issues: tuple[PostpaidChargePreviewIssue, ...]
@@ -645,6 +646,7 @@ def preview_postpaid_recurring_charge(
     base_net, base_tax, base_gross = _line_amounts(
         net_or_gross,
         tax_rate_percent=tax_rate_percent,
+        tax_rate_id=tax_rate_id,
         tax_application=tax_application,
     )
     components: list[PostpaidChargeComponentPreview] = [

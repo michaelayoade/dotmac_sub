@@ -201,6 +201,8 @@ BILLING_KEYS = [
     "use_creation_date",
     "payment_due_days",
     "expiry_reminder_days",
+    "renewal_invoice_notice_enabled",
+    "renewal_invoice_notice_days",
     "invoice_reminder_days",
     "minimum_balance",
     "invoice_number_format",
@@ -335,6 +337,10 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         ("proforma_enabled", "Proforma Invoices"),
         ("zero_total_invoices", "Zero-Total Invoices"),
         ("invoice_caching", "Invoice PDF Caching"),
+        (
+            "renewal_invoice_notice_enabled",
+            "Enable Advance Renewal Invoice Notifications",
+        ),
     ):
         _normalize_bool_setting(normalized, key, label)
 
@@ -361,6 +367,7 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
     for key, label in (
         ("payment_due_days", "Payment Due Days"),
         ("expiry_reminder_days", "Expiry Reminder Days"),
+        ("renewal_invoice_notice_days", "Advance Renewal Invoice Notice Days"),
         ("proforma_generation_day", "Proforma Generation Day"),
         ("prepaid_default_payment_due_days", "Prepaid Default Payment Due Days"),
         ("prepaid_default_grace_period_days", "Prepaid Default Grace Period Days"),
@@ -377,6 +384,12 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         _normalize_decimal_setting(normalized, key, label, minimum=Decimal("0"))
 
     _normalize_csv_days(normalized, "invoice_reminder_days", "Invoice Reminder Days")
+    enabled = normalized.get("renewal_invoice_notice_enabled") == "true"
+    days = str(normalized.get("renewal_invoice_notice_days") or "").strip()
+    if enabled and not days:
+        raise ValueError(
+            "Advance Renewal Invoice Notice Days is required when notifications are enabled."
+        )
     return normalized
 
 

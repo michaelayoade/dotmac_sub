@@ -18,6 +18,7 @@ PERMANENT_LIFECYCLE_TASKS = frozenset(
         "app.tasks.billing.run_invoice_cycle",
         "app.tasks.billing.mark_invoices_overdue",
         "app.tasks.billing.run_billing_notifications",
+        "app.tasks.billing.generate_advance_renewal_invoices",
         "app.tasks.billing.check_billing_switch",
         "app.tasks.collections.run_billing_enforcement",
         "app.tasks.collections.run_bundle_reconcile",

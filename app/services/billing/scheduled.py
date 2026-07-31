@@ -7,6 +7,8 @@ transaction, and logging boundary for scheduled billing automation.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
+from uuid import NAMESPACE_URL, uuid5
 
 from billiard.exceptions import SoftTimeLimitExceeded
 
@@ -19,6 +21,64 @@ from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
+
+
+def run_advance_renewal_invoices() -> dict[str, object]:
+    """Resolve today's cohort, then execute one atomic owner command per service."""
+    from app.services.advance_renewal_invoicing import (
+        ADVANCE_RENEWAL_WRITE_SCOPE,
+        GenerateAdvanceRenewalInvoiceCommand,
+        find_due_subscription_ids,
+        generate_advance_renewal_invoice,
+    )
+    from app.services.owner_commands import CommandContext
+
+    evaluated_at = datetime.now(UTC)
+    with db_session_adapter.session() as query_session:
+        cohort = find_due_subscription_ids(query_session, evaluated_at=evaluated_at)
+    created = 0
+    replayed = 0
+    failed = 0
+    for subscription_id in cohort.subscription_ids:
+        operation_key = (
+            f"advance-renewal:{subscription_id}:{evaluated_at.date().isoformat()}"
+        )
+        operation_id = uuid5(NAMESPACE_URL, operation_key)
+        try:
+            with db_session_adapter.owner_command_session() as command_session:
+                outcome = generate_advance_renewal_invoice(
+                    command_session,
+                    GenerateAdvanceRenewalInvoiceCommand(
+                        context=CommandContext.system(
+                            actor="scheduler:advance-renewal",
+                            scope=ADVANCE_RENEWAL_WRITE_SCOPE,
+                            reason="configured advance renewal invoice notice",
+                            command_id=operation_id,
+                            correlation_id=operation_id,
+                            idempotency_key=operation_key,
+                        ),
+                        subscription_id=subscription_id,
+                        evaluated_at=evaluated_at,
+                    ),
+                )
+            if outcome.disposition.value == "created":
+                created += 1
+            else:
+                replayed += 1
+        except Exception:
+            failed += 1
+            logger.exception(
+                "advance_renewal_invoice_failed",
+                extra={"subscription_id": str(subscription_id)},
+            )
+    return {
+        "configuration_state": cohort.configuration.state.value,
+        "days_before": cohort.configuration.days_before,
+        "eligible": len(cohort.subscription_ids),
+        "created": created,
+        "replayed": replayed,
+        "failed": failed,
+    }
 
 
 def run_invoice_cycle() -> dict[str, int]:

@@ -696,6 +696,13 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=billing_notif_interval,
         )
+        _sync_scheduled_task(
+            session,
+            name="advance_renewal_invoice_runner",
+            task_name="app.tasks.billing.generate_advance_renewal_invoices",
+            enabled=True,
+            interval_seconds=86400,
+        )
         # Unified billing enforcement. Accrual remains mode-specific;
         # suspension/restore decisions converge in the owner.
         dunning_interval_seconds = resolve_integer(

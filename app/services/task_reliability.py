@@ -139,6 +139,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.billing.run_billing_notifications": _c(
         "billing", STATE, GUARDED, STATUS
     ),
+    "app.tasks.billing.generate_advance_renewal_invoices": _c(
+        "billing",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Exact subscription-period keys make daily replay idempotent.",
+    ),
     "app.tasks.billing.run_invoice_cycle": _c(
         "billing", STATE, GUARDED, HEALTH, "Invoice creation must remain idempotent."
     ),
