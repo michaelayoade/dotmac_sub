@@ -177,16 +177,20 @@ def test_ci_change_classifier_does_not_resolve_a_base_from_shallow_roots() -> No
     classifier = workflow[
         workflow.index("  changes:\n") : workflow.index("  python-environment:\n")
     ]
+    # Assert against what actually runs. The comment explaining why this
+    # fallback was removed necessarily names the command it removed.
+    executed = "\n".join(
+        line for line in classifier.splitlines() if not line.strip().startswith("#")
+    )
 
-    assert "--max-parents=0" not in classifier
+    assert "--max-parents=0" not in executed
 
     zero_sha_guard = '[ "$base" = "0000000000000000000000000000000000000000" ]'
-    assert zero_sha_guard in classifier
+    assert zero_sha_guard in executed
 
     # The no-base branch must short-circuit to application before any git
     # command consumes "$base"; running everything is the safe default.
-    guard_index = classifier.index(zero_sha_guard)
-    tail = classifier[guard_index:]
+    tail = executed[executed.index(zero_sha_guard) :]
     assert tail.index("application=true") < tail.index('git cat-file -e "$base')
 
 
