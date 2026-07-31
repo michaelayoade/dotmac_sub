@@ -266,12 +266,13 @@ def test_live_indicator_and_search_match_the_sidebar_contract():
 
 
 def test_stats_filters_scroll_without_hiding_the_conversation_queue():
-    assert 'aria-label="Inbox summary filters"' not in SIDEBAR
-    assert 'aria-label="Secondary inbox filters"' not in SIDEBAR
+    summary_filters = SIDEBAR.index('aria-label="Inbox summary filters"')
+    secondary_filters = SIDEBAR.index('aria-label="Secondary inbox filters"')
+    filter_panel = SIDEBAR.index('id="inbox-stats-filters"')
+    filter_form = SIDEBAR.index('id="inbox-filter-form"')
+    assert filter_panel < summary_filters < secondary_filters < filter_form
     assert 'class="inbox-filter-scroll space-y-3 pt-2"' in SIDEBAR
-    assert SIDEBAR.index('id="inbox-stats-filters"') < SIDEBAR.index(
-        'id="inbox-conversation-queue"'
-    )
+    assert filter_panel < SIDEBAR.index('id="inbox-conversation-queue"')
     for contract in (
         "max-height: min(30dvh, 22rem)",
         "overflow-y: auto",
@@ -529,7 +530,7 @@ def test_channel_colours_are_page_scoped_and_cover_every_supported_alias():
         assert selector in REPLICA_CSS
         assert colour in REPLICA_CSS
 
-    assert '[data-inbox-workspace] .inbox-channel-indicator' in REPLICA_CSS
+    assert "[data-inbox-workspace] .inbox-channel-indicator" in REPLICA_CSS
     assert "background: rgb(var(--channel-color))" in REPLICA_CSS
     assert "box-shadow: 0 0 12px rgba(var(--channel-color), .4)" in REPLICA_CSS
     assert "facebook_comment" in REPLICA_CSS
