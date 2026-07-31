@@ -700,6 +700,7 @@ class FieldSpliceCreate(BaseModel):
     splice_type: str = Field(min_length=1, max_length=80)
     loss_db: float | None = Field(default=None, ge=0, le=5)
     note: str | None = Field(default=None, max_length=2000)
+    work_order_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class FieldSpliceProposalResponse(BaseModel):
@@ -711,6 +712,7 @@ class FieldSpliceProposalResponse(BaseModel):
     from_strand_end: Literal["a", "b"]
     to_strand_id: UUID
     to_strand_end: Literal["a", "b"]
+    work_order_public_id: str | None = None
 
 
 class FieldSpliceProposalStatusRead(BaseModel):
@@ -724,6 +726,7 @@ class FieldSpliceProposalStatusRead(BaseModel):
     to_strand_end: Literal["a", "b"] | None = None
     splice_type: str | None = None
     loss_db: float | None = None
+    work_order_public_id: str | None = None
     review_notes: str | None = None
     reviewed_at: datetime | None = None
     applied_at: datetime | None = None

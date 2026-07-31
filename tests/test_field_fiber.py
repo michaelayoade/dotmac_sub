@@ -472,3 +472,60 @@ def test_splice_proposal_listing_is_scoped_to_the_technician(db_session):
     rows = field_fiber.list_splice_proposals(db_session, _auth(user))
     assert rows[0].status.value == "rejected"
     assert rows[0].review_notes == "Closure tray schedule mismatch"
+
+
+def test_propose_splice_links_scoped_work_order(db_session):
+    user = _user(db_session)
+    _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    work_order = _work_order(db_session, subscriber)
+    closure, tray, strand_a, strand_b, _access_point = _plant(db_session)
+    db_session.commit()
+
+    receipt = field_fiber.propose_splice(
+        db_session,
+        _auth(user),
+        closure_id=str(closure.id),
+        from_strand_id=str(strand_a.id),
+        from_strand_end="b",
+        to_strand_id=str(strand_b.id),
+        to_strand_end="a",
+        tray_id=str(tray.id),
+        position=1,
+        splice_type="fusion",
+        work_order_id="wo-fiber",
+    )
+
+    assert receipt.work_order_public_id == "wo-fiber"
+    change = db_session.get(FiberChangeRequest, receipt.change_request_id)
+    assert change is not None
+    assert change.payload["work_order_id"] == str(work_order.id)
+    assert change.payload["work_order_public_id"] == work_order.public_id
+
+    rows = field_fiber.list_splice_proposals(db_session, _auth(user))
+    assert rows[0].work_order_public_id == "wo-fiber"
+
+
+def test_propose_splice_rejects_out_of_scope_work_order(db_session):
+    user = _user(db_session)
+    profile = _profile(db_session, user)
+    profile.crm_person_id = "crm-not-assigned"
+    subscriber = _subscriber(db_session)
+    _work_order(db_session, subscriber)
+    closure, _tray, strand_a, strand_b, _access_point = _plant(db_session)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        field_fiber.propose_splice(
+            db_session,
+            _auth(user),
+            closure_id=str(closure.id),
+            from_strand_id=str(strand_a.id),
+            from_strand_end="b",
+            to_strand_id=str(strand_b.id),
+            to_strand_end="a",
+            splice_type="fusion",
+            work_order_id="wo-fiber",
+        )
+
+    assert exc.value.status_code == 404

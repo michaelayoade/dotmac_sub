@@ -77,8 +77,12 @@ def propose_splice(
     splice_type: str | None = None,
     loss_db: float | None = None,
     note: str | None = None,
+    work_order_id: str | None = None,
 ) -> FieldSpliceProposalReceipt:
     profile = _profile_from_principal(db, principal)
+    work_order = (
+        _scoped_work_order(db, profile, work_order_id) if work_order_id else None
+    )
     closure_uuid = _uuid_or_422(closure_id, "closure_id")
     from_uuid = _uuid_or_422(from_strand_id, "from_strand_id")
     to_uuid = _uuid_or_422(to_strand_id, "to_strand_id")
@@ -174,6 +178,8 @@ def propose_splice(
         "splice_type": splice_type,
         "loss_db": loss_db,
         "notes": note,
+        "work_order_id": str(work_order.id) if work_order else None,
+        "work_order_public_id": work_order.public_id if work_order else None,
         "physical_link_decision_id": str(decision.id),
         "field_actor": {
             "technician_id": str(profile.id),
@@ -425,6 +431,7 @@ class FieldSpliceProposalReceipt:
     from_strand_end: str
     to_strand_id: uuid.UUID
     to_strand_end: str
+    work_order_public_id: str | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -436,6 +443,7 @@ class FieldSpliceProposalReceipt:
             "from_strand_end": self.from_strand_end,
             "to_strand_id": self.to_strand_id,
             "to_strand_end": self.to_strand_end,
+            "work_order_public_id": self.work_order_public_id,
         }
 
 
@@ -453,6 +461,7 @@ class FieldSpliceProposalStatus:
     to_strand_end: str | None
     splice_type: str | None
     loss_db: float | None
+    work_order_public_id: str | None
     review_notes: str | None
     reviewed_at: datetime | None
     applied_at: datetime | None
@@ -470,6 +479,7 @@ class FieldSpliceProposalStatus:
             "to_strand_end": self.to_strand_end,
             "splice_type": self.splice_type,
             "loss_db": self.loss_db,
+            "work_order_public_id": self.work_order_public_id,
             "review_notes": self.review_notes,
             "reviewed_at": self.reviewed_at,
             "applied_at": self.applied_at,
@@ -631,6 +641,7 @@ def _proposal_status(request: FiberChangeRequest) -> FieldSpliceProposalStatus:
         to_strand_end=payload.get("to_strand_end"),
         splice_type=payload.get("splice_type"),
         loss_db=float(loss_db) if loss_db is not None else None,
+        work_order_public_id=payload.get("work_order_public_id"),
         review_notes=request.review_notes,
         reviewed_at=request.reviewed_at,
         applied_at=request.applied_at,
@@ -660,6 +671,7 @@ def _proposal_response(
         from_strand_end=str(payload["from_strand_end"]),
         to_strand_id=coerce_uuid(str(payload["to_strand_id"])),
         to_strand_end=str(payload["to_strand_end"]),
+        work_order_public_id=payload.get("work_order_public_id"),
     )
 
 

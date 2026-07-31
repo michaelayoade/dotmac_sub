@@ -43,6 +43,7 @@ def propose_field_splice(
         splice_type=payload.splice_type,
         loss_db=payload.loss_db,
         note=payload.note,
+        work_order_id=payload.work_order_id,
     )
     return receipt.to_dict()
 
