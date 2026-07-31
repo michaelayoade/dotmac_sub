@@ -14182,6 +14182,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "WAN, LAN, or Wi-Fi intent. Assignment converts a "
                     "management-ready intent; expiry without assignment stages "
                     "idempotent return-to-inventory cleanup."
+                    " Slow OLT calls consume detached immutable connection values "
+                    "after the preceding database transaction closes; a fresh "
+                    "reliability session records partial external success."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -14286,8 +14289,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "Admission and scheduled reconciliation each enter "
                             "execute_owner_command once on a transaction-free session; "
                             "intent, operation, dispatch, audit, and event stage "
-                            "atomically. Device workers commit external-write evidence "
-                            "before subsequent coordination."
+                            "atomically. Device workers close the database transaction "
+                            "before live OLT or management I/O, use detached connection "
+                            "values, and persist external-write evidence in a fresh "
+                            "transaction before subsequent coordination."
                         ),
                         locking=(
                             "Admission locks the exact autofind candidate and active "
@@ -14330,6 +14335,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "network.ont_commissioning.management_priority_missing",
                             "network.ont_commissioning.management_apply_failed",
                             "network.ont_commissioning.service_config_forbidden",
+                            "network.ont_commissioning.unsafe_external_transaction",
+                            "network.ont_commissioning.external_write_reconciliation_required",
                             "network.ont_commissioning.acs_not_ready",
                             "network.ont_commissioning.cleanup_target_missing",
                             "network.ont_commissioning.cleanup_identity_mismatch",
