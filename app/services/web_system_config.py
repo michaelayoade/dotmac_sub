@@ -53,10 +53,14 @@ def _save_settings(
     """Upsert a batch of DomainSettings."""
     secret_keys = secret_keys or set()
     spec_updates: list[tuple[str, DomainSettingUpdate]] = []
+    skipped_optional_spec_keys: set[str] = set()
     if use_specs:
         for key in keys:
             spec = settings_spec.get_spec(domain, key)
             if not spec:
+                continue
+            if key not in data and spec.default is None and not spec.required:
+                skipped_optional_spec_keys.add(key)
                 continue
             value = _coerce_spec_form_value(spec, data.get(key))
             value_text, value_json = settings_spec.normalize_for_db(spec, value)
@@ -74,7 +78,7 @@ def _save_settings(
                 )
             )
 
-    spec_keys = {key for key, _ in spec_updates}
+    spec_keys = {key for key, _ in spec_updates} | skipped_optional_spec_keys
     spec_service = DomainSettings(domain) if spec_updates else None
     if spec_service:
         for key, payload in spec_updates:
@@ -332,6 +336,8 @@ def _normalize_csv_days(data: dict[str, Any], key: str, label: str) -> None:
 
 def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
     normalized = dict(data)
+    if not str(normalized.get("renewal_invoice_notice_days") or "").strip():
+        normalized.pop("renewal_invoice_notice_days", None)
     for key, label in (
         ("use_creation_date", "Use Customer Creation Date"),
         ("proforma_enabled", "Proforma Invoices"),

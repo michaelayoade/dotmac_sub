@@ -141,7 +141,6 @@ celery_app.conf.task_routes = {
     # dispatch sat unexecuted behind ~6.6k queued default-queue tasks).
     "app.tasks.billing.run_invoice_cycle": {"queue": "billing"},
     "app.tasks.billing.run_billing_notifications": {"queue": "billing"},
-    "app.tasks.billing.generate_advance_renewal_invoices": {"queue": "billing"},
     "app.tasks.autopay.charge_due_invoices": {"queue": "billing"},
     "app.tasks.arrangements.check_overdue_arrangements": {"queue": "billing"},
     "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},

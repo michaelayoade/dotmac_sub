@@ -6410,7 +6410,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="financial.advance_renewal_invoicing",
                 module="app.services.advance_renewal_invoicing",
-                owns=("idempotent advance renewal invoice and notification request",),
+                owns=(
+                    "per-subscription advance renewal timer",
+                    "idempotent advance renewal invoice and notification request",
+                ),
                 depends_on=(
                     "access.subscription_lifecycle",
                     "auth.permission_gate",
@@ -6421,16 +6424,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.invoices",
                     "financial.prepaid_service_coverage",
                     "financial.prepaid_service_renewals",
+                    "runtime.durable_timers",
                 ),
                 notes=(
                     "The feature is disabled with no notice-day value until an "
                     "operator explicitly configures both controls. Invoice issue "
                     "time never becomes service-period start; the exact current "
                     "coverage boundary owns the future period. Invoice creation "
-                    "does not advance next_billing_at.",
+                    "does not advance next_billing_at."
                 ),
                 contract=ServiceContract(
                     concerns=(
+                        ConcernContract(
+                            name="per-subscription advance renewal timer",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "explicit renewal notice configuration",
+                                "canonical subscription lifecycle and billing anchor",
+                            ),
+                            canonical_writer="financial.advance_renewal_invoicing",
+                        ),
                         ConcernContract(
                             name=(
                                 "idempotent advance renewal invoice and notification request"
@@ -6523,7 +6536,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "financial.advance_renewal_invoicing"
                             ),
                         ),
-                        mapping_owner="scheduled billing adapter",
+                        mapping_owner="billing lifecycle event adapter",
                         fail_closed_on=(
                             "missing or invalid configuration",
                             "ambiguous coverage or anchor drift",
@@ -15557,7 +15570,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "materializes bytes through the canonical billing invoice PDF "
                     "service immediately before SMTP transport. Required attachment "
                     "failure retries the complete delivery; body-only fallback is "
-                    "forbidden.",
+                    "forbidden."
                 ),
             ),
             SOTService(

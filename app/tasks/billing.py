@@ -67,12 +67,3 @@ def audit_funded_inactive_exposure_task() -> dict:
 def run_billing_notifications() -> dict[str, int | bool]:
     """Emit invoice reminders within the configured send window."""
     return scheduled_billing.run_billing_notifications()
-
-
-@celery_app.task(name="app.tasks.billing.generate_advance_renewal_invoices")
-@idempotent_task(
-    key_func=lambda: f"advance_renewal:{datetime.now(UTC).strftime('%Y-%m-%d')}"
-)
-def generate_advance_renewal_invoices() -> dict[str, object]:
-    """Generate explicitly configured future-period renewal invoices."""
-    return scheduled_billing.run_advance_renewal_invoices()

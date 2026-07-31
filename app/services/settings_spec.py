@@ -74,7 +74,6 @@ SCHEDULER_BOOLEAN_SETTING_KEYS = frozenset(
         (SettingDomain.audit, "cross_app_drift_detection_enabled"),
         (SettingDomain.billing, "cutover_balance_audit_enabled"),
         (SettingDomain.billing, "funded_inactive_exposure_audit_enabled"),
-        (SettingDomain.billing, "renewal_invoice_notice_enabled"),
         (SettingDomain.billing, "stale_overdue_lock_detect_enabled"),
         (SettingDomain.catalog, "nas_backup_retention_enabled"),
         (SettingDomain.comms, "oauth_token_refresh_enabled"),

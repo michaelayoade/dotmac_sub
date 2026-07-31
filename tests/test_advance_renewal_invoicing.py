@@ -7,6 +7,7 @@ import pytest
 from app.models.billing import Invoice, InvoiceLine, TaxApplication
 from app.models.catalog import BillingCycle, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.durable_timer import DurableTimer, TimerStatus
 from app.models.subscription_engine import SettingValueType
 from app.services import advance_renewal_invoicing as renewal
 from app.services.billing_automation import (
@@ -93,6 +94,24 @@ def test_advance_invoice_uses_future_boundary_and_replays(
     account_id = subscription.subscriber_id
     db_session.commit()
     _set_config(db_session, enabled=True, days=7)
+    timer_command_id = uuid4()
+    timer = DurableTimer(
+        owner=renewal.ADVANCE_RENEWAL_TIMER_OWNER,
+        entity_kind="subscription",
+        entity_id=subscription_id,
+        purpose=renewal.ADVANCE_RENEWAL_TIMER_PURPOSE,
+        generation=1,
+        due_at=evaluated_at,
+        output_event_type=renewal.ADVANCE_RENEWAL_TIMER_TRIGGER,
+        status=TimerStatus.fired,
+        fired_at=evaluated_at,
+        command_id=timer_command_id,
+        correlation_id=timer_command_id,
+    )
+    db_session.add(timer)
+    db_session.flush()
+    timer_id = timer.id
+    db_session.commit()
 
     preview = PostpaidChargePreview(
         subscription_id=subscription_id,
@@ -146,6 +165,8 @@ def test_advance_invoice_uses_future_boundary_and_replays(
             ),
             subscription_id=subscription_id,
             evaluated_at=evaluated_at,
+            timer_id=timer_id,
+            timer_generation=1,
         )
 
     first_command = _command()
@@ -172,13 +193,29 @@ def test_advance_invoice_uses_future_boundary_and_replays(
     assert len(emitted) == 1
 
 
-def test_due_cohort_uses_exact_configured_local_date(db_session, subscription):
-    evaluated_at = datetime(2026, 8, 25, 9, tzinfo=UTC)
+def test_subscription_timer_uses_exact_configured_boundary(db_session, subscription):
+    boundary = datetime(2026, 9, 1, 9, tzinfo=UTC)
     subscription.status = SubscriptionStatus.active
-    subscription.next_billing_at = evaluated_at + timedelta(days=7)
+    subscription.next_billing_at = boundary
+    subscription_id = subscription.id
     db_session.commit()
     _set_config(db_session, enabled=True, days=7)
 
-    cohort = renewal.find_due_subscription_ids(db_session, evaluated_at=evaluated_at)
+    command_id = uuid4()
+    outcome = renewal.schedule_advance_renewal_timer(
+        db_session,
+        renewal.ScheduleAdvanceRenewalTimerCommand(
+            context=CommandContext.system(
+                actor="test:lifecycle",
+                scope=renewal.ADVANCE_RENEWAL_WRITE_SCOPE,
+                reason="test subscription timer",
+                command_id=command_id,
+                correlation_id=command_id,
+                idempotency_key=f"advance-timer:{subscription_id}:{boundary.isoformat()}",
+            ),
+            subscription_id=subscription_id,
+        ),
+    )
 
-    assert cohort.subscription_ids == (subscription.id,)
+    assert outcome.scheduled is True
+    assert outcome.due_at == boundary - timedelta(days=7)

@@ -646,7 +646,6 @@ def preview_postpaid_recurring_charge(
     base_net, base_tax, base_gross = _line_amounts(
         net_or_gross,
         tax_rate_percent=tax_rate_percent,
-        tax_rate_id=tax_rate_id,
         tax_application=tax_application,
     )
     components: list[PostpaidChargeComponentPreview] = [
@@ -710,6 +709,7 @@ def preview_postpaid_recurring_charge(
         billing_cycle=effective_cycle,
         tax_application=tax_application,
         tax_rate_percent=tax_rate_percent,
+        tax_rate_id=tax_rate_id,
         disposition=PostpaidChargePreviewDisposition.comparable,
         components=tuple(components),
         issues=issues,

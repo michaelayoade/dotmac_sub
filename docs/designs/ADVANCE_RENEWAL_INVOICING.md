@@ -15,14 +15,16 @@ describes the next billable service period anchored to current coverage.
 
 ## Ownership
 
-`financial.advance_renewal_invoicing` owns cohort eligibility, exact future
+`financial.advance_renewal_invoicing` owns per-subscription eligibility, exact future
 period selection, idempotent invoice construction, and the transactional
 `subscription.renewal_invoice_ready` request. It consumes typed recurring-charge
 previews from the existing prepaid or postpaid owner and delegates invoice and
 line persistence to `financial.invoices`.
 
-The scheduled task is an adapter. It reads the cohort, then invokes one owner
-command per subscription on a transaction-free session.
+Subscription lifecycle and payment events invoke one timer-scheduling owner
+command for the exact subscription. The shared durable-timer runtime emits the
+declared trigger when due; the billing lifecycle adapter then invokes the
+invoice owner on a transaction-free session.
 
 ## Date contract
 
@@ -60,7 +62,7 @@ email; body-only fallback is forbidden.
 
 ## Operations
 
-The daily scheduler remains harmless while disabled. Enable only after setting
-and reviewing the notice day. Monitor created, replayed, and failed counts; a
-coverage/anchor disagreement or conflicting future invoice requires review and
-is never repaired automatically.
+No business-wide financial sweep is installed. Enable only after setting and
+reviewing the notice day. Subsequent subscription lifecycle and payment events
+create or replace the exact subscription timer. A coverage/anchor disagreement
+or conflicting future invoice requires review and is never repaired automatically.
