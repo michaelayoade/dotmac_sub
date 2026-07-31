@@ -102,9 +102,7 @@ def test_dev_first_gate_refuses_pull_requests_that_bypass_staging() -> None:
 
     # Exactly these heads reach main. `dev` is matched exactly, so a branch
     # merely starting with "dev" (develop, dev-experiment) is still refused.
-    assert (
-        "dev|agent/promote-*|agent/reconcile-*|promote/*|reconcile/*)" in workflow
-    )
+    assert "dev|agent/promote-*|agent/reconcile-*|promote/*|reconcile/*)" in workflow
 
     # A production incident must never be blocked outright, and the escape
     # hatch has to be visible rather than silent.
