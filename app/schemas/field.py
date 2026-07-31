@@ -713,6 +713,67 @@ class FieldSpliceProposalResponse(BaseModel):
     to_strand_end: Literal["a", "b"]
 
 
+class FieldSpliceProposalStatusRead(BaseModel):
+    change_request_id: UUID
+    status: str
+    operation: str
+    closure_id: UUID | None = None
+    from_strand_id: UUID | None = None
+    from_strand_end: Literal["a", "b"] | None = None
+    to_strand_id: UUID | None = None
+    to_strand_end: Literal["a", "b"] | None = None
+    splice_type: str | None = None
+    loss_db: float | None = None
+    review_notes: str | None = None
+    reviewed_at: datetime | None = None
+    applied_at: datetime | None = None
+    created_at: datetime
+
+
+class FieldFiberTraceHop(BaseModel):
+    kind: str
+    label: str
+    asset_id: UUID | None = None
+    evidence: str
+    validation: str
+    operational_state: str | None = None
+    splitter_stage: int | None = None
+    insertion_loss_db: str | None = None
+    cumulative_splitter_loss_db: str | None = None
+
+
+class FieldFiberTraceGap(BaseModel):
+    code: str
+    message: str
+    after_kind: str | None = None
+    after_asset_id: UUID | None = None
+
+
+class FieldFiberOntLiveRead(BaseModel):
+    ont_unit_id: UUID
+    serial_number: str
+    olt_status: str | None = None
+    olt_status_seen_at: datetime | None = None
+    rx_signal_dbm: float | None = None
+    rx_observed_at: datetime | None = None
+
+
+class FieldFiberCustomerTraceRead(BaseModel):
+    subscription_id: UUID
+    customer_label: str
+    subscription_status: str
+    hops: list[FieldFiberTraceHop]
+    gaps: list[FieldFiberTraceGap]
+    electronic_complete: bool
+    physical_complete: bool
+    customer_trace_complete: bool
+    first_gap: FieldFiberTraceGap | None = None
+    last_validated_scope: FieldFiberTraceHop | None = None
+    upstream_scope: str
+    upstream_message: str
+    ont_live: FieldFiberOntLiveRead | None = None
+
+
 class FieldFiberTestCreate(BaseModel):
     crm_work_order_id: str = Field(min_length=1, max_length=64)
     asset_type: str = Field(min_length=1, max_length=80)

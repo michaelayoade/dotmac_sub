@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.catalog import AccessType, CatalogOffer, Subscription
 from app.models.fiber_change_request import (
     FiberChangeRequest,
     FiberChangeRequestOperation,
@@ -26,10 +29,17 @@ from app.models.network import (
     FiberStrand,
     FiberStrandStatus,
     OLTDevice,
+    OntAssignment,
+    OntSignalObservation,
+    OntUnit,
 )
 from app.models.work_order import WorkOrder
 from app.services import fiber_change_requests
 from app.services.common import coerce_uuid
+from app.services.fiber_topology import (
+    FiberSubscriptionTrace,
+    trace_fiber_subscription,
+)
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.network import (
     fiber_physical_continuity,
@@ -67,7 +77,7 @@ def propose_splice(
     splice_type: str | None = None,
     loss_db: float | None = None,
     note: str | None = None,
-) -> dict[str, Any]:
+) -> FieldSpliceProposalReceipt:
     profile = _profile_from_principal(db, principal)
     closure_uuid = _uuid_or_422(closure_id, "closure_id")
     from_uuid = _uuid_or_422(from_strand_id, "from_strand_id")
@@ -399,6 +409,235 @@ def get_work_order_evidence_map(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+_MAX_TRACE_SUBSCRIPTIONS = 10
+_MAX_PROPOSAL_ROWS = 200
+
+
+@dataclass(frozen=True)
+class FieldSpliceProposalReceipt:
+    """Typed acknowledgement for a field-proposed splice change request."""
+
+    change_request_id: uuid.UUID
+    status: FiberChangeRequestStatus
+    replayed: bool
+    closure_id: uuid.UUID
+    from_strand_id: uuid.UUID
+    from_strand_end: str
+    to_strand_id: uuid.UUID
+    to_strand_end: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "change_request_id": self.change_request_id,
+            "status": self.status.value,
+            "replayed": self.replayed,
+            "closure_id": self.closure_id,
+            "from_strand_id": self.from_strand_id,
+            "from_strand_end": self.from_strand_end,
+            "to_strand_id": self.to_strand_id,
+            "to_strand_end": self.to_strand_end,
+        }
+
+
+@dataclass(frozen=True)
+class FieldSpliceProposalStatus:
+    """Review status of one technician-proposed splice change request."""
+
+    change_request_id: uuid.UUID
+    status: FiberChangeRequestStatus
+    operation: FiberChangeRequestOperation
+    closure_id: uuid.UUID | None
+    from_strand_id: uuid.UUID | None
+    from_strand_end: str | None
+    to_strand_id: uuid.UUID | None
+    to_strand_end: str | None
+    splice_type: str | None
+    loss_db: float | None
+    review_notes: str | None
+    reviewed_at: datetime | None
+    applied_at: datetime | None
+    created_at: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "change_request_id": self.change_request_id,
+            "status": self.status.value,
+            "operation": self.operation.value,
+            "closure_id": self.closure_id,
+            "from_strand_id": self.from_strand_id,
+            "from_strand_end": self.from_strand_end,
+            "to_strand_id": self.to_strand_id,
+            "to_strand_end": self.to_strand_end,
+            "splice_type": self.splice_type,
+            "loss_db": self.loss_db,
+            "review_notes": self.review_notes,
+            "reviewed_at": self.reviewed_at,
+            "applied_at": self.applied_at,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True)
+class FieldOntLiveStatus:
+    """Latest observed OLT-side signal evidence for one exact ONT."""
+
+    ont_unit_id: uuid.UUID
+    serial_number: str
+    olt_status: str | None
+    olt_status_seen_at: datetime | None
+    rx_signal_dbm: float | None
+    rx_observed_at: datetime | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ont_unit_id": self.ont_unit_id,
+            "serial_number": self.serial_number,
+            "olt_status": self.olt_status,
+            "olt_status_seen_at": self.olt_status_seen_at,
+            "rx_signal_dbm": self.rx_signal_dbm,
+            "rx_observed_at": self.rx_observed_at,
+        }
+
+
+@dataclass(frozen=True)
+class FieldCustomerFiberTrace:
+    """One customer fiber trace projected into the technician's job scope."""
+
+    trace: FiberSubscriptionTrace
+    ont_live: FieldOntLiveStatus | None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = self.trace.to_dict()
+        payload["ont_live"] = self.ont_live.to_dict() if self.ont_live else None
+        return payload
+
+
+def list_customer_traces(
+    db: Session,
+    principal: dict[str, Any],
+    *,
+    crm_work_order_id: str,
+) -> list[FieldCustomerFiberTrace]:
+    """Project the job customer's fiber traces inside the technician's scope.
+
+    Read-only adapter over the canonical trace owner
+    (``app.services.fiber_topology.trace_fiber_subscription``); it never
+    infers, repairs, or widens the owner's evidence.
+    """
+
+    profile = _profile_from_principal(db, principal)
+    work_order = _scoped_work_order(db, profile, crm_work_order_id)
+    subscriptions = (
+        db.query(Subscription)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+        .filter(
+            Subscription.subscriber_id == work_order.subscriber_id,
+            CatalogOffer.access_type == AccessType.fiber,
+        )
+        .order_by(Subscription.created_at.desc())
+        .limit(_MAX_TRACE_SUBSCRIPTIONS)
+        .all()
+    )
+    return [
+        FieldCustomerFiberTrace(
+            trace=trace_fiber_subscription(db, subscription.id),
+            ont_live=_latest_ont_live(db, subscription.id),
+        )
+        for subscription in subscriptions
+    ]
+
+
+def _latest_ont_live(
+    db: Session, subscription_id: uuid.UUID
+) -> FieldOntLiveStatus | None:
+    """Latest observed ONT signal for exactly one active assignment.
+
+    Ambiguous or missing assignments return no live reading; the trace's own
+    gap evidence names the conflict.
+    """
+
+    assignments = (
+        db.query(OntAssignment)
+        .filter(
+            OntAssignment.subscription_id == subscription_id,
+            OntAssignment.active.is_(True),
+        )
+        .all()
+    )
+    if len(assignments) != 1:
+        return None
+    ont = db.get(OntUnit, assignments[0].ont_unit_id)
+    if ont is None or not ont.is_active:
+        return None
+    observation = (
+        db.query(OntSignalObservation)
+        .filter(OntSignalObservation.ont_unit_id == ont.id)
+        .order_by(OntSignalObservation.observed_at.desc())
+        .first()
+    )
+    return FieldOntLiveStatus(
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        olt_status=ont.olt_status.value if ont.olt_status else None,
+        olt_status_seen_at=ont.olt_status_seen_at,
+        rx_signal_dbm=observation.rx_signal_dbm if observation else None,
+        rx_observed_at=observation.observed_at if observation else None,
+    )
+
+
+def list_splice_proposals(
+    db: Session,
+    principal: dict[str, Any],
+    *,
+    limit: int = 50,
+) -> list[FieldSpliceProposalStatus]:
+    """List the technician's own splice change requests, newest first."""
+
+    profile = _profile_from_principal(db, principal)
+    rows = (
+        db.query(FiberChangeRequest)
+        .filter(FiberChangeRequest.asset_type == "fiber_splice")
+        .filter(
+            FiberChangeRequest.payload["field_actor"]["technician_id"].as_string()
+            == str(profile.id)
+        )
+        .order_by(FiberChangeRequest.created_at.desc())
+        .limit(max(1, min(limit, _MAX_PROPOSAL_ROWS)))
+        .all()
+    )
+    return [_proposal_status(row) for row in rows]
+
+
+def _uuid_or_none(value: Any) -> uuid.UUID | None:
+    if value in (None, ""):
+        return None
+    try:
+        return coerce_uuid(str(value))
+    except ValueError:
+        return None
+
+
+def _proposal_status(request: FiberChangeRequest) -> FieldSpliceProposalStatus:
+    payload = request.payload or {}
+    loss_db = payload.get("loss_db")
+    return FieldSpliceProposalStatus(
+        change_request_id=request.id,
+        status=request.status,
+        operation=request.operation,
+        closure_id=_uuid_or_none(payload.get("closure_id")),
+        from_strand_id=_uuid_or_none(payload.get("from_strand_id")),
+        from_strand_end=payload.get("from_strand_end"),
+        to_strand_id=_uuid_or_none(payload.get("to_strand_id")),
+        to_strand_end=payload.get("to_strand_end"),
+        splice_type=payload.get("splice_type"),
+        loss_db=float(loss_db) if loss_db is not None else None,
+        review_notes=request.review_notes,
+        reviewed_at=request.reviewed_at,
+        applied_at=request.applied_at,
+        created_at=request.created_at,
+    )
+
+
 def _pending_splice_requests(db: Session) -> list[FiberChangeRequest]:
     return (
         db.query(FiberChangeRequest)
@@ -410,18 +649,18 @@ def _pending_splice_requests(db: Session) -> list[FiberChangeRequest]:
 
 def _proposal_response(
     request: FiberChangeRequest, *, replayed: bool
-) -> dict[str, Any]:
+) -> FieldSpliceProposalReceipt:
     payload = request.payload or {}
-    return {
-        "change_request_id": request.id,
-        "status": request.status.value,
-        "replayed": replayed,
-        "closure_id": payload.get("closure_id"),
-        "from_strand_id": payload.get("from_strand_id"),
-        "from_strand_end": payload.get("from_strand_end"),
-        "to_strand_id": payload.get("to_strand_id"),
-        "to_strand_end": payload.get("to_strand_end"),
-    }
+    return FieldSpliceProposalReceipt(
+        change_request_id=request.id,
+        status=request.status,
+        replayed=replayed,
+        closure_id=coerce_uuid(str(payload["closure_id"])),
+        from_strand_id=coerce_uuid(str(payload["from_strand_id"])),
+        from_strand_end=str(payload["from_strand_end"]),
+        to_strand_id=coerce_uuid(str(payload["to_strand_id"])),
+        to_strand_end=str(payload["to_strand_end"]),
+    )
 
 
 def _load_spliceable_strand(db: Session, strand_id, label: str) -> FiberStrand:
