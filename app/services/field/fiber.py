@@ -8,16 +8,11 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.catalog import AccessType, CatalogOffer, Subscription
-from app.models.fiber_change_request import (
-    FiberChangeRequest,
-    FiberChangeRequestOperation,
-    FiberChangeRequestStatus,
-)
+from app.models.fiber_change_request import FiberChangeRequest
 from app.models.field_attachment import FieldAttachment
 from app.models.field_fiber import FIELD_FIBER_TEST_TYPES, FieldFiberTestResult
 from app.models.network import (
@@ -25,16 +20,13 @@ from app.models.network import (
     FiberAccessPoint,
     FiberSplice,
     FiberSpliceClosure,
-    FiberSpliceTray,
     FiberStrand,
-    FiberStrandStatus,
     OLTDevice,
     OntAssignment,
     OntSignalObservation,
     OntUnit,
 )
 from app.models.work_order import WorkOrder
-from app.services import fiber_change_requests
 from app.services.common import coerce_uuid
 from app.services.fiber_topology import (
     FiberSubscriptionTrace,
@@ -42,9 +34,14 @@ from app.services.fiber_topology import (
 )
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.network import (
-    fiber_physical_continuity,
+    fiber_splice_proposals,
     fiber_topology_field_observations,
     fiber_topology_work_order_evidence_map,
+)
+from app.services.network.fiber_splice_proposals import (
+    FieldTechnicianActor,
+    SpliceProposalReceipt,
+    SpliceProposalStatus,
 )
 
 _TESTABLE_ASSET_MODELS = {
@@ -56,10 +53,6 @@ _TESTABLE_ASSET_MODELS = {
     "fdh_cabinet": FdhCabinet,
     "olt": OLTDevice,
     "olt_device": OLTDevice,
-}
-_SPLICEABLE_STRAND_STATUSES = {
-    FiberStrandStatus.available,
-    FiberStrandStatus.reserved,
 }
 
 
@@ -78,127 +71,31 @@ def propose_splice(
     loss_db: float | None = None,
     note: str | None = None,
     work_order_id: str | None = None,
-) -> FieldSpliceProposalReceipt:
+) -> SpliceProposalReceipt:
     profile = _profile_from_principal(db, principal)
     work_order = (
         _scoped_work_order(db, profile, work_order_id) if work_order_id else None
     )
-    closure_uuid = _uuid_or_422(closure_id, "closure_id")
-    from_uuid = _uuid_or_422(from_strand_id, "from_strand_id")
-    to_uuid = _uuid_or_422(to_strand_id, "to_strand_id")
-    from_end = _strand_end_or_422(from_strand_end, "from_strand_end")
-    to_end = _strand_end_or_422(to_strand_end, "to_strand_end")
-    if from_uuid == to_uuid:
-        raise HTTPException(
-            status_code=422, detail="A strand cannot be spliced to itself"
-        )
-
-    closure = db.get(FiberSpliceClosure, closure_uuid)
-    if closure is None or not closure.is_active:
-        raise HTTPException(status_code=404, detail="Splice closure not found")
-
-    _load_spliceable_strand(db, from_uuid, "from")
-    _load_spliceable_strand(db, to_uuid, "to")
-
-    tray_uuid = _uuid_or_422(tray_id, "tray_id") if tray_id else None
-    if tray_uuid is not None:
-        tray = db.get(FiberSpliceTray, tray_uuid)
-        if tray is None:
-            raise HTTPException(status_code=404, detail="Splice tray not found")
-        if tray.closure_id != closure.id:
-            raise HTTPException(
-                status_code=422, detail="Splice tray does not belong to this closure"
-            )
-        if position is not None:
-            occupied = (
-                db.query(FiberSplice)
-                .filter(FiberSplice.tray_id == tray.id)
-                .filter(FiberSplice.position == position)
-                .first()
-            )
-            if occupied is not None:
-                raise HTTPException(
-                    status_code=409, detail="That tray position is already occupied"
-                )
-
-    existing = (
-        db.query(FiberSplice)
-        .filter(
-            or_(
-                (FiberSplice.from_strand_id == from_uuid)
-                & (FiberSplice.to_strand_id == to_uuid),
-                (FiberSplice.from_strand_id == to_uuid)
-                & (FiberSplice.to_strand_id == from_uuid),
-            )
-        )
-        .first()
+    actor = FieldTechnicianActor(
+        technician_id=profile.id,
+        person_id=profile.person_id,
+        system_user_id=profile.system_user_id,
     )
-    if existing is not None:
-        raise HTTPException(
-            status_code=409, detail="A splice between these strands already exists"
-        )
-
-    pair = {(str(from_uuid), from_end), (str(to_uuid), to_end)}
-    for request in _pending_splice_requests(db):
-        payload = request.payload or {}
-        if {
-            (str(payload.get("from_strand_id")), payload.get("from_strand_end")),
-            (str(payload.get("to_strand_id")), payload.get("to_strand_end")),
-        } == pair:
-            return _proposal_response(request, replayed=True)
-
-    try:
-        decision = fiber_physical_continuity.propose_physical_link(
-            db,
-            "core_splice",
-            "connect",
-            proposed_by=f"field-technician:{profile.id}",
-            reason=note or "Field-captured exact fiber core splice",
-            first_strand_id=from_uuid,
-            first_strand_end=from_end,
-            second_strand_id=to_uuid,
-            second_strand_end=to_end,
-            splice_closure_id=closure.id,
-            splice_tray_id=tray_uuid,
-            position=position,
-            splice_type=splice_type,
-            insertion_loss_db=loss_db,
-        )
-    except fiber_physical_continuity.FiberPhysicalContinuityError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    payload = {
-        "closure_id": str(closure.id),
-        "from_strand_id": str(from_uuid),
-        "from_strand_end": from_end,
-        "to_strand_id": str(to_uuid),
-        "to_strand_end": to_end,
-        "tray_id": str(tray_uuid) if tray_uuid else None,
-        "position": position,
-        "splice_type": splice_type,
-        "loss_db": loss_db,
-        "notes": note,
-        "work_order_id": str(work_order.id) if work_order else None,
-        "work_order_public_id": work_order.public_id if work_order else None,
-        "physical_link_decision_id": str(decision.id),
-        "field_actor": {
-            "technician_id": str(profile.id),
-            "person_id": str(profile.person_id),
-            "system_user_id": str(profile.system_user_id)
-            if profile.system_user_id
-            else None,
-        },
-    }
-    request = fiber_change_requests.create_request(
+    return fiber_splice_proposals.propose_splice(
         db,
-        asset_type="fiber_splice",
-        asset_id=str(decision.id),
-        operation=FiberChangeRequestOperation.create,
-        payload=payload,
-        requested_by_person_id=None,
-        requested_by_vendor_id=None,
+        actor=actor,
+        closure_id=closure_id,
+        from_strand_id=from_strand_id,
+        from_strand_end=from_strand_end,
+        to_strand_id=to_strand_id,
+        to_strand_end=to_strand_end,
+        tray_id=tray_id,
+        position=position,
+        splice_type=splice_type,
+        loss_db=loss_db,
+        note=note,
+        work_order=work_order,
     )
-    return _proposal_response(request, replayed=False)
 
 
 def record_test(
@@ -420,74 +317,6 @@ _MAX_PROPOSAL_ROWS = 200
 
 
 @dataclass(frozen=True)
-class FieldSpliceProposalReceipt:
-    """Typed acknowledgement for a field-proposed splice change request."""
-
-    change_request_id: uuid.UUID
-    status: FiberChangeRequestStatus
-    replayed: bool
-    closure_id: uuid.UUID
-    from_strand_id: uuid.UUID
-    from_strand_end: str
-    to_strand_id: uuid.UUID
-    to_strand_end: str
-    work_order_public_id: str | None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "change_request_id": self.change_request_id,
-            "status": self.status.value,
-            "replayed": self.replayed,
-            "closure_id": self.closure_id,
-            "from_strand_id": self.from_strand_id,
-            "from_strand_end": self.from_strand_end,
-            "to_strand_id": self.to_strand_id,
-            "to_strand_end": self.to_strand_end,
-            "work_order_public_id": self.work_order_public_id,
-        }
-
-
-@dataclass(frozen=True)
-class FieldSpliceProposalStatus:
-    """Review status of one technician-proposed splice change request."""
-
-    change_request_id: uuid.UUID
-    status: FiberChangeRequestStatus
-    operation: FiberChangeRequestOperation
-    closure_id: uuid.UUID | None
-    from_strand_id: uuid.UUID | None
-    from_strand_end: str | None
-    to_strand_id: uuid.UUID | None
-    to_strand_end: str | None
-    splice_type: str | None
-    loss_db: float | None
-    work_order_public_id: str | None
-    review_notes: str | None
-    reviewed_at: datetime | None
-    applied_at: datetime | None
-    created_at: datetime
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "change_request_id": self.change_request_id,
-            "status": self.status.value,
-            "operation": self.operation.value,
-            "closure_id": self.closure_id,
-            "from_strand_id": self.from_strand_id,
-            "from_strand_end": self.from_strand_end,
-            "to_strand_id": self.to_strand_id,
-            "to_strand_end": self.to_strand_end,
-            "splice_type": self.splice_type,
-            "loss_db": self.loss_db,
-            "work_order_public_id": self.work_order_public_id,
-            "review_notes": self.review_notes,
-            "reviewed_at": self.reviewed_at,
-            "applied_at": self.applied_at,
-            "created_at": self.created_at,
-        }
-
-
-@dataclass(frozen=True)
 class FieldOntLiveStatus:
     """Latest observed OLT-side signal evidence for one exact ONT."""
 
@@ -600,7 +429,7 @@ def list_splice_proposals(
     principal: dict[str, Any],
     *,
     limit: int = 50,
-) -> list[FieldSpliceProposalStatus]:
+) -> list[SpliceProposalStatus]:
     """List the technician's own splice change requests, newest first."""
 
     profile = _profile_from_principal(db, principal)
@@ -615,83 +444,7 @@ def list_splice_proposals(
         .limit(max(1, min(limit, _MAX_PROPOSAL_ROWS)))
         .all()
     )
-    return [_proposal_status(row) for row in rows]
-
-
-def _uuid_or_none(value: Any) -> uuid.UUID | None:
-    if value in (None, ""):
-        return None
-    try:
-        return coerce_uuid(str(value))
-    except ValueError:
-        return None
-
-
-def _proposal_status(request: FiberChangeRequest) -> FieldSpliceProposalStatus:
-    payload = request.payload or {}
-    loss_db = payload.get("loss_db")
-    return FieldSpliceProposalStatus(
-        change_request_id=request.id,
-        status=request.status,
-        operation=request.operation,
-        closure_id=_uuid_or_none(payload.get("closure_id")),
-        from_strand_id=_uuid_or_none(payload.get("from_strand_id")),
-        from_strand_end=payload.get("from_strand_end"),
-        to_strand_id=_uuid_or_none(payload.get("to_strand_id")),
-        to_strand_end=payload.get("to_strand_end"),
-        splice_type=payload.get("splice_type"),
-        loss_db=float(loss_db) if loss_db is not None else None,
-        work_order_public_id=payload.get("work_order_public_id"),
-        review_notes=request.review_notes,
-        reviewed_at=request.reviewed_at,
-        applied_at=request.applied_at,
-        created_at=request.created_at,
-    )
-
-
-def _pending_splice_requests(db: Session) -> list[FiberChangeRequest]:
-    return (
-        db.query(FiberChangeRequest)
-        .filter(FiberChangeRequest.asset_type == "fiber_splice")
-        .filter(FiberChangeRequest.status == FiberChangeRequestStatus.pending)
-        .all()
-    )
-
-
-def _proposal_response(
-    request: FiberChangeRequest, *, replayed: bool
-) -> FieldSpliceProposalReceipt:
-    payload = request.payload or {}
-    return FieldSpliceProposalReceipt(
-        change_request_id=request.id,
-        status=request.status,
-        replayed=replayed,
-        closure_id=coerce_uuid(str(payload["closure_id"])),
-        from_strand_id=coerce_uuid(str(payload["from_strand_id"])),
-        from_strand_end=str(payload["from_strand_end"]),
-        to_strand_id=coerce_uuid(str(payload["to_strand_id"])),
-        to_strand_end=str(payload["to_strand_end"]),
-        work_order_public_id=payload.get("work_order_public_id"),
-    )
-
-
-def _load_spliceable_strand(db: Session, strand_id, label: str) -> FiberStrand:
-    strand = db.get(FiberStrand, strand_id)
-    if strand is None or not strand.is_active:
-        raise HTTPException(status_code=404, detail=f"{label} strand not found")
-    if strand.status not in _SPLICEABLE_STRAND_STATUSES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{label} strand is {strand.status.value}; only available or reserved strands can be spliced",
-        )
-    return strand
-
-
-def _strand_end_or_422(value: str, field_name: str) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized not in {"a", "b"}:
-        raise HTTPException(status_code=422, detail=f"{field_name} must be a or b")
-    return normalized
+    return [fiber_splice_proposals.proposal_status(row) for row in rows]
 
 
 def _scoped_work_order(db: Session, profile, crm_work_order_id: str) -> WorkOrder:
