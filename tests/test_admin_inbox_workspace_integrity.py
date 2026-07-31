@@ -243,7 +243,7 @@ def test_live_indicator_and_search_match_the_sidebar_contract():
     search_marker = 'id="inbox-conversation-search"'
     assert SIDEBAR.index("</header>") < SIDEBAR.index(search_marker)
     assert SIDEBAR.index(search_marker) < SIDEBAR.index(
-        'aria-label="Inbox summary filters"'
+        'aria-controls="inbox-stats-filters"'
     )
     assert 'placeholder="Search conversations..."' in SIDEBAR
     assert '@input.debounce.300ms="searchConversations($el.value)"' in SIDEBAR
@@ -263,6 +263,24 @@ def test_live_indicator_and_search_match_the_sidebar_contract():
     assert 'url.searchParams.delete("page")' in body
     assert "conversation_id" in body
     assert 'target: "#inbox-sidebar-content"' in body
+
+
+def test_stats_filters_scroll_without_hiding_the_conversation_queue():
+    assert 'aria-label="Inbox summary filters"' not in SIDEBAR
+    assert 'aria-label="Secondary inbox filters"' not in SIDEBAR
+    assert 'class="inbox-filter-scroll space-y-3 pt-2"' in SIDEBAR
+    assert SIDEBAR.index('id="inbox-stats-filters"') < SIDEBAR.index(
+        'id="inbox-conversation-queue"'
+    )
+    for contract in (
+        "max-height: min(30dvh, 22rem)",
+        "overflow-y: auto",
+        "overscroll-behavior: contain",
+        "scrollbar-gutter: stable",
+        "#inbox-conversation-queue",
+        "min-height: 8rem",
+    ):
+        assert contract in REPLICA_CSS
 
 
 def test_sidebar_resize_handle_has_exact_shape_states_and_tooltip():
