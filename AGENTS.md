@@ -81,6 +81,17 @@ authoritative documents in the same change that updates the contract.
 - Promote only the staged and accepted code from `dev` to `main`; do not add
   unrelated changes during promotion. Require the resulting `main` CI and
   immutable image build to pass before any production deployment.
+- The required `Promotion Policy` check owns admission to `main`. It accepts
+  only a `release/promote-*` branch pinned to an exact successfully deployed
+  `dev` SHA, the allowlisted `automation/version-bump-main` projection, or a
+  reviewed `hotfix/*` exception carrying the `hotfix` and `version:patch`
+  labels plus incident, bypass, and back-sync evidence.
+- A `hotfix` label is evidence, not authorization by itself. Direct and force
+  pushes to `main` remain forbidden, and emergency hotfixes must be reconciled
+  back into `dev`.
+- Every `main` update is reconciled into `dev` through the checked-in
+  `automation/sync-main-to-dev` pull-request workflow. Merge reconciliation
+  pull requests with a merge commit; squashing discards the ancestry repair.
 - Keep each implementation slice coherent and reviewable even when several
   slices are assembled into a larger release.
 - Every pull request must declare exactly one appropriate `version:major`,

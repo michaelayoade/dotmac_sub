@@ -3,6 +3,12 @@
 The `CI` workflow is the deployment-quality owner for pull requests targeting
 `dev` or `main`, merge groups, and promotion through `dev` and `main`.
 
+`Promotion Policy` is the admission-decision owner for `main`. It accepts only
+an exact staged `dev` SHA, the narrow generated main-version projection, or a
+reviewed incident hotfix. `Reconcile main into dev` is the repair owner for
+branch ancestry and main-only commits; it opens a reviewed `version:none` pull
+request and never writes directly to `dev`.
+
 ## Required gates
 
 Application changes retain all release gates:
@@ -22,6 +28,11 @@ its immutable SHA tag; only the default branch receives `latest`. The BuildKit
 cache scope `dotmac-sub-application` is shared by pre-merge validation and
 publication so unchanged layers are reused without unrelated builds
 overwriting the cache history.
+
+The `Promotion Policy` status must be required by the active `main` ruleset in
+addition to CI. The ruleset must require pull requests and review, dismiss
+stale approvals, block direct and force pushes, and disallow administrative
+bypass. Labels alone are not a promotion control.
 
 Browser E2E remains nightly and manually dispatchable in `e2e.yml`. It pulls
 the immutable `sha-<commit>` image published by CI, rather than rebuilding it,

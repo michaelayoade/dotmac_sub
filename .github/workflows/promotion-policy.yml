@@ -1,0 +1,131 @@
+name: Promotion Policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+    branches: [main]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  deployments: read
+  pull-requests: read
+
+concurrency:
+  group: promotion-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Promotion Policy
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The policy program must come from trusted main, not from the PR being
+      # evaluated. The workflow fetches candidate objects but never executes
+      # candidate code.
+      - name: Check out trusted policy owner
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve dev ancestry
+        id: ancestry
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Invalid pull-request head SHA." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin dev:refs/remotes/origin/dev
+          if git merge-base --is-ancestor "$HEAD_SHA" origin/dev; then
+            echo "contains=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "contains=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Collect GitHub promotion evidence
+        id: evidence
+        uses: actions/github-script@v7
+        env:
+          DEV_CONTAINS_HEAD: ${{ steps.ancestry.outputs.contains }}
+        with:
+          result-encoding: string
+          script: |
+            const pull = context.payload.pull_request;
+            const parameters = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pull.number,
+              per_page: 100,
+            };
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              parameters,
+            );
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              parameters,
+            );
+            const latestReviewByUser = new Map();
+            for (const review of reviews) {
+              if (review.user?.login) {
+                latestReviewByUser.set(review.user.login, {
+                  state: review.state,
+                  commitId: review.commit_id,
+                });
+              }
+            }
+            const approvalCount = [...latestReviewByUser.entries()].filter(
+              ([login, review]) =>
+                login !== pull.user.login &&
+                review.state === "APPROVED" &&
+                review.commitId === pull.head.sha,
+            ).length;
+
+            const deployments = await github.rest.repos.listDeployments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment: "staging",
+              sha: pull.head.sha,
+              per_page: 100,
+            });
+            let stagingSucceeded = false;
+            const latestDeployment = deployments.data[0];
+            if (latestDeployment) {
+              const statuses =
+                await github.rest.repos.listDeploymentStatuses({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: latestDeployment.id,
+                  per_page: 100,
+                });
+              stagingSucceeded = statuses.data[0]?.state === "success";
+            }
+
+            return JSON.stringify({
+              baseRef: pull.base.ref,
+              baseRepository: pull.base.repo.full_name,
+              headRef: pull.head.ref,
+              headRepository: pull.head.repo?.full_name || "",
+              headSha: pull.head.sha,
+              authorLogin: pull.user.login,
+              labels: pull.labels.map((label) => label.name),
+              body: pull.body || "",
+              changedFiles: files.map((file) => file.filename),
+              devContainsHead: process.env.DEV_CONTAINS_HEAD === "true",
+              stagingSucceeded,
+              approvalCount,
+            });
+
+      - name: Enforce promotion policy
+        env:
+          PROMOTION_EVIDENCE_JSON: ${{ steps.evidence.outputs.result }}
+        run: python3 scripts/ci/check_promotion_policy.py

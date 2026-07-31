@@ -21,6 +21,34 @@ def test_dev_pull_requests_run_required_ci_gates() -> None:
     assert "branches: [main, dev]" in version_impact
 
 
+def test_main_pull_requests_have_a_fail_closed_promotion_policy() -> None:
+    workflow = _read(".github/workflows/promotion-policy.yml")
+
+    assert yaml.safe_load(workflow)
+    assert "branches: [main]" in workflow
+    assert "ref: ${{ github.event.pull_request.base.sha }}" in workflow
+    assert "persist-credentials: false" in workflow
+    assert "git merge-base --is-ancestor" in workflow
+    assert 'environment: "staging"' in workflow
+    assert "scripts/ci/check_promotion_policy.py" in workflow
+    assert "pull_request_review:" in workflow
+
+
+def test_main_updates_open_a_reviewed_dev_reconciliation_pr() -> None:
+    workflow = _read(".github/workflows/main-dev-sync.yml")
+
+    assert yaml.safe_load(workflow)
+    assert "push:\n    branches: [main]" in workflow
+    assert "actions/create-github-app-token@v2" in workflow
+    assert "RELEASE_AUTOMATION_APP_PRIVATE_KEY" in workflow
+    assert "git merge --no-ff origin/main" in workflow
+    assert "--force-with-lease" in workflow
+    assert "base=dev" in workflow
+    assert "labels[]=version:none" in workflow
+    assert "git push origin dev" not in workflow
+    assert "git reset --hard" not in workflow
+
+
 def test_ghcr_builds_dev_and_main_but_latest_remains_default_branch_only() -> None:
     workflow = _read(".github/workflows/ghcr.yml")
 
