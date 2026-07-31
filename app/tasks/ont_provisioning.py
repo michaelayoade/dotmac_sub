@@ -81,10 +81,36 @@ def authorize_ont(
                 "duplicate": command.duplicate,
                 "legacy_envelope_rehomed": True,
             }
-    if not operation_id or not scoped_ont_id:
-        raise ValueError(
-            "Tracked assigned ONT authorization operation and ONT are required."
-        )
+    if not operation_id:
+        raise ValueError("Tracked assigned ONT authorization operation is required.")
+
+    if not scoped_ont_id:
+        # Admitted before the assigned-authorization contract existed, so it
+        # carries no ONT and can never satisfy it. Terminalize through the
+        # owner instead of raising: an unhandled raise here leaves the
+        # operation non-terminal forever, looking queued rather than dead.
+        with db_session_adapter.session() as db:
+            from app.services.network.ont_provisioning_execution import (
+                fail_unexecutable_authorization,
+            )
+
+            try:
+                unexecutable_id = UUID(operation_id)
+            except ValueError:
+                raise ValueError(
+                    "Tracked assigned ONT authorization operation must be a UUID."
+                ) from None
+            outcome = fail_unexecutable_authorization(
+                db,
+                operation_id=unexecutable_id,
+                message=(
+                    "Authorize & provision requires an assigned ONT. This "
+                    "operation predates that requirement and cannot be "
+                    "executed; reissue it as Authorize & provision on the "
+                    "assigned device, or use Commission ONT."
+                ),
+            )
+            return outcome.to_dict()
 
     with db_session_adapter.session() as db:
         try:

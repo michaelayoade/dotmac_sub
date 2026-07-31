@@ -180,6 +180,46 @@ def complete_waiting_bootstrap_after_inform(
     return True
 
 
+def fail_unexecutable_authorization(
+    db,
+    *,
+    operation_id: UUID,
+    message: str,
+) -> OntAuthorizationExecutionOutcome:
+    """Terminalize an accepted operation the typed contract can never execute.
+
+    An operation admitted before the assigned-authorization contract existed
+    can lack the ONT that contract requires. Refusing it by raising would leave
+    it non-terminal forever — invisible work that looks queued rather than
+    dead — so it fails closed here on the same path a rejected assignment
+    decision uses.
+    """
+    from app.services.network.ont_authorization import AuthorizationWorkflowResult
+    from app.services.network_operations import network_operations
+
+    tracked_id = str(operation_id)
+    operation = network_operations.get(db, tracked_id)
+    outcome = OntAuthorizationExecutionOutcome(
+        authorization=AuthorizationWorkflowResult(
+            success=False,
+            message=message,
+            status=AuthorizationWorkflowStatus.ERROR,
+        ),
+        operation_id=operation_id,
+        message=message,
+        status=AuthorizationWorkflowStatus.ERROR,
+        partial_success=False,
+    )
+    network_operations.mark_failed(
+        db,
+        tracked_id,
+        message,
+        output_payload=outcome.to_dict(base=operation.output_payload or {}),
+    )
+    db.commit()
+    return outcome
+
+
 def execute_ont_authorization(
     db,
     command: ExecuteAssignedOntAuthorization,
