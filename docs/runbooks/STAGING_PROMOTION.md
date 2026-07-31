@@ -3,6 +3,17 @@
 This repository promotes release changes through `dev` and the staging
 environment before `main`. A feature branch must not bypass this path.
 
+**Open your pull request against `dev`, not `main`.** The `Dev-First Gate`
+check (`.github/workflows/dev-first-gate.yml`) fails any pull request targeting
+`main` whose head is not `dev`, `agent/promote-*`, `agent/reconcile-*`,
+`promote/*`, or `reconcile/*`. Retarget with `gh pr edit <number> --base dev`.
+
+For a production incident that genuinely cannot wait for the staging cycle, the
+`dev-first:override` label lets a pull request through. It is deliberately
+visible: the label stays on the pull request and the run records a warning.
+Overridden work reaches production without staging having run it, so reconcile
+`main` back into `dev` afterwards.
+
 ## Promotion sequence
 
 1. Open the feature pull request against `dev` with the appropriate
