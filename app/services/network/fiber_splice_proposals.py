@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -33,6 +32,7 @@ from app.models.network import (
 from app.models.work_order import WorkOrder
 from app.services import fiber_change_requests
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
 from app.services.network import fiber_physical_continuity
 from app.services.network.fiber_color_code import (
     StrandColorCode,
@@ -43,6 +43,30 @@ _SPLICEABLE_STRAND_STATUSES = {
     FiberStrandStatus.available,
     FiberStrandStatus.reserved,
 }
+
+
+class SpliceProposalError(DomainError):
+    """Stable splice-intake failures for transports to translate.
+
+    ``kind`` names the failure class (``not_found`` | ``conflict`` |
+    ``invalid``); transports map it to their own status vocabulary.
+    """
+
+    def __init__(self, *, code: str, message: str, kind: str) -> None:
+        super().__init__(code=f"network.fiber_splice_proposals.{code}", message=message)
+        self.kind = kind
+
+
+def _not_found(code: str, message: str) -> SpliceProposalError:
+    return SpliceProposalError(code=code, message=message, kind="not_found")
+
+
+def _conflict(code: str, message: str) -> SpliceProposalError:
+    return SpliceProposalError(code=code, message=message, kind="conflict")
+
+
+def _invalid(code: str, message: str) -> SpliceProposalError:
+    return SpliceProposalError(code=code, message=message, kind="invalid")
 
 
 @dataclass(frozen=True)
@@ -149,19 +173,17 @@ class SpliceProposalStatus:
         }
 
 
-def uuid_or_422(value: str | None, field_name: str) -> uuid.UUID:
+def _uuid_or_invalid(value: str | None, field_name: str) -> uuid.UUID:
     try:
         return coerce_uuid(str(value))
     except ValueError as exc:
-        raise HTTPException(
-            status_code=422, detail=f"{field_name} must be a UUID"
-        ) from exc
+        raise _invalid("invalid_identifier", f"{field_name} must be a UUID") from exc
 
 
-def strand_end_or_422(value: str, field_name: str) -> str:
+def _strand_end_or_invalid(value: str, field_name: str) -> str:
     normalized = str(value or "").strip().lower()
     if normalized not in {"a", "b"}:
-        raise HTTPException(status_code=422, detail=f"{field_name} must be a or b")
+        raise _invalid("invalid_strand_end", f"{field_name} must be a or b")
     return normalized
 
 
@@ -177,11 +199,11 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
 def _load_spliceable_strand(db: Session, strand_id, label: str) -> FiberStrand:
     strand = db.get(FiberStrand, strand_id)
     if strand is None or not strand.is_active:
-        raise HTTPException(status_code=404, detail=f"{label} strand not found")
+        raise _not_found("strand_not_found", f"{label} strand not found")
     if strand.status not in _SPLICEABLE_STRAND_STATUSES:
-        raise HTTPException(
-            status_code=422,
-            detail=(
+        raise _invalid(
+            "strand_not_spliceable",
+            (
                 f"{label} strand is {strand.status.value}; only available or "
                 "reserved strands can be spliced"
             ),
@@ -293,31 +315,30 @@ def propose_splice(
 ) -> SpliceProposalReceipt:
     """Validate and file one reviewed splice proposal for the given actor."""
 
-    closure_uuid = uuid_or_422(closure_id, "closure_id")
-    from_uuid = uuid_or_422(from_strand_id, "from_strand_id")
-    to_uuid = uuid_or_422(to_strand_id, "to_strand_id")
-    from_end = strand_end_or_422(from_strand_end, "from_strand_end")
-    to_end = strand_end_or_422(to_strand_end, "to_strand_end")
+    closure_uuid = _uuid_or_invalid(closure_id, "closure_id")
+    from_uuid = _uuid_or_invalid(from_strand_id, "from_strand_id")
+    to_uuid = _uuid_or_invalid(to_strand_id, "to_strand_id")
+    from_end = _strand_end_or_invalid(from_strand_end, "from_strand_end")
+    to_end = _strand_end_or_invalid(to_strand_end, "to_strand_end")
     if from_uuid == to_uuid:
-        raise HTTPException(
-            status_code=422, detail="A strand cannot be spliced to itself"
-        )
+        raise _invalid("self_splice", "A strand cannot be spliced to itself")
 
     closure = db.get(FiberSpliceClosure, closure_uuid)
     if closure is None or not closure.is_active:
-        raise HTTPException(status_code=404, detail="Splice closure not found")
+        raise _not_found("closure_not_found", "Splice closure not found")
 
     from_strand = _load_spliceable_strand(db, from_uuid, "from")
     to_strand = _load_spliceable_strand(db, to_uuid, "to")
 
-    tray_uuid = uuid_or_422(tray_id, "tray_id") if tray_id else None
+    tray_uuid = _uuid_or_invalid(tray_id, "tray_id") if tray_id else None
     if tray_uuid is not None:
         tray = db.get(FiberSpliceTray, tray_uuid)
         if tray is None:
-            raise HTTPException(status_code=404, detail="Splice tray not found")
+            raise _not_found("tray_not_found", "Splice tray not found")
         if tray.closure_id != closure.id:
-            raise HTTPException(
-                status_code=422, detail="Splice tray does not belong to this closure"
+            raise _invalid(
+                "tray_closure_mismatch",
+                "Splice tray does not belong to this closure",
             )
         if position is not None:
             occupied = (
@@ -327,8 +348,9 @@ def propose_splice(
                 .first()
             )
             if occupied is not None:
-                raise HTTPException(
-                    status_code=409, detail="That tray position is already occupied"
+                raise _conflict(
+                    "tray_position_occupied",
+                    "That tray position is already occupied",
                 )
 
     existing = (
@@ -344,8 +366,8 @@ def propose_splice(
         .first()
     )
     if existing is not None:
-        raise HTTPException(
-            status_code=409, detail="A splice between these strands already exists"
+        raise _conflict(
+            "splice_exists", "A splice between these strands already exists"
         )
 
     pair = {(str(from_uuid), from_end), (str(to_uuid), to_end)}
@@ -376,7 +398,7 @@ def propose_splice(
             insertion_loss_db=loss_db,
         )
     except fiber_physical_continuity.FiberPhysicalContinuityError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise _invalid("continuity_rejected", str(exc)) from exc
 
     from_colors = derive_segment_strand_colors(
         from_strand.segment, from_strand.strand_number

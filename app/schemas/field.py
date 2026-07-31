@@ -789,9 +789,7 @@ class FieldSegmentPhysicalDetailRead(BaseModel):
     segment_id: UUID
     termination_count: int
     truncated: bool
-    terminations: list[FieldStrandTerminationDetailRead] = Field(
-        default_factory=list
-    )
+    terminations: list[FieldStrandTerminationDetailRead] = Field(default_factory=list)
 
 
 class FieldFiberCustomerTraceRead(BaseModel):
@@ -808,9 +806,7 @@ class FieldFiberCustomerTraceRead(BaseModel):
     upstream_scope: str
     upstream_message: str
     ont_live: FieldFiberOntLiveRead | None = None
-    physical_details: list[FieldSegmentPhysicalDetailRead] = Field(
-        default_factory=list
-    )
+    physical_details: list[FieldSegmentPhysicalDetailRead] = Field(default_factory=list)
 
 
 class FieldFiberTestCreate(BaseModel):

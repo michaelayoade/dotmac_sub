@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.fiber_change_request import FiberChangeRequest
 from app.models.network import (
@@ -22,6 +21,7 @@ from app.models.subscriber import Subscriber
 from app.models.vendor_routes import InstallationProject, Vendor
 from app.models.work_order import WorkOrder
 from app.services import fiber_change_requests, vendor_fiber
+from app.services.network.fiber_splice_proposals import SpliceProposalError
 from app.services.vendor_portal_operations import _verification_evidence_policy
 
 
@@ -186,7 +186,7 @@ def test_vendor_propose_splice_rejects_unassigned_work_order(db_session):
     closure, _tray, strand_a, strand_b = _plant(db_session)
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(SpliceProposalError) as exc:
         vendor_fiber.propose_splice(
             db_session,
             vendor_id=str(intruder.id),
@@ -200,7 +200,7 @@ def test_vendor_propose_splice_rejects_unassigned_work_order(db_session):
             splice_type="fusion",
         )
 
-    assert exc.value.status_code == 404
+    assert exc.value.kind == "not_found"
 
 
 def test_verification_blocked_until_vendor_splices_reviewed(db_session):

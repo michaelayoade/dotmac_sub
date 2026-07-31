@@ -50,9 +50,12 @@ from app.services.network.fiber_color_code import (
 )
 from app.services.network.fiber_splice_proposals import (
     FieldTechnicianActor,
+    SpliceProposalError,
     SpliceProposalReceipt,
     SpliceProposalStatus,
 )
+
+_PROPOSAL_ERROR_STATUS = {"not_found": 404, "conflict": 409, "invalid": 422}
 
 _TESTABLE_ASSET_MODELS = {
     "fiber_strand": FiberStrand,
@@ -91,21 +94,27 @@ def propose_splice(
         person_id=profile.person_id,
         system_user_id=profile.system_user_id,
     )
-    return fiber_splice_proposals.propose_splice(
-        db,
-        actor=actor,
-        closure_id=closure_id,
-        from_strand_id=from_strand_id,
-        from_strand_end=from_strand_end,
-        to_strand_id=to_strand_id,
-        to_strand_end=to_strand_end,
-        tray_id=tray_id,
-        position=position,
-        splice_type=splice_type,
-        loss_db=loss_db,
-        note=note,
-        work_order=work_order,
-    )
+    try:
+        return fiber_splice_proposals.propose_splice(
+            db,
+            actor=actor,
+            closure_id=closure_id,
+            from_strand_id=from_strand_id,
+            from_strand_end=from_strand_end,
+            to_strand_id=to_strand_id,
+            to_strand_end=to_strand_end,
+            tray_id=tray_id,
+            position=position,
+            splice_type=splice_type,
+            loss_db=loss_db,
+            note=note,
+            work_order=work_order,
+        )
+    except SpliceProposalError as exc:
+        raise HTTPException(
+            status_code=_PROPOSAL_ERROR_STATUS.get(exc.kind, 422),
+            detail=exc.message,
+        ) from exc
 
 
 def record_test(
@@ -462,7 +471,7 @@ def _segment_physical_details(
 
     segment_ids: list[uuid.UUID] = []
     for hop in trace.hops:
-        if hop.kind.endswith("_segment") and hop.asset_id is not None:
+        if hop.kind.endswith("_segment") and isinstance(hop.asset_id, uuid.UUID):
             if hop.asset_id not in segment_ids:
                 segment_ids.append(hop.asset_id)
     if not segment_ids:

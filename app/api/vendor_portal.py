@@ -36,6 +36,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field import vendor_capabilities
 from app.services.field.vendor_auth import require_native_vendor_context
+from app.services.network.fiber_splice_proposals import SpliceProposalError
 from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_operations import (
     AddVendorQuoteLineCommand,
@@ -411,22 +412,28 @@ def propose_vendor_splice(
     ),
     db: Session = Depends(get_db),
 ):
-    receipt = vendor_fiber.propose_splice(
-        db,
-        vendor_id=_vendor_id(context),
-        vendor_user_id=str(context["principal_id"]),
-        work_order_id=payload.work_order_id,
-        closure_id=str(payload.closure_id),
-        from_strand_id=str(payload.from_strand_id),
-        from_strand_end=payload.from_strand_end,
-        to_strand_id=str(payload.to_strand_id),
-        to_strand_end=payload.to_strand_end,
-        tray_id=str(payload.tray_id) if payload.tray_id else None,
-        position=payload.position,
-        splice_type=payload.splice_type,
-        loss_db=payload.loss_db,
-        note=payload.note,
-    )
+    try:
+        receipt = vendor_fiber.propose_splice(
+            db,
+            vendor_id=_vendor_id(context),
+            vendor_user_id=str(context["principal_id"]),
+            work_order_id=payload.work_order_id,
+            closure_id=str(payload.closure_id),
+            from_strand_id=str(payload.from_strand_id),
+            from_strand_end=payload.from_strand_end,
+            to_strand_id=str(payload.to_strand_id),
+            to_strand_end=payload.to_strand_end,
+            tray_id=str(payload.tray_id) if payload.tray_id else None,
+            position=payload.position,
+            splice_type=payload.splice_type,
+            loss_db=payload.loss_db,
+            note=payload.note,
+        )
+    except SpliceProposalError as exc:
+        status_code = {"not_found": 404, "conflict": 409, "invalid": 422}.get(
+            exc.kind, 422
+        )
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
     return receipt.to_dict()
 
 

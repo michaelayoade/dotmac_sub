@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.fiber_change_request import FiberChangeRequest
@@ -21,6 +20,7 @@ from app.models.work_order import WorkOrder
 from app.services.common import coerce_uuid
 from app.services.network import fiber_splice_proposals
 from app.services.network.fiber_splice_proposals import (
+    SpliceProposalError,
     SpliceProposalReceipt,
     SpliceProposalStatus,
     VendorActor,
@@ -39,7 +39,11 @@ def _scoped_vendor_work_order(
         .one_or_none()
     )
     if row is None or row.project_id is None:
-        raise HTTPException(status_code=404, detail="Work order not found")
+        raise SpliceProposalError(
+            code="work_order_not_found",
+            message="Work order not found",
+            kind="not_found",
+        )
     assignment = (
         db.query(InstallationProject)
         .filter(InstallationProject.project_id == row.project_id)
@@ -48,7 +52,11 @@ def _scoped_vendor_work_order(
         .first()
     )
     if assignment is None:
-        raise HTTPException(status_code=404, detail="Work order not found")
+        raise SpliceProposalError(
+            code="work_order_not_found",
+            message="Work order not found",
+            kind="not_found",
+        )
     return row
 
 
