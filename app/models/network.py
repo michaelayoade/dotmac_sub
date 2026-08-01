@@ -567,6 +567,27 @@ class IPAssignment(Base):
             postgresql_where=text("is_active"),
             sqlite_where=text("is_active"),
         ),
+        # One active PRIMARY IPv4 assignment per exact service. The address-side
+        # index above stops two services sharing an address; it does nothing to
+        # stop one service holding two. That gap is what let consumers face an
+        # unanswerable "which address does this service own?" and answer it by
+        # arbitrary query order. Predicated on ipv4_address_id rather than the
+        # ip_version enum: ck_ip_assignments_version_address already ties the
+        # two, and this keeps the predicate free of enum representation.
+        # See migration 452 and docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md.
+        Index(
+            "uq_ip_assignments_subscription_ipv4_active",
+            "subscription_id",
+            unique=True,
+            postgresql_where=text(
+                "is_active AND ipv4_address_id IS NOT NULL "
+                "AND subscription_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "is_active AND ipv4_address_id IS NOT NULL "
+                "AND subscription_id IS NOT NULL"
+            ),
+        ),
         CheckConstraint(
             "(ip_version = 'ipv4' AND ipv4_address_id IS NOT NULL AND ipv6_address_id IS NULL) OR "
             "(ip_version = 'ipv6' AND ipv6_address_id IS NOT NULL AND ipv4_address_id IS NULL)",
