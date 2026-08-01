@@ -1284,6 +1284,25 @@ full-value payment experience.
 }
 ```
 
+#### `GET /admin/catalog/subscriptions/{id}`
+
+Mistaken duplicate activations are projected as `correction_action_forms`, one
+shared `ActionForm` per owner-reviewed restorable sibling. The action is absent
+without `catalog:write`. Each eligible form carries the exact target,
+owner-produced preview fingerprint, and scoped idempotency key; it discloses the
+lifecycle, PPPoE/RADIUS profile, FUP, and no-automatic-financial-adjustment
+consequences before requiring confirmation. Its title distinguishes correction
+from ordinary Restore, and its description and impact show the full target UUID
+and creation timestamp so repeated plan names cannot be confused. Ineligible
+forms remain visible to authorized operators with the owner-provided blocker,
+including malformed IP evidence, PPPoE identity mismatch, target locks, and
+unconfigured target speed. The template only renders
+`action_form(correction_action)` and never derives eligibility or fingerprints.
+
+The generic Restore preview rejects a restorable subscription when another
+active sibling uses the same login. That is an atomic-correction case, not a
+single-service lifecycle action.
+
 #### Subscription Form
 
 ```python

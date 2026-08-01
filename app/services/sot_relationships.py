@@ -14317,7 +14317,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "idempotent return-to-inventory cleanup."
                     " Slow OLT calls consume detached immutable connection values "
                     "after the preceding database transaction closes; a fresh "
-                    "reliability session records partial external success."
+                    "reliability session records partial external success. The "
+                    "permanent reconciler admits bounded management-only recovery "
+                    "only from matching intent, operation-ledger, dispatch, local "
+                    "inventory, and live OLT registration evidence."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -14423,9 +14426,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "execute_owner_command once on a transaction-free session; "
                             "intent, operation, dispatch, audit, and event stage "
                             "atomically. Device workers close the database transaction "
-                            "before live OLT or management I/O, use detached connection "
-                            "values, and persist external-write evidence in a fresh "
-                            "transaction before subsequent coordination."
+                            "before live OLT or management I/O, use a detached immutable "
+                            "typed execution plan, and persist external-write evidence "
+                            "in a fresh transaction before subsequent coordination. "
+                            "Finalization locks and revalidates the exact intent and "
+                            "operation after device I/O."
                         ),
                         locking=(
                             "Admission locks the exact autofind candidate and active "
@@ -14437,12 +14442,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "One active intent per canonical serial and operation "
                             "correlation suppress duplicate admission; versioned "
                             "dispatch keys make bounded ACS checks and cleanup "
-                            "replay-safe."
+                            "replay-safe. Interrupted management redrives are linked to "
+                            "one reviewed operation/evidence fingerprint and carry "
+                            "authorization_reissue_allowed=false."
                         ),
                         retries=(
                             "Device authorization reuses durable landed-write evidence; "
-                            "ACS checks use five delayed attempts; later reconciliation "
-                            "repairs assignment and expiry drift."
+                            "management recovery is bounded by the operation retry "
+                            "budget; ACS checks use five delayed attempts; later "
+                            "reconciliation repairs assignment and expiry drift."
                         ),
                     ),
                     errors=ErrorContract(
@@ -14470,6 +14478,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "network.ont_commissioning.service_config_forbidden",
                             "network.ont_commissioning.unsafe_external_transaction",
                             "network.ont_commissioning.external_write_reconciliation_required",
+                            "network.ont_commissioning.registration_not_confirmed",
+                            "network.ont_commissioning.execution_conflict",
+                            "network.ont_commissioning.interrupted_execution_review_required",
+                            "network.ont_commissioning.management_recovery_exhausted",
+                            "network.ont_commissioning.operation_missing",
                             "network.ont_commissioning.acs_not_ready",
                             "network.ont_commissioning.cleanup_target_missing",
                             "network.ont_commissioning.cleanup_identity_mismatch",
@@ -14492,6 +14505,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "registration on a different F/S/P",
                             "missing registration or management-only prerequisites",
                             "any internet, WAN, PPPoE, LAN, or Wi-Fi command",
+                            "missing durable landed-authorization recovery evidence",
+                            "changed live registration before management recovery",
+                            "an active database transaction at any device-I/O boundary",
                             "identity drift before cleanup",
                         ),
                     ),
@@ -14528,7 +14544,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             stale_behavior=(
                                 "Stale intent state never grants service. Expired "
                                 "unassigned device state is cleanup-eligible only "
-                                "after exact locked revalidation."
+                                "after exact locked revalidation. An interrupted "
+                                "authorizing intent either receives bounded, exact-live "
+                                "management recovery from durable landed evidence or "
+                                "moves to a terminal failed state for review."
                             ),
                             drift_signal=(
                                 "last_reconciled_at, expiry, assignment state, "
@@ -14536,7 +14555,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                             rebuild_operation=(
                                 "reconcile_ont_commissioning recomputes assignment "
-                                "conversion and stages safe expiry cleanup"
+                                "conversion, repairs interrupted management execution, "
+                                "and stages safe expiry cleanup"
                             ),
                             repair_owner="network.ont_commissioning",
                         ),
@@ -26339,6 +26359,366 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "derived under the lifecycle transaction. "
                     "Adapters request a lifecycle command or reconciliation; they do not "
                     "write the access-state projection."
+                ),
+            ),
+            SOTService(
+                name="access.credential_binding",
+                module="app.services.access_credential_binding",
+                owns=("access credential subscription and RADIUS-profile binding",),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "access.radius_projection",
+                    "service_intent.catalog_policy",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "This flush-only participant changes only the service/profile "
+                    "binding of one existing active credential. Username and secret "
+                    "authority remain unchanged; RADIUS tables remain projections."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "access credential subscription and RADIUS-profile binding"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical subscriber access credential",
+                                "canonical subscription lifecycle state",
+                                "catalog-linked target RADIUS profile",
+                                "typed credential binding command evidence",
+                            ),
+                            canonical_writer="access.credential_binding",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical subscriber access credential",
+                            owner="access.radius_projection",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Active AccessCredential identity, subscriber, username, "
+                                "and secret state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Locked Subscription identity, subscriber, and status",
+                        ),
+                        AuthorityInput(
+                            name="catalog-linked target RADIUS profile",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "Exact active subscription override or unambiguous active "
+                                "OfferRadiusProfile link"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="typed credential binding command evidence",
+                            owner="access.credential_binding",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Exact credential, subscriber, target subscription, and "
+                                "profile identifiers admitted only inside the active "
+                                "subscription-correction owner command"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The subscription-correction coordinator owns completion; "
+                            "this participant locks, stages an event, and flushes only."
+                        ),
+                        locking=(
+                            "Lock the selected AccessCredential after the coordinator "
+                            "locks both subscription rows in stable UUID order."
+                        ),
+                        idempotency=(
+                            "Assigning the same target subscription and profile is a "
+                            "deterministic no-drift write and emits the reviewed evidence "
+                            "only within the parent correction."
+                        ),
+                        retries=(
+                            "Retry only through the parent correction idempotency key; "
+                            "missing, inactive, or changed binding evidence fails closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "access.credential_binding.coordinator_required",
+                            "access.credential_binding.credential_missing",
+                            "access.credential_binding.account_mismatch",
+                            "access.credential_binding.radius_profile_inactive",
+                        ),
+                        mapping_owner="admin catalog subscription correction adapter",
+                        fail_closed_on=(
+                            "missing or inactive credential",
+                            "subscriber mismatch",
+                            "missing or inactive target profile",
+                            "call outside the named coordinator transaction",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("access_credential.binding_changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 contains credential and binding identifiers only; "
+                            "it never contains the credential secret."
+                        ),
+                        replay=(
+                            "The parent correction idempotency reservation reproduces the "
+                            "same binding outcome without a second transition."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="access.credential_binding",
+                        old_owner=(
+                            "generic AccessCredentials.update followed by an uncommitted "
+                            "best-effort RADIUS synchronization"
+                        ),
+                        verification=(
+                            "Correction behavior and architecture tests prove exact binding, "
+                            "flush-only transaction participation, and secret-safe events."
+                        ),
+                        cutover_gate=(
+                            "Mistaken-subscription repair uses only this typed participant."
+                        ),
+                        fallback_retirement=(
+                            "The correction UI and coordinator never call generic credential "
+                            "CRUD or write AccessCredential binding fields directly."
+                        ),
+                    ),
+                    steward="network access",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_subscription_correction.py",
+                        "tests/architecture/test_subscription_correction_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="access.subscription_correction",
+                module="app.services.subscription_correction",
+                owns=("atomic mistaken-subscription correction coordination",),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "access.credential_binding",
+                    "access.fup_runtime_state",
+                    "access.radius_projection",
+                    "financial.invoices",
+                    "service_intent.catalog_policy",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "The reviewed coordinator never guesses the correct plan and never "
+                    "hard-deletes history. It fails closed on billing history or ambiguous "
+                    "credential/profile evidence, active target locks, or malformed legacy "
+                    "served-IP projection evidence, then commits lifecycle, binding, FUP, "
+                    "and durable event evidence once. It validates but never writes IP "
+                    "projection fields."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="atomic mistaken-subscription correction coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical subscription lifecycle state",
+                                "canonical access credential binding",
+                                "canonical FUP runtime state",
+                                "canonical invoice-line history",
+                                "catalog-linked target RADIUS profile",
+                                "reviewed correction preview",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Locked mistaken and target Subscription rows and locks; "
+                                "legacy served-IP scalars are checked only as non-authoritative "
+                                "resume-provisioning evidence pending explicit IPv6 projection "
+                                "ownership"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical access credential binding",
+                            owner="access.credential_binding",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Exactly one active subscriber credential and its current "
+                                "subscription/profile binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical FUP runtime state",
+                            owner="access.fup_runtime_state",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Per-subscription FupState rows and active lock evidence",
+                        ),
+                        AuthorityInput(
+                            name="canonical invoice-line history",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Any InvoiceLine record linked to the mistaken subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="catalog-linked target RADIUS profile",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "Exact active subscription override or one active offer profile"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="reviewed correction preview",
+                            owner="access.subscription_correction",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Server-calculated fingerprint over both subscriptions, "
+                                "credential, profile, FUP, locks, and invoice evidence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "The public command enters execute_owner_command once on a "
+                            "transaction-free session; lifecycle, credential-binding, and "
+                            "FUP participants flush and the coordinator commits once."
+                        ),
+                        locking=(
+                            "Lock both Subscription rows in stable UUID order, then the one "
+                            "active credential and FUP states; revalidate the preview before writes."
+                        ),
+                        idempotency=(
+                            "A scoped idempotency key stores the reviewed preview fingerprint; "
+                            "same-input retry returns the original binding while key reuse with "
+                            "different evidence fails closed."
+                        ),
+                        retries=(
+                            "Preview drift and business ambiguity require operator re-review; "
+                            "transient transaction failures may retry with the same key."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "access.subscription_correction.invalid_active_subscription_id",
+                            "access.subscription_correction.invalid_target_subscription_id",
+                            "access.subscription_correction.invalid_idempotency_key",
+                            "access.subscription_correction.same_subscription",
+                            "access.subscription_correction.subscription_not_found",
+                            "access.subscription_correction.account_mismatch",
+                            "access.subscription_correction.active_subscription_required",
+                            "access.subscription_correction.target_not_restorable",
+                            "access.subscription_correction.target_not_prior",
+                            "access.subscription_correction.billing_approval_required",
+                            "access.subscription_correction.account_lifecycle_override",
+                            "access.subscription_correction.financial_history_present",
+                            "access.subscription_correction.credential_missing",
+                            "access.subscription_correction.credential_ambiguous",
+                            "access.subscription_correction.credential_binding_conflict",
+                            "access.subscription_correction.credential_username_missing",
+                            "access.subscription_correction.target_login_missing",
+                            "access.subscription_correction.credential_target_login_mismatch",
+                            "access.subscription_correction.credential_active_login_mismatch",
+                            "access.subscription_correction.radius_profile_missing",
+                            "access.subscription_correction.radius_profile_ambiguous",
+                            "access.subscription_correction.radius_profile_inactive",
+                            "access.subscription_correction.radius_profile_speed_invalid",
+                            (
+                                "access.subscription_correction."
+                                "radius_profile_speed_unconfigured"
+                            ),
+                            "access.subscription_correction.active_ipv4_invalid",
+                            "access.subscription_correction.active_ipv6_invalid",
+                            "access.subscription_correction.target_ipv4_invalid",
+                            "access.subscription_correction.target_ipv6_invalid",
+                            (
+                                "access.subscription_correction."
+                                "target_enforcement_lock_present"
+                            ),
+                            "access.subscription_correction.preview_changed",
+                            "access.subscription_correction.correction_ineligible",
+                            "access.subscription_correction.correction_not_applied",
+                            "access.subscription_correction.idempotency_conflict",
+                            "access.subscription_correction.replay_state_missing",
+                        )
+                        + owner_command_boundary_error_codes(
+                            "access.subscription_correction"
+                        ),
+                        mapping_owner="admin catalog subscription correction adapter",
+                        fail_closed_on=(
+                            "changed preview evidence",
+                            "any existing invoice line",
+                            "ambiguous credential or target profile",
+                            "missing or mismatched PPPoE identity",
+                            "unconfigured target speed or malformed served-IP projection",
+                            "active enforcement lock on the target subscription",
+                            "account/subscription mismatch or lifecycle override",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscription.correction_applied",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 names the replaced and restored subscriptions, "
+                            "credential/profile identifiers, cleared FUP scopes, and preview "
+                            "fingerprint without secrets or customer identity data."
+                        ),
+                        replay=(
+                            "The scoped idempotency record prevents duplicate correction; "
+                            "lifecycle and RADIUS reconcilers remain independently idempotent."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        new_owner="access.subscription_correction",
+                        old_owner=(
+                            "separate admin cancel/restore clicks plus manual credential, "
+                            "profile, FUP, and RADIUS repair"
+                        ),
+                        verification=(
+                            "Focused preview, transaction rollback, idempotency, UI, event, "
+                            "and architecture tests plus staging acceptance."
+                        ),
+                        cutover_gate=(
+                            "The correction action appears only for an active subscription "
+                            "with an explicit restorable sibling and executes this owner; "
+                            "generic restore previews reject a same-login active sibling."
+                        ),
+                        fallback_retirement=(
+                            "No correction route performs direct ORM writes or generic CRUD; "
+                            "financially linked subscriptions remain blocked for finance review."
+                        ),
+                    ),
+                    steward="network access and billing operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    ),
+                    test_refs=(
+                        "tests/test_subscription_correction.py",
+                        "tests/test_subscription_lifecycle_ui.py",
+                        "tests/playwright/e2e/test_subscription_correction.py",
+                        "tests/architecture/test_subscription_correction_boundary.py",
+                    ),
                 ),
             ),
             SOTService(

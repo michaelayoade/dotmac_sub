@@ -257,6 +257,36 @@ def test_status_command_previews_share_one_transition_projection(
     assert preview.access_impact.session_action == session_action
 
 
+def test_restore_preview_blocks_duplicate_active_login_and_directs_correction(
+    db_session, subscriber, catalog_offer
+):
+    target = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        status=SubscriptionStatus.stopped,
+    )
+    target.login = "shared-pppoe-login"
+    active = _subscription(db_session, subscriber, catalog_offer)
+    active.login = target.login
+    db_session.flush()
+
+    preview = preview_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(target.id),
+            kind=SubscriptionCommandKind.restore,
+            source="admin:test",
+        ),
+    )
+
+    assert preview.eligible is False
+    assert (
+        "another_active_subscription_uses_login_use_correction"
+        in preview.eligibility_reasons
+    )
+
+
 @pytest.mark.parametrize(
     "current_status",
     [
@@ -407,6 +437,11 @@ def test_plan_change_preview_uses_canonical_proration_and_access_impact(
             kind=SubscriptionCommandKind.change_plan,
             source="admin:test",
             target_offer_id=str(target.id),
+            # The pricing owner keeps its own clock unless the command
+            # carries an explicit effective time; without it the quote uses
+            # wall clock and this pinned mid-cycle preview breaks once the
+            # real date passes next_billing_at (2026-08-01).
+            effective_at=datetime(2026, 7, 14, 12, 0, tzinfo=UTC),
         ),
         now=datetime(2026, 7, 14, 12, 0, tzinfo=UTC),
     )
