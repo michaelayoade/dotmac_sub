@@ -128,7 +128,10 @@ def _login_redirect_for_path(request: Request) -> str:
     if path.startswith("/reseller/"):
         return f"/reseller/auth/login?next={quoted_next}"
     if path.startswith("/vendor/"):
-        return f"/vendor/auth/login?next={quoted_next}"
+        # Vendor principals are SystemUser records and authenticate through the
+        # shared system-user login. There is deliberately no parallel vendor
+        # credential or session owner.
+        return f"/auth/login?next={quoted_next}"
     return f"/auth/login?next={quoted_next}"
 
 

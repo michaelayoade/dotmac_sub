@@ -104,6 +104,21 @@ class TestCustomerRouteRegistration:
                 break
         assert found, "GET /portal/auth/support-info route not found"
 
+    def test_customer_auth_footer_links_to_served_public_routes(self) -> None:
+        template = (
+            Path(__file__).resolve().parents[1]
+            / "templates"
+            / "layouts"
+            / "customer_auth.html"
+        ).read_text()
+
+        assert 'href="/portal/auth/support-info"' in template
+        assert 'href="/legal/privacy"' in template
+        assert 'href="/legal/terms"' in template
+        assert 'href="/contact"' not in template
+        assert 'href="/privacy"' not in template
+        assert 'href="/terms"' not in template
+
     def test_support_comment_post_route_exists(self) -> None:
         from app.web.customer.routes import router
 

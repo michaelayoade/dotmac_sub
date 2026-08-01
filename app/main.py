@@ -88,7 +88,6 @@ _CORE_ROUTER_SPECS = [
 _DEFERRED_API_ROUTER_SPECS = [
     ("app.web.admin", "router", "web", "none"),
     ("app.web_home", "router", "web", "none"),
-    ("app.web_domains", "router", "web", "none"),
     ("app.web.customer", "router", "web", "none"),
     ("app.web.reseller", "router", "web", "none"),
     ("app.web.vendor_portal", "router", "web", "none"),

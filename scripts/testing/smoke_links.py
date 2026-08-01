@@ -20,7 +20,6 @@ LOGIN_REDIRECT_PATHS = (
     "/auth/login",
     "/portal/auth/login",
     "/reseller/auth/login",
-    "/vendor/auth/login",
 )
 
 SKIP_SCHEMES = ("mailto:", "tel:", "javascript:")
@@ -211,7 +210,15 @@ def main() -> int:
     args = _parse_args()
     base_url = args.base_url.rstrip("/")
     if not args.start:
-        args.start = ["/", "/auth/login", "/web/network", "/web/billing"]
+        args.start = [
+            "/",
+            "/auth/login",
+            "/portal/auth/login",
+            "/portal/auth/support-info",
+            "/reseller/auth/login",
+            "/legal/privacy",
+            "/legal/terms",
+        ]
     excluded = set(DEFAULT_EXCLUDED_PATH_SNIPPETS)
     env_excludes = os.getenv("SMOKE_EXCLUDE", "")
     if env_excludes:

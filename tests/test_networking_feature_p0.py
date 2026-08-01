@@ -3,7 +3,6 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -115,7 +114,6 @@ from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.cpe_tr069 import CpeTR069
 from app.services.network.ont_tr069 import OntTR069
 from app.web.admin import nas as nas_web
-from app.web_domains import network_home
 
 
 def _assign_ont(db_session, *, ont, pon, subscription):
@@ -1176,43 +1174,6 @@ def test_collect_devices_excludes_system_owned_inventory_cpes(
     assert visible_cpe["status"] == "not_working"
     assert visible_cpe["operational_reason"] == "verification_not_configured"
     assert visible_cpe["status_presentation"].tone.value == "negative"
-
-
-def test_web_network_home_excludes_system_owned_inventory_cpes(
-    db_session, subscriber, subscription
-):
-    network_service.cpe_devices.create(
-        db_session,
-        CPEDeviceCreate(
-            account_id=subscriber.id,
-            serial_number="VISIBLE-WEB-CPE",
-            vendor="Huawei",
-            model="EG8145X6",
-        ),
-    )
-    olt = network_service.olt_devices.create(
-        db_session,
-        OLTDeviceCreate(name="Web Inv OLT", hostname="web-inv-olt.local"),
-    )
-    pon = network_service.pon_ports.create(
-        db_session,
-        PonPortCreate(olt_id=olt.id, name="0/1/3"),
-    )
-    ont = network_service.ont_units.create(
-        db_session,
-        OntUnitCreate(serial_number="PARKED-WEB-ONT"),
-    )
-    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
-    _release_ont(db_session, assignment)
-
-    request = Request({"type": "http", "method": "GET", "path": "/web/network"})
-    with patch("app.web_domains.templates.TemplateResponse") as render:
-        network_home(request=request, db=db_session)
-
-    context = render.call_args.args[1]
-    serials = {item.serial_number for item in context["items"]}
-    assert "VISIBLE-WEB-CPE" in serials
-    assert "PARKED-WEB-ONT" not in serials
 
 
 def test_get_or_create_inventory_subscriber_recovers_from_integrity_race(

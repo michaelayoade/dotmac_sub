@@ -229,6 +229,15 @@ then invokes `scripts/deploy_staging.sh`. That staging-only adapter proves the
 exact environment, server name, and private health endpoint before delegating
 to the hardened deployment owner.
 
+GitHub evaluates a `workflow_run` workflow from the default branch. Therefore a
+change to `.github/workflows/staging-deploy.yml` on `dev` is not active merely
+because the dev image built successfully. Bootstrap such a workflow change by
+manually invoking the candidate's checked-in `scripts/deploy_staging.sh` on the
+named staging host, complete acceptance on that exact candidate, and promote
+the accepted tree to `main`. Only subsequent automatic runs use the new
+default-branch workflow. Never rerun an older default-branch workflow that calls
+`scripts/deploy.sh` directly on staging.
+
 ## Staging database-backup policy
 
 The staging database is non-authoritative and its PostgreSQL workload and local

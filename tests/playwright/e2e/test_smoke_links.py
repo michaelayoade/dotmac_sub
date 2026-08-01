@@ -113,22 +113,20 @@ def test_customer_portal_internal_links_smoke(user_page, settings):
     )
 
 
-def test_public_internal_links_smoke(admin_page, settings):
+def test_public_internal_links_smoke(anon_page, settings):
     max_pages = _max_pages_from_env()
     _crawl_links(
-        admin_page,
+        anon_page,
         settings.base_url,
         [
             "/",
             "/auth/login",
             "/auth/forgot-password",
-            # Only routes the app actually serves. /web/catalog, /web/projects
-            # and /web/tickets were listed here but have never existed in app
-            # code, so this spec asserted a 404 on every run. E2E is nightly and
-            # not a PR gate, so that failure sat unnoticed.
-            "/web/network",
-            "/web/usage",
-            "/web/billing",
+            "/portal/auth/login",
+            "/portal/auth/support-info",
+            "/reseller/auth/login",
+            "/legal/privacy",
+            "/legal/terms",
         ],
         max_pages,
     )
