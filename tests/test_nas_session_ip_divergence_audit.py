@@ -13,8 +13,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.radius_active_session import RadiusActiveSession
