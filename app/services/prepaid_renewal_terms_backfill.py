@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
-from app.services.common import DomainError
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -273,8 +273,7 @@ def _capture(
     if not context.idempotency_key:
         raise _error(
             "missing_idempotency_key",
-            "Capturing a renewal-terms backfill requires a business "
-            "idempotency key.",
+            "Capturing a renewal-terms backfill requires a business idempotency key.",
         )
     preview = preview_prepaid_renewal_terms_backfill(db, now=command.as_of)
     if preview.fingerprint != command.preview_fingerprint:
@@ -301,6 +300,23 @@ def _capture(
                 continue
             subscription.unit_price = item.contracted_amount
             repaired += 1
+            from app.services.events import EventType, emit_event
+
+            emit_event(
+                db,
+                EventType.prepaid_renewal_terms_backfilled,
+                {
+                    "schema_version": 1,
+                    "account_id": str(item.account_id),
+                    "subscription_id": str(item.subscription_id),
+                    "contracted_amount": str(item.contracted_amount),
+                    "paid_line_count": item.paid_line_count,
+                    "preview_fingerprint": preview.fingerprint,
+                },
+                subscriber_id=item.account_id,
+                account_id=item.account_id,
+                subscription_id=item.subscription_id,
+            )
             logger.info(
                 "prepaid_renewal_terms_backfilled: subscription=%s amount=%s "
                 "paid_lines=%d",
