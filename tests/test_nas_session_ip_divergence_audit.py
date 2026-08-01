@@ -313,7 +313,7 @@ def test_duplicates_that_never_touch_the_scoped_nas_stay_out(db_session, catalog
 def test_exact_service_ambiguity_is_now_unrepresentable(db_session, catalog_offer):
     """The invariant moved from "detect it" to "it cannot happen".
 
-    `uq_ip_assignments_subscription_ipv4_active` (migration 452) forbids a
+    `uq_ip_assignments_subscription_ipv4_active` (migration 453) forbids a
     second active exact-service IPv4 assignment, so the audit's
     `ambiguous_service_assignment` class can no longer be provoked through the
     ORM. The class is retained because production data predating the index

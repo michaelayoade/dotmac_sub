@@ -574,7 +574,7 @@ class IPAssignment(Base):
         # arbitrary query order. Predicated on ipv4_address_id rather than the
         # ip_version enum: ck_ip_assignments_version_address already ties the
         # two, and this keeps the predicate free of enum representation.
-        # See migration 452 and docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md.
+        # See migration 453 and docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md.
         Index(
             "uq_ip_assignments_subscription_ipv4_active",
             "subscription_id",

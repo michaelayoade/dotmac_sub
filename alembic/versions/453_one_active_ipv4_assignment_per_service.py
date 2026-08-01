@@ -17,8 +17,8 @@ migration may silently resolve by deleting or deactivating a row, so this
 refuses to proceed and names the offenders instead. Adjudicate each one through
 ``network.ip_assignment_lifecycle``'s reviewed repair command, then re-run.
 
-Revision ID: 452_one_active_ipv4_assignment_per_service
-Revises: 451_add_nas_local_secret_retire_operation_type
+Revision ID: 453_one_active_ipv4_assignment_per_service
+Revises: 452_add_nas_local_secret_retire_operation_type
 Create Date: 2026-08-01
 """
 
@@ -26,8 +26,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "452_one_active_ipv4_assignment_per_service"
-down_revision = "451_add_nas_local_secret_retire_operation_type"
+revision = "453_one_active_ipv4_assignment_per_service"
+down_revision = "452_add_nas_local_secret_retire_operation_type"
 branch_labels = None
 depends_on = None
 

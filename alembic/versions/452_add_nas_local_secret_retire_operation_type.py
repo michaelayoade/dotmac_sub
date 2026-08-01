@@ -4,15 +4,15 @@ Retiring a shadowing NAS-local PPPoE secret is a tracked device operation, not a
 log line: it needs idempotency, retry and durable failure evidence. See
 docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md.
 
-Revision ID: 451_add_nas_local_secret_retire_operation_type
-Revises: 450_fiber_test_acceptance
+Revision ID: 452_add_nas_local_secret_retire_operation_type
+Revises: 451_prepaid_sweep_cycle
 Create Date: 2026-08-01
 """
 
 from alembic import op
 
-revision = "451_add_nas_local_secret_retire_operation_type"
-down_revision = "450_fiber_test_acceptance"
+revision = "452_add_nas_local_secret_retire_operation_type"
+down_revision = "451_prepaid_sweep_cycle"
 branch_labels = None
 depends_on = None
 
