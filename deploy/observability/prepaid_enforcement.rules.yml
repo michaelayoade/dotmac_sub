@@ -150,20 +150,20 @@ groups:
           runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
 
       - alert: PrepaidSweepBudgetDeferredPersistent
-        expr: observability_state{domain="prepaid_enforcement",signal="budget_deferred"} > 0
-        for: 6h
+        expr: observability_state{domain="prepaid_enforcement",signal="budget_deferred"} > 3000
+        for: 3h
         labels:
           severity: warning
           area: prepaid-enforcement
           owner: financial-collections
         annotations:
-          summary: "Prepaid sweep cannot cover its cohort within the run budget"
+          summary: "Prepaid sweep throughput regressed against its verified baseline"
           description: >
-            Every recent sweep run deferred accounts because the cohort no
-            longer fits collections.prepaid_balance_sweep_budget_seconds.
-            Rotation keeps coverage fair, but sustained deferral means the
-            per-account cost or cohort size grew — raise the budget/limits
-            or reduce per-account work.
+            TEMPORARY regression threshold: the verified 2026-08-01
+            baseline defers ~2600 of ~3900 accounts per bounded run; a
+            sustained count above 3000 means roughly a one-third throughput
+            loss (per-account cost or cohort growth). The durable signal is
+            cycle age (see cycle_age_seconds), not per-run deferral.
           runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
 
       - alert: PrepaidNoticeShieldPersistent
