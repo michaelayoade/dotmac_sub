@@ -113,18 +113,36 @@ had no answer, and `radius_population.populate()` answered it by unordered query
 position — an ownership decision the projection does not hold, and one that
 could differ between two runs over identical data.
 
-Two guardrails close that:
+One guardrail closes half of it, and the other half needs a modelling change
+first.
 
-1. `uq_ip_assignments_subscription_ipv4_active` makes a second active
-   exact-service IPv4 assignment unrepresentable. Its migration fails closed
-   rather than resolving an existing duplicate: which address a service is
-   served on is customer-visible, so a schema step may not pick one.
-2. `populate()` refuses an ambiguous ledger instead of choosing. The login's
-   existing RADIUS rows are PRESERVED and the refusal is counted as
-   `skipped_ambiguous_ipv4_ledger`, so ambiguity degrades to "no change,
-   reported" rather than "a coin-flip address, silently served". Adding
-   deterministic ordering would not have fixed this: a repeatable arbitrary
-   choice is still an unauthorized one.
+`populate()` refuses an ambiguous ledger instead of choosing. The login's
+existing RADIUS rows are PRESERVED and the refusal is counted as
+`skipped_ambiguous_ipv4_ledger`, so ambiguity degrades to "no change, reported"
+rather than "a coin-flip address, silently served". Adding deterministic
+ordering would not have fixed this: a repeatable arbitrary choice is still an
+unauthorized one.
+
+A database constraint cannot yet express the other half. **Multiple active IPv4
+assignments per subscription is a supported product shape** — the admin
+subscription form allocates one assignment per selected block, and the edit form
+renders them as a list. A unique index on `(subscription_id) WHERE is_active`
+would forbid that feature, not protect an invariant.
+
+What is actually missing is the concept of a PRIMARY assignment. `IPAssignment`
+records that a service holds an address; nothing records which held address is
+the one RADIUS should serve as `Framed-IP-Address`. Until that exists:
+
+- consumers must fail closed when a service holds more than one, which is what
+  `populate()` now does; and
+- the documented contract stands that an additional address which must coexist
+  with the primary PPP address belongs to `SubscriberAdditionalRoute` and is
+  projected as `Framed-Route`, not as a second `IPAssignment`.
+
+The next slice is therefore to introduce and backfill an explicit primary
+marker, migrate legitimate additional allocations to routed blocks, and only
+then add a partial unique index over the primary flag. Constraining first would
+have deleted a feature to satisfy a constraint.
 
 #### Cutover: RADIUS must consume the assignment, not the served column
 

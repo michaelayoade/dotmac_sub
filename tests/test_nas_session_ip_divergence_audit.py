@@ -310,30 +310,47 @@ def test_duplicates_that_never_touch_the_scoped_nas_stay_out(db_session, catalog
     assert audit(db_session, None)["counts"]["duplicate_served_projection"] == 1
 
 
-def test_exact_service_ambiguity_is_now_unrepresentable(db_session, catalog_offer):
-    """The invariant moved from "detect it" to "it cannot happen".
+def test_ambiguous_assignments_suppress_mismatch_but_not_conflict(
+    db_session, catalog_offer
+):
+    """Ambiguity blocks only the verdict that needs this sub's desired state.
 
-    `uq_ip_assignments_subscription_ipv4_active` (migration 453) forbids a
-    second active exact-service IPv4 assignment, so the audit's
-    `ambiguous_service_assignment` class can no longer be provoked through the
-    ORM. The class is retained because production data predating the index
-    still contains violations, and the migration deliberately refuses to run
-    until they are adjudicated.
+    Multiple active IPv4 assignments per subscription is a supported product
+    shape -- the admin form allocates one per selected block -- so the audit
+    must handle it rather than assume it away. No owner can be named, so no
+    mismatch verdict is issued. A conflict still is, because it is decided by
+    the OTHER party's ownership of the observed address.
     """
-    from sqlalchemy.exc import IntegrityError
-
-    subscriber = _subscriber(db_session, "ambiguous")
-    sub = _sub(
+    nas = _nas(db_session, "Eagle Access")
+    victim = _sub(db_session, catalog_offer, login="victim", owned_ips=["172.16.5.9"])
+    ambiguous = _sub(
         db_session,
         catalog_offer,
         login="ambiguous",
-        owned_ips=["172.16.5.1"],
-        subscriber=subscriber,
+        column_ip="172.16.5.1",
+        owned_ips=["172.16.5.1", "172.16.5.2"],
     )
-    with pytest.raises(IntegrityError):
-        _assign(db_session, subscriber=subscriber, subscription=sub, ip="172.16.5.2")
-        db_session.flush()
-    db_session.rollback()
+    _session(db_session, nas=nas, sub=ambiguous, framed_ip="172.16.5.9")
+    db_session.commit()
+
+    result = audit(db_session, "eagle")
+
+    assert result["counts"]["ambiguous_service_assignment"] == 1
+    finding = result["findings"]["ambiguous_service_assignment"][0]
+    assert finding["owner_ips"] == ["172.16.5.1", "172.16.5.2"]
+    assert finding["owner_ip"] == ""
+    assert result["counts"]["session_ip_mismatch"] == 0
+    assert result["counts"]["served_projection_stale"] == 0
+    assert result["counts"]["session_ip_conflict"] == 1
+    assert result["findings"]["session_ip_conflict"][0]["assignment_holder"] == "victim"
+    assert (
+        str(victim.id)
+        == (
+            result["findings"]["session_ip_conflict"][0][
+                "assignment_holder_subscription_id"
+            ]
+        )
+    )
 
 
 def test_served_projection_stale_when_column_disagrees_with_owner(
