@@ -173,22 +173,32 @@ def _validate(command: StagePostingGroupCommand, context: CommandContext) -> Non
 def _assert_replay_matches(
     existing: CustomerPostingGroup, command: StagePostingGroupCommand
 ) -> None:
-    recorded_effects = tuple(
-        (
+    def _canonical(effect, amount, *links):
+        return (
+            effect.value,
+            str(Decimal(str(amount)).quantize(Decimal("0.0001"))),
+            *(str(link) if link is not None else None for link in links),
+        )
+
+    # Canonical multiset comparison WITH multiplicity: [A, A, B] never
+    # matches [A, B, B]. Persisted rows carry no ordinal, so equality is
+    # defined over the sorted canonical tuples.
+    recorded_effects = sorted(
+        _canonical(
             item.effect,
-            Decimal(str(item.amount)),
+            item.amount,
             item.obligation_id,
             item.invoice_id,
             item.payment_id,
             item.credit_note_id,
             item.entitlement_id,
         )
-        for item in sorted(existing.effects, key=lambda item: str(item.id))
+        for item in existing.effects
     )
-    commanded_effects = tuple(
-        (
+    commanded_effects = sorted(
+        _canonical(
             item.effect,
-            Decimal(str(item.amount)),
+            item.amount,
             item.obligation_id,
             item.invoice_id,
             item.payment_id,
@@ -207,8 +217,7 @@ def _assert_replay_matches(
         or existing.source_kind != command.source_kind.value
         or existing.source_id != command.source_id
         or existing_occurred != command.occurred_at
-        or set(recorded_effects) != set(commanded_effects)
-        or len(recorded_effects) != len(commanded_effects)
+        or recorded_effects != commanded_effects
     ):
         raise _error(
             "idempotency_conflict",
@@ -338,6 +347,37 @@ def stage_reversal(
         )
     ).scalar_one_or_none()
     if already is not None:
+        if (
+            already.producer_owner == command.producer_owner.value
+            and already.idempotency_key == context.idempotency_key
+        ):
+            # Exact replay of the same reversal decision returns the
+            # recorded reversal; the full-command check still applies.
+            _assert_replay_matches(
+                already,
+                StagePostingGroupCommand(
+                    account_id=original.account_id,
+                    currency=original.currency,
+                    command_kind=PostingCommandKind.reversal,
+                    producer_owner=command.producer_owner,
+                    source_kind=command.source_kind,
+                    source_id=command.source_id,
+                    occurred_at=command.occurred_at,
+                    effects=tuple(
+                        EffectInput(
+                            effect=item.effect,
+                            amount=item.amount,
+                            obligation_id=item.obligation_id,
+                            invoice_id=item.invoice_id,
+                            payment_id=item.payment_id,
+                            credit_note_id=item.credit_note_id,
+                            entitlement_id=item.entitlement_id,
+                        )
+                        for item in original.effects
+                    ),
+                ),
+            )
+            return already
         raise _error(
             "posting_group_already_reversed",
             "A posting group has one active reversal chain.",

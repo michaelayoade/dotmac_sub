@@ -92,7 +92,7 @@ def test_posting_failure_rolls_back_the_whole_deposit(
 
     import pytest as _pytest
 
-    with _pytest.raises(Exception):
+    with _pytest.raises(RuntimeError, match="posting unavailable"):
         _settle(
             db_session,
             intent_id=intent.id,
@@ -101,6 +101,9 @@ def test_posting_failure_rolls_back_the_whole_deposit(
     db_session.rollback()
     assert db_session.query(Payment).count() == before_payments
     assert _groups(db_session, "financial.account_credit_deposits") == []
+    db_session.refresh(intent)
+    # The intent itself rolled back: no settlement linkage survived.
+    assert "settlement_payment_id" not in (intent.metadata_ or {})
     assert deposits_module is not None
 
 
@@ -121,7 +124,7 @@ def test_downstream_failure_leaves_no_orphan_posting(
 
     import pytest as _pytest
 
-    with _pytest.raises(Exception):
+    with _pytest.raises(RuntimeError, match="application unavailable"):
         _settle(
             db_session,
             intent_id=intent.id,
@@ -129,3 +132,5 @@ def test_downstream_failure_leaves_no_orphan_posting(
         )
     db_session.rollback()
     assert _groups(db_session, "financial.account_credit_deposits") == []
+    db_session.refresh(intent)
+    assert "settlement_payment_id" not in (intent.metadata_ or {})

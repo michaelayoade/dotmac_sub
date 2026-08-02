@@ -66,12 +66,11 @@ class PostingProducer(enum.Enum):
     """
 
     account_credit_deposits = "financial.account_credit_deposits"
-    payment_webhooks = "financial.payment_webhooks"
+    payment_provider_events = "financial.payment_provider_events"
     payment_proofs = "financial.payment_proofs"
-    provider_payment_settlements = "financial.provider_payment_settlements"
+    account_credit_applications = "financial.account_credit_applications"
     prepaid_draft_reconciliation = "financial.prepaid_draft_reconciliation"
     account_adjustments = "financial.account_adjustments"
-    opening_position_backfill = "financial.opening_position_backfill"
 
 
 class PostingSourceKind(enum.Enum):
