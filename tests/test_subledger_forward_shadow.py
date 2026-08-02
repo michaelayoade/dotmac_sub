@@ -70,3 +70,62 @@ def test_deposit_replay_duplicates_no_group(db_session, subscriber):
     assert replay.payment.id == first.payment.id
     groups = _groups(db_session, "financial.account_credit_deposits")
     assert len(groups) == 1
+
+
+def test_posting_failure_rolls_back_the_whole_deposit(
+    db_session, subscriber, monkeypatch
+):
+    # Atomicity gate: if staging the posting group fails, the deposit's
+    # owner command aborts and NO payment or group survives.
+    import app.services.account_credit_deposits as deposits_module
+    from app.models.billing import Payment
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("posting unavailable")
+
+    monkeypatch.setattr(
+        "app.services.billing.customer_subledger.stage_posting_group", _boom
+    )
+    provider = _provider(db_session)
+    intent = _intent(db_session, subscriber, provider, amount="10000.00")
+    before_payments = db_session.query(Payment).count()
+
+    import pytest as _pytest
+
+    with _pytest.raises(Exception):
+        _settle(
+            db_session,
+            intent_id=intent.id,
+            transaction=_transaction(intent, external_id="fwd-shadow-atomic-1"),
+        )
+    db_session.rollback()
+    assert db_session.query(Payment).count() == before_payments
+    assert _groups(db_session, "financial.account_credit_deposits") == []
+    assert deposits_module is not None
+
+
+def test_downstream_failure_leaves_no_orphan_posting(
+    db_session, subscriber, monkeypatch
+):
+    # Atomicity gate: a failure AFTER staging (credit application) aborts
+    # the same transaction; the staged group must not survive alone.
+    def _boom(db, account_id, *args, **kwargs):
+        raise RuntimeError("application unavailable")
+
+    monkeypatch.setattr(
+        "app.services.account_credit_deposits.AccountCreditApplications.apply",
+        _boom,
+    )
+    provider = _provider(db_session)
+    intent = _intent(db_session, subscriber, provider, amount="10000.00")
+
+    import pytest as _pytest
+
+    with _pytest.raises(Exception):
+        _settle(
+            db_session,
+            intent_id=intent.id,
+            transaction=_transaction(intent, external_id="fwd-shadow-atomic-2"),
+        )
+    db_session.rollback()
+    assert _groups(db_session, "financial.account_credit_deposits") == []
