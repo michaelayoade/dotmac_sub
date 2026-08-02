@@ -842,6 +842,7 @@ def _stage_confirmation(
         prepaid_funding_after=preview.prepaid_funding_after,
         access_consequence=preview.access_consequence,
     )
+    _stage_adjustment_posting(db, adjustment, preview)
     return AccountAdjustmentResult(
         adjustment=adjustment,
         ledger_entry=entry,
@@ -1178,3 +1179,55 @@ __all__ = [
     "stage_account_adjustment",
     "stage_system_account_adjustment",
 ]
+
+
+def _stage_adjustment_posting(db: Session, adjustment, preview) -> None:
+    """One shadow posting group per confirmed adjustment (ADR 0007 Ph. 3).
+
+    Renewals-driven system adjustments run without an owner command today
+    and skip: that gap is the verifier's producer_not_owner_wrapped debt.
+    """
+    from app.services.owner_commands import (
+        current_command_context,
+        owner_command_active,
+    )
+
+    if not owner_command_active(db):
+        return
+    from decimal import Decimal as _Decimal
+
+    from app.models.customer_subledger import (
+        PositionEffectKind,
+        PostingCommandKind,
+        PostingProducer,
+        PostingSourceKind,
+    )
+    from app.services.billing.customer_subledger import (
+        EffectInput,
+        StagePostingGroupCommand,
+        stage_posting_group,
+    )
+
+    effective = adjustment.created_at
+    stage_posting_group(
+        db,
+        StagePostingGroupCommand(
+            account_id=adjustment.account_id,
+            currency=preview.currency,
+            command_kind=PostingCommandKind.adjustment,
+            producer_owner=PostingProducer.account_adjustments,
+            source_kind=PostingSourceKind.account_adjustment,
+            source_id=adjustment.id,
+            occurred_at=(
+                effective.replace(tzinfo=UTC) if effective.tzinfo is None else effective
+            ),
+            effects=(
+                EffectInput(
+                    effect=PositionEffectKind.adjustment_applied,
+                    amount=abs(_Decimal(str(preview.amount))),
+                ),
+            ),
+            idempotency_key=f"posting:account_adjustment:{adjustment.id}",
+        ),
+        context=current_command_context(db),
+    )
