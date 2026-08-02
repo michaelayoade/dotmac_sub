@@ -20,7 +20,7 @@ There is no cross-currency total and no generic mutable balance.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -33,6 +33,8 @@ from app.models.customer_subledger import (
     CustomerPostingGroup,
     PositionEffectKind,
     PostingCommandKind,
+    PostingProducer,
+    PostingSourceKind,
 )
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext, owner_command_active
@@ -90,8 +92,8 @@ class StagePostingGroupCommand:
     account_id: UUID
     currency: str
     command_kind: PostingCommandKind
-    producer_owner: str
-    source_kind: str
+    producer_owner: PostingProducer
+    source_kind: PostingSourceKind
     source_id: UUID
     occurred_at: datetime
     effects: tuple[EffectInput, ...] = field(default_factory=tuple)
@@ -168,6 +170,55 @@ def _validate(command: StagePostingGroupCommand, context: CommandContext) -> Non
             )
 
 
+def _assert_replay_matches(
+    existing: CustomerPostingGroup, command: StagePostingGroupCommand
+) -> None:
+    recorded_effects = tuple(
+        (
+            item.effect,
+            Decimal(str(item.amount)),
+            item.obligation_id,
+            item.invoice_id,
+            item.payment_id,
+            item.credit_note_id,
+            item.entitlement_id,
+        )
+        for item in sorted(existing.effects, key=lambda item: str(item.id))
+    )
+    commanded_effects = tuple(
+        (
+            item.effect,
+            Decimal(str(item.amount)),
+            item.obligation_id,
+            item.invoice_id,
+            item.payment_id,
+            item.credit_note_id,
+            item.entitlement_id,
+        )
+        for item in command.effects
+    )
+    existing_occurred = existing.occurred_at
+    if existing_occurred is not None and existing_occurred.tzinfo is None:
+        existing_occurred = existing_occurred.replace(tzinfo=UTC)
+    if (
+        existing.account_id != command.account_id
+        or existing.currency != command.currency
+        or existing.command_kind != command.command_kind
+        or existing.source_kind != command.source_kind.value
+        or existing.source_id != command.source_id
+        or existing_occurred != command.occurred_at
+        or set(recorded_effects) != set(commanded_effects)
+        or len(recorded_effects) != len(commanded_effects)
+    ):
+        raise _error(
+            "idempotency_conflict",
+            "A replayed idempotency key carries a different financial "
+            "meaning than the recorded posting group.",
+            group_id=str(existing.id),
+            idempotency_key=str(existing.idempotency_key),
+        )
+
+
 def stage_posting_group(
     db: Session,
     command: StagePostingGroupCommand,
@@ -190,13 +241,16 @@ def stage_posting_group(
 
     existing = db.execute(
         select(CustomerPostingGroup).where(
-            CustomerPostingGroup.producer_owner == command.producer_owner,
+            CustomerPostingGroup.producer_owner == command.producer_owner.value,
             CustomerPostingGroup.idempotency_key == context.idempotency_key,
         )
     ).scalar_one_or_none()
     if existing is not None:
-        # One posting group per idempotent business result: the replayed
-        # command gets its original evidence back, bit for bit.
+        # One posting group per idempotent business result — but only when
+        # the replay carries the identical financial meaning. The key alone
+        # never wins: the complete command and the ordered effect sequence
+        # must match the recorded group bit for bit.
+        _assert_replay_matches(existing, command)
         return existing
 
     group = CustomerPostingGroup(
@@ -204,8 +258,8 @@ def stage_posting_group(
         currency=command.currency,
         authority=permitted_authority(),
         command_kind=command.command_kind,
-        producer_owner=command.producer_owner,
-        source_kind=command.source_kind,
+        producer_owner=command.producer_owner.value,
+        source_kind=command.source_kind.value,
         source_id=command.source_id,
         occurred_at=command.occurred_at,
         command_id=context.command_id,
@@ -236,18 +290,34 @@ def stage_posting_group(
     return group
 
 
+@dataclass(frozen=True)
+class StageReversalCommand:
+    """Typed request to negate one complete original posting group.
+
+    A true reversal identifies its own deciding owner and its own reversal
+    record; it never inherits the original group's producer or source. A
+    partial refund is NOT a reversal — it is a new economic posting group of
+    kind ``refund``.
+    """
+
+    original_group_id: UUID
+    producer_owner: PostingProducer
+    source_kind: PostingSourceKind
+    source_id: UUID
+    occurred_at: datetime
+
+
 def stage_reversal(
     db: Session,
+    command: StageReversalCommand,
     *,
-    group_id: UUID,
     context: CommandContext,
-    occurred_at: datetime,
 ) -> CustomerPostingGroup:
     """Stage the reversal of one posted group inside the owner's transaction.
 
-    The reversal is a linked group replaying the original effects; position
-    math negates them. History is never edited. A group can be reversed at
-    most once (unique reversal chain).
+    The reversal is a linked group replaying the original's complete effect
+    set; position math negates them via the reversal link. History is never
+    edited. A group can be reversed at most once (unique reversal chain).
     """
 
     if not owner_command_active(db):
@@ -255,23 +325,23 @@ def stage_reversal(
             "posting_requires_owner_command",
             "Reversals are staged only inside an active owner command.",
         )
-    original = db.get(CustomerPostingGroup, group_id)
+    original = db.get(CustomerPostingGroup, command.original_group_id)
     if original is None:
         raise _error(
             "posting_group_not_found",
             "Reversal requires an existing posting group.",
-            group_id=str(group_id),
+            group_id=str(command.original_group_id),
         )
     already = db.execute(
         select(CustomerPostingGroup).where(
-            CustomerPostingGroup.reverses_group_id == group_id
+            CustomerPostingGroup.reverses_group_id == command.original_group_id
         )
     ).scalar_one_or_none()
     if already is not None:
         raise _error(
             "posting_group_already_reversed",
             "A posting group has one active reversal chain.",
-            group_id=str(group_id),
+            group_id=str(command.original_group_id),
             reversal_id=str(already.id),
         )
 
@@ -281,10 +351,10 @@ def stage_reversal(
             account_id=original.account_id,
             currency=original.currency,
             command_kind=PostingCommandKind.reversal,
-            producer_owner=original.producer_owner,
-            source_kind=original.source_kind,
-            source_id=original.source_id,
-            occurred_at=occurred_at,
+            producer_owner=command.producer_owner,
+            source_kind=command.source_kind,
+            source_id=command.source_id,
+            occurred_at=command.occurred_at,
             effects=tuple(
                 EffectInput(
                     effect=item.effect,

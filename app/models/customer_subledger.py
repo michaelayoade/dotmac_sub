@@ -57,6 +57,38 @@ class PostingCommandKind(enum.Enum):
     reversal = "reversal"
 
 
+class PostingProducer(enum.Enum):
+    """Closed set of owners allowed to stage posting groups.
+
+    Typed provenance: the participant API accepts only these identities, so a
+    posting can never carry a free-form producer string. Extend the enum in
+    the same change that registers a new producing owner.
+    """
+
+    account_credit_deposits = "financial.account_credit_deposits"
+    payment_webhooks = "financial.payment_webhooks"
+    payment_proofs = "financial.payment_proofs"
+    provider_payment_settlements = "financial.provider_payment_settlements"
+    prepaid_draft_reconciliation = "financial.prepaid_draft_reconciliation"
+    account_adjustments = "financial.account_adjustments"
+    opening_position_backfill = "financial.opening_position_backfill"
+
+
+class PostingSourceKind(enum.Enum):
+    """Closed set of source records a posting group may cite."""
+
+    payment = "payment"
+    payment_allocation = "payment_allocation"
+    payment_refund = "payment_refund"
+    payment_reversal = "payment_reversal"
+    invoice = "invoice"
+    ledger_entry = "ledger_entry"
+    credit_note = "credit_note"
+    account_adjustment = "account_adjustment"
+    prepaid_opening_funding_consumption = "prepaid_opening_funding_consumption"
+    prepaid_funding_baseline = "prepaid_funding_baseline"
+
+
 class PositionEffectKind(enum.Enum):
     """Typed economic meaning of one position effect.
 

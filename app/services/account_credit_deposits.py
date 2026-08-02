@@ -854,6 +854,8 @@ class AccountCreditDeposits:
             from app.models.customer_subledger import (
                 PositionEffectKind,
                 PostingCommandKind,
+                PostingProducer,
+                PostingSourceKind,
             )
             from app.services.billing.customer_subledger import (
                 EffectInput,
@@ -867,15 +869,24 @@ class AccountCreditDeposits:
                     account_id=intent.account_id,
                     currency=currency,
                     command_kind=PostingCommandKind.customer_credit_deposit,
-                    producer_owner="financial.account_credit_deposits",
-                    source_kind="payment",
+                    producer_owner=PostingProducer.account_credit_deposits,
+                    source_kind=PostingSourceKind.payment,
                     source_id=payment.id,
+                    # Missing paid_at fails closed: a posting instant is
+                    # financial provenance, never a wall-clock guess.
                     occurred_at=(
                         payment.paid_at.replace(tzinfo=UTC)
-                        if payment.paid_at and payment.paid_at.tzinfo is None
+                        if payment.paid_at.tzinfo is None
                         else payment.paid_at
                     )
-                    or datetime.now(UTC),
+                    if payment.paid_at is not None
+                    else (_ for _ in ()).throw(
+                        DepositEligibilityError(
+                            "deposit_settlement_missing_paid_at",
+                            "Settled payment has no paid_at instant for "
+                            "posting provenance.",
+                        )
+                    ),
                     effects=(
                         EffectInput(
                             effect=PositionEffectKind.customer_credit_created,
