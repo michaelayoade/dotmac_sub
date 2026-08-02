@@ -7,8 +7,8 @@ parallel decision path of its own:
   (the same ``fdh_impact_rows`` resolver behind the outage-impact page);
 - per-recipient policy: ``customer_notification_policy`` cohort evaluation,
   ``category="service"`` — a transactional communication, so marketing
-  unsubscribes and ``marketing_opt_in`` never block it; only hard suppressions
-  (``SuppressionScope.all``: bounce/complaint/erasure) do;
+  unsubscribes and a missing marketing opt-in never block it; only hard
+  suppressions (``SuppressionScope.all``: bounce/complaint/erasure) do;
 - delivery: one ``communication_intents.submit`` per distinct customer with a
   durable ``dedupe_key``, so a retry or double-confirm is a hard no-op.
 
@@ -17,12 +17,12 @@ membership (``scope_token``) and content + per-recipient dispositions
 (``impact_token``); execution recomputes both and refuses with
 ``CabinetNoticeDriftError`` (adapter: HTTP 409) when either changed.
 
-Deliberately NOT a campaign: campaigns hard-filter ``marketing_opt_in`` and
+Deliberately NOT a campaign: campaigns hard-filter on marketing consent and
 write marketing-scope suppression state, which would silently drop most of a
 cabinet from an outage/maintenance notice.
 
-Transaction: preview is read-only; send flushes on the caller session and the
-web adapter commits (same split as the detected-outage notify console).
+Transaction: preview is read-only; send owns its commit (the adapter never
+commits — same owner-managed split as the customer bulk-message command).
 """
 
 from __future__ import annotations
@@ -366,7 +366,9 @@ def send_cabinet_notice(
     when membership, content, or any recipient disposition changed since the
     operator previewed. The per-customer ``dedupe_key`` (cabinet + customer +
     content fingerprint) makes identical re-sends a durable no-op at the
-    intent layer. Flushes only; the calling adapter owns the commit.
+    intent layer. OWNS its commit (like the customer bulk-message command):
+    the calling adapter must not commit — the intents, the dispatch event and
+    the audit trail land atomically here or not at all.
     """
     if not confirmation.confirmed:
         raise CabinetNoticeValidationError("Send requires explicit confirmation")
@@ -481,7 +483,7 @@ def send_cabinet_notice(
             "actor": actor,
         },
     )
-    db.flush()
+    db.commit()
     return CabinetNoticeResult(
         fdh_id=preview.fdh_id,
         queued=queued,

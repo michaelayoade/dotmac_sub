@@ -346,8 +346,9 @@ def cabinet_notice_submit(
     impact tokens carried as hidden fields. ``mode=send`` recomputes the
     preview and dispatches only when both tokens and the eligible count still
     match — membership or content drift re-renders the fresh preview with a
-    409 instead of sending on a stale audience. The service flushes; this
-    adapter owns the commit (transaction-ownership contract)."""
+    409 instead of sending on a stale audience. The command owner commits its
+    own transaction; this adapter never commits (transaction-ownership
+    contract)."""
     import uuid as _uuid
 
     from app.services.network.cabinet_notice import (
@@ -380,7 +381,6 @@ def cabinet_notice_submit(
                 ),
                 actor=_actor(request),
             )
-            db.commit()
             context["result"] = result
         else:
             context["preview"] = preview_cabinet_notice(db, draft)

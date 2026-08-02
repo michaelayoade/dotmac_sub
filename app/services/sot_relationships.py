@@ -15425,7 +15425,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 notes=(
                     "Service (transactional) communication, deliberately NOT a "
-                    "campaign: campaigns hard-filter marketing_opt_in and would "
+                    "campaign: campaigns hard-filter on marketing consent and would "
                     "silently drop most of a cabinet from an outage notice. One "
                     "deduplicated email per distinct customer via a durable "
                     "communication-intent dedupe key; preview binds membership "
@@ -15491,11 +15491,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     transaction=TransactionContract(
-                        mode=TransactionMode.PARTICIPANT,
+                        mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "Preview is read-only. Send flushes intents and "
-                            "the dispatch event on the caller session; the "
-                            "admin web adapter owns the single commit."
+                            "Preview is read-only. Send owns its commit: the "
+                            "intents, the dispatch event, and the audit trail "
+                            "land atomically in the command or not at all; "
+                            "the admin web adapter never commits."
                         ),
                         locking=(
                             "No mutation locks of its own; per-customer "
@@ -15519,6 +15520,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         domain_codes=(
                             "cabinet_notice.validation_error",
                             "cabinet_notice.membership_drift",
+                            *owner_command_boundary_error_codes(
+                                "network.cabinet_notice"
+                            ),
                         ),
                         mapping_owner=(
                             "admin web adapter (validation -> 400, drift -> "
