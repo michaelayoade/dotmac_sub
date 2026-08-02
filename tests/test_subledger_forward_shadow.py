@@ -370,3 +370,100 @@ def test_deposit_that_pays_an_invoice_stages_deposit_and_application_groups(
     }
     amounts = {str(e.amount) for e in group.effects}
     assert amounts == {"4000.0000"} or amounts == {"4000.00"}
+
+
+def test_phase3_forward_verifier_is_durable_and_owns_every_debt_row(
+    db_session, subscriber_account, subscription
+):
+    from datetime import UTC, datetime, timedelta
+
+    # One prepaid funding candidate; with no authority-cutover batch every
+    # candidate is quarantined by predicate — the opening-position debt.
+    from decimal import Decimal as D
+
+    from app.models.admin_alert import AdminAlert
+    from app.models.billing_shadow_verification import (
+        BillingCutoverVerificationRun,
+    )
+    from app.models.catalog import BillingMode, SubscriptionStatus
+    from app.models.subscriber import SubscriberStatus
+    from app.services.billing.shadow_verification import (
+        RecordPhase3ForwardVerificationCommand,
+        record_phase3_forward_run,
+    )
+    from app.services.owner_commands import CommandContext
+    from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
+
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscriber_account.min_balance = D("100.00")
+    subscriber_account.splynx_customer_id = None
+    subscriber_account.deposit = None
+    subscriber_account.status = SubscriberStatus.active
+    subscriber_account.is_active = True
+    subscriber_account.billing_enabled = True
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    ensure_test_prepaid_contract(db_session, subscription)
+    # Deliberately NO baseline for this account. The test database carries
+    # a seeded authority-cutover batch, so a LEGACY account (created before
+    # the cutover position) without an active baseline is the quarantined
+    # opening-position debt.
+    from app.services.prepaid_funding_reconstruction import (
+        authority_cutover_batch,
+    )
+
+    cutover = authority_cutover_batch(db_session)
+    assert cutover is not None
+    subscriber_account.created_at = cutover.position_at - timedelta(days=30)
+    db_session.commit()
+
+    now = datetime.now(UTC)
+    command = RecordPhase3ForwardVerificationCommand(
+        cutoff_at=now,
+        observation_started_at=now - timedelta(days=1),
+        observation_ended_at=now,
+        code_version="pytest",
+        database_schema_version="pytest",
+    )
+
+    def _ctx(key: str) -> CommandContext:
+        return CommandContext.system(
+            actor="pytest:phase3-forward",
+            scope="billing-shadow-verification:test",
+            reason="forward-shadow verifier test",
+            idempotency_key=key,
+        )
+
+    db_session.commit()
+    result = record_phase3_forward_run(
+        db_session, command, context=_ctx("phase3-fwd-1")
+    )
+    db_session.commit()
+
+    assert result.replayed is False
+    assert result.cohort_count >= 1
+    assert result.opening_position_debt_count == result.cohort_count
+    run = db_session.get(BillingCutoverVerificationRun, result.run_id)
+    assert run.phase == "phase_3_forward"
+    assert run.event_outcomes["postings_manufactured"] is False
+    assert len(result.source_fingerprint) == 64
+    assert len(result.result_fingerprint) == 64
+
+    # blocked \\ owned = ∅: every debt account carries an open owned item.
+    debt_accounts = set(run.cohort_classification["_details"]["opening_position_debt"])
+    owned = {
+        alert.details.get("account_id")
+        for alert in db_session.query(AdminAlert)
+        .filter(AdminAlert.fingerprint.like("prepaid-funding:opening-debt:%"))
+        .all()
+        if alert.status.value == "open"
+    }
+    assert debt_accounts - owned == set()
+
+    # Exact replay returns the recorded run.
+    db_session.commit()
+    replay = record_phase3_forward_run(
+        db_session, command, context=_ctx("phase3-fwd-1")
+    )
+    assert replay.replayed is True
+    assert replay.run_id == result.run_id
