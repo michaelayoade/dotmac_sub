@@ -1071,10 +1071,69 @@ def _stage_reversal(
         prepaid_funding_after=preview.prepaid_funding_after,
         access_consequence=preview.access_consequence,
     )
+    _stage_adjustment_reversal_posting(db, adjustment, reversal)
     return AccountAdjustmentReversalResult(
         adjustment=adjustment,
         ledger_entry=reversal,
         preview=preview,
+    )
+
+
+def _stage_adjustment_reversal_posting(db: Session, adjustment, reversal) -> None:
+    """Link the shadow reversal to the original adjustment posting group.
+
+    A true reversal negates and links one complete original group. When the
+    original adjustment predates the forward-shadow (no group exists),
+    nothing is staged — the verifier owns the gap rather than inventing
+    history.
+    """
+    from app.services.owner_commands import (
+        current_command_context,
+        owner_command_active,
+    )
+
+    if not owner_command_active(db):
+        return
+    from app.models.customer_subledger import (
+        CustomerPostingGroup,
+        PostingCommandKind,
+        PostingProducer,
+        PostingSourceKind,
+    )
+    from app.services.billing.customer_subledger import (
+        StageReversalCommand,
+        stage_reversal,
+    )
+
+    original = (
+        db.execute(
+            select(CustomerPostingGroup).where(
+                CustomerPostingGroup.source_kind
+                == PostingSourceKind.account_adjustment.value,
+                CustomerPostingGroup.source_id == adjustment.id,
+                CustomerPostingGroup.command_kind != PostingCommandKind.reversal,
+                CustomerPostingGroup.reverses_group_id.is_(None),
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if original is None:
+        return
+    occurred = adjustment.reversed_at or datetime.now(UTC)
+    stage_reversal(
+        db,
+        StageReversalCommand(
+            original_group_id=original.id,
+            producer_owner=PostingProducer.account_adjustments,
+            source_kind=PostingSourceKind.ledger_entry,
+            source_id=reversal.id,
+            occurred_at=(
+                occurred.replace(tzinfo=UTC) if occurred.tzinfo is None else occurred
+            ),
+            idempotency_key=f"posting:adjustment_reversal:{reversal.id}",
+        ),
+        context=current_command_context(db),
     )
 
 
