@@ -97,6 +97,10 @@ class StagePostingGroupCommand:
     source_id: UUID
     occurred_at: datetime
     effects: tuple[EffectInput, ...] = field(default_factory=tuple)
+    #: Group-level business key. A deciding owner staging several groups in
+    #: one host command keys each on its own source record; when omitted the
+    #: host command's key applies (single-group commands).
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,12 +148,18 @@ _EVIDENCE_MOVES: dict[PositionEffectKind, str] = {
 }
 
 
-def _validate(command: StagePostingGroupCommand, context: CommandContext) -> None:
-    if not context.idempotency_key:
+def _group_key(command: StagePostingGroupCommand, context: CommandContext) -> str:
+    key = command.idempotency_key or context.idempotency_key
+    if not key:
         raise _error(
             "missing_idempotency_key",
             "A posting group requires a business idempotency key.",
         )
+    return key
+
+
+def _validate(command: StagePostingGroupCommand, context: CommandContext) -> None:
+    _group_key(command, context)
     if len(command.currency) != 3:
         raise _error(
             "invalid_posting_currency",
@@ -248,10 +258,11 @@ def stage_posting_group(
         )
     _validate(command, context)
 
+    group_key = _group_key(command, context)
     existing = db.execute(
         select(CustomerPostingGroup).where(
             CustomerPostingGroup.producer_owner == command.producer_owner.value,
-            CustomerPostingGroup.idempotency_key == context.idempotency_key,
+            CustomerPostingGroup.idempotency_key == group_key,
         )
     ).scalar_one_or_none()
     if existing is not None:
@@ -274,7 +285,7 @@ def stage_posting_group(
         command_id=context.command_id,
         correlation_id=context.correlation_id,
         causation_id=context.causation_id,
-        idempotency_key=context.idempotency_key,
+        idempotency_key=group_key,
         actor=context.actor,
         reason=context.reason,
     )
@@ -314,6 +325,7 @@ class StageReversalCommand:
     source_kind: PostingSourceKind
     source_id: UUID
     occurred_at: datetime
+    idempotency_key: str | None = None
 
 
 def stage_reversal(
@@ -347,9 +359,10 @@ def stage_reversal(
         )
     ).scalar_one_or_none()
     if already is not None:
+        replay_key = command.idempotency_key or context.idempotency_key
         if (
             already.producer_owner == command.producer_owner.value
-            and already.idempotency_key == context.idempotency_key
+            and already.idempotency_key == replay_key
         ):
             # Exact replay of the same reversal decision returns the
             # recorded reversal; the full-command check still applies.
@@ -407,6 +420,7 @@ def stage_reversal(
                 )
                 for item in original.effects
             ),
+            idempotency_key=command.idempotency_key,
         ),
         context=context,
     )
