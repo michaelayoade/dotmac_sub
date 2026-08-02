@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.subscriber import SubscriberCategory
-from app.services import customer_network_path as customer_network_path_service
 from app.services import customer_portal
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
@@ -908,34 +907,6 @@ def provision_remote_plan_change(
             f"&service_change_reference={quote_plus(feedback_reference)}"
         ),
         status_code=303,
-    )
-
-
-@router.get(
-    "/subscriptions/{subscription_id}/fiber-path",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:fiber:read"))],
-)
-def subscription_fiber_path_panel(
-    request: Request,
-    subscription_id: str,
-    db: Session = Depends(get_db),
-):
-    """Lazy passive-fibre plant fragment for one subscription's path card.
-
-    ui.customer_network_path_projection composes network.fiber_topology's
-    validated trace; this route only authorizes and renders it.
-    """
-
-    view = customer_network_path_service.project_subscription_fiber_detail(
-        db, subscription_id
-    )
-    return templates.TemplateResponse(
-        "admin/customers/_fiber_path_panel.html",
-        {
-            "request": request,
-            "fiber_path": view.to_dict() if view else None,
-        },
     )
 
 

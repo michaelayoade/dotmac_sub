@@ -510,6 +510,8 @@ jobs:
           tags: dotmac-sub:ci
           cache-from: type=gha,scope=dotmac-sub-application
           cache-to: type=gha,mode=max,scope=dotmac-sub-application
+          secrets: |
+            forgejo_token=${{ secrets.FORGEJO_READ_TOKEN }}
 
       - name: Create CI network and services
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
