@@ -136,6 +136,21 @@ def test_template_consumes_the_kpi_and_action_contracts():
     # Task-originated creation locks the validated subscriber/project/task scope.
     assert 'name="project_task_id"' in source
     assert "create_prefill.project_task_id" in source
+    assert 'href="#create-work-order"' in source
+    assert 'href="/admin/dispatch/work-orders/{{ wo.public_id }}"' in source
+    assert 'name="assigned_technician_id"' not in source
+
+
+def test_detail_template_owns_the_visible_assignment_next_action():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "templates/admin/dispatch/work_order_detail.html"
+    ).read_text(encoding="utf-8")
+
+    assert "Linked context" in source
+    assert 'name="assigned_technician_id"' in source
+    assert "action_permitted(request, queue_action)" in source
+    assert "/admin/support/tickets/{{ origin_ticket.id }}" in source
 
 
 def test_post_create_redirect_identifies_the_new_work_order():
