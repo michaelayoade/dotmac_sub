@@ -324,3 +324,49 @@ def test_unwrapped_refund_path_stages_nothing(db_session, subscriber):
     )
 
     assert _groups(db_session, "financial.payment_provider_events") == []
+
+
+def test_deposit_that_pays_an_invoice_stages_deposit_and_application_groups(
+    db_session, subscriber
+):
+    from decimal import Decimal as D
+
+    from app.models.billing import Invoice, InvoiceStatus
+    from tests.test_account_credit_deposits import _intent as _dep_intent
+    from tests.test_account_credit_deposits import _provider as _dep_provider
+    from tests.test_account_credit_deposits import _settle as _dep_settle
+    from tests.test_account_credit_deposits import _transaction as _dep_tx
+
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        subtotal=D("4000.00"),
+        total=D("4000.00"),
+        balance_due=D("4000.00"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    provider = _dep_provider(db_session)
+    intent = _dep_intent(db_session, subscriber, provider, amount="10000.00")
+    _dep_settle(
+        db_session,
+        intent_id=intent.id,
+        transaction=_dep_tx(intent, external_id="fwd-shadow-app-1"),
+    )
+
+    deposit_groups = _groups(db_session, "financial.account_credit_deposits")
+    application_groups = _groups(db_session, "financial.account_credit_applications")
+    assert len(deposit_groups) == 1
+    assert len(application_groups) == 1
+    group = application_groups[0]
+    assert group.command_kind is PostingCommandKind.customer_credit_application
+    assert group.source_kind == "payment_allocation"
+    effects = {e.effect for e in group.effects}
+    assert effects == {
+        PositionEffectKind.customer_credit_consumed,
+        PositionEffectKind.receivable_settled,
+    }
+    amounts = {str(e.amount) for e in group.effects}
+    assert amounts == {"4000.0000"} or amounts == {"4000.00"}
