@@ -894,6 +894,7 @@ class AccountCreditDeposits:
                             payment_id=payment.id,
                         ),
                     ),
+                    idempotency_key=f"posting:payment:{payment.id}",
                 ),
                 context=context,
             )
