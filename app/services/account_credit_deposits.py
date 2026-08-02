@@ -847,6 +847,45 @@ class AccountCreditDeposits:
             payment = creation.payment
             already_recorded = creation.idempotent_replay
 
+        if not already_recorded:
+            # ADR 0007 Phase 3 forward-shadow: one posting group per money
+            # transition, staged inside this owner's transaction. Shadow
+            # authority only; no read path consumes it yet.
+            from app.models.customer_subledger import (
+                PositionEffectKind,
+                PostingCommandKind,
+            )
+            from app.services.billing.customer_subledger import (
+                EffectInput,
+                StagePostingGroupCommand,
+                stage_posting_group,
+            )
+
+            stage_posting_group(
+                db,
+                StagePostingGroupCommand(
+                    account_id=intent.account_id,
+                    currency=currency,
+                    command_kind=PostingCommandKind.customer_credit_deposit,
+                    producer_owner="financial.account_credit_deposits",
+                    source_kind="payment",
+                    source_id=payment.id,
+                    occurred_at=(
+                        payment.paid_at.replace(tzinfo=UTC)
+                        if payment.paid_at and payment.paid_at.tzinfo is None
+                        else payment.paid_at
+                    )
+                    or datetime.now(UTC),
+                    effects=(
+                        EffectInput(
+                            effect=PositionEffectKind.customer_credit_created,
+                            amount=credited_amount,
+                            payment_id=payment.id,
+                        ),
+                    ),
+                ),
+                context=context,
+            )
         # Race policy: cash is accepted, then any invoice that appeared after
         # intent creation immediately consumes the evidenced credit.
         application = AccountCreditApplications.apply(db, str(intent.account_id))
