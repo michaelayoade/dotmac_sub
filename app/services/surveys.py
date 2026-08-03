@@ -940,12 +940,16 @@ def _public_filter(
     )
 
 
+def _try_coerce_uuid(value: str) -> UUID | None:
+    try:
+        return coerce_uuid(value)
+    except ValueError:
+        return None
+
+
 def get_public_survey(db: Session, reference: str) -> Survey:
     query = db.query(Survey)
-    try:
-        survey_id = coerce_uuid(reference)
-    except ValueError:
-        survey_id = None
+    survey_id = _try_coerce_uuid(reference)
     if survey_id is None:
         query = query.filter(Survey.public_slug == reference.strip().lower())
     else:
@@ -1163,7 +1167,7 @@ def submit_response(
                 )
             survey_query = db.query(Survey).filter(Survey.id == invitation.survey_id)
         elif command.public_reference:
-            survey_id = coerce_uuid(command.public_reference)
+            survey_id = _try_coerce_uuid(command.public_reference)
             survey_query = db.query(Survey)
             if survey_id is None:
                 survey_query = survey_query.filter(
