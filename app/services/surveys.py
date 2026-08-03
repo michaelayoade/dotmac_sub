@@ -942,7 +942,10 @@ def _public_filter(
 
 def get_public_survey(db: Session, reference: str) -> Survey:
     query = db.query(Survey)
-    survey_id = coerce_uuid(reference)
+    try:
+        survey_id = coerce_uuid(reference)
+    except ValueError:
+        survey_id = None
     if survey_id is None:
         query = query.filter(Survey.public_slug == reference.strip().lower())
     else:
