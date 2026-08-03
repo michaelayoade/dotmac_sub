@@ -128,7 +128,9 @@ class SurveyQuestion(BaseModel):
             if not value:
                 raise ValueError("Multiple Choice options cannot be blank.")
             if len(value) > 200:
-                raise ValueError("Multiple Choice options cannot exceed 200 characters.")
+                raise ValueError(
+                    "Multiple Choice options cannot exceed 200 characters."
+                )
             duplicate_key = value.casefold()
             if duplicate_key in seen:
                 raise ValueError("Multiple Choice options must be unique.")
@@ -184,9 +186,7 @@ class SurveyCreate(BaseModel):
     @classmethod
     def validate_slug(cls, value: str | None) -> str | None:
         if value is not None and not _PUBLIC_SLUG_PATTERN.fullmatch(value):
-            raise ValueError(
-                "Use lowercase letters, numbers, and single hyphens only."
-            )
+            raise ValueError("Use lowercase letters, numbers, and single hyphens only.")
         return value
 
     @field_validator("questions")
@@ -238,9 +238,7 @@ class SurveyUpdate(BaseModel):
     @classmethod
     def validate_slug(cls, value: str | None) -> str | None:
         if value is not None and not _PUBLIC_SLUG_PATTERN.fullmatch(value):
-            raise ValueError(
-                "Use lowercase letters, numbers, and single hyphens only."
-            )
+            raise ValueError("Use lowercase letters, numbers, and single hyphens only.")
         return value
 
     @field_validator("questions")

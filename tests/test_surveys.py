@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import cast
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -42,6 +42,8 @@ def _create(
     key: str | None = None,
 ):
     user, person = add_bound_staff_user(db)
+    user_id = user.id
+    person_id = person.id
     db.commit()
     idempotency_key = key or str(uuid4())
     outcome = surveys.create_survey(
@@ -53,12 +55,12 @@ def _create(
                 trigger_type=trigger_type,
                 questions=questions or [],
             ),
-            principal_id=user.id,
+            principal_id=user_id,
             principal_type="system_user",
             context=_context("create test Survey", key=idempotency_key),
         ),
     )
-    return outcome, user, person
+    return outcome, user_id, person_id
 
 
 def test_survey_schema_normalizes_basic_fields_and_defaults() -> None:
@@ -192,12 +194,12 @@ def test_form_validation_rejects_malformed_json_and_preserves_valid_state() -> N
 
 def test_create_is_draft_idempotent_and_has_no_initial_side_effect_rows(db_session):
     key = str(uuid4())
-    outcome, user, person = _create(db_session, key=key)
+    outcome, user_id, person_id = _create(db_session, key=key)
     survey = surveys.get_survey(db_session, outcome.survey_id)
 
     assert survey.status is SurveyStatus.draft
     assert survey.is_active is True
-    assert survey.created_by_id == person.id
+    assert survey.created_by_id == person_id
     assert survey.expires_at is None
     assert survey.segment_filter is None
     assert survey.total_invited == 0
@@ -212,7 +214,7 @@ def test_create_is_draft_idempotent_and_has_no_initial_side_effect_rows(db_sessi
         db_session,
         surveys.CreateSurveyCommand(
             payload=SurveyCreate(name="Customer Satisfaction", questions=[]),
-            principal_id=user.id,
+            principal_id=user_id,
             principal_type="system_user",
             context=_context("retry create test Survey", key=key),
         ),
@@ -227,16 +229,15 @@ def test_create_requires_bound_staff_person(db_session) -> None:
     user.party_bound_at = None
     user.party_binding_source = None
     user.party_binding_reason = None
+    user_id = user.id
     db_session.commit()
 
-    with pytest.raises(
-        surveys.SurveyDomainError, match="not linked to a Person"
-    ):
+    with pytest.raises(surveys.SurveyDomainError, match="not linked to a Person"):
         surveys.create_survey(
             db_session,
             surveys.CreateSurveyCommand(
                 payload=SurveyCreate(name="Feedback"),
-                principal_id=user.id,
+                principal_id=user_id,
                 principal_type="system_user",
                 context=_context("create without person", key=str(uuid4())),
             ),
@@ -285,9 +286,10 @@ def test_public_access_and_automatic_selection_require_active_lifecycle(db_sessi
 
     with pytest.raises(surveys.SurveyDomainError):
         surveys.get_public_survey(db_session, "active-feedback")
-    assert surveys.eligible_automatic_surveys(
-        db_session, SurveyTriggerType.ticket_closed
-    ) == []
+    assert (
+        surveys.eligible_automatic_surveys(db_session, SurveyTriggerType.ticket_closed)
+        == []
+    )
     finish_read_transaction(db_session)
 
     surveys.transition_survey(
@@ -299,8 +301,7 @@ def test_public_access_and_automatic_selection_require_active_lifecycle(db_sessi
         ),
     )
     assert (
-        surveys.get_public_survey(db_session, "active-feedback").id
-        == outcome.survey_id
+        surveys.get_public_survey(db_session, "active-feedback").id == outcome.survey_id
     )
     assert [
         item.id
@@ -410,9 +411,7 @@ def test_response_validation_is_authoritative_and_updates_metrics(db_session):
 def test_survey_templates_cover_creation_contract() -> None:
     index = (ROOT / "templates/admin/surveys/index.html").read_text(encoding="utf-8")
     form = (ROOT / "templates/admin/surveys/form.html").read_text(encoding="utf-8")
-    macros = (ROOT / "templates/components/ui/macros.html").read_text(
-        encoding="utf-8"
-    )
+    macros = (ROOT / "templates/components/ui/macros.html").read_text(encoding="utf-8")
 
     assert 'ui.action_button("New Survey", "/admin/surveys/new"' in index
     assert "icon=ui.icon_plus()" in index

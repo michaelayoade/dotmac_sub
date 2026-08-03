@@ -211,9 +211,7 @@ def update_survey(
 
 
 @router.delete("/surveys/{survey_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_survey(
-    survey_id: str, request: Request, db: Session = Depends(get_db)
-):
+def delete_survey(survey_id: str, request: Request, db: Session = Depends(get_db)):
     try:
         survey_service.transition_survey(
             db,

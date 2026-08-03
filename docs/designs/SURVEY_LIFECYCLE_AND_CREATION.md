@@ -108,7 +108,7 @@ transaction.
 
 ## Migration and repair
 
-Migration `457_survey_lifecycle_and_creation` is additive. It preserves legacy
+Migration `458_survey_lifecycle_and_creation` is additive. It preserves legacy
 rows as drafts, adds lifecycle/content/provenance/metric columns, creates the
 invitation ledger, and links tracked responses. A nullable creator on legacy
 rows is migration evidence; every new create requires a resolved Person.

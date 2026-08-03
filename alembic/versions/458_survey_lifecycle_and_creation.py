@@ -5,18 +5,19 @@ The additive columns allow the owner service to cut over creation, lifecycle,
 invitation, trigger, and response writes without inferring authority from the
 legacy ``is_active`` flag.
 
-Revision ID: 457_survey_lifecycle_and_creation
-Revises: 456_ont_wan_service_intent_owner
+Revision ID: 458_survey_lifecycle_and_creation
+Revises: 457_customer_subledger_opening_positions
 Create Date: 2026-08-02
 """
 
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
-revision = "457_survey_lifecycle_and_creation"
-down_revision = "456_ont_wan_service_intent_owner"
+revision = "458_survey_lifecycle_and_creation"
+down_revision = "457_customer_subledger_opening_positions"
 branch_labels = None
 depends_on = None
 
@@ -54,24 +55,18 @@ def upgrade() -> None:
     op.add_column("surveys", sa.Column("segment_filter", sa.JSON()))
     op.add_column(
         "surveys",
-        sa.Column(
-            "total_invited", sa.Integer(), nullable=False, server_default="0"
-        ),
+        sa.Column("total_invited", sa.Integer(), nullable=False, server_default="0"),
     )
     op.add_column(
         "surveys",
-        sa.Column(
-            "total_responses", sa.Integer(), nullable=False, server_default="0"
-        ),
+        sa.Column("total_responses", sa.Integer(), nullable=False, server_default="0"),
     )
     op.add_column("surveys", sa.Column("avg_rating", sa.Numeric(6, 2)))
     op.add_column("surveys", sa.Column("nps_score", sa.Numeric(6, 2)))
     op.add_column(
         "surveys", sa.Column("creation_idempotency_key", sa.String(length=80))
     )
-    op.add_column(
-        "surveys", sa.Column("creation_fingerprint", sa.String(length=64))
-    )
+    op.add_column("surveys", sa.Column("creation_fingerprint", sa.String(length=64)))
     op.execute(sa.text("UPDATE surveys SET questions = '[]' WHERE questions IS NULL"))
     op.alter_column(
         "surveys",
@@ -90,9 +85,7 @@ def upgrade() -> None:
         "surveys",
         "status IN ('draft', 'active', 'paused', 'closed')",
     )
-    op.create_unique_constraint(
-        "uq_surveys_public_slug", "surveys", ["public_slug"]
-    )
+    op.create_unique_constraint("uq_surveys_public_slug", "surveys", ["public_slug"])
     op.create_unique_constraint(
         "uq_surveys_creation_idempotency_key",
         "surveys",
@@ -214,13 +207,13 @@ def downgrade() -> None:
     )
     op.drop_column("survey_responses", "nps_value")
     op.drop_column("survey_responses", "invitation_id")
-    op.drop_index("ix_survey_invitations_subscriber_id", table_name="survey_invitations")
+    op.drop_index(
+        "ix_survey_invitations_subscriber_id", table_name="survey_invitations"
+    )
     op.drop_index("ix_survey_invitations_survey_id", table_name="survey_invitations")
     op.drop_table("survey_invitations")
 
-    op.drop_constraint(
-        "uq_surveys_creation_idempotency_key", "surveys", type_="unique"
-    )
+    op.drop_constraint("uq_surveys_creation_idempotency_key", "surveys", type_="unique")
     op.drop_constraint("uq_surveys_public_slug", "surveys", type_="unique")
     op.drop_constraint("ck_surveys_status", "surveys", type_="check")
     op.drop_constraint("ck_surveys_trigger_type", "surveys", type_="check")

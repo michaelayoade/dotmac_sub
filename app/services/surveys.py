@@ -290,8 +290,10 @@ def validate_form(values: SurveyFormValues) -> SurveyFormValidation:
             field = str(location[0]) if location else "form"
             display_field = "questions_json" if field == "questions" else field
             location_text = ""
-            if field == "questions" and len(location) > 1 and isinstance(
-                location[1], int
+            if (
+                field == "questions"
+                and len(location) > 1
+                and isinstance(location[1], int)
             ):
                 location_text = f" question {int(location[1]) + 1}"
             message = f"{labels.get(field, 'Survey')}{location_text}: {item['msg']}"
@@ -448,9 +450,7 @@ def create_survey(db: Session, command: CreateSurveyCommand) -> SurveyMutationOu
         fingerprint = _creation_fingerprint(command.payload, creator_id)
         existing = (
             db.query(Survey)
-            .filter(
-                Survey.creation_idempotency_key == command.context.idempotency_key
-            )
+            .filter(Survey.creation_idempotency_key == command.context.idempotency_key)
             .one_or_none()
         )
         if existing is not None:
@@ -583,13 +583,10 @@ def update_survey(db: Session, command: UpdateSurveyCommand) -> SurveyMutationOu
                 "survey_not_found", "Survey not found.", kind="not_found"
             )
         fields = command.payload.model_fields_set
-        if (
-            "public_slug" in fields
-            and not _public_slug_available(
-                db,
-                command.payload.public_slug,
-                exclude_survey_id=survey.id,
-            )
+        if "public_slug" in fields and not _public_slug_available(
+            db,
+            command.payload.public_slug,
+            exclude_survey_id=survey.id,
         ):
             raise SurveyDomainError(
                 "public_slug_duplicate",
@@ -949,7 +946,9 @@ def get_public_survey(db: Session, reference: str) -> Survey:
     if survey_id is None:
         query = query.filter(Survey.public_slug == reference.strip().lower())
     else:
-        query = query.filter(or_(Survey.id == survey_id, Survey.public_slug == reference))
+        query = query.filter(
+            or_(Survey.id == survey_id, Survey.public_slug == reference)
+        )
     survey = _public_filter(query).one_or_none()
     if survey is None:
         raise SurveyDomainError(
@@ -965,9 +964,7 @@ def get_invitation_survey(
     db: Session, token: str, *, include_completed: bool = False
 ) -> tuple[SurveyInvitation, Survey]:
     invitation = (
-        db.query(SurveyInvitation)
-        .filter(SurveyInvitation.token == token)
-        .one_or_none()
+        db.query(SurveyInvitation).filter(SurveyInvitation.token == token).one_or_none()
     )
     if invitation is None or (
         not include_completed
@@ -1094,9 +1091,7 @@ def _validated_answers(
     return normalized, rating, nps_value
 
 
-def _refresh_survey_projections(
-    db: Session, survey: Survey
-) -> SurveyProjectionOutcome:
+def _refresh_survey_projections(db: Session, survey: Survey) -> SurveyProjectionOutcome:
     survey.total_invited = int(
         db.query(func.count(SurveyInvitation.id))
         .filter(SurveyInvitation.survey_id == survey.id)
@@ -1116,9 +1111,7 @@ def _refresh_survey_projections(
         .scalar()
     )
     survey.avg_rating = (
-        Decimal(str(average)).quantize(Decimal("0.01"))
-        if average is not None
-        else None
+        Decimal(str(average)).quantize(Decimal("0.01")) if average is not None else None
     )
     nps_values = [
         int(value)

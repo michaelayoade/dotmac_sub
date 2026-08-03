@@ -46,9 +46,7 @@ async def _answers(request: Request) -> tuple[survey_service.SurveyAnswer, ...]:
 
 
 @router.get("/t/{token}", response_class=HTMLResponse)
-def tracked_survey_page(
-    request: Request, token: str, db: Session = Depends(get_db)
-):
+def tracked_survey_page(request: Request, token: str, db: Session = Depends(get_db)):
     try:
         _invitation, survey = survey_service.get_invitation_survey(db, token)
     except survey_service.SurveyDomainError:

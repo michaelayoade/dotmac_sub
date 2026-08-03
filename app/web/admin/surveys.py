@@ -12,6 +12,7 @@ from app.db import get_db
 from app.models.comms import SurveyTriggerType
 from app.schemas.comms import SurveyUpdate
 from app.services import surveys as survey_service
+from app.services.auth_dependencies import require_permission
 from app.services.owner_commands import CommandContext
 from app.web.templates import templates
 
@@ -134,9 +135,7 @@ def survey_list(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/new", response_class=HTMLResponse)
 def survey_new(request: Request, db: Session = Depends(get_db)):
-    values = survey_service.form_values_for_survey(
-        None, idempotency_key=str(uuid4())
-    )
+    values = survey_service.form_values_for_survey(None, idempotency_key=str(uuid4()))
     validation = survey_service.SurveyFormValidation(
         values=values,
         questions_seed=(),
@@ -147,7 +146,7 @@ def survey_new(request: Request, db: Session = Depends(get_db)):
     return _render_form(request, db, survey=None, validation=validation)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_permission("customer:write"))])
 def survey_create(
     request: Request,
     name: str = Form(""),
@@ -236,9 +235,7 @@ def survey_edit(request: Request, survey_id: str, db: Session = Depends(get_db))
         survey = survey_service.get_survey(db, survey_id)
     except survey_service.SurveyDomainError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
-    values = survey_service.form_values_for_survey(
-        survey, idempotency_key=str(uuid4())
-    )
+    values = survey_service.form_values_for_survey(survey, idempotency_key=str(uuid4()))
     validation = survey_service.SurveyFormValidation(
         values=values,
         questions_seed=tuple(survey.questions or []),
@@ -249,7 +246,9 @@ def survey_edit(request: Request, survey_id: str, db: Session = Depends(get_db))
     return _render_form(request, db, survey=survey, validation=validation)
 
 
-@router.post("/{survey_id}")
+@router.post(
+    "/{survey_id}", dependencies=[Depends(require_permission("customer:write"))]
+)
 def survey_update(
     request: Request,
     survey_id: str,
@@ -350,7 +349,10 @@ def _transition_response(
     return RedirectResponse(f"/admin/surveys/{survey_id}", status_code=303)
 
 
-@router.post("/{survey_id}/activate")
+@router.post(
+    "/{survey_id}/activate",
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def survey_activate(request: Request, survey_id: str, db: Session = Depends(get_db)):
     return _transition_response(
         request,
@@ -360,7 +362,10 @@ def survey_activate(request: Request, survey_id: str, db: Session = Depends(get_
     )
 
 
-@router.post("/{survey_id}/pause")
+@router.post(
+    "/{survey_id}/pause",
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def survey_pause(request: Request, survey_id: str, db: Session = Depends(get_db)):
     return _transition_response(
         request,
@@ -370,7 +375,10 @@ def survey_pause(request: Request, survey_id: str, db: Session = Depends(get_db)
     )
 
 
-@router.post("/{survey_id}/close")
+@router.post(
+    "/{survey_id}/close",
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def survey_close(request: Request, survey_id: str, db: Session = Depends(get_db)):
     return _transition_response(
         request,
@@ -380,7 +388,10 @@ def survey_close(request: Request, survey_id: str, db: Session = Depends(get_db)
     )
 
 
-@router.post("/{survey_id}/archive")
+@router.post(
+    "/{survey_id}/archive",
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def survey_archive(request: Request, survey_id: str, db: Session = Depends(get_db)):
     return _transition_response(
         request,
