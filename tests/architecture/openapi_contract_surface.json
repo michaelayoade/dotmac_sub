@@ -9048,7 +9048,7 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "GET /api/v1/search/parties": {
+  "GET /api/v1/search/organizations": {
    "params": [
     "header:authorization",
     "header:x-api-key",
@@ -9061,7 +9061,7 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "GET /api/v1/search/organizations": {
+  "GET /api/v1/search/parties": {
    "params": [
     "header:authorization",
     "header:x-api-key",
