@@ -53,11 +53,14 @@ def test_customer_detail_remote_plan_action_delegates_to_execution_owner() -> No
     assert "prepare_remote_reprovision(db, request)" in lifecycle
     assert "stage_remote_reprovision(db, request)" not in lifecycle
     assert "Retry or contact network operations" not in route
-    assert route.index(
-        "db.rollback()", route.index("except SubscriptionChangeExecutionError")
-    ) < route.index(
-        "log_audit_event(", route.index("except SubscriptionChangeExecutionError")
-    )
+    remote_action = route[
+        route.index("def provision_remote_plan_change(") : route.index(
+            '@router.get(\n    "/subscriptions/{subscription_id}/fiber-path"'
+        )
+    ]
+    assert "db.rollback()" not in remote_action
+    assert "def _provision_and_verify_remote_change(" in owner
+    assert "if db.in_transaction():" in owner
     assert "can_reconcile_service_changes" in template
     assert "remote-plan-change:" in template
 

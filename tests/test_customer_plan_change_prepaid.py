@@ -930,6 +930,7 @@ def test_operator_remote_provision_fails_closed_when_projection_target_unavailab
                 reason="Operator requested RADIUS provisioning and verification",
             ),
         )
+    assert not db_session.in_transaction()
     db_session.refresh(subscription)
     db_session.refresh(change)
     db_session.refresh(credential)

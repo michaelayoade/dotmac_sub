@@ -502,7 +502,7 @@ def stage_remote_reprovision(
     return prepared
 
 
-def provision_and_verify_remote_change(
+def _provision_and_verify_remote_change(
     db: Session,
     command: RemoteProvisionActionCommand,
 ) -> RemoteProvisionActionOutcome:
@@ -810,6 +810,25 @@ def provision_and_verify_remote_change(
         operation_reference,
         f"{target_offer_name} profile verified. Plan change completed.",
     )
+
+
+def provision_and_verify_remote_change(
+    db: Session,
+    command: RemoteProvisionActionCommand,
+) -> RemoteProvisionActionOutcome:
+    """Execute remote provisioning and propagate errors from a clean session.
+
+    The web adapter records failed attempts after this command returns. Ensure
+    that audit persistence cannot commit partially staged price or RADIUS state
+    from any validation, projection, finalization, or recovery failure.
+    """
+
+    try:
+        return _provision_and_verify_remote_change(db, command)
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        raise
 
 
 def finalize_verified_remote_reprovision(
