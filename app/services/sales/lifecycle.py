@@ -8,7 +8,8 @@ silent repoints or attribution replacement.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -162,6 +163,7 @@ def bind_lead_party(
 def create_party_lead(
     db: Session,
     *,
+    lead_id: UUID | None = None,
     party_id: UUID,
     title: str,
     lead_source: str,
@@ -172,6 +174,16 @@ def create_party_lead(
     address: str | None = None,
     notes: str | None = None,
     metadata: dict[str, Any] | None = None,
+    owner_agent_id: UUID | None = None,
+    pipeline_id: UUID | None = None,
+    stage_id: UUID | None = None,
+    status: LeadStatus = LeadStatus.new,
+    estimated_value: Decimal | None = None,
+    currency: str | None = None,
+    probability: int | None = None,
+    expected_close_date: date | None = None,
+    lost_reason: str | None = None,
+    is_active: bool = True,
 ) -> Lead:
     """Create one Party-first Lead without committing the caller's transaction.
 
@@ -182,14 +194,26 @@ def create_party_lead(
     """
 
     lead = Lead(
+        id=lead_id,
         title=_required(title, "title"),
-        status=LeadStatus.new.value,
+        status=_enum_value(status, LeadStatus, "status"),
         lead_source=lead_source,
         region=_optional(region),
         address=_optional(address),
         notes=_optional(notes),
         metadata_=dict(metadata) if metadata else None,
+        owner_agent_id=owner_agent_id,
+        pipeline_id=pipeline_id,
+        stage_id=stage_id,
+        estimated_value=estimated_value,
+        currency=_optional(currency),
+        probability=probability,
+        expected_close_date=expected_close_date,
+        lost_reason=_optional(lost_reason),
+        is_active=is_active,
     )
+    if lead.status in {LeadStatus.won.value, LeadStatus.lost.value}:
+        lead.closed_at = datetime.now(UTC)
     initialize_lead_party(
         db,
         lead=lead,
@@ -322,6 +346,22 @@ def validate_lead_subscriber_alignment(
         raise LeadLifecycleError(
             "Legacy unbound Lead and downstream record must use the same Subscriber"
         )
+
+
+def stage_quote_acceptance(db: Session, *, lead: Lead) -> None:
+    """Stage the sole sales transition that marks a Lead Won."""
+
+    if not lead.is_active:
+        raise LeadLifecycleError("Inactive Lead cannot receive a Quote outcome")
+    if lead.status in {LeadStatus.won.value, LeadStatus.lost.value}:
+        if lead.status != LeadStatus.won.value:
+            raise LeadLifecycleError(
+                "Quote acceptance conflicts with the Lead's existing closed status"
+            )
+        return
+    lead.status = LeadStatus.won.value
+    lead.closed_at = lead.closed_at or datetime.now(UTC)
+    db.flush()
 
 
 def _capture_values(payload: dict[str, Any], *, lead_source: str) -> dict[str, Any]:

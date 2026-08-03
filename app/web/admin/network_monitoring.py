@@ -411,6 +411,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     incidents. No auto-detection, no notification sending."""
     from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.network.service_impact import summarize_incident_impact
     from app.services.operational_escalation_delivery import delivery_audit_for_entity
     from app.services.status_presentation import outage_status_presentation
     from app.services.topology.affected import (
@@ -422,6 +423,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
         is_stale_open,
         list_operator_open_incidents,
     )
+    from app.services.topology.outage_tickets import infrastructure_link_for
     from app.services.topology.reachability import reachability_overview
 
     context = _base_context(request, db, active_page="monitoring")
@@ -450,6 +452,11 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
                 "target": target,
                 "stale": is_stale_open(inc),
                 "status_presentation": outage_status_presentation(inc.status),
+                # Exposure vs confirmed split from network.service_impact —
+                # audience membership is exposure, never automatic downtime.
+                "impact": summarize_incident_impact(db, inc),
+                # The one canonical infrastructure ticket, when bound.
+                "infrastructure_link": infrastructure_link_for(db, inc.id),
                 "delivery_audit": delivery_audit_for_entity(
                     db,
                     entity_type="outage",
@@ -732,6 +739,106 @@ def detected_outage_notify_send(
     context["recent"] = recent_dispatches(db, incident.id)
     return templates.TemplateResponse(
         "admin/network/detected_outages_notify.html", context
+    )
+
+
+def _notice_context(request: Request, db: Session, incident_id: str):
+    """Shared preview context for the customer-communications console."""
+    import uuid as _uuid
+
+    from app.models.network_monitoring import OutageIncident
+    from app.services.status_presentation import outage_status_presentation
+    from app.services.topology import outage_communications
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["incident_id"] = incident_id
+    try:
+        incident = db.get(OutageIncident, _uuid.UUID(str(incident_id)))
+    except (ValueError, TypeError):
+        incident = None
+    context["incident"] = incident
+    if incident is None:
+        return context, None
+    context["incident_status_presentation"] = outage_status_presentation(
+        incident.status
+    )
+    context["armed"] = outage_communications.is_armed(db)
+    context["plan"] = outage_communications.plan_incident_notices(db, incident)
+    context["history"] = outage_communications.notices_for_incident(db, incident.id)
+    return context, incident
+
+
+@router.get(
+    "/outage-communications",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def outage_communications_preview(
+    request: Request,
+    incident_id: str,
+    db: Session = Depends(get_db),
+):
+    """Preview the customer messages this incident currently owes.
+
+    Read-only. Unlike the legacy notify console this covers operator and
+    classifier incidents alike, and shows the closing messages as well as the
+    opening ones.
+    """
+    context, incident = _notice_context(request, db, incident_id)
+    status_code = 200 if incident is not None else 404
+    return templates.TemplateResponse(
+        "admin/network/outage_communications.html", context, status_code=status_code
+    )
+
+
+@router.post(
+    "/outage-communications",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def outage_communications_send(
+    request: Request,
+    incident_id: str = Form(...),
+    impact_token: str = Form(...),
+    confirm: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Confirm and send. The owner command owns the transaction — this
+    adapter never commits."""
+    from app.services.topology import outage_communications
+
+    context, incident = _notice_context(request, db, incident_id)
+    if incident is None:
+        return RedirectResponse("/admin/network/detected-outages", status_code=303)
+    if confirm != "send":
+        context["needs_confirm"] = True
+        return templates.TemplateResponse(
+            "admin/network/outage_communications.html", context
+        )
+    try:
+        result = outage_communications.confirm_incident_notices(
+            db,
+            incident,
+            actor=str(_actor_id(request) or "operator"),
+            expected_impact_token=impact_token,
+        )
+    except outage_communications.OutageCommunicationsDriftError as exc:
+        context, _incident = _notice_context(request, db, incident_id)
+        context["drift_error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/network/outage_communications.html", context, status_code=409
+        )
+    except outage_communications.OutageCommunicationsError as exc:
+        context["error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/network/outage_communications.html", context, status_code=400
+        )
+    # Re-read after the commit so the page shows the post-send plan and
+    # history, then re-attach the result the refresh does not know about.
+    context, _incident = _notice_context(request, db, incident_id)
+    context["result"] = result
+    return templates.TemplateResponse(
+        "admin/network/outage_communications.html", context
     )
 
 

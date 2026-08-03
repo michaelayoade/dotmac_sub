@@ -10,6 +10,9 @@ from app.web.admin.admin_hub import router as admin_hub_router
 from app.web.admin.alerts import router as alerts_router
 from app.web.admin.billing_accounts import router as billing_accounts_router
 from app.web.admin.billing_arrangements import router as billing_arrangements_router
+from app.web.admin.billing_calendar_reconciliation import (
+    router as billing_calendar_reconciliation_router,
+)
 from app.web.admin.billing_channels import router as billing_channels_router
 from app.web.admin.billing_collection_accounts import (
     router as billing_collection_accounts_router,
@@ -55,6 +58,7 @@ from app.web.admin.network_core_devices import router as network_core_devices_ro
 from app.web.admin.network_cpes import router as network_cpes_router
 from app.web.admin.network_device_groups import router as network_device_groups_router
 from app.web.admin.network_dns_threats import router as network_dns_threats_router
+from app.web.admin.network_explorer import router as network_explorer_router
 from app.web.admin.network_fiber_plant import router as network_fiber_plant_router
 from app.web.admin.network_fiber_splice import router as network_fiber_splice_router
 from app.web.admin.network_firmware_catalog import (
@@ -257,6 +261,10 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
+    billing_calendar_reconciliation_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
     billing_payments_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
@@ -343,6 +351,10 @@ router.include_router(
 )
 router.include_router(
     network_weathermap_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_explorer_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

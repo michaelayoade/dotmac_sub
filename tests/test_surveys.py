@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _context(label: str, *, key: str | None = None) -> CommandContext:
     return CommandContext.system(
-        actor="system_user:test",
+        actor=str(uuid4()),
         scope="communications.surveys:write",
         reason=label,
         idempotency_key=key,
@@ -441,6 +441,6 @@ def test_admin_create_adapter_uses_html_form_defaults_and_http_303() -> None:
 
     assert "Form(...)" not in source
     assert "status_code=303" in source
-    assert "require_permission" not in source
+    assert 'require_permission("customer:write")' in source
     assert "Survey(" not in source
     assert "db.commit" not in source

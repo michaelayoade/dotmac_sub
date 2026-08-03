@@ -5,8 +5,8 @@ The additive columns allow the owner service to cut over creation, lifecycle,
 invitation, trigger, and response writes without inferring authority from the
 legacy ``is_active`` flag.
 
-Revision ID: 458_survey_lifecycle_and_creation
-Revises: 457_customer_subledger_opening_positions
+Revision ID: 464_survey_lifecycle_and_creation
+Revises: 463_outage_customer_notices
 Create Date: 2026-08-02
 """
 
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "458_survey_lifecycle_and_creation"
-down_revision = "457_customer_subledger_opening_positions"
+revision = "464_survey_lifecycle_and_creation"
+down_revision = "463_outage_customer_notices"
 branch_labels = None
 depends_on = None
 

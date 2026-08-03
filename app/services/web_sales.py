@@ -20,17 +20,17 @@ CRM-compatible Selfcare adaptations:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, TypedDict
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import String, case, cast, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.field_material import FieldInventoryItem
-from app.models.party import Party, PartyContactPoint
+from app.models.party import Party, PartyContactPoint, PartyIdentityStatus
 from app.models.project import ProjectType
 from app.models.sales import (
     Lead,
@@ -51,7 +51,6 @@ from app.schemas.sales import (
     PipelineStageCreate,
     PipelineStageUpdate,
     PipelineUpdate,
-    QuoteCreate,
     QuoteLineItemCreate,
     QuoteUpdate,
 )
@@ -61,17 +60,22 @@ from app.schemas.sales_order import (
     SalesOrderLineUpdate,
     SalesOrderUpdate,
 )
+from app.services import billing as billing_service
 from app.services import sales as sales_service
 from app.services import sales_orders as sales_orders_service
 from app.services import web_catalog_subscriptions, web_system_users
+from app.services.catalog import region_zones as region_zones_service
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
+from app.services.field.inventory import field_inventory_lookup
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     PageMeta,
     request_needs_canonicalization,
 )
-from app.services.sales import pipeline_configuration
+from app.services.owner_commands import CommandContext
+from app.services.sales import lead_authoring, pipeline_configuration, quote_authoring
 from app.services.sales.selfserve import compute_feasibility
 from app.services.sales_orders import _resolve_project_for_sales_order
 from app.services.team_inbox_projection import list_agent_options
@@ -147,6 +151,15 @@ LOST_REASON_OPTIONS = (
     "Other",
 )
 
+QUOTE_PROJECT_TYPE_OPTIONS = (
+    (ProjectType.cable_rerun.value, "Cable Rerun"),
+    (ProjectType.fiber_optics_relocation.value, "Fiber Optics Relocation"),
+    (ProjectType.air_fiber_relocation.value, "Air Fiber Relocation"),
+    (ProjectType.fiber_optics_installation.value, "Fiber Optics Installation"),
+    (ProjectType.air_fiber_installation.value, "Air Fiber Installation"),
+    (ProjectType.cross_connect.value, "Cross Connect"),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class LeadContactView:
@@ -162,7 +175,7 @@ class LeadContactView:
 class LeadFormFields:
     title: str
     status: str
-    subscriber_id: str
+    party_id: str
     contact_label: str
     owner_agent_id: str
     pipeline_id: str
@@ -180,10 +193,44 @@ class LeadFormFields:
 
 
 @dataclass(frozen=True, slots=True)
+class NewLeadFormFields:
+    submission_id: str
+    display_name: str
+    status: str
+    owner_agent_id: str
+    emails: tuple[str, ...]
+    primary_email: str
+    phones: tuple[str, ...]
+    primary_phone: str
+    whatsapp_phone_indices: tuple[str, ...]
+    address_line1: str
+    address_line2: str
+    date_of_birth: str
+    gender: str
+    nin: str
+    city: str
+    postal_code: str
+    country_code: str
+    organization_id: str
+    organization_label: str
+    pipeline_id: str
+    stage_id: str
+    lead_source: str
+    region_zone_id: str
+    estimated_value: str
+    currency: str
+    probability: str
+    expected_close_date: str
+    lost_reason: str
+    notes: str
+    is_active: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ValidatedLeadForm:
     title: str
     status: LeadStatus
-    subscriber_id: UUID | None
+    party_id: UUID
     owner_agent_id: UUID | None
     pipeline_id: UUID | None
     stage_id: UUID | None
@@ -235,6 +282,15 @@ def _as_bool(value: str | None) -> bool:
 
 def lead_status_values() -> list[str]:
     return [status.value for status in LeadStatus]
+
+
+def lead_operator_status_values(current: str | None = None) -> list[str]:
+    """Manual Lead statuses; Won is owned exclusively by Quote acceptance."""
+
+    values = [value for value in lead_status_values() if value != LeadStatus.won.value]
+    if current == LeadStatus.won.value:
+        values.append(LeadStatus.won.value)
+    return values
 
 
 # The leads list's declared query capabilities. Sortable keys mirror the
@@ -698,9 +754,9 @@ def build_lead_detail_context(db: Session, *, lead_id: str) -> dict[str, Any]:
             None,
         ),
         "quotes": quotes,
-        "can_create_quote": lead.subscriber_id is not None,
+        "can_create_quote": lead.party_id is not None,
         "status_val": lead.status or LeadStatus.new.value,
-        "lead_statuses": lead_status_values(),
+        "lead_statuses": lead_operator_status_values(lead.status),
         "api_error": None,
         "success": None,
     }
@@ -710,7 +766,7 @@ def _lead_form_fields(
     *,
     title: str | None,
     status: str | None,
-    subscriber_id: str | None,
+    party_id: str | None,
     contact_label: str | None,
     owner_agent_id: str | None,
     pipeline_id: str | None,
@@ -729,7 +785,7 @@ def _lead_form_fields(
     return LeadFormFields(
         title=(title or "").strip(),
         status=(status or LeadStatus.new.value).strip(),
-        subscriber_id=(subscriber_id or "").strip(),
+        party_id=(party_id or "").strip(),
         contact_label=(contact_label or "").strip(),
         owner_agent_id=(owner_agent_id or "").strip(),
         pipeline_id=(pipeline_id or "").strip(),
@@ -765,7 +821,7 @@ def _lead_form_context(
             if mode == "update"
             else "/admin/sales/leads"
         ),
-        "lead_statuses": lead_status_values(),
+        "lead_statuses": lead_operator_status_values(lead_form.status),
         "lead_sources": list(sales_service.LEAD_SOURCE_OPTIONS),
         "lost_reasons": LOST_REASON_OPTIONS,
         "pipelines": options["pipelines"],
@@ -776,30 +832,182 @@ def _lead_form_context(
     }
 
 
-def build_lead_new_context(db: Session) -> dict[str, Any]:
-    return _lead_form_context(
-        db,
-        lead_form=_lead_form_fields(
-            title=None,
-            status=LeadStatus.new.value,
-            subscriber_id=None,
-            contact_label=None,
-            owner_agent_id=None,
-            pipeline_id=None,
-            stage_id=None,
-            lead_source=None,
-            region=None,
-            estimated_value=None,
-            currency="NGN",
-            address=None,
-            probability="0",
-            expected_close_date=None,
-            lost_reason=None,
-            notes=None,
-            is_active=True,
+def _new_lead_fields(
+    *,
+    submission_id: str | None = None,
+    display_name: str | None = None,
+    status: str | None = None,
+    owner_agent_id: str | None = None,
+    emails: list[str] | tuple[str, ...] | None = None,
+    primary_email: str | None = None,
+    phones: list[str] | tuple[str, ...] | None = None,
+    primary_phone: str | None = None,
+    whatsapp_phone_indices: list[str] | tuple[str, ...] | None = None,
+    address_line1: str | None = None,
+    address_line2: str | None = None,
+    date_of_birth: str | None = None,
+    gender: str | None = None,
+    nin: str | None = None,
+    city: str | None = None,
+    postal_code: str | None = None,
+    country_code: str | None = None,
+    organization_id: str | None = None,
+    organization_label: str | None = None,
+    pipeline_id: str | None = None,
+    stage_id: str | None = None,
+    lead_source: str | None = None,
+    region_zone_id: str | None = None,
+    estimated_value: str | None = None,
+    currency: str | None = None,
+    probability: str | None = None,
+    expected_close_date: str | None = None,
+    lost_reason: str | None = None,
+    notes: str | None = None,
+    is_active: bool = True,
+) -> NewLeadFormFields:
+    email_rows = tuple(str(value or "") for value in (emails or ("",))) or ("",)
+    phone_rows = tuple(str(value or "") for value in (phones or ("",))) or ("",)
+    return NewLeadFormFields(
+        submission_id=(submission_id or str(uuid4())).strip(),
+        display_name=(display_name or "").strip(),
+        status=(status or LeadStatus.new.value).strip(),
+        owner_agent_id=(owner_agent_id or "").strip(),
+        emails=email_rows,
+        primary_email=(primary_email or "0").strip(),
+        phones=phone_rows,
+        primary_phone=(primary_phone or "0").strip(),
+        whatsapp_phone_indices=tuple(
+            str(value) for value in (whatsapp_phone_indices or ())
         ),
-        mode="create",
-        lead_id=None,
+        address_line1=(address_line1 or "").strip(),
+        address_line2=(address_line2 or "").strip(),
+        date_of_birth=(date_of_birth or "").strip(),
+        gender=(gender or "unknown").strip(),
+        nin=(nin or "").strip(),
+        city=(city or "").strip(),
+        postal_code=(postal_code or "").strip(),
+        country_code=(country_code or "").strip().upper(),
+        organization_id=(organization_id or "").strip(),
+        organization_label=(organization_label or "").strip(),
+        pipeline_id=(pipeline_id or "").strip(),
+        stage_id=(stage_id or "").strip(),
+        lead_source=(lead_source or "").strip(),
+        region_zone_id=(region_zone_id or "").strip(),
+        estimated_value=(estimated_value or "").strip(),
+        currency=(currency or "NGN").strip().upper(),
+        probability=(probability or "0").strip(),
+        expected_close_date=(expected_close_date or "").strip(),
+        lost_reason=(lost_reason or "").strip(),
+        notes=(notes or "").strip(),
+        is_active=is_active,
+    )
+
+
+def _new_lead_context(
+    db: Session,
+    *,
+    lead_form: NewLeadFormFields,
+    actor_system_user_id: str | None,
+    field_errors: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    options = _sales_options(db)
+    regions = region_zones_service.list(
+        db,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
+    )
+    owner_id = lead_form.owner_agent_id
+    if not owner_id and actor_system_user_id in options["agent_map"]:
+        owner_id = str(actor_system_user_id)
+        lead_form = replace(lead_form, owner_agent_id=owner_id)
+    return {
+        "lead_form": lead_form,
+        "lead": None,
+        "form_title": "New Lead",
+        "submit_label": "Create Lead",
+        "action_url": "/admin/sales/leads",
+        "lead_statuses": lead_operator_status_values(lead_form.status),
+        "lead_sources": list(sales_service.LEAD_SOURCE_OPTIONS),
+        "lost_reasons": LOST_REASON_OPTIONS,
+        "pipelines": options["pipelines"],
+        "stages": options["stages"],
+        "agents": options["agents"],
+        "regions": regions,
+        "gender_options": (
+            ("unknown", "Unknown"),
+            ("female", "Female"),
+            ("male", "Male"),
+            ("non_binary", "Non Binary"),
+            ("other", "Other"),
+        ),
+        "field_errors": field_errors or {},
+        "error": "Please correct the highlighted fields." if field_errors else None,
+    }
+
+
+def build_lead_new_context(
+    db: Session, *, actor_system_user_id: str | None = None
+) -> dict[str, Any]:
+    return _new_lead_context(
+        db,
+        lead_form=_new_lead_fields(),
+        actor_system_user_id=actor_system_user_id,
+    )
+
+
+def build_lead_create_error_context(
+    db: Session,
+    *,
+    actor_system_user_id: str | None,
+    field_errors: dict[str, str],
+    **fields: object,
+) -> dict[str, Any]:
+    def string_tuple(value: object, *, default: tuple[str, ...]) -> tuple[str, ...]:
+        if not isinstance(value, (list, tuple)):
+            return default
+        return tuple(str(item or "") for item in value)
+
+    return _new_lead_context(
+        db,
+        lead_form=_new_lead_fields(
+            submission_id=str(fields.get("submission_id") or ""),
+            display_name=str(fields.get("display_name") or ""),
+            status=str(fields.get("status") or ""),
+            owner_agent_id=str(fields.get("owner_agent_id") or ""),
+            emails=string_tuple(fields.get("emails"), default=("",)),
+            primary_email=str(fields.get("primary_email") or "0"),
+            phones=string_tuple(fields.get("phones"), default=("",)),
+            primary_phone=str(fields.get("primary_phone") or "0"),
+            whatsapp_phone_indices=string_tuple(
+                fields.get("whatsapp_phone_indices"), default=()
+            ),
+            address_line1=str(fields.get("address_line1") or ""),
+            address_line2=str(fields.get("address_line2") or ""),
+            date_of_birth=str(fields.get("date_of_birth") or ""),
+            gender=str(fields.get("gender") or "unknown"),
+            nin=str(fields.get("nin") or ""),
+            city=str(fields.get("city") or ""),
+            postal_code=str(fields.get("postal_code") or ""),
+            country_code=str(fields.get("country_code") or ""),
+            organization_id=str(fields.get("organization_id") or ""),
+            organization_label=str(fields.get("organization_label") or ""),
+            pipeline_id=str(fields.get("pipeline_id") or ""),
+            stage_id=str(fields.get("stage_id") or ""),
+            lead_source=str(fields.get("lead_source") or ""),
+            region_zone_id=str(fields.get("region_zone_id") or ""),
+            estimated_value=str(fields.get("estimated_value") or ""),
+            currency=str(fields.get("currency") or ""),
+            probability=str(fields.get("probability") or ""),
+            expected_close_date=str(fields.get("expected_close_date") or ""),
+            lost_reason=str(fields.get("lost_reason") or ""),
+            notes=str(fields.get("notes") or ""),
+            is_active=bool(fields.get("is_active")),
+        ),
+        actor_system_user_id=actor_system_user_id,
+        field_errors=field_errors,
     )
 
 
@@ -812,7 +1020,7 @@ def build_lead_edit_context(db: Session, *, lead_id: str) -> dict[str, Any]:
         lead_form=_lead_form_fields(
             title=lead.title,
             status=lead.status,
-            subscriber_id=str(lead.subscriber_id) if lead.subscriber_id else None,
+            party_id=str(lead.party_id) if lead.party_id else None,
             contact_label=contact.name if contact else None,
             owner_agent_id=(str(lead.owner_agent_id) if lead.owner_agent_id else None),
             pipeline_id=str(lead.pipeline_id) if lead.pipeline_id else None,
@@ -854,7 +1062,7 @@ def build_lead_form_error_context(
         lead_form=_lead_form_fields(
             title=str(fields.get("title") or ""),
             status=str(fields.get("status") or ""),
-            subscriber_id=str(fields.get("subscriber_id") or ""),
+            party_id=str(fields.get("party_id") or ""),
             contact_label=str(fields.get("contact_label") or ""),
             owner_agent_id=str(fields.get("owner_agent_id") or ""),
             pipeline_id=str(fields.get("pipeline_id") or ""),
@@ -882,7 +1090,7 @@ def _validate_lead_form(
     *,
     title: str | None,
     status: str | None,
-    subscriber_id: str | None,
+    party_id: str | None,
     owner_agent_id: str | None,
     pipeline_id: str | None,
     stage_id: str | None,
@@ -896,7 +1104,6 @@ def _validate_lead_form(
     lost_reason: str | None,
     notes: str | None,
     is_active: bool,
-    contact_required: bool,
 ) -> ValidatedLeadForm:
     errors: dict[str, str] = {}
     clean_title = (title or "").strip()
@@ -919,9 +1126,9 @@ def _validate_lead_form(
             errors[field] = "Select a valid option."
             return None
 
-    clean_subscriber_id = optional_uuid(subscriber_id, "subscriber_id")
-    if contact_required and clean_subscriber_id is None:
-        errors["subscriber_id"] = "Person/Contact is required."
+    clean_party_id = optional_uuid(party_id, "party_id")
+    if clean_party_id is None:
+        errors["party_id"] = "Person/Contact is required."
     clean_owner_id = optional_uuid(owner_agent_id, "owner_agent_id")
     clean_pipeline_id = optional_uuid(pipeline_id, "pipeline_id")
     clean_stage_id = optional_uuid(stage_id, "stage_id")
@@ -956,10 +1163,11 @@ def _validate_lead_form(
 
     if errors:
         raise LeadFormValidationError(errors)
+    assert clean_party_id is not None
     return ValidatedLeadForm(
         title=clean_title,
         status=clean_status,
-        subscriber_id=clean_subscriber_id,
+        party_id=clean_party_id,
         owner_agent_id=clean_owner_id,
         pipeline_id=clean_pipeline_id,
         stage_id=clean_stage_id,
@@ -980,12 +1188,168 @@ def _validate_lead_form(
     )
 
 
+def author_lead_from_form(
+    db: Session,
+    *,
+    actor_system_user_id: str,
+    submission_id: str | None,
+    display_name: str | None,
+    status: str | None,
+    owner_agent_id: str | None,
+    emails: list[str] | tuple[str, ...],
+    primary_email: str | None,
+    phones: list[str] | tuple[str, ...],
+    primary_phone: str | None,
+    whatsapp_phone_indices: list[str] | tuple[str, ...],
+    address_line1: str | None,
+    address_line2: str | None,
+    date_of_birth: str | None,
+    gender: str | None,
+    nin: str | None,
+    city: str | None,
+    postal_code: str | None,
+    country_code: str | None,
+    organization_id: str | None,
+    pipeline_id: str | None,
+    stage_id: str | None,
+    lead_source: str | None,
+    region_zone_id: str | None,
+    estimated_value: str | None,
+    currency: str | None,
+    probability: str | None,
+    expected_close_date: str | None,
+    lost_reason: str | None,
+    notes: str | None,
+    is_active: bool,
+) -> lead_authoring.AuthorLeadOutcome:
+    errors: dict[str, str] = {}
+
+    def required_uuid(value: str | None, field: str) -> UUID:
+        try:
+            return UUID((value or "").strip())
+        except (TypeError, ValueError, AttributeError):
+            errors[field] = "This form expired or is invalid. Reload and try again."
+            return UUID(int=0)
+
+    def optional_uuid(value: str | None, field: str) -> UUID | None:
+        clean = (value or "").strip()
+        if not clean:
+            return None
+        try:
+            return UUID(clean)
+        except (TypeError, ValueError, AttributeError):
+            errors[field] = "Select a valid option."
+            return None
+
+    def optional_date(value: str | None, field: str) -> date | None:
+        clean = (value or "").strip()
+        if not clean:
+            return None
+        try:
+            return date.fromisoformat(clean)
+        except ValueError:
+            errors[field] = "Enter a valid date."
+            return None
+
+    def index(value: str | None, field: str) -> int:
+        try:
+            result = int((value or "0").strip())
+        except ValueError:
+            errors[field] = "Select a valid primary row."
+            return 0
+        return result
+
+    actor_id = required_uuid(actor_system_user_id, "form")
+    lead_id = required_uuid(submission_id, "form")
+    try:
+        lead_status = LeadStatus((status or LeadStatus.new.value).strip())
+    except ValueError:
+        errors["status"] = "Select a valid Lead Status."
+        lead_status = LeadStatus.new
+    if (lead_source or "").strip() and (
+        lead_source or ""
+    ).strip() not in sales_service.LEAD_SOURCE_OPTIONS:
+        errors["lead_source"] = "Select a valid Lead Source."
+
+    amount: Decimal | None = None
+    if (estimated_value or "").strip():
+        try:
+            amount = Decimal((estimated_value or "").strip())
+        except (ArithmeticError, ValueError):
+            errors["estimated_value"] = "Estimated Value must be a number."
+
+    probability_value: int | None = None
+    if (probability or "").strip():
+        try:
+            probability_value = int((probability or "").strip())
+        except ValueError:
+            errors["probability"] = "Probability must be a whole number."
+
+    whatsapp_indexes: list[int] = []
+    for raw in whatsapp_phone_indices:
+        try:
+            whatsapp_indexes.append(int(str(raw)))
+        except ValueError:
+            continue
+
+    if errors:
+        raise LeadFormValidationError(errors)
+
+    command = lead_authoring.AuthorLeadCommand(
+        context=CommandContext.system(
+            actor=str(actor_id),
+            scope="sales:lead-authoring",
+            reason="Authenticated staff created a Lead",
+            idempotency_key=f"admin-lead:{lead_id}",
+        ),
+        lead_id=lead_id,
+        actor_system_user_id=actor_id,
+        status=lead_status,
+        owner_system_user_id=optional_uuid(owner_agent_id, "owner_agent_id"),
+        pipeline_id=optional_uuid(pipeline_id, "pipeline_id"),
+        stage_id=optional_uuid(stage_id, "stage_id"),
+        lead_source=(lead_source or "").strip() or None,
+        region_zone_id=optional_uuid(region_zone_id, "region_zone_id"),
+        estimated_value=amount,
+        currency=(currency or "").strip().upper() or None,
+        probability=probability_value,
+        expected_close_date=optional_date(expected_close_date, "expected_close_date"),
+        lost_reason=(lost_reason or "").strip() or None,
+        notes=(notes or "").strip() or None,
+        is_active=is_active,
+        person=lead_authoring.LeadPersonDraft(
+            display_name=(display_name or "").strip(),
+            emails=lead_authoring.LeadContactDraft(
+                values=tuple(str(value or "") for value in emails),
+                primary_index=index(primary_email, "primary_email"),
+            ),
+            phones=lead_authoring.LeadContactDraft(
+                values=tuple(str(value or "") for value in phones),
+                primary_index=index(primary_phone, "primary_phone"),
+            ),
+            whatsapp_phone_indices=tuple(whatsapp_indexes),
+            address_line1=(address_line1 or "").strip() or None,
+            address_line2=(address_line2 or "").strip() or None,
+            date_of_birth=optional_date(date_of_birth, "date_of_birth"),
+            gender=(gender or "unknown").strip(),
+            nin=(nin or "").strip() or None,
+            city=(city or "").strip() or None,
+            postal_code=(postal_code or "").strip() or None,
+            country_code=(country_code or "").strip().upper() or None,
+            organization_id=optional_uuid(organization_id, "organization_id"),
+        ),
+    )
+    if errors:
+        raise LeadFormValidationError(errors)
+    return lead_authoring.author_lead(db, command)
+
+
 def create_lead_from_form(
     db: Session,
     *,
     title: str | None,
     status: str | None,
-    subscriber_id: str | None,
+    party_id: str | None,
     owner_agent_id: str | None,
     pipeline_id: str | None,
     stage_id: str | None,
@@ -1003,7 +1367,7 @@ def create_lead_from_form(
     values = _validate_lead_form(
         title=title,
         status=status,
-        subscriber_id=subscriber_id,
+        party_id=party_id,
         owner_agent_id=owner_agent_id,
         pipeline_id=pipeline_id,
         stage_id=stage_id,
@@ -1017,10 +1381,11 @@ def create_lead_from_form(
         lost_reason=lost_reason,
         notes=notes,
         is_active=is_active,
-        contact_required=True,
     )
     payload = LeadCreate(
-        subscriber_id=values.subscriber_id,
+        party_id=values.party_id,
+        party_binding_source="admin_sales_lead_form",
+        party_binding_reason="Sales staff selected a reviewed Party for the Lead",
         owner_agent_id=values.owner_agent_id,
         pipeline_id=values.pipeline_id,
         stage_id=values.stage_id,
@@ -1047,7 +1412,7 @@ def update_lead_from_form(
     lead_id: str,
     title: str | None,
     status: str | None,
-    subscriber_id: str | None,
+    party_id: str | None,
     contact_label: str | None,
     owner_agent_id: str | None,
     pipeline_id: str | None,
@@ -1066,18 +1431,14 @@ def update_lead_from_form(
     lead = sales_service.leads.get(db, lead_id)
     contact_map, _ = _lead_contact_views(db, [lead])
     current_contact = contact_map.get(str(lead.id))
-    if (
-        not (subscriber_id or "").strip()
-        and current_contact is not None
-        and (contact_label or "").strip() != current_contact.name
-    ):
+    if not (party_id or "").strip() and current_contact is not None:
         raise LeadFormValidationError(
-            {"subscriber_id": "Select a Person/Contact from the search results."}
+            {"party_id": "Select a Person/Contact from the search results."}
         )
     values = _validate_lead_form(
         title=title,
         status=status,
-        subscriber_id=subscriber_id,
+        party_id=party_id,
         owner_agent_id=owner_agent_id,
         pipeline_id=pipeline_id,
         stage_id=stage_id,
@@ -1091,8 +1452,11 @@ def update_lead_from_form(
         lost_reason=lost_reason,
         notes=notes,
         is_active=is_active,
-        contact_required=lead.party_id is None and lead.subscriber_id is None,
     )
+    if lead.party_id != values.party_id:
+        raise LeadFormValidationError(
+            {"party_id": "Lead identity cannot be changed through the edit form."}
+        )
     payload = LeadUpdate(
         owner_agent_id=values.owner_agent_id,
         pipeline_id=values.pipeline_id,
@@ -1110,8 +1474,6 @@ def update_lead_from_form(
         notes=values.notes,
         is_active=values.is_active,
     )
-    if values.subscriber_id is not None:
-        payload = payload.model_copy(update={"subscriber_id": values.subscriber_id})
     sales_service.leads.update(db, lead_id, payload)
 
 
@@ -1455,7 +1817,7 @@ def _count_quotes(
     lead_id: str | None,
     search: str | None,
 ) -> int:
-    query = db.query(func.count(Quote.id)).select_from(Quote)
+    query = db.query(func.count(func.distinct(Quote.id))).select_from(Quote)
     query = query.filter(Quote.is_active.is_(True))
     if status:
         query = query.filter(Quote.status == status)
@@ -1463,15 +1825,27 @@ def _count_quotes(
         query = query.filter(Quote.lead_id == coerce_uuid(lead_id))
     if search:
         like = f"%{search.strip()}%"
-        query = query.outerjoin(
-            Subscriber, Quote.subscriber_id == Subscriber.id
-        ).filter(
-            or_(
-                Subscriber.display_name.ilike(like),
-                Subscriber.first_name.ilike(like),
-                Subscriber.last_name.ilike(like),
-                Subscriber.email.ilike(like),
-                cast(Quote.id, String).ilike(like),
+        query = (
+            query.outerjoin(Subscriber, Quote.subscriber_id == Subscriber.id)
+            .outerjoin(Lead, Quote.lead_id == Lead.id)
+            .outerjoin(Party, Lead.party_id == Party.id)
+            .outerjoin(
+                PartyContactPoint,
+                (PartyContactPoint.party_id == Party.id)
+                & PartyContactPoint.is_active.is_(True),
+            )
+            .filter(
+                or_(
+                    Subscriber.display_name.ilike(like),
+                    Subscriber.first_name.ilike(like),
+                    Subscriber.last_name.ilike(like),
+                    Subscriber.email.ilike(like),
+                    Party.display_name.ilike(like),
+                    PartyContactPoint.display_value.ilike(like),
+                    PartyContactPoint.normalized_value.ilike(like),
+                    Lead.title.ilike(like),
+                    cast(Quote.id, String).ilike(like),
+                )
             )
         )
     return int(query.scalar() or 0)
@@ -1545,8 +1919,8 @@ def _merge_install_metadata(
 ) -> dict[str, Any] | None:
     """Fold a new pin into a quote's existing metadata without clobbering it.
 
-    ``metadata_`` carries the whole portal contract (source, project_type,
-    deposit, pricing_mode...), so an admin edit must merge into it, never
+    ``metadata_`` carries the remaining portal contract (source, deposit,
+    pricing_mode...), so an admin edit must merge into it, never
     replace it. Clearing the pin removes only the keys the pin owns.
     """
     meta: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
@@ -1564,17 +1938,23 @@ def _merge_install_metadata(
 
 def _quote_form_fields(
     *,
-    subscriber_id: str | None,
-    lead_id: str | None,
-    status: str | None,
-    currency: str | None,
-    tax_rate: str | None,
-    expires_at: str | None,
-    notes: str | None,
-    latitude: str | None,
-    longitude: str | None,
-    address: str | None,
-    region: str | None,
+    subscriber_id: str | None = None,
+    lead_id: str | None = None,
+    status: str | None = None,
+    currency: str | None = None,
+    tax_rate: str | None = None,
+    tax_rate_id: str | None = None,
+    manual_tax_total: str | None = None,
+    project_type: str | None = None,
+    expires_at: str | None = None,
+    notes: str | None = None,
+    latitude: str | None = None,
+    longitude: str | None = None,
+    address: str | None = None,
+    region: str | None = None,
+    is_active: bool = True,
+    submission_id: str | None = None,
+    items: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "subscriber_id": (subscriber_id or "").strip(),
@@ -1582,62 +1962,195 @@ def _quote_form_fields(
         "status": (status or QuoteStatus.draft.value).strip(),
         "currency": (currency or "NGN").strip().upper(),
         "tax_rate": (tax_rate or "").strip(),
+        "tax_rate_id": (tax_rate_id or "").strip(),
+        "manual_tax_total": (manual_tax_total or "0.00").strip(),
+        "project_type": (project_type or "").strip(),
         "expires_at": (expires_at or "").strip(),
         "notes": (notes or "").strip(),
         "latitude": (latitude or "").strip(),
         "longitude": (longitude or "").strip(),
         "address": (address or "").strip(),
         "region": (region or "").strip(),
+        "is_active": bool(is_active),
+        "submission_id": (submission_id or str(uuid4())).strip(),
+        "items": items
+        or [
+            {
+                "description": "",
+                "quantity": "",
+                "unit_price": "",
+                "discount_percent": "",
+                "sub_offer_id": "",
+                "inventory_item_id": "",
+            }
+        ],
     }
 
 
-def creatable_quote_status_values() -> list[str]:
-    """A new quote can only start as a draft.
+def quote_form_item_rows(
+    *,
+    descriptions: list[str],
+    quantities: list[str],
+    unit_prices: list[str],
+    discount_percents: list[str],
+    sub_offer_ids: list[str],
+    inventory_item_ids: list[str],
+) -> list[dict[str, str]]:
+    """Rebuild submitted Line Item rows without interpreting their values."""
 
-    ``sent`` and ``accepted`` drive real downstream effects, and a quote that
-    does not exist yet cannot have line items -- so offering them on the create
-    form is offering a way to commit the business to a quote worth nothing.
-    """
+    count = max(
+        len(descriptions),
+        len(quantities),
+        len(unit_prices),
+        len(discount_percents),
+        len(sub_offer_ids),
+        len(inventory_item_ids),
+        1,
+    )
     return [
-        value
-        for value in quote_status_values()
-        if value not in {QuoteStatus.sent.value, QuoteStatus.accepted.value}
+        {
+            "description": descriptions[index] if index < len(descriptions) else "",
+            "quantity": quantities[index] if index < len(quantities) else "",
+            "unit_price": unit_prices[index] if index < len(unit_prices) else "",
+            "discount_percent": (
+                discount_percents[index] if index < len(discount_percents) else ""
+            ),
+            "sub_offer_id": (
+                sub_offer_ids[index] if index < len(sub_offer_ids) else ""
+            ),
+            "inventory_item_id": (
+                inventory_item_ids[index] if index < len(inventory_item_ids) else ""
+            ),
+        }
+        for index in range(count)
     ]
 
 
+def creatable_quote_status_values() -> list[str]:
+    """A new Quote may begin only as Draft or Sent.
+
+    Accepted is exclusively owned by the conversion command; rejected and
+    expired are later lifecycle states.
+    """
+
+    return [QuoteStatus.draft.value, QuoteStatus.sent.value]
+
+
+def _quote_lead_options(db: Session) -> list[dict[str, str]]:
+    leads = (
+        db.query(Lead)
+        .options(selectinload(Lead.party))
+        .filter(
+            Lead.is_active.is_(True),
+            Lead.status.in_(_OPEN_LEAD_STATUSES),
+            Lead.party_id.is_not(None),
+        )
+        .order_by(Lead.created_at.desc(), Lead.id.asc())
+        .limit(500)
+        .all()
+    )
+    options: list[dict[str, str]] = []
+    for lead in leads:
+        party = lead.party
+        if party is None or party.status not in {
+            PartyIdentityStatus.active.value,
+            PartyIdentityStatus.quarantined.value,
+        }:
+            continue
+        lead_number = str(lead.id).split("-", 1)[0].upper()
+        title = (lead.title or "").strip() or f"Lead {lead_number}"
+        person_name = (party.display_name or "").strip()
+        label = f"{lead_number} — {title}"
+        if person_name and person_name.casefold() != title.casefold():
+            label = f"{label} — {person_name}"
+        options.append({"id": str(lead.id), "label": label})
+    return options
+
+
+def _quote_tax_rate_options(db: Session) -> list[dict[str, str]]:
+    rates = billing_service.tax_rates.list(
+        db,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
+    )
+    return [
+        {
+            "id": str(rate.id),
+            "name": rate.name,
+            "rate": str(rate.rate),
+            "label": f"{rate.name} ({Decimal(rate.rate):g}%)",
+        }
+        for rate in rates
+    ]
+
+
+def _quote_suggestions(db: Session) -> list[dict[str, str]]:
+    suggestions: list[dict[str, str]] = []
+    for offer in web_catalog_subscriptions.active_offer_options(db):
+        suggestions.append(
+            {
+                "kind": "offer",
+                "id": offer["id"],
+                "description": offer["name"],
+                "label": offer["label"],
+                "price": offer.get("price", ""),
+            }
+        )
+    inventory_items = field_inventory_lookup.list_items(db, limit=200)
+    for item in inventory_items:
+        name = str(item["name"])
+        sku = str(item.get("sku") or "").strip()
+        description = f"{name} — {sku}" if sku else name
+        suggestions.append(
+            {
+                "kind": "inventory",
+                "id": str(item["id"]),
+                "description": description,
+                "label": f"{description} — Inventory",
+                "price": "",
+            }
+        )
+    return suggestions
+
+
+def _quote_form_options(db: Session) -> dict[str, Any]:
+    return {
+        "leads": _quote_lead_options(db),
+        "tax_rates": _quote_tax_rate_options(db),
+        "suggestions": _quote_suggestions(db),
+        "project_types": [
+            {"value": value, "label": label}
+            for value, label in QUOTE_PROJECT_TYPE_OPTIONS
+        ],
+    }
+
+
 def build_quote_new_context(
-    db: Session | None = None, *, lead_id: str | None = None
+    db: Session, *, lead_id: str | None = None
 ) -> dict[str, Any]:
     normalized_lead_id = (lead_id or "").strip()
-    selected_lead = (
-        sales_service.leads.get(db, normalized_lead_id)
-        if db is not None and normalized_lead_id
-        else None
-    )
-    return {
+    options = _quote_form_options(db)
+    lead_options: list[dict[str, str]] = options["leads"]
+    lead_ids = {item["id"] for item in lead_options}
+    selected_lead_id = normalized_lead_id if normalized_lead_id in lead_ids else ""
+    context: dict[str, Any] = {
         "quote_form": _quote_form_fields(
-            subscriber_id=(
-                str(selected_lead.subscriber_id)
-                if selected_lead is not None and selected_lead.subscriber_id
-                else None
-            ),
-            lead_id=str(selected_lead.id) if selected_lead is not None else None,
+            lead_id=selected_lead_id,
             status=QuoteStatus.draft.value,
             currency="NGN",
-            tax_rate=None,
-            expires_at=None,
-            notes=None,
-            latitude=None,
-            longitude=None,
-            address=None,
-            region=None,
         ),
         "status_values": creatable_quote_status_values(),
         "form_title": "New Quote",
         "submit_label": "Create Quote",
         "action_url": "/admin/sales/quotes",
         "error": None,
+        "is_editing": False,
     }
+    context.update(options)
+    return context
 
 
 def build_quote_edit_context(db: Session, *, quote_id: str) -> dict[str, Any]:
@@ -1645,16 +2158,21 @@ def build_quote_edit_context(db: Session, *, quote_id: str) -> dict[str, Any]:
     meta = quote.metadata_ if isinstance(quote.metadata_, dict) else {}
     raw_install = meta.get("install")
     install: dict[str, Any] = raw_install if isinstance(raw_install, dict) else {}
-    return {
+    context: dict[str, Any] = {
         "quote": quote,
         "quote_form": _quote_form_fields(
-            subscriber_id=str(quote.subscriber_id),
+            subscriber_id=str(quote.subscriber_id) if quote.subscriber_id else None,
             lead_id=str(quote.lead_id) if quote.lead_id else None,
             status=quote.status,
             currency=quote.currency,
             tax_rate=str(quote.tax_rate) if quote.tax_rate is not None else None,
+            tax_rate_id=str(meta.get("tax_rate_id") or ""),
+            manual_tax_total=(str(quote.tax_total)),
+            project_type=str(quote.project_type or ""),
             expires_at=(
-                quote.expires_at.date().isoformat() if quote.expires_at else None
+                quote.expires_at.strftime("%Y-%m-%dT%H:%M")
+                if quote.expires_at
+                else None
             ),
             notes=quote.notes,
             latitude=(
@@ -1669,31 +2187,54 @@ def build_quote_edit_context(db: Session, *, quote_id: str) -> dict[str, Any]:
             ),
             address=install.get("address"),
             region=install.get("region"),
+            is_active=quote.is_active,
         ),
         "status_values": quote_status_values(),
         "form_title": "Edit Quote",
         "submit_label": "Update Quote",
         "action_url": f"/admin/sales/quotes/{quote_id}/edit",
         "error": None,
+        "is_editing": True,
     }
+    context["quote_form"]["initial_subtotal"] = str(quote.subtotal)
+    context.update(_quote_form_options(db))
+    return context
 
 
 def build_quote_form_error_context(
+    db: Session,
     *,
     mode: str,
     quote_id: str | None,
-    **fields: str | None,
+    **fields: Any,
 ) -> dict[str, Any]:
     editing = mode == "update"
-    return {
+    options = _quote_form_options(db)
+    submitted_lead_id = str(fields.get("lead_id") or "").strip()
+    lead_options: list[dict[str, str]] = options["leads"]
+    if submitted_lead_id and submitted_lead_id not in {
+        item["id"] for item in lead_options
+    }:
+        lead_options.append(
+            {
+                "id": submitted_lead_id,
+                "label": "Unavailable Lead (selection cannot be used)",
+            }
+        )
+    context: dict[str, Any] = {
         "quote_form": _quote_form_fields(**fields),
-        "status_values": quote_status_values(),
+        "status_values": (
+            quote_status_values() if editing else creatable_quote_status_values()
+        ),
         "form_title": "Edit Quote" if editing else "New Quote",
         "submit_label": "Update Quote" if editing else "Create Quote",
         "action_url": (
             f"/admin/sales/quotes/{quote_id}/edit" if editing else "/admin/sales/quotes"
         ),
+        "is_editing": editing,
     }
+    context.update(options)
+    return context
 
 
 def _quote_expiry(value: str | None) -> datetime | None:
@@ -1719,51 +2260,166 @@ def _quote_tax_rate(value: str | None) -> Decimal | None:
 def create_quote_from_form(
     db: Session,
     *,
-    subscriber_id: str | None,
+    actor_system_user_id: str,
+    submission_id: str | None,
     lead_id: str | None,
     status: str | None,
     currency: str | None,
-    tax_rate: str | None,
+    project_type: str | None,
+    tax_rate_id: str | None,
+    manual_tax_total: str | None,
     expires_at: str | None,
+    is_active: bool,
     notes: str | None,
     latitude: str | None,
     longitude: str | None,
     address: str | None,
     region: str | None,
+    descriptions: list[str],
+    quantities: list[str],
+    unit_prices: list[str],
+    discount_percents: list[str],
+    sub_offer_ids: list[str],
+    inventory_item_ids: list[str],
 ) -> str:
-    if not (subscriber_id or "").strip():
-        raise ValueError("A subscriber is required.")
+    if not (lead_id or "").strip():
+        raise ValueError("A Lead is required.")
 
-    install, feasibility = _install_pin(
-        db,
-        latitude=latitude,
-        longitude=longitude,
-        address=address,
-        region=region,
-    )
-    metadata = _merge_install_metadata(
-        {"source": "admin"}, install=install, feasibility=feasibility
-    )
+    def parsed_uuid(value: str | None, field: str) -> UUID | None:
+        candidate = (value or "").strip()
+        if not candidate:
+            return None
+        try:
+            return UUID(candidate)
+        except ValueError:
+            raise ValueError(f"{field} is not valid.") from None
 
-    payload = QuoteCreate(
-        subscriber_id=coerce_uuid(subscriber_id),
-        lead_id=coerce_uuid(lead_id) if (lead_id or "").strip() else None,
-        status=QuoteStatus(_clean_choice(status, quote_status_values()) or "draft"),
+    def parsed_decimal(
+        value: str | None, field: str, *, blank: Decimal | None = None
+    ) -> Decimal:
+        candidate = (value or "").strip()
+        if not candidate:
+            if blank is not None:
+                return blank
+            raise ValueError(f"{field} is required.")
+        try:
+            return Decimal(candidate)
+        except ArithmeticError:
+            raise ValueError(f"{field} must be a number.") from None
+
+    selected_status = _clean_choice(status, creatable_quote_status_values())
+    if (status or "").strip() and selected_status is None:
+        raise ValueError("Select a valid Quote status.") from None
+    requested_status = QuoteStatus(selected_status or QuoteStatus.draft.value)
+    try:
+        requested_project_type = ProjectType((project_type or "").strip())
+    except ValueError:
+        raise ValueError("A valid Project Type is required.") from None
+
+    row_count = max(
+        len(descriptions),
+        len(quantities),
+        len(unit_prices),
+        len(discount_percents),
+        len(sub_offer_ids),
+        len(inventory_item_ids),
+        0,
+    )
+    line_drafts: list[quote_authoring.QuoteLineDraft] = []
+    for index in range(row_count):
+        raw = {
+            "description": descriptions[index] if index < len(descriptions) else "",
+            "quantity": quantities[index] if index < len(quantities) else "",
+            "unit_price": unit_prices[index] if index < len(unit_prices) else "",
+            "discount_percent": (
+                discount_percents[index] if index < len(discount_percents) else ""
+            ),
+            "sub_offer_id": (
+                sub_offer_ids[index] if index < len(sub_offer_ids) else ""
+            ),
+            "inventory_item_id": (
+                inventory_item_ids[index] if index < len(inventory_item_ids) else ""
+            ),
+        }
+        if not any(value.strip() for value in raw.values()):
+            continue
+        if not raw["description"].strip():
+            raise ValueError(f"Line Item {index + 1} needs a description.")
+        line_drafts.append(
+            quote_authoring.QuoteLineDraft(
+                description=raw["description"].strip(),
+                quantity=parsed_decimal(
+                    raw["quantity"], f"Line Item {index + 1} quantity"
+                ),
+                unit_price=parsed_decimal(
+                    raw["unit_price"], f"Line Item {index + 1} Unit Price"
+                ),
+                discount_percent=parsed_decimal(
+                    raw["discount_percent"],
+                    f"Line Item {index + 1} Discount",
+                    blank=Decimal("0"),
+                ),
+                sub_offer_id=parsed_uuid(
+                    raw["sub_offer_id"], f"Line Item {index + 1} offer"
+                ),
+                inventory_item_id=parsed_uuid(
+                    raw["inventory_item_id"],
+                    f"Line Item {index + 1} inventory item",
+                ),
+            )
+        )
+
+    try:
+        actor_id = UUID(str(actor_system_user_id))
+        quote_id = UUID(str(submission_id))
+        selected_lead_id = UUID(str(lead_id))
+    except ValueError:
+        raise ValueError("The authenticated Quote submission is not valid.") from None
+    command = quote_authoring.AuthorQuoteCommand(
+        context=CommandContext.system(
+            actor=str(actor_id),
+            scope="crm:quote:write",
+            reason="Author Lead-backed Quote from the admin form",
+            idempotency_key=f"quote-authoring:{quote_id}",
+        ),
+        quote_id=quote_id,
+        actor_system_user_id=actor_id,
+        lead_id=selected_lead_id,
+        status=requested_status,
         currency=(currency or "NGN").strip().upper(),
-        tax_rate=_quote_tax_rate(tax_rate),
+        project_type=requested_project_type,
+        tax_rate_id=parsed_uuid(tax_rate_id, "Tax Rate"),
+        manual_tax_total=parsed_decimal(
+            manual_tax_total, "Tax Total", blank=Decimal("0.00")
+        ),
         expires_at=_quote_expiry(expires_at),
+        is_active=is_active,
         notes=(notes or "").strip() or None,
-        metadata_=metadata,
+        install=quote_authoring.QuoteInstallLocation(
+            latitude=(
+                parsed_decimal(latitude, "Latitude")
+                if (latitude or "").strip()
+                else None
+            ),
+            longitude=(
+                parsed_decimal(longitude, "Longitude")
+                if (longitude or "").strip()
+                else None
+            ),
+            address=(address or "").strip() or None,
+            region=(region or "").strip() or None,
+        ),
+        lines=tuple(line_drafts),
     )
-    quote = sales_service.quotes.create(db, payload)
-    return str(quote.id)
+    db_session_adapter.release_read_transaction(db)
+    outcome = quote_authoring.author_quote(db, command)
+    return str(outcome.quote_id)
 
 
 def update_quote_from_form(
     db: Session,
     *,
     quote_id: str,
-    subscriber_id: str | None,
     lead_id: str | None,
     status: str | None,
     currency: str | None,
@@ -1774,6 +2430,7 @@ def update_quote_from_form(
     longitude: str | None,
     address: str | None,
     region: str | None,
+    context: CommandContext | None = None,
 ) -> None:
     quote = sales_service.quotes.get(db, quote_id)
     install, feasibility = _install_pin(
@@ -1788,9 +2445,6 @@ def update_quote_from_form(
     )
 
     payload = QuoteUpdate(
-        subscriber_id=(
-            coerce_uuid(subscriber_id) if (subscriber_id or "").strip() else None
-        ),
         lead_id=coerce_uuid(lead_id) if (lead_id or "").strip() else None,
         status=(
             QuoteStatus(_clean_choice(status, quote_status_values()) or "draft")
@@ -1803,7 +2457,7 @@ def update_quote_from_form(
         notes=(notes or "").strip() or None,
         metadata_=metadata,
     )
-    sales_service.quotes.update(db, quote_id, payload)
+    sales_service.quotes.update(db, quote_id, payload, context=context)
 
 
 def add_quote_line_item_from_form(
@@ -1847,11 +2501,22 @@ def delete_quote_line_item(db: Session, item_id: str) -> None:
     sales_service.quote_line_items.delete(db, item_id)
 
 
-def set_quote_status(db: Session, quote_id: str, status: str | None) -> None:
+def set_quote_status(
+    db: Session,
+    quote_id: str,
+    status: str | None,
+    *,
+    context: CommandContext | None = None,
+) -> None:
     clean = _clean_choice(status, quote_status_values())
     if not clean:
         raise ValueError("Unknown quote status.")
-    sales_service.quotes.update(db, quote_id, QuoteUpdate(status=QuoteStatus(clean)))
+    sales_service.quotes.update(
+        db,
+        quote_id,
+        QuoteUpdate(status=QuoteStatus(clean)),
+        context=context,
+    )
 
 
 def deactivate_quote(db: Session, quote_id: str) -> None:
@@ -1983,7 +2648,7 @@ def build_quote_detail_context(db: Session, *, quote_id: str) -> dict[str, Any]:
         "status_val": quote.status or QuoteStatus.draft.value,
         "is_accepted": (quote.status or "") == QuoteStatus.accepted.value,
         "quote_source": meta.get("source"),
-        "quote_project_type": meta.get("project_type"),
+        "quote_project_type": quote.project_type,
         "deposit": deposit,
         "deposit_percent": meta.get("deposit_percent"),
         "estimate_provisional": meta.get("estimate_provisional"),
