@@ -313,7 +313,7 @@
         const rows = Array.from(document.querySelectorAll(`[data-row="${group}"]`));
         rows.forEach((row, index) => {
             const input = row.querySelector("input:not([type=radio])");
-            const label = row.querySelector("label[for]");
+            const label = row.querySelector("label");
             const radio = row.querySelector("input[type=radio]");
             input.id = `${group === "emails" ? "email" : "phone"}-${index}`;
             label.htmlFor = input.id;
