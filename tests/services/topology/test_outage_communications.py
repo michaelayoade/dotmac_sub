@@ -26,15 +26,8 @@ from app.models.network_monitoring import (
 )
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services.topology import outage_communications
-from app.services.topology.outage_communications import (
-    NoticeStage,
-    NoticeStatus,
-    OutageCommunicationsDriftError,
-    plan_incident_notices,
-    send_incident_notices,
-)
 from app.services.settings_cache import SettingsCache
+from app.services.topology import outage_communications
 from app.services.topology.outage import (
     confirm_incident,
     declare_outage,
@@ -42,6 +35,13 @@ from app.services.topology.outage import (
     reopen_incident,
     resolve_outage,
     start_clearing,
+)
+from app.services.topology.outage_communications import (
+    NoticeStage,
+    NoticeStatus,
+    OutageCommunicationsDriftError,
+    plan_incident_notices,
+    send_incident_notices,
 )
 
 NOW = datetime(2026, 8, 2, 12, 0, 0, tzinfo=UTC)

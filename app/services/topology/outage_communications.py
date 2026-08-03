@@ -799,14 +799,18 @@ def plan_incident_notices(
             if not decision.allowed
         }
         if blocked:
+            # Only candidates that carried an address were evaluated, so a
+            # missing one simply cannot match a policy decision.
             candidates = [
                 (
-                    candidate
-                    if (candidate.subscriber_id, candidate.email) not in blocked
-                    else _reblock(
-                        candidate,
-                        blocked[(candidate.subscriber_id, candidate.email)],
+                    _reblock(candidate, refusal)
+                    if candidate.email
+                    and (
+                        refusal := blocked.get(
+                            (candidate.subscriber_id, candidate.email)
+                        )
                     )
+                    else candidate
                 )
                 for candidate in candidates
             ]
@@ -1060,6 +1064,21 @@ def send_incident_notices(
                     actor=actor,
                     now=evaluated_at,
                 )
+            continue
+        if candidate.email is None:
+            # Unreachable by construction — planning routes an addressless
+            # customer to the blocked namespace — but a send must never fan
+            # out to a resolved contact list, so fail closed rather than
+            # letting the intent pick an address for us.
+            _record(
+                db,
+                incident,
+                candidate,
+                NoticeStatus.skipped_no_recipient,
+                actor=actor,
+                now=evaluated_at,
+            )
+            suppressed += 1
             continue
 
         result = communication_intents.submit(
