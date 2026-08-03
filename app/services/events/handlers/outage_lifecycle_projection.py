@@ -96,8 +96,8 @@ class OutageLifecycleProjectionHandler:
         self, db: Session, event: Event, incident_id: str
     ) -> None:
         from app.services.common import coerce_uuid
-        from app.services.network import outage_communications
         from app.services.owner_commands import CommandContext
+        from app.services.topology import outage_communications
 
         context = CommandContext.system(
             actor=str(event.actor or "system:outage_lifecycle_projection"),

@@ -747,8 +747,8 @@ def _notice_context(request: Request, db: Session, incident_id: str):
     import uuid as _uuid
 
     from app.models.network_monitoring import OutageIncident
-    from app.services.network import outage_communications
     from app.services.status_presentation import outage_status_presentation
+    from app.services.topology import outage_communications
 
     context = _base_context(request, db, active_page="monitoring")
     context["incident_id"] = incident_id
@@ -805,7 +805,7 @@ def outage_communications_send(
 ):
     """Confirm and send. The owner command owns the transaction — this
     adapter never commits."""
-    from app.services.network import outage_communications
+    from app.services.topology import outage_communications
 
     context, incident = _notice_context(request, db, incident_id)
     if incident is None:

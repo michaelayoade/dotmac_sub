@@ -26,8 +26,8 @@ from app.models.network_monitoring import (
 )
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services.network import outage_communications
-from app.services.network.outage_communications import (
+from app.services.topology import outage_communications
+from app.services.topology.outage_communications import (
     NoticeStage,
     NoticeStatus,
     OutageCommunicationsDriftError,

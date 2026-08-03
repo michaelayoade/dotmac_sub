@@ -55,9 +55,10 @@ import hashlib
 import hmac
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -201,7 +202,10 @@ class IncidentNoticeResult:
 # customers from the admin UI mid-incident, without a deploy.
 
 
-def _gate(session: Session, key: str, fallback: object) -> object:
+def _gate(session: Session, key: str, fallback: object) -> Any:
+    # Any, not object: settings_spec.resolve_value is itself Any and every
+    # caller immediately coerces to bool/int. Typing it as object only forces
+    # a `type: ignore` at each of those coercions.
     value = settings_spec.resolve_value(session, SettingDomain.network_monitoring, key)
     return fallback if value is None else value
 
@@ -219,27 +223,27 @@ def _dry_run(session: Session) -> bool:
 def _settle_period(session: Session) -> timedelta:
     return timedelta(
         minutes=int(_gate(session, "outage_customer_comms_settle_minutes", 15))
-    )  # type: ignore[call-overload]
+    )
 
 
 def _min_affected(session: Session) -> int:
-    return int(_gate(session, "outage_customer_comms_min_affected", 5))  # type: ignore[call-overload]
+    return int(_gate(session, "outage_customer_comms_min_affected", 5))
 
 
 def _update_interval(session: Session) -> timedelta:
     return timedelta(
         hours=int(_gate(session, "outage_customer_comms_update_interval_hours", 6))
-    )  # type: ignore[call-overload]
+    )
 
 
 def _max_recipients(session: Session) -> int:
-    return int(_gate(session, "outage_customer_comms_max_recipients_per_run", 500))  # type: ignore[call-overload]
+    return int(_gate(session, "outage_customer_comms_max_recipients_per_run", 500))
 
 
 def _customer_cooldown(session: Session) -> timedelta:
     return timedelta(
         hours=int(_gate(session, "outage_customer_comms_customer_cooldown_hours", 2))
-    )  # type: ignore[call-overload]
+    )
 
 
 # --- helpers ---------------------------------------------------------------
@@ -339,7 +343,8 @@ def _history(rows: list[OutageCustomerNotice]) -> _History:
         if row.stage in (NoticeStage.opened.value, NoticeStage.update.value)
         and _in_episode(row)
     ]
-    last_told_at = max((_utc(row.created_at) for row in told), default=None)
+    told_at = [stamp for stamp in (_utc(row.created_at) for row in told) if stamp]
+    last_told_at = max(told_at, default=None)
     return _History(
         told_in_episode=bool(told),
         last_told_at=last_told_at,
@@ -844,6 +849,7 @@ def _candidate(
     reason: str | None = None,
 ) -> NoticeCandidate:
     ids = tuple(sorted(subscription_ids))
+    customer_impact = _customer_impact(states)
     downtime = (
         _downtime_for(db, incident.id, ids) if stage is NoticeStage.restored else None
     )
@@ -858,9 +864,7 @@ def _candidate(
         email=email,
         stage=stage,
         sequence=sequence,
-        impact_state=(
-            _customer_impact(states).value if _customer_impact(states) else "terminal"
-        ),
+        impact_state=(customer_impact.value if customer_impact else "terminal"),
         scope_revision_sequence=revision_sequence,
         subject=subject,
         body=body,
@@ -916,28 +920,29 @@ def _key_exists(db: Session, dedupe_key: str) -> bool:
     )
 
 
-def _requalify(candidate: NoticeCandidate, namespace: str, **overrides):
-    """Copy a candidate onto a different dedupe-key namespace."""
+def _requalify(
+    candidate: NoticeCandidate,
+    namespace: str,
+    *,
+    eligible: bool | None = None,
+    reason_code: str | None = None,
+    reason: str | None = None,
+) -> NoticeCandidate:
+    """Copy a candidate onto a different dedupe-key namespace.
 
-    _prefix, rest = candidate.dedupe_key.split(":", 1)
-    fields = {
-        "subscriber_id": candidate.subscriber_id,
-        "subscription_ids": candidate.subscription_ids,
-        "name": candidate.name,
-        "email": candidate.email,
-        "stage": candidate.stage,
-        "sequence": candidate.sequence,
-        "impact_state": candidate.impact_state,
-        "scope_revision_sequence": candidate.scope_revision_sequence,
-        "subject": candidate.subject,
-        "body": candidate.body,
-        "dedupe_key": f"{namespace}:{rest}",
-        "eligible": candidate.eligible,
-        "reason_code": candidate.reason_code,
-        "reason": candidate.reason,
-    }
-    fields.update(overrides)
-    return NoticeCandidate(**fields)
+    Overrides are named rather than splatted: only the disposition fields are
+    ever re-decided after planning, and naming them keeps the frozen contract
+    checkable instead of degrading to an untyped bag.
+    """
+
+    rest = candidate.dedupe_key.split(":", 1)[1]
+    return replace(
+        candidate,
+        dedupe_key=f"{namespace}:{rest}",
+        eligible=candidate.eligible if eligible is None else eligible,
+        reason_code=candidate.reason_code if reason_code is None else reason_code,
+        reason=candidate.reason if reason is None else reason,
+    )
 
 
 def _deferred(candidate: NoticeCandidate) -> NoticeCandidate:

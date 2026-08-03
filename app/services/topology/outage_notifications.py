@@ -399,7 +399,7 @@ def dispatch_outage_notifications(
     # only disarming the scheduler) is what makes the cutover real — an
     # operator clicking the legacy console must not produce a second opening
     # message from an audience the spine did not resolve.
-    from app.services.network import outage_communications
+    from app.services.topology import outage_communications
 
     if outage_communications.is_armed(session):
         plan = plan_outage_notifications(

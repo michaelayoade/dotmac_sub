@@ -17556,7 +17556,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
             SOTService(
                 name="network.outage_communications",
-                module="app.services.network.outage_communications",
+                module="app.services.topology.outage_communications",
                 owns=(
                     "customer outage communication decisions",
                     "customer outage notice record",
