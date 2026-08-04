@@ -181,9 +181,8 @@ def _snapshot(db: Session, quote: Quote) -> tuple[dict[str, object], str | None]
     brand = _resolved_brand(db, quote)
     logo_src = _logo_data_uri(db, brand.logo_url)
     metadata = quote.metadata_ if isinstance(quote.metadata_, dict) else {}
-    install = (
-        metadata.get("install") if isinstance(metadata.get("install"), dict) else {}
-    )
+    install_value = metadata.get("install")
+    install = install_value if isinstance(install_value, dict) else {}
     lines = sorted(quote.line_items, key=lambda item: (item.created_at, str(item.id)))
     payload: dict[str, object] = {
         "quote_id": str(quote.id),
