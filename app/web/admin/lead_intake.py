@@ -5,13 +5,9 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import ValidationError
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import finish_read_transaction, get_db
-from app.models.sales import Pipeline, PipelineStage
-from app.models.service_team import ServiceTeam
-from app.models.system_user import SystemUser
 from app.schemas.lead_intake import LeadIntakePartyType, LeadIntakeTemplateDraft
 from app.services.auth_dependencies import require_permission
 from app.services.owner_commands import CommandContext
@@ -44,26 +40,13 @@ def _context(request: Request, db: Session, **values):
     }
 
 
-def _options(db: Session):
+def _options(db: Session) -> dict[str, object]:
+    options = lead_intake.template_form_options(db)
     return {
-        "teams": db.scalars(
-            select(ServiceTeam)
-            .where(ServiceTeam.is_active.is_(True))
-            .order_by(ServiceTeam.name)
-        ).all(),
-        "owners": db.scalars(
-            select(SystemUser)
-            .where(SystemUser.is_active.is_(True))
-            .order_by(SystemUser.email)
-        ).all(),
-        "pipelines": db.scalars(
-            select(Pipeline).where(Pipeline.is_active.is_(True)).order_by(Pipeline.name)
-        ).all(),
-        "stages": db.scalars(
-            select(PipelineStage)
-            .where(PipelineStage.is_active.is_(True))
-            .order_by(PipelineStage.pipeline_id, PipelineStage.order_index)
-        ).all(),
+        "teams": options.teams,
+        "owners": options.owners,
+        "pipelines": options.pipelines,
+        "stages": options.stages,
     }
 
 

@@ -222,6 +222,14 @@ class LeadIntakeRolloutStatus:
     automatic_sends_active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class LeadIntakeTemplateFormOptions:
+    teams: tuple[ServiceTeam, ...]
+    owners: tuple[SystemUser, ...]
+    pipelines: tuple[Pipeline, ...]
+    stages: tuple[PipelineStage, ...]
+
+
 def _error(
     code: str, message: str, *, kind: str = "conflict", field: str | None = None
 ) -> LeadIntakeError:
@@ -446,6 +454,39 @@ def list_templates(db: Session) -> list[LeadIntakeTemplate]:
 
 def get_template(db: Session, template_id: UUID) -> LeadIntakeTemplate | None:
     return db.get(LeadIntakeTemplate, template_id)
+
+
+def template_form_options(db: Session) -> LeadIntakeTemplateFormOptions:
+    return LeadIntakeTemplateFormOptions(
+        teams=tuple(
+            db.scalars(
+                select(ServiceTeam)
+                .where(ServiceTeam.is_active.is_(True))
+                .order_by(ServiceTeam.name)
+            ).all()
+        ),
+        owners=tuple(
+            db.scalars(
+                select(SystemUser)
+                .where(SystemUser.is_active.is_(True))
+                .order_by(SystemUser.email)
+            ).all()
+        ),
+        pipelines=tuple(
+            db.scalars(
+                select(Pipeline)
+                .where(Pipeline.is_active.is_(True))
+                .order_by(Pipeline.name)
+            ).all()
+        ),
+        stages=tuple(
+            db.scalars(
+                select(PipelineStage)
+                .where(PipelineStage.is_active.is_(True))
+                .order_by(PipelineStage.pipeline_id, PipelineStage.order_index)
+            ).all()
+        ),
+    )
 
 
 def _bool_setting(db: Session, key: str, default: bool) -> bool:
