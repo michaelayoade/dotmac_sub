@@ -1934,6 +1934,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "mutation locks."
                         ),
                         idempotency=(
+                            "An idempotency key is unique across every "
+                            "series: the same key with the same fingerprint "
+                            "replays, the same key with different terms "
+                            "raises idempotency_conflict, and concurrent "
+                            "reuse is arbitrated by "
+                            "uq_sla_policy_versions_idempotency_key. "
                             "A durable command fingerprint over derived "
                             "policy key, source, effective_from and terms is "
                             "stored on the row under a unique constraint; a "
@@ -1947,10 +1953,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         retries=(
                             "A writer that loses the race surfaces "
                             "customer.service_level.concurrent_version_"
-                            "conflict from the exclusion/unique constraints "
-                            "rather than a raw database error, and is safe "
-                            "to retry after re-reading the series. Reads are "
-                            "always safe to retry."
+                            "conflict, but ONLY for the named race "
+                            "constraints; any other integrity error is bad "
+                            "input or a bug and surfaces as "
+                            "invalid_policy_version, because telling that "
+                            "caller to retry would loop forever. Scope and "
+                            "parent existence are validated before the "
+                            "database sees the row. Reads are always safe to "
+                            "retry."
                         ),
                     ),
                     errors=ErrorContract(
@@ -1963,6 +1973,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "customer.service_level.not_after_current",
                             "customer.service_level.would_rewrite_closed_period",
                             "customer.service_level.scope_required",
+                            "customer.service_level.invalid_scope",
+                            "customer.service_level.unknown_scope",
+                            "customer.service_level.idempotency_conflict",
+                            "customer.service_level.invalid_policy_version",
                             "customer.service_level.concurrent_version_conflict",
                         ),
                         mapping_owner="app.services.web_customer_details",
@@ -1971,6 +1985,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "effective_from at or before the version in force",
                             "backdating behind an already-closed version",
                             "a precedence claim with no matching scope",
+                            "a scope id that does not belong to the source",
+                            "a scope id with no such parent record",
+                            "an idempotency key reused for different terms",
                             "a concurrent writer winning the series race",
                         ),
                     ),

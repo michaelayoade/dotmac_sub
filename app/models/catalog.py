@@ -1526,6 +1526,12 @@ class SlaPolicyVersion(Base):
         UniqueConstraint(
             "command_fingerprint", name="uq_sla_policy_versions_fingerprint"
         ),
+        # Database arbitration for concurrent reuse of one idempotency key:
+        # the read-side check cannot serialise two processes on its own.
+        UniqueConstraint(
+            "command_idempotency_key",
+            name="uq_sla_policy_versions_idempotency_key",
+        ),
         Index("ix_sla_policy_versions_key", "policy_key", "version"),
         Index("ix_sla_policy_versions_subscription", "subscription_id"),
         Index("ix_sla_policy_versions_subscriber", "subscriber_id"),

@@ -166,18 +166,31 @@ def resolve_effective_policy(
 ) -> SlaPolicyVersion | None:
     """The effective contractual policy at ``at``, or None — never invented.
 
-    Persisted effective-dated versions win, by the approved precedence. The
-    legacy ``SlaProfile`` derivation below is the fallback for subscriptions
-    that have no persisted policy yet; it is retired by the cutover slice.
+    During the shadow migration BOTH sources are live, so both are ranked by
+    the one precedence order. Preferring any persisted row over the legacy
+    derivation would let a global ``internal_measurement`` policy — the
+    LOWEST precedence there is — mask a customer's actual offer SLA. The
+    legacy profile therefore competes at ``offer_version`` precedence, which
+    is what it represents.
+
+    Ties go to the persisted row: it is the authority the legacy derivation
+    is being retired in favour of.
     """
 
     instant = at or datetime.now(UTC)
     covering = _persisted_versions_covering(
         db, subscription, start=instant, end=instant + timedelta(microseconds=1)
     )
-    if covering:
-        return _row_to_policy(covering[0])
-    return _legacy_offer_policy(db, subscription)
+    candidates = [_row_to_policy(row) for row in covering]
+    legacy = _legacy_offer_policy(db, subscription)
+    if legacy is not None:
+        candidates.append(legacy)
+    if not candidates:
+        return None
+    rank = {source: index for index, source in enumerate(_PRECEDENCE)}
+    # min() is stable, so persisted rows (added first) win an equal-precedence
+    # tie against the legacy derivation.
+    return min(candidates, key=lambda policy: rank[policy.source])
 
 
 def _legacy_offer_policy(
@@ -578,6 +591,72 @@ def derive_policy_key(
     return "internal_measurement:global"
 
 
+#: Constraints that genuinely represent a lost race. Every OTHER integrity
+#: error is a bug or bad input and must not be dressed up as concurrency.
+_RACE_CONSTRAINTS = frozenset(
+    {
+        "ex_sla_policy_versions_no_overlap",
+        "uq_sla_policy_versions_key_version",
+        "uq_sla_policy_versions_fingerprint",
+        "uq_sla_policy_versions_idempotency_key",
+    }
+)
+
+
+def _validate_scope(db: Session, command: RecordPolicyVersionCommand) -> None:
+    """Exactly one source-matching scope, and its parent must exist.
+
+    Without this, an extra scope id or a nonexistent parent reaches PostgreSQL
+    and surfaces as an IntegrityError, which the writer would then mislabel as
+    a concurrency conflict — telling the caller to retry something that can
+    never succeed.
+    """
+
+    from app.models.subscriber import Subscriber
+
+    supplied = {
+        "subscription_id": command.subscription_id,
+        "subscriber_id": command.subscriber_id,
+        "offer_id": command.offer_id,
+    }
+    expected = {
+        SlaPolicySource.subscription_contract: "subscription_id",
+        SlaPolicySource.account_contract: "subscriber_id",
+        SlaPolicySource.offer_version: "offer_id",
+        SlaPolicySource.internal_measurement: None,
+    }[command.source]
+
+    extra = sorted(k for k, v in supplied.items() if v is not None and k != expected)
+    if extra:
+        raise SlaPolicyError(
+            code="customer.service_level.invalid_scope",
+            message=(
+                f"A {command.source.value} policy must carry only its own "
+                f"scope; got {', '.join(extra)}."
+            ),
+            details={"unexpected_scope": extra},
+        )
+    if expected is None:
+        return
+    scope_id = supplied[expected]
+    if scope_id is None:
+        raise SlaPolicyError(
+            code="customer.service_level.scope_required",
+            message=f"A {command.source.value} policy needs its {expected}.",
+        )
+    parent = {
+        "subscription_id": Subscription,
+        "subscriber_id": Subscriber,
+        "offer_id": CatalogOffer,
+    }[expected]
+    if db.get(parent, scope_id) is None:
+        raise SlaPolicyError(
+            code="customer.service_level.unknown_scope",
+            message=f"No {parent.__name__} exists for the supplied {expected}.",
+            details={expected: str(scope_id)},
+        )
+
+
 def _policy_fingerprint(command: RecordPolicyVersionCommand, key: str) -> str:
     """Stable identity of the *intent*, for replay arbitration.
 
@@ -620,7 +699,11 @@ def _outcome(record: SlaPolicyVersionRecord, *, replayed: bool) -> PolicyVersion
         source=SlaPolicySource(record.source),
         effective_from=_utc(record.effective_from) or datetime.now(UTC),
         superseded_version_id=record.supersedes_id,
-        superseded_at=_utc(record.effective_from),
+        # Nothing was superseded on version 1, so there is no instant at which
+        # it happened. Reporting effective_from here would invent one.
+        superseded_at=(
+            _utc(record.effective_from) if record.supersedes_id is not None else None
+        ),
         replayed=replayed,
         fingerprint=record.command_fingerprint or "",
     )
@@ -677,6 +760,7 @@ def record_policy_version(
                 ),
             )
 
+        _validate_scope(db, command)
         policy_key = derive_policy_key(
             command.source,
             subscription_id=command.subscription_id,
@@ -684,6 +768,33 @@ def record_policy_version(
             offer_id=command.offer_id,
         )
         fingerprint = _policy_fingerprint(command, policy_key)
+        idempotency_key = getattr(command.context, "idempotency_key", None)
+
+        # Idempotency-key semantics, checked before any series work:
+        #   same key + same fingerprint  -> replay the original outcome
+        #   same key + different inputs  -> conflict, never a second version
+        # The key is globally unique, so this search spans every series.
+        if idempotency_key:
+            prior = (
+                db.query(SlaPolicyVersionRecord)
+                .filter(
+                    SlaPolicyVersionRecord.command_idempotency_key == idempotency_key
+                )
+                .with_for_update()
+                .one_or_none()
+            )
+            if prior is not None:
+                if prior.command_fingerprint == fingerprint:
+                    return _outcome(prior, replayed=True)
+                raise SlaPolicyError(
+                    code="customer.service_level.idempotency_conflict",
+                    message=(
+                        "This idempotency key was already used for different "
+                        "policy terms; issue a new key or resend the original "
+                        "command unchanged."
+                    ),
+                    details={"policy_key": prior.policy_key},
+                )
 
         # Serialise writers on this series before reading "current version".
         existing = (
@@ -754,22 +865,43 @@ def record_policy_version(
             established_by=command.context.actor,
             supersedes_id=open_row.id if open_row is not None else None,
             command_fingerprint=fingerprint,
-            command_idempotency_key=getattr(command.context, "idempotency_key", None),
+            command_idempotency_key=idempotency_key,
         )
         db.add(record)
         try:
             db.flush()
         except IntegrityError as exc:
-            # The exclusion/unique constraints are the real arbiter under
-            # concurrency; surface a stable domain error rather than a raw
-            # database exception the adapter cannot classify.
+            constraint = getattr(
+                getattr(getattr(exc, "orig", None), "diag", None),
+                "constraint_name",
+                None,
+            )
+            if constraint == "uq_sla_policy_versions_idempotency_key":
+                # A concurrent reuse of the same key: the database arbitrated,
+                # and this caller lost. Same contract as the read-side check.
+                raise SlaPolicyError(
+                    code="customer.service_level.idempotency_conflict",
+                    message=(
+                        "This idempotency key was used concurrently for "
+                        "different policy terms."
+                    ),
+                    details={"policy_key": policy_key},
+                ) from exc
+            if constraint in _RACE_CONSTRAINTS:
+                raise SlaPolicyError(
+                    code="customer.service_level.concurrent_version_conflict",
+                    message=(
+                        "Another version of this policy was recorded "
+                        "concurrently; re-read the series and retry."
+                    ),
+                    details={"policy_key": policy_key, "constraint": constraint},
+                ) from exc
+            # Anything else is bad input or a bug. Telling the caller to retry
+            # would send them round a loop that can never succeed.
             raise SlaPolicyError(
-                code="customer.service_level.concurrent_version_conflict",
-                message=(
-                    "Another version of this policy was recorded concurrently; "
-                    "re-read the series and retry."
-                ),
-                details={"policy_key": policy_key},
+                code="customer.service_level.invalid_policy_version",
+                message="The policy version was rejected by the database.",
+                details={"policy_key": policy_key, "constraint": constraint},
             ) from exc
 
         emit_event(

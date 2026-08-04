@@ -681,3 +681,147 @@ def test_recording_a_policy_does_not_change_an_existing_score(
         ).availability_target_percent
         == 99.999
     )
+
+
+# --- review round 2: precedence during shadow migration, idempotency, input --
+
+
+def test_a_persisted_internal_policy_does_not_mask_the_legacy_offer_sla(
+    db_session, subscription, staged_owner_command
+):
+    """Both sources are live during the shadow migration, so both must be
+    ranked by ONE precedence order. `internal_measurement` is the lowest
+    precedence there is; preferring it because it happens to be persisted
+    would hide the customer's actual offer SLA."""
+
+    _attach_policy(db_session, subscription, uptime="99.50")
+    sla.record_policy_version(
+        db_session,
+        sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.internal_measurement,
+            effective_from=NOW - timedelta(days=30),
+            availability_target_percent=95.0,
+            context=_ctx(),
+        ),
+    )
+
+    policy = sla.resolve_effective_policy(db_session, subscription, at=NOW)
+
+    assert policy.source is sla.SlaPolicySource.offer_version
+    assert policy.availability_target_percent == 99.5
+
+
+def test_a_persisted_offer_policy_wins_the_tie_against_the_legacy_profile(
+    db_session, subscription, staged_owner_command
+):
+    """Equal precedence, so the persisted authority wins — it is what the
+    legacy derivation is being retired in favour of."""
+
+    _attach_policy(db_session, subscription, uptime="99.50")
+    sla.record_policy_version(
+        db_session,
+        sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.offer_version,
+            effective_from=NOW - timedelta(days=30),
+            availability_target_percent=99.8,
+            offer_id=subscription.offer_id,
+            context=_ctx(),
+        ),
+    )
+
+    policy = sla.resolve_effective_policy(db_session, subscription, at=NOW)
+
+    assert policy.availability_target_percent == 99.8
+
+
+def test_reusing_an_idempotency_key_for_different_terms_conflicts(
+    db_session, subscription, staged_owner_command
+):
+    """Same key + different inputs must never append a second version."""
+
+    from app.services.owner_commands import CommandContext
+
+    shared = CommandContext.system(
+        actor="test:sla",
+        scope="policy",
+        reason="acceptance",
+        idempotency_key="sla-fixed-key",
+    )
+
+    def _cmd(target):
+        return sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.subscription_contract,
+            effective_from=NOW - timedelta(days=10),
+            availability_target_percent=target,
+            subscription_id=subscription.id,
+            context=shared,
+        )
+
+    first = sla.record_policy_version(db_session, _cmd(99.9))
+    # Same key, same terms -> replay.
+    assert sla.record_policy_version(db_session, _cmd(99.9)).replayed is True
+    # Same key, different terms -> conflict, not a second version.
+    with pytest.raises(sla.SlaPolicyError) as caught:
+        sla.record_policy_version(db_session, _cmd(99.1))
+    assert caught.value.code == "customer.service_level.idempotency_conflict"
+
+    from app.models.catalog import SlaPolicyVersion as Record
+
+    assert (
+        db_session.query(Record).filter(Record.policy_key == first.policy_key).count()
+        == 1
+    )
+
+
+def test_a_scope_id_from_the_wrong_source_is_invalid_input(
+    db_session, subscription, staged_owner_command
+):
+    """Not a concurrency conflict — telling this caller to retry would loop."""
+
+    with pytest.raises(sla.SlaPolicyError) as caught:
+        sla.record_policy_version(
+            db_session,
+            sla.RecordPolicyVersionCommand(
+                source=sla.SlaPolicySource.subscription_contract,
+                effective_from=NOW,
+                availability_target_percent=99.9,
+                subscription_id=subscription.id,
+                offer_id=subscription.offer_id,  # extra scope
+                context=_ctx(),
+            ),
+        )
+    assert caught.value.code == "customer.service_level.invalid_scope"
+
+
+def test_a_nonexistent_parent_is_invalid_input_not_concurrency(
+    db_session, subscription, staged_owner_command
+):
+    with pytest.raises(sla.SlaPolicyError) as caught:
+        sla.record_policy_version(
+            db_session,
+            sla.RecordPolicyVersionCommand(
+                source=sla.SlaPolicySource.subscription_contract,
+                effective_from=NOW,
+                availability_target_percent=99.9,
+                subscription_id=uuid.uuid4(),
+                context=_ctx(),
+            ),
+        )
+    assert caught.value.code == "customer.service_level.unknown_scope"
+
+
+def test_version_one_supersedes_nothing(db_session, subscription, staged_owner_command):
+    outcome = sla.record_policy_version(
+        db_session,
+        sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.subscription_contract,
+            effective_from=NOW - timedelta(days=1),
+            availability_target_percent=99.9,
+            subscription_id=subscription.id,
+            context=_ctx(),
+        ),
+    )
+
+    assert outcome.version == 1
+    assert outcome.superseded_version_id is None
+    assert outcome.superseded_at is None, "nothing was superseded, so no instant"

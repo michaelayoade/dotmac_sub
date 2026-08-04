@@ -423,3 +423,29 @@ def test_a_replayed_command_cannot_append_a_second_row(engine, migrated_database
                 command_fingerprint="sha256:same",
             )
     assert caught.value.diag.constraint_name == "uq_sla_policy_versions_fingerprint"
+
+
+def test_concurrent_idempotency_key_reuse_is_arbitrated_by_the_database(
+    engine, migrated_database
+):
+    """The read-side check cannot serialise two processes on its own, so the
+    key carries a unique constraint as the real arbiter."""
+    _alembic(migrated_database, "head")
+
+    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+        _insert(
+            conn,
+            version=1,
+            effective_to=NOW + timedelta(days=1),
+            command_fingerprint="sha256:a",
+            command_idempotency_key="key-1",
+        )
+        with pytest.raises(pg_errors.UniqueViolation) as caught:
+            _insert(
+                conn,
+                version=2,
+                effective_from=NOW + timedelta(days=1),
+                command_fingerprint="sha256:b",
+                command_idempotency_key="key-1",
+            )
+    assert caught.value.diag.constraint_name == "uq_sla_policy_versions_idempotency_key"

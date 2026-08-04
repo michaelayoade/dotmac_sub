@@ -110,6 +110,10 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "command_fingerprint", name="uq_sla_policy_versions_fingerprint"
         ),
+        sa.UniqueConstraint(
+            "command_idempotency_key",
+            name="uq_sla_policy_versions_idempotency_key",
+        ),
         sa.CheckConstraint("version >= 1", name="ck_sla_policy_versions_version"),
         sa.CheckConstraint(
             "effective_to IS NULL OR effective_to > effective_from",
