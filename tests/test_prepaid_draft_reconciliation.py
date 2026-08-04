@@ -296,6 +296,10 @@ def test_exact_funded_onboarding_proforma_adopts_then_reconciles(
             effective_at=settlement_effective_at,
         ),
     )
+    post_settlement_replay = adopt_funded_prepaid_proforma(
+        db_session,
+        adoption_command,
+    )
 
     db_session.refresh(invoice)
     db_session.refresh(subscription)
@@ -305,6 +309,9 @@ def test_exact_funded_onboarding_proforma_adopts_then_reconciles(
     assert entitlement.source_invoice_id == invoice.id
     assert entitlement.subscription_id == subscription.id
     assert subscription.next_billing_at == entitlement.ends_at
+    assert post_settlement_replay.replayed is True
+    assert post_settlement_replay.settlement_payment_id == payment.id
+    assert post_settlement_replay.preview_fingerprint == adoption_fingerprint
 
 
 def test_proforma_adoption_fails_closed_without_reviewed_baseline(

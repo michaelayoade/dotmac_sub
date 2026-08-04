@@ -455,6 +455,63 @@ def _build_proforma_adoption_preview(
     )
 
 
+def _proforma_adoption_ref(invoice_id: UUID, preview_fingerprint: str) -> str:
+    return f"{invoice_id}|{preview_fingerprint}"
+
+
+def _parse_proforma_adoption_ref(ref_id: str | None) -> tuple[UUID, str] | None:
+    if ref_id is None:
+        return None
+    invoice_raw, separator, fingerprint = ref_id.partition("|")
+    if not separator or len(fingerprint) != 64:
+        return None
+    try:
+        invoice_id = UUID(invoice_raw)
+        int(fingerprint, 16)
+    except ValueError:
+        return None
+    return invoice_id, fingerprint
+
+
+def _proforma_adoption_reservation(
+    db: Session,
+    *,
+    invoice: Invoice,
+) -> IdempotencyKey | None:
+    return db.scalar(
+        select(IdempotencyKey)
+        .where(
+            IdempotencyKey.scope == _PROFORMA_ADOPTION_IDEMPOTENCY_SCOPE,
+            IdempotencyKey.account_id == invoice.account_id,
+            IdempotencyKey.ref_id.like(f"{invoice.id}|%"),
+        )
+        .order_by(IdempotencyKey.created_at, IdempotencyKey.id)
+        .limit(1)
+    )
+
+
+def _proforma_adoption_payment(db: Session, invoice: Invoice) -> Payment | None:
+    allocated_payment_ids = tuple(
+        db.scalars(
+            select(PaymentAllocation.payment_id)
+            .where(
+                PaymentAllocation.invoice_id == invoice.id,
+                PaymentAllocation.is_active.is_(True),
+            )
+            .distinct()
+            .order_by(PaymentAllocation.payment_id)
+        ).all()
+    )
+    if len(allocated_payment_ids) == 1:
+        return db.get(Payment, allocated_payment_ids[0])
+    if allocated_payment_ids:
+        return None
+    funding = _funding_preview(db, invoice)
+    if len(funding.source_payment_ids) != 1:
+        return None
+    return db.get(Payment, funding.source_payment_ids[0])
+
+
 def preview_funded_prepaid_proforma_adoption(
     db: Session,
     query: PrepaidProformaAdoptionQuery,
@@ -473,8 +530,17 @@ def preview_funded_prepaid_proforma_adoption(
             "Invoice was not found.",
             invoice_id=str(query.invoice_id),
         )
-    metadata = dict(invoice.metadata_ or {}).get(_PROFORMA_ADOPTION_METADATA_KEY)
-    if isinstance(metadata, dict) and not invoice.is_proforma:
+    adoption_reservation = _proforma_adoption_reservation(db, invoice=invoice)
+    adoption_ref = (
+        _parse_proforma_adoption_ref(adoption_reservation.ref_id)
+        if adoption_reservation is not None
+        else None
+    )
+    if (
+        adoption_ref is not None
+        and adoption_ref[0] == invoice.id
+        and not invoice.is_proforma
+    ):
         line = next(
             (
                 item
@@ -483,13 +549,14 @@ def preview_funded_prepaid_proforma_adoption(
             ),
             None,
         )
-        if line is not None:
-            payment_id_raw = metadata.get("settlement_payment_id")
-            payment = (
-                db.get(Payment, UUID(str(payment_id_raw)))
-                if payment_id_raw is not None
-                else None
-            )
+        payment = _proforma_adoption_payment(db, invoice)
+        if (
+            line is not None
+            and payment is not None
+            and payment.paid_at is not None
+            and invoice.billing_period_start is not None
+            and invoice.billing_period_end is not None
+        ):
             return _build_proforma_adoption_preview(
                 invoice=invoice,
                 subscription_id=query.subscription_id,
@@ -1692,44 +1759,46 @@ def _replay_proforma_adoption_result(
     command: AdoptFundedPrepaidProformaCommand,
     reservation: IdempotencyKey,
 ) -> PrepaidProformaAdoptionResult:
-    if reservation.ref_id != str(command.invoice_id):
+    parsed_ref = _parse_proforma_adoption_ref(reservation.ref_id)
+    if parsed_ref is None or parsed_ref[0] != command.invoice_id:
         _error(
             "idempotency_conflict",
             "Idempotency key belongs to another invoice.",
         )
+    _invoice_id, preview_fingerprint = parsed_ref
     invoice = db.get(Invoice, command.invoice_id, populate_existing=True)
-    metadata = (
-        dict(invoice.metadata_ or {}).get(_PROFORMA_ADOPTION_METADATA_KEY)
-        if invoice is not None
-        else None
-    )
-    if invoice is None or not isinstance(metadata, dict):
+    if invoice is None:
         _error(
             "idempotency_conflict",
             "Proforma adoption evidence is incomplete.",
         )
-    if metadata.get(
-        "idempotency_key"
-    ) != command.context.idempotency_key or metadata.get("subscription_id") != str(
-        command.subscription_id
+    matching_lines = tuple(
+        line
+        for line in _active_positive_lines(db, invoice.id)
+        if command.subscription_id == line.subscription_id
+    )
+    payment = _proforma_adoption_payment(db, invoice)
+    if (
+        len(matching_lines) != 1
+        or payment is None
+        or payment.paid_at is None
+        or invoice.billing_period_start is None
+        or invoice.billing_period_end is None
     ):
         _error(
             "idempotency_conflict",
-            "Proforma adoption evidence does not match the idempotency key.",
+            "Proforma adoption structural evidence is incomplete.",
         )
+    line = matching_lines[0]
     return PrepaidProformaAdoptionResult(
         invoice_id=invoice.id,
-        subscription_id=UUID(str(metadata["subscription_id"])),
-        line_id=UUID(str(metadata["line_id"])),
-        settlement_payment_id=UUID(str(metadata["settlement_payment_id"])),
-        settlement_effective_at=datetime.fromisoformat(
-            str(metadata["settlement_effective_at"])
-        ),
-        billing_period_start=datetime.fromisoformat(
-            str(metadata["billing_period_start"])
-        ),
-        billing_period_end=datetime.fromisoformat(str(metadata["billing_period_end"])),
-        preview_fingerprint=str(metadata["preview_fingerprint"]),
+        subscription_id=command.subscription_id,
+        line_id=line.id,
+        settlement_payment_id=payment.id,
+        settlement_effective_at=_utc(payment.paid_at),
+        billing_period_start=_utc(invoice.billing_period_start),
+        billing_period_end=_utc(invoice.billing_period_end),
+        preview_fingerprint=preview_fingerprint,
         replayed=True,
     )
 
@@ -1814,7 +1883,10 @@ def adopt_funded_prepaid_proforma(
             scope=_PROFORMA_ADOPTION_IDEMPOTENCY_SCOPE,
             key=key,
             account_id=current.account_id,
-            ref_id=str(current.invoice_id),
+            ref_id=_proforma_adoption_ref(
+                current.invoice_id,
+                current.fingerprint,
+            ),
         )
         db.add(reservation)
         try:
