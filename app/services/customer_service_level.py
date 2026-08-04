@@ -591,14 +591,30 @@ def derive_policy_key(
     return "internal_measurement:global"
 
 
-#: Constraints that genuinely represent a lost race. Every OTHER integrity
-#: error is a bug or bad input and must not be dressed up as concurrency.
+#: Constraints that genuinely represent a lost race. A raw collision does not
+#: reveal WHAT the winner wrote, so all of these are reported as retryable:
+#: the retry re-reads the winner and decides replay-or-conflict from evidence
+#: rather than guessing here.
 _RACE_CONSTRAINTS = frozenset(
     {
         "ex_sla_policy_versions_no_overlap",
         "uq_sla_policy_versions_key_version",
         "uq_sla_policy_versions_fingerprint",
         "uq_sla_policy_versions_idempotency_key",
+    }
+)
+
+#: Constraints that can only mean bad input. Everything outside these two sets
+#: is an unexpected defect and MUST stay unexpected — swallowing an unknown
+#: constraint or driver failure into a tidy domain error hides the bug.
+_INPUT_CONSTRAINTS = frozenset(
+    {
+        "ck_sla_policy_versions_version",
+        "ck_sla_policy_versions_range",
+        "ck_sla_policy_versions_target_bounds",
+        "ck_sla_policy_versions_contractual_target",
+        "ck_sla_policy_versions_scope_matches_source",
+        "ck_sla_policy_versions_key_is_derived",
     }
 )
 
@@ -770,10 +786,18 @@ def record_policy_version(
         fingerprint = _policy_fingerprint(command, policy_key)
         idempotency_key = getattr(command.context, "idempotency_key", None)
 
-        # Idempotency-key semantics, checked before any series work:
+        # Idempotency semantics. When a key is supplied it — not the
+        # fingerprint — is the identity:
         #   same key + same fingerprint  -> replay the original outcome
         #   same key + different inputs  -> conflict, never a second version
-        # The key is globally unique, so this search spans every series.
+        # Replaying on a fingerprint match alone would report success under a
+        # key that was never persisted, leaving that key free to append later
+        # with different terms instead of conflicting.
+        duplicate_terms = (
+            db.query(SlaPolicyVersionRecord)
+            .filter(SlaPolicyVersionRecord.command_fingerprint == fingerprint)
+            .one_or_none()
+        )
         if idempotency_key:
             prior = (
                 db.query(SlaPolicyVersionRecord)
@@ -795,6 +819,23 @@ def record_policy_version(
                     ),
                     details={"policy_key": prior.policy_key},
                 )
+            if duplicate_terms is not None:
+                # These exact terms exist under a DIFFERENT key. Reporting
+                # success would reserve nothing for this key. Retrying cannot
+                # help, so this is a conflict, not concurrency.
+                raise SlaPolicyError(
+                    code="customer.service_level.duplicate_policy_terms",
+                    message=(
+                        "These exact policy terms were already recorded under "
+                        "a different command; resend that command's key to "
+                        "replay it, or change the terms."
+                    ),
+                    details={"policy_key": duplicate_terms.policy_key},
+                )
+        elif duplicate_terms is not None:
+            # No key supplied, so the fingerprint is the only identity there
+            # is and replaying on it is the best available contract.
+            return _outcome(duplicate_terms, replayed=True)
 
         # Serialise writers on this series before reading "current version".
         existing = (
@@ -804,12 +845,6 @@ def record_policy_version(
             .with_for_update()
             .all()
         )
-
-        replay = next(
-            (r for r in existing if r.command_fingerprint == fingerprint), None
-        )
-        if replay is not None:
-            return _outcome(replay, replayed=True)
 
         for row in existing:
             row_end = _utc(row.effective_to)
@@ -876,33 +911,30 @@ def record_policy_version(
                 "constraint_name",
                 None,
             )
-            if constraint == "uq_sla_policy_versions_idempotency_key":
-                # A concurrent reuse of the same key: the database arbitrated,
-                # and this caller lost. Same contract as the read-side check.
-                raise SlaPolicyError(
-                    code="customer.service_level.idempotency_conflict",
-                    message=(
-                        "This idempotency key was used concurrently for "
-                        "different policy terms."
-                    ),
-                    details={"policy_key": policy_key},
-                ) from exc
             if constraint in _RACE_CONSTRAINTS:
+                # A raw collision does not reveal whether the winner wrote the
+                # SAME terms or different ones — a concurrent identical retry
+                # hits the key constraint exactly as a conflicting one does.
+                # So this is retryable; the retry re-reads the winner above and
+                # decides replay-or-conflict from evidence.
                 raise SlaPolicyError(
                     code="customer.service_level.concurrent_version_conflict",
                     message=(
-                        "Another version of this policy was recorded "
+                        "Another writer recorded a version of this policy "
                         "concurrently; re-read the series and retry."
                     ),
                     details={"policy_key": policy_key, "constraint": constraint},
                 ) from exc
-            # Anything else is bad input or a bug. Telling the caller to retry
-            # would send them round a loop that can never succeed.
-            raise SlaPolicyError(
-                code="customer.service_level.invalid_policy_version",
-                message="The policy version was rejected by the database.",
-                details={"policy_key": policy_key, "constraint": constraint},
-            ) from exc
+            if constraint in _INPUT_CONSTRAINTS:
+                raise SlaPolicyError(
+                    code="customer.service_level.invalid_policy_version",
+                    message="The policy version was rejected by the database.",
+                    details={"policy_key": policy_key, "constraint": constraint},
+                ) from exc
+            # An unrecognised constraint or a driver failure is an unexpected
+            # defect. Dressing it as a domain error would hide the bug behind a
+            # tidy contract the caller can neither act on nor report.
+            raise
 
         emit_event(
             db,

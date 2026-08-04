@@ -1934,12 +1934,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "mutation locks."
                         ),
                         idempotency=(
-                            "An idempotency key is unique across every "
-                            "series: the same key with the same fingerprint "
-                            "replays, the same key with different terms "
-                            "raises idempotency_conflict, and concurrent "
-                            "reuse is arbitrated by "
-                            "uq_sla_policy_versions_idempotency_key. "
+                            "When a key is supplied it, not the fingerprint, "
+                            "is the identity: the same key with the same "
+                            "fingerprint replays, the same key with different "
+                            "terms raises idempotency_conflict, and identical "
+                            "terms submitted under a NEW key raise "
+                            "duplicate_policy_terms rather than reporting "
+                            "success under a key that reserves nothing. With "
+                            "no key supplied the fingerprint is the only "
+                            "identity and replays on match. "
                             "A durable command fingerprint over derived "
                             "policy key, source, effective_from and terms is "
                             "stored on the row under a unique constraint; a "
@@ -1953,12 +1956,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         retries=(
                             "A writer that loses the race surfaces "
                             "customer.service_level.concurrent_version_"
-                            "conflict, but ONLY for the named race "
-                            "constraints; any other integrity error is bad "
-                            "input or a bug and surfaces as "
-                            "invalid_policy_version, because telling that "
-                            "caller to retry would loop forever. Scope and "
-                            "parent existence are validated before the "
+                            "conflict for the named race constraints, "
+                            "including the idempotency key: a raw collision "
+                            "does not reveal whether the winner wrote the "
+                            "same terms, so the retry re-reads the winner and "
+                            "decides replay-or-conflict from evidence. Named "
+                            "input constraints surface as "
+                            "invalid_policy_version, since retrying those "
+                            "would loop forever. Any UNRECOGNISED constraint "
+                            "or driver failure is re-raised unchanged — an "
+                            "unexpected defect must stay unexpected. Scope "
+                            "and parent existence are validated before the "
                             "database sees the row. Reads are always safe to "
                             "retry."
                         ),
@@ -1976,6 +1984,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "customer.service_level.invalid_scope",
                             "customer.service_level.unknown_scope",
                             "customer.service_level.idempotency_conflict",
+                            "customer.service_level.duplicate_policy_terms",
                             "customer.service_level.invalid_policy_version",
                             "customer.service_level.concurrent_version_conflict",
                         ),
@@ -1988,6 +1997,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "a scope id that does not belong to the source",
                             "a scope id with no such parent record",
                             "an idempotency key reused for different terms",
+                            "identical terms already recorded under another key",
                             "a concurrent writer winning the series race",
                         ),
                     ),

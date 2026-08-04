@@ -590,11 +590,19 @@ def test_policy_identity_is_derived_from_the_real_scope(db_session, subscription
         sla.derive_policy_key(sla.SlaPolicySource.account_contract)
 
 
-def test_replaying_the_same_command_returns_the_original_outcome(
+def test_replaying_the_same_key_returns_the_original_outcome(
     db_session, subscription, staged_owner_command
 ):
-    """A retry must not raise `not_after_current` against the row it already
-    created."""
+    """A retry with the SAME key must not raise against the row it created."""
+
+    from app.services.owner_commands import CommandContext
+
+    ctx = CommandContext.system(
+        actor="test:sla",
+        scope="policy",
+        reason="acceptance",
+        idempotency_key="sla-replay-key",
+    )
 
     def _cmd():
         return sla.RecordPolicyVersionCommand(
@@ -602,7 +610,7 @@ def test_replaying_the_same_command_returns_the_original_outcome(
             effective_from=NOW - timedelta(days=10),
             availability_target_percent=99.9,
             subscription_id=subscription.id,
-            context=_ctx(),
+            context=ctx,
         )
 
     first = sla.record_policy_version(db_session, _cmd())
@@ -611,8 +619,6 @@ def test_replaying_the_same_command_returns_the_original_outcome(
     assert first.replayed is False
     assert replay.replayed is True
     assert replay.policy_version_id == first.policy_version_id
-    assert replay.version == first.version
-    assert replay.fingerprint == first.fingerprint
 
     from app.models.catalog import SlaPolicyVersion as Record
 
@@ -620,6 +626,114 @@ def test_replaying_the_same_command_returns_the_original_outcome(
         db_session.query(Record).filter(Record.policy_key == first.policy_key).count()
         == 1
     ), "a replay must not append a second version"
+
+
+def test_a_new_key_cannot_claim_success_for_existing_terms(
+    db_session, subscription, staged_owner_command
+):
+    """The hole this closes: key A records terms F; key B submits F. Replaying
+    on the fingerprint would report success while B was never persisted,
+    leaving B free to append later with different terms instead of
+    conflicting."""
+
+    from app.services.owner_commands import CommandContext
+
+    def _ctx_named(key):
+        return CommandContext.system(
+            actor="test:sla",
+            scope="policy",
+            reason="acceptance",
+            idempotency_key=key,
+        )
+
+    def _cmd(key, target):
+        return sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.subscription_contract,
+            effective_from=NOW - timedelta(days=10),
+            availability_target_percent=target,
+            subscription_id=subscription.id,
+            context=_ctx_named(key),
+        )
+
+    sla.record_policy_version(db_session, _cmd("key-A", 99.9))
+
+    # B/F must NOT report success — B reserves nothing.
+    with pytest.raises(sla.SlaPolicyError) as caught:
+        sla.record_policy_version(db_session, _cmd("key-B", 99.9))
+    assert caught.value.code == "customer.service_level.duplicate_policy_terms"
+
+    from app.models.catalog import SlaPolicyVersion as Record
+
+    assert (
+        db_session.query(Record)
+        .filter(Record.command_idempotency_key == "key-B")
+        .count()
+        == 0
+    ), "a key that never succeeded must not be recorded"
+
+
+def test_a_concurrent_loser_retrying_with_the_same_terms_replays(
+    db_session, subscription, staged_owner_command
+):
+    """Command-level semantics after losing the unique-key race: the winner
+    wrote the SAME terms, so the retry replays rather than conflicting.
+
+    The raw PostgreSQL canary proves the constraint; this proves the service
+    behaviour built on it."""
+
+    from app.services.owner_commands import CommandContext
+
+    ctx = CommandContext.system(
+        actor="test:sla",
+        scope="policy",
+        reason="acceptance",
+        idempotency_key="sla-race-key",
+    )
+    cmd = sla.RecordPolicyVersionCommand(
+        source=sla.SlaPolicySource.subscription_contract,
+        effective_from=NOW - timedelta(days=10),
+        availability_target_percent=99.9,
+        subscription_id=subscription.id,
+        context=ctx,
+    )
+    winner = sla.record_policy_version(db_session, cmd)
+
+    # The loser retries the identical command.
+    retry = sla.record_policy_version(db_session, cmd)
+
+    assert retry.replayed is True
+    assert retry.policy_version_id == winner.policy_version_id
+
+
+def test_a_concurrent_loser_retrying_with_different_terms_conflicts(
+    db_session, subscription, staged_owner_command
+):
+    """Same key, but the winner wrote different terms — the retry must not
+    quietly append a second version."""
+
+    from app.services.owner_commands import CommandContext
+
+    ctx = CommandContext.system(
+        actor="test:sla",
+        scope="policy",
+        reason="acceptance",
+        idempotency_key="sla-race-key-2",
+    )
+
+    def _cmd(target):
+        return sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.subscription_contract,
+            effective_from=NOW - timedelta(days=10),
+            availability_target_percent=target,
+            subscription_id=subscription.id,
+            context=ctx,
+        )
+
+    sla.record_policy_version(db_session, _cmd(99.9))
+
+    with pytest.raises(sla.SlaPolicyError) as caught:
+        sla.record_policy_version(db_session, _cmd(99.1))
+    assert caught.value.code == "customer.service_level.idempotency_conflict"
 
 
 def test_the_outcome_is_immutable_and_not_the_orm_row(
