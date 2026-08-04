@@ -1176,7 +1176,6 @@ def quote_pdf_download(
         export = quote_documents.get_export(db, outcome.export_id)
         stream = quote_documents.stream_export(db, export)
     except (DomainError, ValueError) as exc:
-        db.rollback()
         context = _ctx(request, db, "sales-quotes")
         context.update(
             web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
@@ -1223,7 +1222,6 @@ def quote_send_email(
             ),
         )
     except (DomainError, ValueError) as exc:
-        db.rollback()
         context = _ctx(request, db, "sales-quotes")
         context.update(
             web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
