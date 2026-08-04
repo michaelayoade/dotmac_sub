@@ -1058,8 +1058,8 @@ def preview_historical_paid_prepaid_invoice_repair(
             allocation=repair_evidence.allocation,
             settlement=repair_evidence.settlement,
             payment=repair_evidence.payment,
-            period_start=_utc(invoice.billing_period_start),
-            period_end=_utc(invoice.billing_period_end),
+            period_start=_utc(repair_evidence.entitlement.starts_at),
+            period_end=_utc(repair_evidence.entitlement.ends_at),
         )
 
     if (
