@@ -96,29 +96,19 @@ declaration is what turns redaction on.
 The prompt and the projection contents are never audited or logged — only the
 fact of generation, the advisor, the projection key, and provider telemetry.
 
-## What is not implemented
+## Customer-message intake
 
-`AiIntakeConfig` (`app/models/ai_intake.py`) is a **CRM import for a feature
-Sub does not have**: an AI that answers inbound conversations, routes them to
-departments and escalates to a fallback team. Its fields say so —
-`department_mappings`, `fallback_team_id`, `escalate_after_minutes`,
-`exclude_campaign_attribution`. It has an admin CRUD API and no reader.
+`AiIntakeConfig` is now the runtime control for the separate customer-message
+classification owner described in `docs/designs/CUSTOMER_AI_INTAKE.md`. It does
+not gate advisors: advisors remain controlled by `ai.generation`, their
+per-advisor setting, and token budget.
 
-It is **not** the gate for advisors and must not be pressed into that role:
-forcing a conversational-intake model into the advisory path would leave most
-of its fields inert while implying they mean something. Advisors are gated by
-the `ai.generation` control, a per-advisor setting key, and a daily token
-budget.
-
-Its `allow_followup_questions` and `max_clarification_turns` fields describe a
-multi-turn agent that fetches more data mid-reasoning. That contradicts this
-design: the moment AI fetches its own data, the boundary stops holding by
-construction. Such an agent would not extend this document — it would replace
-it, and requires its own architecture decision.
-
-`AiIntakeConfig` therefore stays parked and unread, pending the AI
-chat-support work. If that work does not adopt it, delete the model and its
-API: an unenforced gate with an admin UI reads as protection and is not.
+The customer-intake owner is not a data-fetching agent. It receives the exact
+committed Inbox message identity and a bounded recent-thread projection from
+the Inbox consequence adapter, applies customer-content redaction, and asks the
+gateway for one strict classification observation. Domain policy validates the
+closed values, owns follow-up and fallback decisions, and calls the existing
+routing and Sales owners for consequences.
 
 ## Implemented extensions
 
@@ -131,6 +121,10 @@ API: an unenforced gate with an admin UI reads as protection and is not.
   zero-retention provider transport governed by
   `docs/designs/VOICE_TRANSCRIPTION_DATA_PROTECTION.md`. It writes no AI or
   domain row and inserts returned text only into an unsent browser composer.
+- **Customer-message intake.** `crm.ai_intake` uses the gateway as transport,
+  persists one controlled assessment per inbound message, and requests a
+  team-only route. The gateway never selects an agent or mutates Inbox, ticket,
+  billing, subscription, or Lead state.
 
 ## Open work
 

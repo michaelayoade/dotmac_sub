@@ -1,0 +1,133 @@
+name: Customer AI Intake Validation
+
+on:
+  push:
+    branches: [agent/customer-ai-intake-review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: customer-ai-intake-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "2.4.1"
+  DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test
+  SECRET_KEY: ci-test-secret-key-not-for-production
+  REDIS_URL: redis://localhost:6379/0
+  POETRY_HTTP_BASIC_FORGEJO_USERNAME: ci-reader
+  POETRY_HTTP_BASIC_FORGEJO_PASSWORD: ${{ secrets.FORGEJO_READ_TOKEN }}
+
+jobs:
+  targeted:
+    name: Targeted Intake Checks (No Architecture Tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dotmac_sub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dotmac_sub_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        id: python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Restore Poetry installation
+        id: poetry-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local
+          key: poetry-v1-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ env.POETRY_VERSION }}
+
+      - name: Install Poetry
+        if: steps.poetry-cache.outputs.cache-hit != 'true'
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Configure Poetry
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/poetry" config virtualenvs.create true
+          "$HOME/.local/bin/poetry" config virtualenvs.in-project true
+
+      - name: Restore Python environment
+        id: python-cache
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: customer-ai-intake-v1-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('poetry.lock', 'pyproject.toml') }}
+
+      - name: Install dependencies
+        if: steps.python-cache.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction
+
+      - name: Ruff
+        run: |
+          poetry run ruff check app tests scripts alembic
+          poetry run ruff format --check app tests scripts alembic
+
+      - name: Targeted MyPy
+        run: >-
+          poetry run mypy
+          app/services/crm/ai_intake.py
+          app/services/sales/lead_intake.py
+          app/services/lead_intake_ai.py
+          app/services/team_inbox_channel_receive.py
+          app/services/team_inbox_routing.py
+          app/services/team_inbox_assignment.py
+          --ignore-missing-imports
+          --no-incremental
+
+      - name: SOT manifest validation
+        run: poetry run python -m scripts.architecture.sot_manifest_docs
+
+      - name: Migration head resolution
+        run: poetry run alembic heads
+
+      - name: Migration upgrade, downgrade, and re-upgrade
+        run: |
+          poetry run alembic upgrade head
+          poetry run alembic downgrade 467_sla_policy_versions
+          poetry run alembic upgrade head
+
+      - name: Targeted behavior tests
+        run: >-
+          poetry run pytest -q
+          tests/test_customer_ai_intake.py
+          tests/test_lead_intake.py
+          tests/test_web_lead_intake.py
+          tests/test_team_inbox_routing.py
+          tests/test_team_inbox_assignment.py
+          tests/test_team_inbox_channel_receive.py
+          tests/test_team_inbox_outbound.py
+          tests/test_sot_relationships.py

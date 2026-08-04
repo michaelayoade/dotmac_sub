@@ -94,6 +94,7 @@ closed before SalesOrder money can be overwritten.
 | Verified provider receipt | `integration.inbox` |
 | Party-first capture and source replay | `sales.capture` |
 | Atomic admin Person and Lead authoring | `sales.lead_authoring` |
+| Versioned Inbox prospect intake and Party-first Lead conversion | `sales.lead_intake` |
 | Immutable origin | `sales.lead_lifecycle` |
 | Atomic Lead-backed New Quote authoring | `sales.quote_authoring` |
 | Atomic Quote acceptance and sales conversion | `sales.quote_acceptance` |
@@ -119,6 +120,12 @@ errors. They do not write lifecycle state directly. Domain services must not
 depend on HTTP request/response or exception types.
 
 ## Selfcare CRM Leads page contract
+
+The Lead list links to the `sales.lead_intake` template control plane. Inbox
+intake is an additional Party-first authoring path: it creates no Subscriber
+and cannot bypass Quote acceptance or the reviewed account-conversion owner.
+Its public and Inbox page contract is defined in
+`docs/designs/INBOX_LEAD_INTAKE.md`.
 
 - Screen identifiers: `sales-leads-list`, `sales-lead-create`,
   `sales-lead-edit`, and `sales-lead-detail`.

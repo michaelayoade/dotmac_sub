@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.api import support as support_api
-from app.models.notification import CommunicationIntentRecord, Notification
+from app.models.notification import (
+    CommunicationIntentRecord,
+    Notification,
+    NotificationChannel,
+)
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.subscription_engine import SettingValueType
@@ -220,6 +224,47 @@ def test_send_inbox_reply_does_not_call_whatsapp_provider_inline(
     assert result.kind == "queued"
     assert calls == []
     assert db_session.query(InboxMessage).count() == 1
+
+
+def test_send_inbox_reply_queues_provider_scoped_meta_direct_message(db_session):
+    conversation = InboxConversation(
+        channel_type="facebook_messenger",
+        subject="Messenger enquiry",
+        contact_address="opaque-prospect-123",
+        status=InboxConversationStatus.open.value,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="facebook_messenger",
+            direction=InboxMessageDirection.inbound.value,
+            body="Can I get service?",
+            from_address="opaque-prospect-123",
+            metadata_={"provider_account_scope": "page-456"},
+        )
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html=None,
+            body_text="Please complete the secure form.",
+        ),
+    )
+    db_session.commit()
+
+    notification = db_session.query(Notification).one()
+    message = db_session.query(InboxMessage).filter_by(direction="outbound").one()
+    assert result.kind == "queued"
+    assert notification.channel == NotificationChannel.facebook_messenger
+    assert notification.recipient == "opaque-prospect-123"
+    assert notification.metadata_["provider_account_id"] == "page-456"
+    assert message.notification_id == notification.id
+    assert message.metadata_["delivery_status"] == "queued"
 
 
 def _social_comment_conversation(

@@ -58,6 +58,7 @@ person or organization is; each named domain owner keeps its own lifecycle.
 | Native outbound campaign | `communications.campaigns` | Sub campaign, audience, recipients, and delivery state |
 | Lead identity and origin | `sales.lead_lifecycle` | Party-first Lead, immutable origin, reviewed account attachment |
 | Admin Person and Lead authoring | `sales.lead_authoring` | Atomic Person Party, contact points, Organization relationship, Lead, origin, audit, and event |
+| Inbox Lead intake | `sales.lead_intake` | Versioned forms and atomic unknown Meta prospect to Party-first Lead conversion; never creates a Subscriber |
 | Referral program | `referrals.program` | Capture policy, canonical program and account-attachment records, qualification/reward policy, and atomic transitions |
 | Referral account orchestration | `referrals.account_conversion` | Exact Referral/Party/Lead context into atomic account creation or reviewed attachment |
 | Pipeline and Quote | `sales.service` | Opportunity progress and Lead-backed commercial offer |
@@ -94,6 +95,13 @@ An exact account-attachment retry is idempotent. A different account or Party
 is refused until a reviewed merge/repoint workflow exists. Legacy
 Subscriber-only Leads remain readable and auditable; revision 355 does not
 pretend they have already been classified.
+
+Inbox Lead intake follows the same Party-first boundary. A completed, unexpired
+invitation creates either a Person Party or an Organization Party with its
+representative, adds an exact channel contact point with unknown consent, and
+creates the Lead without a Subscriber. The Inbox participant binding is scoped
+to the exact provider account and endpoint that received the form. See
+`docs/designs/INBOX_LEAD_INTAKE.md`.
 
 ## Origin and attribution contract
 

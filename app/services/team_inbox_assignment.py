@@ -556,3 +556,87 @@ def escalate_conversation_committed(
             reason=reason,
         ),
     )
+
+
+def route_unassigned_conversation_committed(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    service_team_id: str | UUID,
+    reason: str,
+) -> InboxAssignmentResult:
+    """Change only team ownership; preserve any existing agent assignment.
+
+    AI intake uses this command instead of the assignment/dispatcher entry
+    points. The unassigned Inbox queue is a projection of conversation state,
+    so this command neither creates an assignment nor changes ordering facts.
+    """
+
+    def operation() -> InboxAssignmentResult:
+        conversation_uuid = _coerce_uuid(conversation_id)
+        team_uuid = _coerce_uuid(service_team_id)
+        conversation = (
+            db.query(InboxConversation)
+            .filter(InboxConversation.id == conversation_uuid)
+            .with_for_update()
+            .one_or_none()
+            if conversation_uuid
+            else None
+        )
+        if conversation is None or not conversation.is_active:
+            return InboxAssignmentResult(
+                kind="conversation_not_found",
+                service_team_id=None,
+                reason="Conversation not found",
+            )
+        if team_uuid is None:
+            return InboxAssignmentResult(
+                kind="invalid_team",
+                service_team_id=None,
+                reason="service_team_id must be a valid UUID",
+            )
+        active_assignment = (
+            db.query(InboxConversationAssignment)
+            .filter(InboxConversationAssignment.conversation_id == conversation.id)
+            .filter(InboxConversationAssignment.is_active.is_(True))
+            .with_for_update()
+            .first()
+        )
+        if active_assignment is not None:
+            return InboxAssignmentResult(
+                kind="preserved_assigned",
+                service_team_id=str(conversation.primary_service_team_id)
+                if conversation.primary_service_team_id
+                else None,
+                assigned_person_id=str(active_assignment.person_id),
+                reason="AI intake cannot move an assigned conversation",
+            )
+        team = db.get(ServiceTeam, team_uuid)
+        if team is None or not team.is_active:
+            return InboxAssignmentResult(
+                kind="invalid_team",
+                service_team_id=str(team_uuid),
+                reason="service_team_id must reference an active team",
+            )
+        set_conversation_owner_team(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            source=InboxTeamSource.routing_rule.value,
+        )
+        metadata = dict(conversation.metadata_ or {})
+        metadata["last_ai_intake_route"] = {
+            "service_team_id": str(team_uuid),
+            "reason": reason,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        conversation.metadata_ = metadata
+        db.flush()
+        return InboxAssignmentResult(
+            kind="routed",
+            service_team_id=str(team_uuid),
+            assigned_person_id=None,
+            reason=reason,
+        )
+
+    return _commit(db, operation)

@@ -12,6 +12,20 @@ from app.services.owner_commands import CommandContext
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(name="app.tasks.team_inbox.escalate_due_ai_intake_followups")
+def escalate_due_ai_intake_followups(*, limit: int = 200) -> dict[str, int]:
+    from app.services.crm import ai_intake
+
+    with db_session_adapter.session() as session:
+        changed = ai_intake.escalate_due_followups(session, limit=limit)
+    payload = {"escalated": changed}
+    logger.info(
+        "customer AI intake due follow-ups escalated",
+        extra={"event": "customer_ai_intake_due_escalation", **payload},
+    )
+    return payload
+
+
 @celery_app.task(name="app.tasks.team_inbox.retry_failed_outbound_messages")
 def retry_failed_outbound_messages(
     *,

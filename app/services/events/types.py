@@ -20,6 +20,8 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
+    customer_ai_intake_classified = "customer_ai_intake.classified"
+
     # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"

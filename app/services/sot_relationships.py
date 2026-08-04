@@ -934,7 +934,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     concerns=(
                         ConcernContract(
                             name="July 20 CRM name remediation manifest execution",
-                            role=OwnerRole.COMMAND_WRITER,
+                            role=OwnerRole.APPLICATION_COORDINATOR,
                             input_names=(
                                 "CRM identity-change audit evidence",
                                 "legacy Subscriber name state",
@@ -19982,6 +19982,173 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="crm.ai_intake",
+                module="app.services.crm.ai_intake",
+                owns=(
+                    "customer-message classification and follow-up state",
+                    "customer-intake destination decision",
+                ),
+                depends_on=(
+                    "ai.gateway",
+                    "communications.team_inbox_processing",
+                    "communications.team_inbox_routing",
+                    "communications.team_inbox_outbound_intents",
+                ),
+                notes=(
+                    "Classifies committed inbound WhatsApp, Messenger, and Instagram "
+                    "messages into a closed ISP intent/category vocabulary. It requests "
+                    "team routing only; the Inbox dispatcher remains the sole owner of "
+                    "individual agent assignment. Sales receives a handoff only for a "
+                    "high-confidence new-connection intent."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="customer-message classification and follow-up state",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "committed inbound customer message",
+                                "customer AI intake configuration",
+                                "strict AI classification observation",
+                            ),
+                            canonical_writer="crm.ai_intake",
+                        ),
+                        ConcernContract(
+                            name="customer-intake destination decision",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "customer AI intake decision",
+                                "configured Inbox team routes",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="committed inbound customer message",
+                            owner="communications.team_inbox_processing",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Exact committed inbound message, conversation, channel, "
+                                "provider account scope, and assignment state."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="customer AI intake configuration",
+                            owner="crm.ai_intake",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "AiIntakeConfig enablement, channel, threshold, bounded "
+                                "follow-up, fallback, escalation delay, mappings, campaign "
+                                "exclusion, and custom instructions."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="strict AI classification observation",
+                            owner="external:configured_ai_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "Closed intent, category, confidence, department, follow-up "
+                                "key, redacted summary, and sales party-type fields returned "
+                                "through ai.gateway."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="customer AI intake decision",
+                            owner="crm.ai_intake",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "One assessment per inbound message with controlled metadata, "
+                                "follow-up turn, fallback deadline, and desired team."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="configured Inbox team routes",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "Active channel and AI routes, department mapping, fallback "
+                                "team, current owner team, and active assignment."
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The intake owner records one assessment and route-ready metadata "
+                            "in one owner command. Subsequent team routing, outbound follow-up, "
+                            "and sales handoff enter their own declared owners after commit."
+                        ),
+                        locking=(
+                            "The exact message and conversation are locked; the unique message "
+                            "constraint arbitrates concurrent webhook retries."
+                        ),
+                        idempotency=(
+                            "One assessment exists per inbound message; replay skips the AI "
+                            "provider and never repeats a follow-up or sales consequence."
+                        ),
+                        retries=(
+                            "Provider and schema failures become fallback decisions. Adapters "
+                            "may retry only after the complete owner command rolls back."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes("crm.ai_intake"),
+                            "crm.ai_intake.invalid_message",
+                        ),
+                        mapping_owner="Team Inbox inbound consequence adapter",
+                        fail_closed_on=(
+                            "missing or cross-conversation message",
+                            "unknown provider output",
+                            "invalid confidence or intent/category/department combination",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("customer_ai_intake.classified",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries only stable Inbox, assessment, controlled "
+                            "classification, status, and destination identifiers; no raw "
+                            "customer content."
+                        ),
+                        replay=(
+                            "The assessment plus current routing configuration can safely "
+                            "re-request the same team route without another provider call."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="none; AiIntakeConfig was parked and sales intake was narrow",
+                        new_owner="crm.ai_intake",
+                        verification=(
+                            "Focused AI intake, inbound channel, routing, assignment, failure, "
+                            "follow-up, fallback, sales handoff, and migration tests."
+                        ),
+                        cutover_gate=(
+                            "Supported channel config and fallback/team routes are active; "
+                            "sales forms remain separately gated."
+                        ),
+                        fallback_retirement=(
+                            "Inbound adapters no longer call the sales-only AI classifier, and "
+                            "no intake path assigns an individual agent."
+                        ),
+                    ),
+                    steward="customer experience platform",
+                    design_refs=(
+                        "docs/designs/CUSTOMER_AI_INTAKE.md",
+                        "docs/designs/AI_SOT.md",
+                        "docs/designs/INBOX_LEAD_INTAKE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_customer_ai_intake.py",
+                        "tests/test_team_inbox_channel_receive.py",
+                        "tests/test_team_inbox_routing.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="communications.team_inbox_threads",
                 module="app.services.team_inbox_receive",
                 owns=(
@@ -24006,9 +24173,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "The canonical writer of AIInsight. Generated insights "
                     "land here and nowhere else. AI is advisory: it never "
                     "mutates domain state — acting on a recommendation means "
-                    "calling the domain's declared owner. AiIntakeConfig is a "
-                    "CRM import for an unimplemented conversational-intake "
-                    "feature and gates nothing; see docs/designs/AI_SOT.md."
+                    "calling the domain's declared owner. AiIntakeConfig gates "
+                    "only crm.ai_intake customer-message classification and does "
+                    "not gate advisor generation; see docs/designs/AI_SOT.md."
                 ),
             ),
             SOTService(
@@ -36702,6 +36869,260 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "tests/test_lead_capture_webhook.py",
                         "tests/test_sales_capture_account_conversion.py",
                         "tests/architecture/test_service_http_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="sales.lead_intake",
+                module="app.services.sales.lead_intake",
+                owns=(
+                    "versioned lead-intake template lifecycle",
+                    "sales lead eligibility and invitation lifecycle",
+                    "atomic Inbox form to Party and Lead conversion",
+                ),
+                depends_on=(
+                    "auth.staff_provisioning",
+                    "communications.team_inbox_contact_resolution",
+                    "communications.team_inbox_outbound_intents",
+                    "communications.team_inbox_participants",
+                    "communications.team_inbox_processing",
+                    "communications.team_inbox_routing",
+                    "control.settings_spec",
+                    "crm.ai_intake",
+                    "events.dispatcher",
+                    "gis.geocoding",
+                    "observability.audit_log",
+                    "party.registry",
+                    "sales.lead_lifecycle",
+                    "sales.service",
+                ),
+                notes=(
+                    "Unknown Meta conversations may receive one automatic, hashed-token "
+                    "invitation only after the explicit rollout setting, both immutable "
+                    "published form types, and a high-confidence AI observation agree. "
+                    "Form completion creates Party and Lead state atomically and never "
+                    "creates a Subscriber or infers marketing consent."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="versioned lead-intake template lifecycle",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated Lead intake template command",
+                                "canonical Sales routing configuration",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="sales lead eligibility and invitation lifecycle",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "canonical unknown Inbox conversation state",
+                                "shared customer intake sales handoff",
+                                "explicit Lead intake rollout configuration",
+                                "published Lead intake template versions",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="atomic Inbox form to Party and Lead conversion",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "validated public Lead intake submission",
+                                "canonical Lead intake invitation",
+                                "server-resolved Nigerian service address",
+                                "canonical Party identity state",
+                                "canonical Lead lifecycle state",
+                                "canonical unknown Inbox conversation state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated Lead intake template command",
+                            owner="sales.lead_intake",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed version, customer type, copy, Sales team, optional "
+                                "owner and Pipeline/Stage, actor, and CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Sales routing configuration",
+                            owner="sales.service",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active ServiceTeam, SystemUser, Pipeline, and Stage references",
+                        ),
+                        AuthorityInput(
+                            name="canonical unknown Inbox conversation state",
+                            owner="communications.team_inbox_processing",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active Meta Inbox conversation, exact inbound message, "
+                                "unmatched resolution, and provider-scoped participant endpoint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="shared customer intake sales handoff",
+                            owner="crm.ai_intake",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "High-confidence new-connection or coverage classification, "
+                                "controlled customer type, and exact Inbox message identity."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="explicit Lead intake rollout configuration",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "integration.lead_intake_auto_send_enabled, bounded invitation "
+                                "TTL, and channel-specific AiIntakeConfig threshold"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="published Lead intake template versions",
+                            owner="sales.lead_intake",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "one immutable published individual version and one immutable "
+                                "published organization version"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="validated public Lead intake submission",
+                            owner="sales.lead_intake",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "strict customer-type fields, selected coordinates, address and "
+                                "privacy acknowledgements, and one-time invitation token"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Lead intake invitation",
+                            owner="sales.lead_intake",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "hashed token, immutable template, exact conversation/message and "
+                                "provider endpoint, expiry, delivery, revocation, and completion"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="server-resolved Nigerian service address",
+                            owner="gis.geocoding",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "reverse-geocoded display address, coordinates, Nigerian state or "
+                                "FCT, and country code"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Party identity state",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Person or Organization Party, representative relationship, "
+                                "prospect role, and exact channel contact point"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Lead lifecycle state",
+                            owner="sales.lead_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Party-first Lead and immutable Inbox-form origin capture",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each mutation enters execute_owner_command once on a clean session. "
+                            "Template/invitation state or Party, Lead, participant binding, Sales "
+                            "routing, note, audit, and event commit or roll back together."
+                        ),
+                        locking=(
+                            "Template, conversation, trigger message, invitation, participant, and "
+                            "actor are locked before mutation; partial unique and deterministic UUID "
+                            "constraints arbitrate concurrent publish, invite, and submit attempts."
+                        ),
+                        idempotency=(
+                            "One automatic invitation is permitted per conversation; one assessment "
+                            "is permitted per inbound message; a completed invitation replays its "
+                            "deterministic Party and Lead outcome without duplicate consequences."
+                        ),
+                        retries=(
+                            "Adapters retry only a complete owner command after rollback. Expired, "
+                            "revoked, resolved, cross-conversation, or changed evidence fails closed."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes("sales.lead_intake"),
+                            "sales.lead_intake.actor_not_eligible",
+                            "sales.lead_intake.channel_not_supported",
+                            "sales.lead_intake.conversation_not_found",
+                            "sales.lead_intake.conversation_not_unknown",
+                            "sales.lead_intake.invitation_unavailable",
+                            "sales.lead_intake.message_not_eligible",
+                            "sales.lead_intake.provider_scope_missing",
+                            "sales.lead_intake.template_not_found",
+                            "sales.lead_intake.template_not_published",
+                            "sales.lead_intake.published_template_immutable",
+                            "sales.lead_intake.address_not_confirmed",
+                            "sales.lead_intake.address_outside_nigeria",
+                            "sales.lead_intake.state_unresolved",
+                            "sales.lead_intake.privacy_acknowledgement_required",
+                        ),
+                        mapping_owner="Inbox, Sales admin, and public Lead intake web adapters",
+                        fail_closed_on=(
+                            "known or ambiguously resolved customer identity",
+                            "unsupported channel or missing provider account scope",
+                            "disabled rollout, missing templates, or low-confidence observation",
+                            "expired, revoked, completed, or unknown token",
+                            "unconfirmed, non-Nigerian, or unresolved service address",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("lead.created",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 identifies the Lead, Party, source and origin conversation "
+                            "without form values, contact endpoints, tokens, or other private data."
+                        ),
+                        replay=(
+                            "The invitation completion links, immutable origin, and exact participant "
+                            "binding reproduce the saved Party-first Lead outcome."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="none; additive Inbox-to-Lead capability",
+                        new_owner="sales.lead_intake",
+                        verification=(
+                            "Template immutability, rollout gate, classification, single invite, "
+                            "expiry/revocation, public validation, atomic conversion, Meta delivery, "
+                            "UI, manifest, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Both customer-type templates are published and an operator explicitly "
+                            "enables automatic sends after Meta channel validation."
+                        ),
+                        fallback_retirement=(
+                            "No route, webhook, AI adapter, or delivery worker directly creates Lead, "
+                            "Party, invitation, routing, or participant-binding state."
+                        ),
+                    ),
+                    steward="sales operations",
+                    design_refs=(
+                        "docs/designs/INBOX_LEAD_INTAKE.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/PARTY_CUSTOMER_LIFECYCLE.md",
+                        "docs/designs/INBOX_CONVERSATION_PARTICIPANTS.md",
+                        "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_lead_intake.py",
+                        "tests/test_web_lead_intake.py",
+                        "tests/architecture/test_lead_intake_boundary.py",
                     ),
                 ),
             ),

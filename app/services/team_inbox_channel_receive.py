@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +45,32 @@ _OPAQUE_CONTACT_CHANNELS = {
     InboxChannelType.instagram_dm.value,
     InboxChannelType.chat_widget.value,
 }
+logger = logging.getLogger(__name__)
+
+
+def _run_customer_ai_intake_after_commit(
+    db: Session,
+    *,
+    conversation_id: UUID | None,
+    message_id: UUID | None,
+) -> None:
+    """Run optional shared AI intake only after the Inbox owner has committed."""
+    if conversation_id is None or message_id is None:
+        return
+    try:
+        from app.services.crm import ai_intake
+
+        ai_intake.classify_and_route(
+            db, conversation_id=conversation_id, message_id=message_id
+        )
+    except Exception:
+        logger.exception(
+            "customer_ai_intake_post_receive_failed",
+            extra={
+                "conversation_id": str(conversation_id),
+                "message_id": str(message_id),
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -690,6 +717,11 @@ def receive_whatsapp_webhook_batch_committed(
                 idempotency_key=str(recorded.observation_id),
             ),
         )
+        _run_customer_ai_intake_after_commit(
+            db,
+            conversation_id=processed.conversation_id,
+            message_id=processed.message_id,
+        )
         message_results.append(
             {
                 "kind": processed.consequence_kind
@@ -900,6 +932,11 @@ def receive_inbound_channel_batch_committed(
                 reason="resolve committed inbound channel observation",
                 idempotency_key=str(recorded.observation_id),
             ),
+        )
+        _run_customer_ai_intake_after_commit(
+            db,
+            conversation_id=processed.conversation_id,
+            message_id=processed.message_id,
         )
         results.append(
             {

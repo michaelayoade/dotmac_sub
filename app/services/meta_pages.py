@@ -10,6 +10,7 @@ Uses the Meta Graph API.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, cast
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 logger = get_logger(__name__)
 
 _PAGE_POST_SCOPES = {"pages_manage_posts"}
+_PAGE_MESSAGE_SCOPES = {"pages_messaging"}
 _PAGE_COMMENT_SCOPES = {"pages_read_user_content"}
 _IG_MESSAGE_SCOPES = {"instagram_manage_messages"}
 _IG_COMMENT_SCOPES = {"instagram_manage_comments"}
@@ -161,6 +163,50 @@ def _get_instagram_token_record(db: Session, ig_account_id: str) -> OAuthToken |
 def _get_instagram_token(db: Session, ig_account_id: str) -> str | None:
     token = _get_instagram_token_record(db, ig_account_id)
     return token.access_token if token else None
+
+
+def send_direct_message_sync(
+    db: Session,
+    *,
+    account_id: str,
+    recipient_id: str,
+    message: str,
+    instagram: bool,
+) -> dict[str, Any]:
+    """Send a Messenger or Instagram DM through the scoped Meta account."""
+    token = (
+        _get_instagram_token_record(db, account_id)
+        if instagram
+        else _get_page_token_record(db, account_id)
+    )
+    if not token or not token.access_token:
+        raise ValueError("No active token found for the Meta messaging account")
+    _ensure_token_scopes(
+        token,
+        _IG_MESSAGE_SCOPES if instagram else _PAGE_MESSAGE_SCOPES,
+        "instagram_direct_message" if instagram else "facebook_messenger",
+    )
+    url = f"{_get_meta_graph_base_url(db).rstrip('/')}/{account_id}/messages"
+    data = {
+        "recipient": json.dumps({"id": recipient_id}),
+        "message": json.dumps({"text": message}),
+        "access_token": token.access_token,
+    }
+    if not instagram:
+        data["messaging_type"] = "RESPONSE"
+    with httpx.Client(timeout=30.0) as client:
+        response = _request_with_retry_sync(
+            client, "POST", url, data=data, timeout=30.0
+        )
+        response.raise_for_status()
+        result = cast(dict[str, Any], response.json())
+    logger.info(
+        "meta_direct_message_sent account_id=%s channel=%s message_id=%s",
+        account_id,
+        "instagram_dm" if instagram else "facebook_messenger",
+        result.get("message_id"),
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------

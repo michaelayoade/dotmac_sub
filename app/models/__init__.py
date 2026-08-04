@@ -11,7 +11,10 @@ from app.models.ai_insight import (  # noqa: F401
     InsightDomain,
     InsightSeverity,
 )
-from app.models.ai_intake import AiIntakeConfig  # noqa: F401
+from app.models.ai_intake import (  # noqa: F401
+    AiIntakeConfig,
+    CustomerAiIntakeAssessment,
+)
 from app.models.analytics import (  # noqa: F401
     KPIAggregate,
     KPIConfig,
@@ -417,6 +420,11 @@ from app.models.integration_platform import (  # noqa: F401
     IntegrationInstallation,
     IntegrationInstallationState,
     IntegrationValidationStatus,
+)
+from app.models.lead_intake import (  # noqa: F401
+    LeadIntakeAssessment,
+    LeadIntakeInvitation,
+    LeadIntakeTemplate,
 )
 from app.models.legal import (  # noqa: F401
     LegalDocument,

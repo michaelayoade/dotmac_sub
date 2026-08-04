@@ -101,6 +101,7 @@ class ReplyOutcome:
     kind: str
     sender: str
     replayed: bool = False
+    message_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -397,6 +398,7 @@ def reply(
                     ),
                     sender=previous.from_address or "team sender",
                     replayed=True,
+                    message_id=str(previous.id),
                 )
         template = None
         clean_template_id = (
@@ -485,6 +487,7 @@ def reply(
                 conversation_id=str(conversation.id),
                 kind="scheduled",
                 sender="scheduled",
+                message_id=str(scheduled.id),
             )
         result = team_inbox_outbound.send_inbox_reply(
             db,
@@ -534,6 +537,7 @@ def reply(
             conversation_id=str(conversation.id),
             kind=result.kind,
             sender=result.from_address or result.sender_key or "team sender",
+            message_id=result.message_id,
         )
 
     return _commit(db, action)

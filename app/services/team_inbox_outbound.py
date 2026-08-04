@@ -201,6 +201,8 @@ def _queue_outbox_reply(
         if channel
         in {
             NotificationChannel.whatsapp,
+            NotificationChannel.facebook_messenger,
+            NotificationChannel.instagram_dm,
             NotificationChannel.facebook_comment,
             NotificationChannel.instagram_comment,
         }
@@ -361,6 +363,65 @@ def _send_field_job_reply(
     )
 
 
+def _send_meta_direct_message(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    now: datetime | None,
+) -> InboxReplyResult:
+    body_text = _plain_text_reply(payload)
+    recipient = str(conversation.contact_address or "").strip()
+    if not body_text or not recipient:
+        return InboxReplyResult(
+            kind="missing_recipient" if not recipient else "empty_body",
+            conversation_id=str(conversation.id),
+            reason="Meta direct message requires a recipient and body.",
+        )
+    messages = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .order_by(InboxMessage.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    account_id = _social_value(
+        conversation,
+        list(reversed(messages)),
+        "provider_account_scope",
+        "page_or_account_id",
+        "provider_account_id",
+    )
+    if not account_id:
+        return InboxReplyResult(
+            kind="missing_provider_context",
+            conversation_id=str(conversation.id),
+            reason="This Meta conversation has no provider account scope.",
+        )
+    channel = (
+        NotificationChannel.facebook_messenger
+        if conversation.channel_type == InboxChannelType.facebook_messenger.value
+        else NotificationChannel.instagram_dm
+    )
+    return _queue_outbox_reply(
+        db,
+        conversation=conversation,
+        payload=payload,
+        channel=channel,
+        recipient=recipient,
+        subject=None,
+        body=body_text,
+        now=now,
+        from_address="Support",
+        metadata={
+            "channel_type": conversation.channel_type,
+            "message_kind": "direct_message",
+            "provider": "meta",
+            "provider_account_id": account_id,
+        },
+    )
+
+
 _SOCIAL_COMMENT_CHANNELS = {
     InboxChannelType.facebook_comment.value,
     InboxChannelType.instagram_comment.value,
@@ -512,6 +573,14 @@ def send_inbox_reply(
             payload=payload,
             now=now,
             existing_message=existing_message,
+        )
+
+    if conversation.channel_type in {
+        InboxChannelType.facebook_messenger.value,
+        InboxChannelType.instagram_dm.value,
+    }:
+        return _send_meta_direct_message(
+            db, conversation=conversation, payload=payload, now=now
         )
 
     if conversation.channel_type in _SOCIAL_COMMENT_CHANNELS:
