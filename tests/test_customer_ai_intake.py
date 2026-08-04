@@ -153,8 +153,8 @@ def _gateway(monkeypatch, *payloads: dict[str, object] | Exception):
 def test_technical_categories_route_to_technical_support(
     db_session, monkeypatch, body, intent, category
 ):
-    original, technical, _helpdesk, _sales, _fallback, _config = (
-        _configured_inbox(db_session)
+    original, technical, _helpdesk, _sales, _fallback, _config = _configured_inbox(
+        db_session
     )
     conversation, message = _message(
         db_session, channel="whatsapp", team=original, body=body
@@ -195,8 +195,8 @@ def test_technical_categories_route_to_technical_support(
 def test_helpdesk_categories_route_to_helpdesk(
     db_session, monkeypatch, intent, category
 ):
-    original, _technical, helpdesk, _sales, _fallback, _config = (
-        _configured_inbox(db_session)
+    original, _technical, helpdesk, _sales, _fallback, _config = _configured_inbox(
+        db_session
     )
     conversation, message = _message(
         db_session, channel="whatsapp", team=original, body="Please help"
@@ -214,8 +214,8 @@ def test_helpdesk_categories_route_to_helpdesk(
 
 @pytest.mark.parametrize("category", ["coverage_request", "new_connection_request"])
 def test_new_connection_hands_off_to_sales_only(db_session, monkeypatch, category):
-    original, _technical, _helpdesk, sales, _fallback, _config = (
-        _configured_inbox(db_session)
+    original, _technical, _helpdesk, sales, _fallback, _config = _configured_inbox(
+        db_session
     )
     conversation, message = _message(
         db_session,
@@ -342,9 +342,7 @@ def test_low_confidence_asks_once_then_uses_fallback(db_session, monkeypatch):
     assert len(calls) == 2
 
 
-def test_ai_failure_routes_safely_and_duplicate_skips_provider(
-    db_session, monkeypatch
-):
+def test_ai_failure_routes_safely_and_duplicate_skips_provider(db_session, monkeypatch):
     original, _technical, _helpdesk, _sales, fallback, _config = _configured_inbox(
         db_session
     )
@@ -377,8 +375,8 @@ def test_ai_failure_routes_safely_and_duplicate_skips_provider(
 
 
 def test_assigned_conversation_is_not_moved_or_reassigned(db_session, monkeypatch):
-    original, technical, _helpdesk, _sales, _fallback, _config = (
-        _configured_inbox(db_session)
+    original, technical, _helpdesk, _sales, _fallback, _config = _configured_inbox(
+        db_session
     )
     conversation, message = _message(
         db_session, channel="whatsapp", team=original, body="Internet is off"

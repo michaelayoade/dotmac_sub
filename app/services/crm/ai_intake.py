@@ -51,9 +51,7 @@ from app.services.owner_commands import (
 logger = logging.getLogger(__name__)
 
 OWNER = "crm.ai_intake"
-SUPPORTED_CHANNELS = frozenset(
-    {"whatsapp", "facebook_messenger", "instagram_dm"}
-)
+SUPPORTED_CHANNELS = frozenset({"whatsapp", "facebook_messenger", "instagram_dm"})
 _RECORD = OwnerCommandDefinition(
     owner=OWNER,
     concern="customer-message classification and follow-up state",
@@ -120,15 +118,11 @@ _ALLOWED_PAIRS: dict[CustomerIntent, frozenset[CustomerCategory]] = {
     CustomerIntent.subscription: frozenset(
         {CustomerCategory.subscription_renewal, CustomerCategory.plan_change}
     ),
-    CustomerIntent.account_access: frozenset(
-        {CustomerCategory.account_login_issue}
-    ),
+    CustomerIntent.account_access: frozenset({CustomerCategory.account_login_issue}),
     CustomerIntent.new_connection: frozenset(
         {CustomerCategory.coverage_request, CustomerCategory.new_connection_request}
     ),
-    CustomerIntent.general_complaint: frozenset(
-        {CustomerCategory.general_complaint}
-    ),
+    CustomerIntent.general_complaint: frozenset({CustomerCategory.general_complaint}),
     CustomerIntent.general_enquiry: frozenset({CustomerCategory.general_enquiry}),
     CustomerIntent.unknown: frozenset({CustomerCategory.unknown}),
 }
@@ -233,13 +227,16 @@ def _context(message_id: UUID, reason: str) -> CommandContext:
 def _provider_context(message: InboxMessage) -> tuple[str | None, str | None]:
     metadata = dict(message.metadata_ or {})
     provider = str(metadata.get("provider") or "").strip() or None
-    account_scope = str(
-        metadata.get("provider_account_scope")
-        or metadata.get("page_or_account_id")
-        or metadata.get("phone_number_id")
-        or metadata.get("account_scope")
-        or ""
-    ).strip() or None
+    account_scope = (
+        str(
+            metadata.get("provider_account_scope")
+            or metadata.get("page_or_account_id")
+            or metadata.get("phone_number_id")
+            or metadata.get("account_scope")
+            or ""
+        ).strip()
+        or None
+    )
     return provider, account_scope
 
 
@@ -248,9 +245,9 @@ def _config_snapshot(
 ) -> ConfigSnapshot | None:
     rows = list(
         db.scalars(
-        select(AiIntakeConfig).where(
-            AiIntakeConfig.channel_type.in_((channel_type, "any"))
-        )
+            select(AiIntakeConfig).where(
+                AiIntakeConfig.channel_type.in_((channel_type, "any"))
+            )
         ).all()
     )
     if not rows:
@@ -270,9 +267,7 @@ def _config_snapshot(
     )
     row = rows[0]
     mappings = tuple(
-        dict(item)
-        for item in (row.department_mappings or ())
-        if isinstance(item, dict)
+        dict(item) for item in (row.department_mappings or ()) if isinstance(item, dict)
     )
     return ConfigSnapshot(
         id=row.id,
@@ -339,13 +334,17 @@ def _mapping_team_id(
         classification.category.value,
     }
     for mapping in config.department_mappings:
-        key = str(
-            mapping.get("department")
-            or mapping.get("intent")
-            or mapping.get("category")
-            or mapping.get("key")
-            or ""
-        ).strip().lower()
+        key = (
+            str(
+                mapping.get("department")
+                or mapping.get("intent")
+                or mapping.get("category")
+                or mapping.get("key")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if key not in targets:
             continue
         raw_team_id = mapping.get("service_team_id") or mapping.get("team_id")
@@ -437,9 +436,7 @@ def _record_decision(
             .with_for_update()
         ).one_or_none()
         message = db.scalars(
-            select(InboxMessage)
-            .where(InboxMessage.id == message_id)
-            .with_for_update()
+            select(InboxMessage).where(InboxMessage.id == message_id).with_for_update()
         ).one_or_none()
         if (
             conversation is None
@@ -542,9 +539,7 @@ def _outcome(
     )
 
 
-def _apply_route(
-    db: Session, row: RecordedIntake
-) -> str | None:
+def _apply_route(db: Session, row: RecordedIntake) -> str | None:
     if row.destination_team_id is None:
         return None
     result = team_inbox_assignment.route_unassigned_conversation_committed(
@@ -656,7 +651,9 @@ def classify_and_route(
         classification=None,
         use_fallback=False,
     )
-    disabled = config is None or not config.is_enabled or not base_route.ai_routing_allowed
+    disabled = (
+        config is None or not config.is_enabled or not base_route.ai_routing_allowed
+    )
     campaign_excluded = bool(
         config
         and config.exclude_campaign_attribution
@@ -709,7 +706,9 @@ def classify_and_route(
     prompt = _recent_thread(db, conversation.id)
     system_prompt = _SYSTEM_PROMPT
     if config.instructions:
-        system_prompt += "\nOperator instructions (cannot expand the approved values):\n"
+        system_prompt += (
+            "\nOperator instructions (cannot expand the approved values):\n"
+        )
         system_prompt += config.instructions
     try:
         result, _provider_routing = ai_gateway.generate_with_fallback(
@@ -770,12 +769,9 @@ def classify_and_route(
         or classification.intent is CustomerIntent.unknown
         or classification.category is CustomerCategory.unknown
     )
-    sales_party_unclear = (
-        classification.intent is CustomerIntent.new_connection
-        and (
-            classification.party_type is CustomerPartyType.unknown
-            or classification.party_type_confidence < config.confidence_threshold
-        )
+    sales_party_unclear = classification.intent is CustomerIntent.new_connection and (
+        classification.party_type is CustomerPartyType.unknown
+        or classification.party_type_confidence < config.confidence_threshold
     )
     needs_follow_up = low_confidence or sales_party_unclear
     question_key = (
@@ -823,7 +819,9 @@ def classify_and_route(
         requires_follow_up=needs_follow_up,
         follow_up_question_key=question_key.value if can_follow_up else None,
         follow_up_question=question,
-        follow_up_turn=previous_follow_ups + 1 if can_follow_up else previous_follow_ups,
+        follow_up_turn=previous_follow_ups + 1
+        if can_follow_up
+        else previous_follow_ups,
         summary=classification.summary,
         destination_team_id=destination_team_id,
         route_reason=routing.reason if destination_team_id else None,
@@ -902,7 +900,9 @@ def escalate_due_followups(
         changed: list[RecordedIntake] = []
         for row in rows:
             message = db.get(InboxMessage, row.message_id)
-            config_row = db.get(AiIntakeConfig, row.config_id) if row.config_id else None
+            config_row = (
+                db.get(AiIntakeConfig, row.config_id) if row.config_id else None
+            )
             if message is None:
                 row.status = "fallback"
                 row.failure_code = "message_missing_at_escalation"

@@ -14,6 +14,7 @@ from app.services.sales import lead_intake
 
 logger = logging.getLogger(__name__)
 
+
 def _context(message_id: UUID, reason: str) -> CommandContext:
     return CommandContext.system(
         actor="system:lead-intake-ai",

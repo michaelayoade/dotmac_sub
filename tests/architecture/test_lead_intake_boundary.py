@@ -24,4 +24,3 @@ def test_lead_intake_adapters_do_not_construct_owned_records():
         assert "LeadIntakeTemplate(" not in source
         assert "Lead(" not in source
         assert "Party(" not in source
-

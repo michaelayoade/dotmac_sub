@@ -17,9 +17,7 @@ branch_labels = None
 depends_on = None
 
 AI_INTAKE_ESCALATION_TASK = "customer_ai_intake_followup_escalation"
-AI_INTAKE_ESCALATION_TASK_PATH = (
-    "app.tasks.team_inbox.escalate_due_ai_intake_followups"
-)
+AI_INTAKE_ESCALATION_TASK_PATH = "app.tasks.team_inbox.escalate_due_ai_intake_followups"
 
 
 def _replace_lead_origin_constraints(*, expanded: bool) -> None:
