@@ -114,6 +114,7 @@ class EventType(enum.Enum):
     prepaid_renewal_terms_corrected = "prepaid_renewal_terms.corrected"
     prepaid_renewal_terms_audited = "prepaid_renewal_terms.audited"
     prepaid_proforma_adopted = "prepaid_proforma.adopted"
+    prepaid_paid_invoice_repaired = "prepaid_paid_invoice.repaired"
     prepaid_draft_reconciled = "prepaid_draft.reconciled"
     prepaid_billing_calendar_reconciled = "prepaid_billing_calendar.reconciled"
     ip_assignment_service_ownership_reconciled = (
@@ -158,6 +159,7 @@ class EventType(enum.Enum):
     # Retired producer; retained so durable historical events remain decodable.
     service_team_party_cutover_adopted = "service_team.party_cutover_adopted"
     workqueue_action_coordinated = "workqueue.action_coordinated"
+    ai_intake_config_updated = "ai.intake_config_updated"
 
     # Operations - vendor installation project lifecycle
     # Materials / vendor / ERP chain outputs

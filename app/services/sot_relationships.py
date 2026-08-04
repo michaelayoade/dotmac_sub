@@ -3090,9 +3090,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billing.contracts",
                     "billing.obligations",
                     "billing.rating",
+                    "customer.accounts",
                     "events.dispatcher",
                     "events.owner_outputs",
                     "financial.billing_automation",
+                    "financial.customer_subledger",
+                    "financial.prepaid_funding_reconstruction",
                     "financial.prepaid_service_renewals",
                 ),
                 notes=(
@@ -3110,7 +3113,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "add-on exclusions as blockers. It never repairs another owner, "
                     "asks a non-owner to repair, or changes authority; operator and "
                     "finance approvals are separate commands and are forbidden while "
-                    "blockers remain."
+                    "blockers remain. Phase 3 may derive an opening target without "
+                    "Splynx only when account provenance proves the customer was "
+                    "created after the fixed legacy handoff with no Splynx identity. "
+                    "The zero history component and canonical native facts are "
+                    "fingerprinted before normal approval and capture."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -3134,6 +3141,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "deterministic target rating",
                                 "current postpaid billing preview",
                                 "current prepaid renewal preview",
+                                "verified prepaid opening targets",
+                                "recorded customer postings",
                                 "receipted owner-output deliveries",
                                 "recorded shadow verification evidence",
                             ),
@@ -3204,6 +3213,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "typed current-owner monthly period, taxed base "
                                 "renewal, and explicit recurring-add-on exclusions "
                                 "for each prepaid cohort root"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="verified prepaid opening targets",
+                            owner="financial.prepaid_funding_reconstruction",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "reviewed reconstruction/opening positions, or a "
+                                "typed native-after-handoff target proven from the "
+                                "account creation instant, absent Splynx identity, "
+                                "fixed handoff, and canonical native financial facts"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="recorded customer postings",
+                            owner="financial.customer_subledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "currency-typed shadow posting lanes compared with "
+                                "the exact opening target at the verification cutoff"
                             ),
                         ),
                         AuthorityInput(
@@ -3673,8 +3702,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="financial.prepaid_funding_reconstruction",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "reviewed active baseline plus canonical native "
-                                "post-baseline money facts"
+                                "reviewed active baseline/opening plus canonical later "
+                                "native facts, or the fingerprinted native-after-"
+                                "handoff zero-history target used only by opening "
+                                "verification"
                             ),
                         ),
                         AuthorityInput(
@@ -4631,8 +4662,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "evidence, never a runtime money source or fallback. The separate "
                     "customer.financial_position verifier owns the post-activation "
                     "composition of an approved subledger opening with later native "
-                    "facts; this reconstruction owner never rewrites an opening or "
-                    "posts money."
+                    "facts. For opening verification only, a customer created after "
+                    "the fixed legacy handoff with no Splynx identity has a typed "
+                    "zero history component plus canonical native facts; runtime "
+                    "money actions remain quarantined until approved immutable "
+                    "opening capture. This reconstruction owner never rewrites an "
+                    "opening or posts money."
                 ),
             ),
             SOTService(
@@ -10404,13 +10439,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.prepaid_draft_reconciliation",
                 owns=(
                     "funded onboarding proforma documentary adoption",
+                    "historical paid prepaid invoice identity and coverage repair",
                     "stranded prepaid draft classification",
                     "stranded prepaid draft invoice reconciliation",
                     "reviewed opening funding invoice consumption",
                     "prepaid draft reconciliation exceptions and operator alerts",
                 ),
                 depends_on=(
+                    "access.subscription_lifecycle",
                     "financial.account_credit_applications",
+                    "financial.dunning",
                     "financial.invoices",
                     "financial.ledger",
                     "financial.payments",
@@ -10446,7 +10484,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "document, and the reviewed funding baseline is available. The "
                     "sole payment timestamp and contracted cadence resolve the WAT "
                     "service period; adoption has no economic effect and hands the "
-                    "resulting financial draft back to the ordinary reconciler."
+                    "resulting financial draft back to the ordinary reconciler. "
+                    "A separate reviewed historical repair accepts only one already-"
+                    "paid, periodless document whose sole active allocation is fully "
+                    "backed by a successful unreturned settlement and whose charge "
+                    "matches the current canonical prepaid renewal terms. It writes "
+                    "only missing document identity, entitlement, billing anchor, and "
+                    "the canonical access-restoration consequence with zero economic "
+                    "delta."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -10461,6 +10506,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "reviewed opening funding",
                                 "canonical settlement business calendar",
                                 "invoice and payment participant protocols",
+                            ),
+                            canonical_writer="financial.prepaid_draft_reconciliation",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "historical paid prepaid invoice identity and "
+                                "coverage repair"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=(
+                                "reviewed reconciliation command",
+                                "canonical paid prepaid document gap",
+                                "canonical prepaid subscription contract",
+                                "canonical paid invoice allocation evidence",
+                                "canonical settlement business calendar",
+                                "financial access restoration protocol",
                             ),
                             canonical_writer="financial.prepaid_draft_reconciliation",
                         ),
@@ -10545,6 +10606,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="canonical paid prepaid document gap",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active paid non-proforma invoice with zero balance, "
+                                "one positive unlinked line, missing period identity, "
+                                "exact totals, and no credit-note funding"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="canonical prepaid subscription contract",
                             owner="access.subscription_lifecycle",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -10567,14 +10638,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
+                            name="canonical paid invoice allocation evidence",
+                            owner="financial.payments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "one active full-value invoice allocation, matching "
+                                "active succeeded Payment and settlement, currency, "
+                                "paid-at instant, and absence of refund or reversal"
+                            ),
+                        ),
+                        AuthorityInput(
                             name="reviewed opening funding",
                             owner="financial.prepaid_funding_reconstruction",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source=(
-                                "active typed opening baseline, signed reviewed "
-                                "manifest, approval evidence, prior immutable "
-                                "invoice consumptions, and current verified prepaid "
-                                "funding position"
+                                "active typed reconstruction baseline or immutable "
+                                "approved subledger opening, its fingerprinted source "
+                                "evidence, prior immutable invoice consumptions, and "
+                                "current verified prepaid funding position"
                             ),
                         ),
                         AuthorityInput(
@@ -10614,6 +10695,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                                 "authoritative post-allocation invoice remainder"
                             ),
                         ),
+                        AuthorityInput(
+                            name="financial access restoration protocol",
+                            owner="financial.dunning",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "fingerprint-bound prepaid restoration preview and "
+                                "confirmation through the subscription lifecycle owner"
+                            ),
+                        ),
                     ),
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
@@ -10629,6 +10719,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "event, and idempotency evidence; it posts no money and "
                             "creates no entitlement. Its resulting valid prepaid draft "
                             "then enters the existing reviewed settlement command. The "
+                            "historical paid-invoice repair locks and recomputes exact "
+                            "allocation and settlement evidence, then commits document "
+                            "identity, entitlement, reviewed anchor projection, access "
+                            "consequence, audit, event, and idempotency evidence with "
+                            "zero economic delta. The "
                             "funding-change caller uses the same flush-only classifier "
                             "inside its existing transaction."
                         ),
@@ -10686,6 +10781,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "a proforma with a period, linked or multiple lines, "
                             "contract mismatch, existing coverage, multiple payment "
                             "sources, missing payment timestamp, or anchored subscription",
+                            "an already-paid invoice without one exact active full-value "
+                            "allocation and successful unreturned settlement, or whose "
+                            "charge differs from canonical renewal terms",
                             "partial or ambiguous entitlement overlap",
                             "stale preview, changed payment capacity, participant "
                             "remainder mismatch, or already consumed opening funding",
@@ -10694,6 +10792,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     events=EventContract(
                         event_types=(
                             "prepaid_proforma.adopted",
+                            "prepaid_paid_invoice.repaired",
                             "prepaid_draft.reconciled",
                         ),
                         schema_version=1,
@@ -10778,6 +10877,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "Exact funded onboarding proforma adoption, contract and "
                             "baseline mismatch rejection, replay, documentary-only "
                             "intermediate state, subsequent draft settlement, exact "
+                            "already-paid invoice identity/coverage repair, settlement "
+                            "ambiguity rejection, zero economic delta, access consequence, "
                             "fee-inclusive mixed funding, partial funding, exact "
                             "nonzero shortfall, pre-boundary residue absorption, post-boundary "
                             "unbacked or reversed payment evidence, "
@@ -16411,12 +16512,156 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "shared desired-state delivery lifecycle",
                     "control-plane target and revision identity",
                     "vendor status projections and transition guards",
+                    "unset desired-value admissibility policy",
                 ),
                 depends_on=("network.identity",),
                 notes=(
                     "Vendor adapters retain native persistence models but project "
                     "through one desired-to-readback lifecycle. Verified always "
-                    "requires device evidence for the current intent revision."
+                    "requires device evidence for the current intent revision. "
+                    "Missing or provenance-unknown desired state stays typed as "
+                    "unknown and cannot become an executable device value unless "
+                    "a named owner explicitly declares that default. Execution "
+                    "authority is separate from review progress and review "
+                    "progress never grants it; providers register their own "
+                    "sentinel tables, enforce the ruling on every delivery "
+                    "path, and hold any default that still executes without a "
+                    "declaration on a shrink-only debt baseline."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="shared desired-state delivery lifecycle",
+                            role=OwnerRole.POLICY,
+                            input_names=("vendor delivery status",),
+                        ),
+                        ConcernContract(
+                            name="control-plane target and revision identity",
+                            role=OwnerRole.POLICY,
+                            input_names=("control-plane target identity",),
+                        ),
+                        ConcernContract(
+                            name="vendor status projections and transition guards",
+                            role=OwnerRole.POLICY,
+                            input_names=("vendor delivery status",),
+                        ),
+                        ConcernContract(
+                            name="unset desired-value admissibility policy",
+                            role=OwnerRole.POLICY,
+                            input_names=("provider unset-sentinel declaration",),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="vendor delivery status",
+                            owner="network.control_plane_intent",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "Native vendor states passed in by their owning "
+                                "adapter: NetworkOperation, UISP intent, Huawei "
+                                "reconcile sync_status, RouterOS push and push "
+                                "result, ProvisioningRun."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="control-plane target identity",
+                            owner="network.control_plane_intent",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "Provider, target type, target id, and desired "
+                                "revision supplied by the calling owner; the "
+                                "correlation key is derived, never stored here."
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="provider unset-sentinel declaration",
+                            owner="network.control_plane_intent",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "Per-field sentinel value, execution authority, "
+                                "and review status declared by the provider's "
+                                "table, e.g. "
+                                "app.services.network.reconcile.sentinels.RULES "
+                                "for Huawei ONTs."
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.NOT_APPLICABLE,
+                        boundary=(
+                            "Pure semantic policy. The module opens no session, "
+                            "reads no table, and writes no state; callers apply "
+                            "its rulings inside their own transactions."
+                        ),
+                        locking=(
+                            "None. Revision conflicts are detected by "
+                            "assert_intent_head against a current revision the "
+                            "caller has already locked."
+                        ),
+                        idempotency=(
+                            "Every function is a pure function of its "
+                            "arguments. Same-phase transitions are explicitly "
+                            "allowed so a retried write re-derives the same "
+                            "ruling."
+                        ),
+                        retries=(
+                            "Safe to re-evaluate without side effects; a retry "
+                            "that carries a superseded revision is rejected by "
+                            "assert_intent_head rather than silently applied."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.control_plane_intent.contract_error",
+                            "network.control_plane_intent.transition_error",
+                            "network.control_plane_intent.head_conflict",
+                        ),
+                        mapping_owner=(
+                            "Calling delivery owners translate these to their own "
+                            "transport outcomes; this module raises typed errors "
+                            "and never HTTP."
+                        ),
+                        fail_closed_on=(
+                            "unknown vendor status",
+                            "impossible phase transition",
+                            "superseded intent revision",
+                            "undeclared unset desired value",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.SHADOWING,
+                        new_owner="network.control_plane_intent",
+                        old_owner=(
+                            "Per-vendor delivery status vocabularies and, for "
+                            "unset desired values, undeclared per-call defaults "
+                            "scattered across composer, adapter, and planner "
+                            "emission sites."
+                        ),
+                        verification=(
+                            "Providers register every substitution and an audit "
+                            "fails when a new default is added without one; the "
+                            "read-only blast-radius detector reports the live "
+                            "population per rule before any disposition changes."
+                        ),
+                        cutover_gate=(
+                            "The provider authority-debt baselines are empty: "
+                            "every substituted default is either a declared "
+                            "owner default, refused here, or delegated to a "
+                            "named refusing owner, with the detector reporting "
+                            "a measured count behind each decision."
+                        ),
+                        fallback_retirement=(
+                            "Provider-local default substitution is retired as "
+                            "each field's disposition is declared; the registry "
+                            "remains the only place a default may be named."
+                        ),
+                    ),
+                    steward="network operations",
+                    design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+                    test_refs=(
+                        "tests/architecture/test_control_plane_desired_value_policy.py",
+                        "tests/test_reconcile_sentinels.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -17383,7 +17628,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "provisioning writers remain declared migration debt until the "
                     "later runtime cutover. The admin subscription replacement "
                     "adapter is cut over to the two reviewed owner commands and is "
-                    "isolated from recurring add-on and billing writes."
+                    "isolated from recurring add-on and billing writes. The admin "
+                    "subscription detail projects the same fingerprinted served-IP "
+                    "preview through a confirmed ActionForm and delegates repair "
+                    "directly to this owner."
                 ),
                 contract=ServiceContract(
                     concerns=(
@@ -17558,7 +17806,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "network.ip_assignment_lifecycle.unsafe_repair",
                             "network.ip_assignment_lifecycle.unsafe_cohort",
                         ),
-                        mapping_owner="operator CLI and future administrative adapters",
+                        mapping_owner="operator CLI and administrative web adapters",
                         fail_closed_on=(
                             "ambiguous service ownership",
                             "multiple active services or assignments",
@@ -17687,6 +17935,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     test_refs=(
                         "tests/test_ip_assignment_repair.py",
                         "tests/test_ip_assignment_lifecycle.py",
+                        "tests/test_web_ipv4_projection_reconciliation.py",
                         "tests/architecture/test_ip_assignment_service_ownership.py",
                     ),
                 ),
@@ -19932,6 +20181,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.team_inbox_processing",
                 owns=("provider observation consequence coordination",),
                 depends_on=(
+                    "ai.intake",
                     "communications.team_inbox_observations",
                     "communications.team_inbox_threads",
                     "communications.team_inbox_contact_resolution",
@@ -19976,6 +20226,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="communications.team_inbox_delivery_receipts",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source="Timestamp-monotonic provider delivery state.",
+                        ),
+                        AuthorityInput(
+                            name="validated AI intake result",
+                            owner="ai.intake",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Bounded destination-team classification or explicit fallback status.",
                         ),
                     ),
                     transaction_mode=TransactionMode.COORDINATOR_MANAGED,
@@ -20072,6 +20328,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "routing assignment and escalation transitions",
                 ),
                 depends_on=(
+                    "ai.intake",
                     "communications.team_inbox_threads",
                     "operations.sla_escalation",
                     "auth.permission_gate",
@@ -20103,6 +20360,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="auth.permission_gate",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source="Granular assignment and escalation permission evidence.",
+                        ),
+                        AuthorityInput(
+                            name="validated AI intake destination metadata",
+                            owner="ai.intake",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Approved intent, category, confidence, department, and fallback policy.",
                         ),
                     ),
                     transaction_mode=TransactionMode.OWNER_MANAGED,
@@ -20436,9 +20699,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.team_inbox_maintenance",
                 owns=("scheduled Inbox projection maintenance and repair",),
                 depends_on=(
+                    "ai.intake",
                     "communications.team_inbox_threads",
                     "communications.team_inbox_outbound_intents",
                     "communications.team_inbox_projection",
+                    "communications.team_inbox_routing",
                 ),
                 contract=_team_inbox_contract(
                     service_name="communications.team_inbox_maintenance",
@@ -20466,6 +20731,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="communications.team_inbox_outbound_intents",
                             kind=AuthorityKind.AUTHORITATIVE_RECORD,
                             source="Retryable failed communication intent and message evidence.",
+                        ),
+                        AuthorityInput(
+                            name="AI intake recovery state",
+                            owner="ai.intake",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Bounded classifying or awaiting-follow-up state and configured fallback deadline.",
                         ),
                     ),
                     transaction_mode=TransactionMode.OWNER_MANAGED,
@@ -23822,9 +24093,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             owner="ai.generation",
                             kind=AuthorityKind.CONTROL_INPUT,
                             source=(
-                                "System prompt plus the caller's owned "
-                                "projection, already redacted to the advisor's "
-                                "declared input sensitivity."
+                                "System prompt plus either the caller's owned "
+                                "advisory projection or ai.intake's bounded "
+                                "redacted classification projection."
                             ),
                         ),
                         AuthorityInput(
@@ -23996,6 +24267,179 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ai.intake",
+                module="app.services.ai_intake",
+                owns=(
+                    "AI conversational intake configuration lifecycle",
+                    "customer-message intake eligibility policy",
+                    "bounded customer-message intent classification",
+                    "customer contact-data cleaning eligibility policy",
+                ),
+                depends_on=(
+                    "ai.gateway",
+                    "communications.team_inbox_observations",
+                    "communications.team_inbox_threads",
+                    "operations.service_team_lifecycle",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "AiIntakeConfig is the only runtime policy source. The owner "
+                    "classifies WhatsApp, Facebook Messenger, and Instagram only, "
+                    "returns validated destination-team metadata and one controlled "
+                    "follow-up candidate; the Team Inbox outbound owner alone delivers "
+                    "it. Intake never writes queue position or chooses an agent. "
+                    "The reserved data-cleaning gate compares exact configured and "
+                    "conversation team UUIDs and performs no customer-data access. Classification "
+                    "is a read-only participant in the Inbox coordinator transaction; "
+                    "configuration writes enter execute_owner_command once."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="AI conversational intake configuration lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "reviewed AI intake configuration command",
+                                "active fallback and mapped service teams",
+                            ),
+                            canonical_writer="ai.intake",
+                        ),
+                        ConcernContract(
+                            name="customer-message intake eligibility policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "enabled matching AI intake configuration",
+                                "normalized inbound conversation state",
+                                "channel AI-routing permission",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="bounded customer-message intent classification",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "enabled matching AI intake configuration",
+                                "bounded redacted inbound message projection",
+                                "observed provider classification response",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="customer contact-data cleaning eligibility policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "enabled matching AI intake configuration",
+                                "normalized inbound conversation state",
+                                "channel AI-routing permission",
+                                "active fallback and mapped service teams",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="reviewed AI intake configuration command",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Authenticated system-settings writer and typed policy.",
+                        ),
+                        AuthorityInput(
+                            name="active fallback and mapped service teams",
+                            owner="operations.service_team_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Active ServiceTeam identifiers referenced by policy.",
+                        ),
+                        AuthorityInput(
+                            name="enabled matching AI intake configuration",
+                            owner="ai.intake",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Most-specific AiIntakeConfig for provider/account/channel scope.",
+                        ),
+                        AuthorityInput(
+                            name="normalized inbound conversation state",
+                            owner="communications.team_inbox_threads",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Conversation lifecycle, ownership, tags, and bounded recent messages.",
+                        ),
+                        AuthorityInput(
+                            name="channel AI-routing permission",
+                            owner="communications.team_inbox_routing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="Effective TeamInboxChannelRoute allow_ai_routing gate.",
+                        ),
+                        AuthorityInput(
+                            name="bounded redacted inbound message projection",
+                            owner="communications.team_inbox_observations",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="Latest normalized customer message plus at most three relevant messages.",
+                        ),
+                        AuthorityInput(
+                            name="observed provider classification response",
+                            owner="external:llm_provider",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="Strict JSON candidate returned through ai.gateway.",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Configuration mutation enters execute_owner_command once. "
+                            "Classification is read-only and its typed result is persisted "
+                            "by the Inbox coordinator with the inbound message."
+                        ),
+                        locking=(
+                            "Configuration upsert locks the scope row; classification writes no row. "
+                            "The Inbox coordinator serializes channel/thread intake with a transaction "
+                            "advisory lock and locks an existing conversation row; recovery uses the "
+                            "same conversation row lock."
+                        ),
+                        idempotency=(
+                            "Configuration uses command evidence; provider message deduplication "
+                            "precedes classification so one inbound fact produces at most one attempt. "
+                            "Clarification delivery uses an inbound-message-derived communication-intent "
+                            "dedupe key."
+                        ),
+                        retries="No synchronous retry beyond ai.gateway's configured fallback provider.",
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            *owner_command_boundary_error_codes("ai.intake"),
+                            "ai.intake.invalid_configuration",
+                            "ai.intake.invalid_model_output",
+                            "ai.intake.gateway_unavailable",
+                        ),
+                        mapping_owner="Team Inbox processing and AI operations API adapters",
+                        fail_closed_on=(
+                            "invalid or missing configuration",
+                            "invalid provider output",
+                            "provider unavailability",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("ai.intake_config_updated",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility="Version 1 carries only bounded configuration-change evidence.",
+                        replay="Configuration remains authoritative in AiIntakeConfig.",
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner="parked ai_operations CRUD with no runtime reader",
+                        new_owner="ai.intake",
+                        verification="Focused classification, routing, deduplication, and architecture tests.",
+                        cutover_gate="All conversational channels call the shared owner after normalization.",
+                        fallback_retirement="Untyped ai_operations AiIntakeConfig writers are removed.",
+                    ),
+                    steward="customer experience platform",
+                    design_refs=(
+                        "docs/designs/AI_SOT.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                    ),
+                    test_refs=(
+                        "tests/test_ai_intake.py",
+                        "tests/test_team_inbox_ai_intake_flow.py",
+                        "tests/architecture/test_ai_boundaries.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="ai.insights",
                 module="app.services.ai_operations",
                 owns=(
@@ -24006,9 +24450,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "The canonical writer of AIInsight. Generated insights "
                     "land here and nowhere else. AI is advisory: it never "
                     "mutates domain state — acting on a recommendation means "
-                    "calling the domain's declared owner. AiIntakeConfig is a "
-                    "CRM import for an unimplemented conversational-intake "
-                    "feature and gates nothing; see docs/designs/AI_SOT.md."
+                    "calling the domain's declared owner. Customer-facing "
+                    "classification is separately owned by ai.intake."
                 ),
             ),
             SOTService(
@@ -24035,14 +24478,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.tasks.ai_operations",
             "app.web.admin.reports",
             "app.web.admin.inbox",
+            "app.services.team_inbox_channel_receive",
         ),
         rule=(
-            "AI advises ON an owned projection and never re-derives one: the "
+            "Advisory AI advises ON an owned projection and never re-derives one: the "
             "caller hands in what it already computes, so the boundary holds "
             "by construction. AI observes, derives, and recommends; it never "
             "decides domain state. Insight consequences are requested from the "
             "owning domain service, which applies its own guards, events, and "
-            "audit. No app/services/ai* module writes a non-AI ORM row."
+            "audit. ai.intake is the separate bounded customer-message classifier; "
+            "it may select a destination service team but never an agent or queue position."
         ),
     ),
     DomainSOT(

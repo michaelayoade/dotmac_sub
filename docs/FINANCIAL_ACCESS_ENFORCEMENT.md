@@ -88,9 +88,15 @@ support one-time evidence review. They are not queried by runtime funding.
 Amounts in different currencies are never summed or compared.
 
 An account created after the final cutover starts at zero and accumulates
-native facts. A pre-cutover account without a reviewed baseline fails closed.
-An old postpaid account changing to prepaid requires a reviewed current
-baseline as part of that transition.
+native facts. A pre-cutover account without a reviewed baseline fails closed
+for runtime money action. The opening verifier has one narrower completion
+path for a customer created after the fixed legacy handoff with no Splynx
+identity: it fingerprints the mathematical zero history component plus all
+canonical native facts and compares that exact target with the subledger.
+Runtime funding remains blocked until operator and finance approve that run and
+the existing opening owner captures its immutable opening. An old postpaid
+account, a customer created before the handoff, any retained Splynx identity,
+or ambiguous provenance still requires the complete reviewed source baseline.
 
 ## Exact prepaid renewal charge
 
@@ -169,6 +175,25 @@ typed opening-funding consumption (never as a Payment), creates the entitlement,
 then projects `next_billing_at` from the entitlement end. Automatic discovery
 creates a durable operator exception; it does not silently leave a generic
 `draft_invoice_pending` outcome.
+
+The same owner has a separate dry-run-first command for the historical case
+where generic conversion already made an onboarding document final and an
+exact allocation later made it `paid`, while its line and period remained
+unlinked. Repair requires one active paid non-proforma invoice, one positive
+unlinked line, one named matching unanchored prepaid subscription, one active
+full-value allocation from a successful unreturned settlement, no credit-note
+funding, no existing entitlement, and exact equality with the shared taxed
+renewal charge. The Payment may also fund other invoices; only this invoice's
+allocation must equal its total.
+
+Confirmation locks and rechecks the complete evidence chain. A flush-only
+invoice participant writes the missing subscription and WAT settlement-period
+identity; the reconciliation owner then creates the invoice-line entitlement,
+asks the renewal owner to project the billing anchor, and submits a typed
+restoration participant command to the financial-access owner. Identity,
+coverage, anchor, access consequence, audit, event, and idempotency evidence
+commit together with zero economic delta. No payment, allocation, invoice
+status, balance, total, or ledger amount is rewritten.
 
 Bill Now performs the same service-document guard before creating a recovery
 draft. Every unresolved ordinary or recovery invoice with an active positive
