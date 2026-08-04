@@ -52,8 +52,14 @@ class Span:
 
     def __post_init__(self) -> None:
         for name, value in (("start", self.start), ("end", self.end)):
-            if value.tzinfo is None or value.utcoffset() is None:
+            offset = None if value.tzinfo is None else value.utcoffset()
+            if offset is None:
                 raise ValueError(f"{name} must be timezone-aware UTC")
+            # Aware-but-not-UTC is the dangerous case: comparisons still work,
+            # so a +01:00 boundary would silently shift a period edge by an
+            # hour rather than failing. The type says UTC; enforce it.
+            if offset != timedelta(0):
+                raise ValueError(f"{name} must be UTC (offset +00:00), got {offset}")
         if self.end <= self.start:
             raise ValueError("a span must cover a positive duration")
 
@@ -166,6 +172,10 @@ def span_or_none(start: datetime | None, end: datetime | None) -> Span | None:
 
     lo = _utc(start)
     hi = _utc(end)
+    # Normalise a non-UTC aware value rather than rejecting it here: this is
+    # the coercion boundary for persisted rows, and Span enforces the invariant.
+    lo = lo.astimezone(UTC) if lo is not None else None
+    hi = hi.astimezone(UTC) if hi is not None else None
     if lo is None or hi is None or hi <= lo:
         return None
     return Span(lo, hi)
