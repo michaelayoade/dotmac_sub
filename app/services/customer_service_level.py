@@ -20,11 +20,23 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import TYPE_CHECKING
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.catalog import CatalogOffer, SlaProfile, Subscription
+from app.models.catalog import (
+    CatalogOffer,
+    SlaProfile,
+    Subscription,
+)
+from app.models.catalog import (
+    SlaPolicyVersion as SlaPolicyVersionRecord,
+)
+from app.services.domain_errors import DomainError
 from app.services.network.customer_outage_accrual import intervals_for_subscription
 from app.services.service_impact_contracts import (
     SLA_CALENDAR_TIMEZONE,
@@ -34,6 +46,9 @@ from app.services.service_impact_contracts import (
     SlaScore,
     SlaVerdict,
 )
+
+if TYPE_CHECKING:  # avoids a runtime import cycle via owner_commands
+    from app.services.owner_commands import CommandContext
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +71,112 @@ class SlaShadowComparison:
     delta_percent: float | None
 
 
-def resolve_effective_policy(
-    db: Session, subscription: Subscription
-) -> SlaPolicyVersion | None:
-    """The effective contractual policy, or None — never an invented default.
+#: Approved precedence, highest first (design §4). A subscription contract
+#: beats an account contract, which beats the subscribed offer version, which
+#: beats the internal measurement policy. Encoded once, here, so the resolver
+#: and any future reporting surface cannot disagree about which term won.
+_PRECEDENCE: tuple[SlaPolicySource, ...] = (
+    SlaPolicySource.subscription_contract,
+    SlaPolicySource.account_contract,
+    SlaPolicySource.offer_version,
+    SlaPolicySource.internal_measurement,
+)
 
-    Precedence today reaches the offer's SLA profile; subscription- and
-    account-contract policies land with the persisted policy-version slice
-    and take precedence then.
+
+def _row_to_policy(row: SlaPolicyVersionRecord) -> SlaPolicyVersion:
+    """Persisted row → the immutable typed contract the scorer consumes."""
+
+    return SlaPolicyVersion(
+        policy_id=row.id,
+        version=row.version,
+        source=SlaPolicySource(row.source),
+        effective_from=_utc(row.effective_from) or datetime.now(UTC),
+        effective_to=_utc(row.effective_to),
+        availability_target_percent=(
+            float(row.availability_target_percent)
+            if row.availability_target_percent is not None
+            else None
+        ),
+        calendar_timezone=row.calendar_timezone or SLA_CALENDAR_TIMEZONE,
+        maintenance_excludable=bool(row.maintenance_excludable),
+        credit_percent_per_breach=(
+            float(row.credit_percent_per_breach)
+            if row.credit_percent_per_breach is not None
+            else None
+        ),
+        credit_cap_percent=(
+            float(row.credit_cap_percent)
+            if row.credit_cap_percent is not None
+            else None
+        ),
+    )
+
+
+def _persisted_versions_covering(
+    db: Session,
+    subscription: Subscription,
+    *,
+    start: datetime,
+    end: datetime,
+) -> list[SlaPolicyVersionRecord]:
+    """Every persisted version whose effective range overlaps [start, end).
+
+    Ordered by precedence then by ``effective_from`` so the caller can take
+    the winning source without re-deciding the ranking.
     """
+
+    scope_filters = [
+        SlaPolicyVersionRecord.source == SlaPolicySource.internal_measurement.value,
+        SlaPolicyVersionRecord.subscription_id == subscription.id,
+    ]
+    if subscription.subscriber_id is not None:
+        scope_filters.append(
+            SlaPolicyVersionRecord.subscriber_id == subscription.subscriber_id
+        )
+    if subscription.offer_id is not None:
+        scope_filters.append(SlaPolicyVersionRecord.offer_id == subscription.offer_id)
+
+    rows = (
+        db.query(SlaPolicyVersionRecord)
+        .filter(
+            or_(*scope_filters),
+            SlaPolicyVersionRecord.effective_from < end,
+            or_(
+                SlaPolicyVersionRecord.effective_to.is_(None),
+                SlaPolicyVersionRecord.effective_to > start,
+            ),
+        )
+        .all()
+    )
+    rank = {source.value: index for index, source in enumerate(_PRECEDENCE)}
+    return sorted(
+        rows,
+        key=lambda row: (
+            rank.get(row.source, len(rank)),
+            _utc(row.effective_from) or datetime.min.replace(tzinfo=UTC),
+        ),
+    )
+
+
+def resolve_effective_policy(
+    db: Session,
+    subscription: Subscription,
+    *,
+    at: datetime | None = None,
+) -> SlaPolicyVersion | None:
+    """The effective contractual policy at ``at``, or None — never invented.
+
+    Persisted effective-dated versions win, by the approved precedence. The
+    legacy ``SlaProfile`` derivation below is the fallback for subscriptions
+    that have no persisted policy yet; it is retired by the cutover slice.
+    """
+
+    instant = at or datetime.now(UTC)
+    covering = _persisted_versions_covering(
+        db, subscription, start=instant, end=instant + timedelta(microseconds=1)
+    )
+    if covering:
+        return _row_to_policy(covering[0])
 
     offer = (
         db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
@@ -92,6 +204,67 @@ def resolve_effective_policy(
             else None
         ),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PolicySegment:
+    """One contiguous stretch of a reporting period under a single policy.
+
+    A mid-period policy change must split the calculation rather than apply
+    the latest terms retroactively (design §4), so scoring consumes segments,
+    not one policy. ``policy`` is None where no contractual policy was in
+    force for that stretch — measured availability still applies there, under
+    the ``no_contractual_sla`` verdict.
+    """
+
+    start: datetime
+    end: datetime
+    policy: SlaPolicyVersion | None
+
+    @property
+    def seconds(self) -> int:
+        return max(int((self.end - self.start).total_seconds()), 0)
+
+
+def policy_segments_for_period(
+    db: Session,
+    subscription: Subscription,
+    *,
+    period_start: datetime,
+    period_end: datetime,
+) -> tuple[PolicySegment, ...]:
+    """Split ``[period_start, period_end)`` at every effective policy change.
+
+    Boundaries come from the winning policy at each instant, so a change of
+    *precedence* splits the period exactly like a change of terms: if a
+    subscription contract starts mid-month, the offer policy governs the
+    stretch before it and the subscription contract the stretch after.
+    """
+
+    covering = _persisted_versions_covering(
+        db, subscription, start=period_start, end=period_end
+    )
+    boundaries = {period_start, period_end}
+    for row in covering:
+        for edge in (_utc(row.effective_from), _utc(row.effective_to)):
+            if edge is not None and period_start < edge < period_end:
+                boundaries.add(edge)
+
+    ordered = sorted(boundaries)
+    segments: list[PolicySegment] = []
+    for start, end in zip(ordered, ordered[1:], strict=False):
+        if end <= start:
+            continue
+        segments.append(
+            PolicySegment(
+                start=start,
+                end=end,
+                # Resolve at the segment's own start: the winning policy is a
+                # property of the instant, not of the period.
+                policy=resolve_effective_policy(db, subscription, at=start),
+            )
+        )
+    return tuple(segments)
 
 
 def period_bounds(now: datetime) -> tuple[datetime, datetime]:
@@ -288,4 +461,167 @@ def shadow_compare(
         score=score,
         legacy_availability_percent=legacy_percent,
         delta_percent=delta,
+    )
+
+
+# --- recording a new effective-dated version --------------------------------
+
+
+class SlaPolicyError(DomainError):
+    """Invalid policy-version input (adapter: HTTP 400)."""
+
+
+@dataclass(frozen=True, slots=True)
+class RecordPolicyVersionCommand:
+    """Typed input for establishing new contractual terms.
+
+    ``effective_from`` is the instant the terms begin, not the instant the
+    record was typed — a contract signed today may start next month, and the
+    resolver answers by instant, so the two must not be conflated.
+    """
+
+    policy_key: str
+    source: SlaPolicySource
+    effective_from: datetime
+    availability_target_percent: float | None
+    context: CommandContext
+    subscription_id: UUID | None = None
+    subscriber_id: UUID | None = None
+    offer_id: UUID | None = None
+    calendar_timezone: str = SLA_CALENDAR_TIMEZONE
+    maintenance_excludable: bool = True
+    credit_percent_per_breach: float | None = None
+    credit_cap_percent: float | None = None
+    contract_reference: str | None = None
+
+
+def _policy_command(name: str):
+    from app.services.owner_commands import OwnerCommandDefinition
+
+    return OwnerCommandDefinition(
+        owner="customer.service_level",
+        concern="immutable effective-dated SLA policy versions",
+        name=name,
+    )
+
+
+def record_policy_version(
+    db: Session, command: RecordPolicyVersionCommand
+) -> SlaPolicyVersionRecord:
+    """Append a new version, closing the one it supersedes. Never edits terms.
+
+    A period already scored keeps the terms that were in force when it was
+    measured — that is the whole reason this table is append-only. Changing
+    terms therefore means closing the open version at ``effective_from`` and
+    inserting the next one, so the two abut exactly and the database's
+    exclusion constraint stays satisfiable.
+
+    Backdating behind an already-closed version is refused: it would silently
+    rewrite a scored period, which is exactly what superseding ``SlaProfile``
+    was meant to stop.
+    """
+
+    from app.services.events.dispatcher import emit_event
+    from app.services.events.types import EventType
+    from app.services.owner_commands import execute_owner_command
+
+    def operation() -> SlaPolicyVersionRecord:
+        effective_from = _utc(command.effective_from)
+        if effective_from is None:
+            raise SlaPolicyError(
+                code="customer.service_level.missing_effective_from",
+                message="A policy version needs the instant its terms begin.",
+            )
+        if (
+            command.source is not SlaPolicySource.internal_measurement
+            and command.availability_target_percent is None
+        ):
+            raise SlaPolicyError(
+                code="customer.service_level.contractual_target_required",
+                message=(
+                    "A contractual policy must state its availability target; "
+                    "only the internal measurement policy may omit one."
+                ),
+            )
+
+        existing = (
+            db.query(SlaPolicyVersionRecord)
+            .filter(SlaPolicyVersionRecord.policy_key == command.policy_key)
+            .order_by(SlaPolicyVersionRecord.version.desc())
+            .all()
+        )
+        for row in existing:
+            row_end = _utc(row.effective_to)
+            if row_end is not None and row_end > effective_from:
+                raise SlaPolicyError(
+                    code="customer.service_level.would_rewrite_closed_period",
+                    message=(
+                        "Backdating behind a closed version would rewrite a "
+                        "period that may already have been scored."
+                    ),
+                    details={"policy_key": command.policy_key},
+                )
+
+        open_row = next((r for r in existing if r.effective_to is None), None)
+        if open_row is not None:
+            if (_utc(open_row.effective_from) or effective_from) >= effective_from:
+                raise SlaPolicyError(
+                    code="customer.service_level.not_after_current",
+                    message=(
+                        "New terms must begin after the version currently in force."
+                    ),
+                )
+            open_row.effective_to = effective_from
+
+        record = SlaPolicyVersionRecord(
+            policy_key=command.policy_key,
+            version=(existing[0].version + 1) if existing else 1,
+            source=command.source.value,
+            subscription_id=command.subscription_id,
+            subscriber_id=command.subscriber_id,
+            offer_id=command.offer_id,
+            effective_from=effective_from,
+            effective_to=None,
+            availability_target_percent=(
+                Decimal(str(command.availability_target_percent))
+                if command.availability_target_percent is not None
+                else None
+            ),
+            calendar_timezone=command.calendar_timezone,
+            maintenance_excludable=command.maintenance_excludable,
+            credit_percent_per_breach=(
+                Decimal(str(command.credit_percent_per_breach))
+                if command.credit_percent_per_breach is not None
+                else None
+            ),
+            credit_cap_percent=(
+                Decimal(str(command.credit_cap_percent))
+                if command.credit_cap_percent is not None
+                else None
+            ),
+            contract_reference=command.contract_reference,
+            established_by=command.context.actor,
+            supersedes_id=open_row.id if open_row is not None else None,
+        )
+        db.add(record)
+        db.flush()
+        emit_event(
+            db,
+            EventType.sla_policy_version_recorded,
+            {
+                "policy_key": record.policy_key,
+                "version": record.version,
+                "source": record.source,
+                "effective_from": effective_from.isoformat(),
+                "supersedes_id": str(open_row.id) if open_row is not None else None,
+            },
+            actor=command.context.actor,
+        )
+        return record
+
+    return execute_owner_command(
+        db,
+        definition=_policy_command("record_policy_version"),
+        context=command.context,
+        operation=operation,
     )

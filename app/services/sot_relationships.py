@@ -1836,7 +1836,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="customer.service_level",
                 module="app.services.customer_service_level",
-                owns=("per-subscription SLA policy resolution and period score",),
+                owns=(
+                    "per-subscription SLA policy resolution and period score",
+                    "immutable effective-dated SLA policy versions",
+                ),
                 depends_on=(
                     "network.customer_outage_accrual",
                     "service_intent.catalog_policy",
@@ -1859,6 +1862,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 contract=ServiceContract(
                     concerns=(
                         ConcernContract(
+                            name="immutable effective-dated SLA policy versions",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=("contractual SLA terms",),
+                            canonical_writer="customer.service_level",
+                        ),
+                        ConcernContract(
                             name=(
                                 "per-subscription SLA policy resolution and "
                                 "period score"
@@ -1871,6 +1880,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     authoritative_inputs=(
+                        AuthorityInput(
+                            name="contractual SLA terms",
+                            owner="customer.service_level",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "immutable effective-dated sla_policy_versions "
+                                "rows, append-only, one version in force per "
+                                "policy_key per instant"
+                            ),
+                        ),
                         AuthorityInput(
                             name="qualifying downtime intervals",
                             owner="network.customer_outage_accrual",
@@ -1893,7 +1912,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     transaction=TransactionContract(
-                        mode=TransactionMode.READ_ONLY,
+                        mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
                             "Scores are computed on read from committed "
                             "ledger and catalog state; nothing is persisted "
@@ -1907,13 +1926,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         retries="Read scoring calls are safe to retry.",
                     ),
                     errors=ErrorContract(
-                        domain_codes=(),
+                        domain_codes=(
+                            *owner_command_boundary_error_codes(
+                                "customer.service_level"
+                            ),
+                            "customer.service_level.contractual_target_required",
+                            "customer.service_level.missing_effective_from",
+                            "customer.service_level.not_after_current",
+                            "customer.service_level.would_rewrite_closed_period",
+                        ),
                         mapping_owner="app.services.web_customer_details",
+                        fail_closed_on=(
+                            "contractual source without an availability target",
+                            "effective_from at or before the version in force",
+                            "backdating behind an already-closed version",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("sla_policy_version.recorded",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 carries policy key, version, source, "
+                            "effective_from and the superseded version; "
+                            "fields are additive. The authoritative record is "
+                            "the immutable row, not this breadcrumb."
+                        ),
+                        replay=(
+                            "No projection handler consumes it; replay writes nothing."
+                        ),
                     ),
                     migration=MigrationContract(
                         state=AuthorityMigrationState.SHADOWING,
                         old_owner=(
-                            "read-time topology.customer_availability "
+                            "mutable SlaProfile terms and the read-time "
+                            "topology.customer_availability "
                             "trailing-window calculation"
                         ),
                         new_owner="customer.service_level",
@@ -1938,7 +1985,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         "docs/designs/OUTAGE_SLA_SPINE.md",
                         "docs/SOT_RELATIONSHIP_MAP.md",
                     ),
-                    test_refs=("tests/test_customer_service_level.py",),
+                    test_refs=(
+                        "tests/test_customer_service_level.py",
+                        "tests/integration/test_sla_policy_versions_postgres.py",
+                    ),
                 ),
             ),
             SOTService(
