@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -41,6 +42,7 @@ from psycopg import sql
 from sqlalchemy.engine import URL, make_url
 
 from alembic import command
+from app import config as app_config
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "466_team_inbox_channel_ai_routes"
@@ -77,8 +79,15 @@ def engine():
 
 
 @pytest.fixture
-def migrated_database() -> Iterator[URL]:
-    """A disposable database built by the real Alembic chain, to head."""
+def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
+    """A disposable database built by the real Alembic chain.
+
+    `alembic/env.py` resolves its target from `app_config.settings`, NOT from
+    the Config's `sqlalchemy.url`, so pointing the Config at the scratch
+    database silently does nothing and the upgrade runs against whatever
+    `DATABASE_URL` the job exports (sqlite, in CI). Patch settings instead —
+    the same seam `test_migrations_423_to_head.py` uses.
+    """
     configured = os.getenv("TEST_DATABASE_URL")
     if not configured:
         pytest.skip("migrated-schema test requires TEST_DATABASE_URL")
@@ -91,6 +100,14 @@ def migrated_database() -> Iterator[URL]:
     with psycopg.connect(_render(maintenance), autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     target = base.set(database=name)
+    monkeypatch.setattr(
+        app_config,
+        "settings",
+        replace(
+            app_config.settings,
+            database_url=target.render_as_string(hide_password=False),
+        ),
+    )
     try:
         yield target
     finally:
@@ -106,9 +123,13 @@ def migrated_database() -> Iterator[URL]:
 
 
 def _alembic(url: URL, revision: str) -> None:
+    """Upgrade the scratch database. The target comes from the patched
+    `app_config.settings` (see `migrated_database`), which is what
+    `alembic/env.py` actually reads."""
+
+    del url  # documented: env.py resolves the URL from settings, not Config
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", url.render_as_string(hide_password=False))
     command.upgrade(config, revision)
 
 
@@ -250,9 +271,16 @@ def test_a_precedence_claim_requires_its_scope(engine, migrated_database):
     _alembic(migrated_database, "head")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
-        # subscription_contract with no subscription_id
+        # subscription_contract with no subscription_id. The key is set to the
+        # value COALESCE would derive, so the derived-key rule is satisfied and
+        # ONLY the scope rule can fire — otherwise Postgres could report either.
         with pytest.raises(pg_errors.CheckViolation) as caught:
-            _insert(conn, source="subscription_contract", subscription_id=None)
+            _insert(
+                conn,
+                source="subscription_contract",
+                subscription_id=None,
+                policy_key="subscription_contract:global",
+            )
     assert (
         caught.value.diag.constraint_name
         == "ck_sla_policy_versions_scope_matches_source"
@@ -274,7 +302,7 @@ def test_a_contractual_policy_may_not_omit_its_target(engine, migrated_database)
                 subscription_id=None,
                 subscriber_id=subscription_id,
                 availability_target_percent=None,
-                policy_key="acct:no-target",
+                policy_key=f"account_contract:{subscription_id}",
             )
     # CHECK constraints are evaluated before the FK trigger fires, so this is
     # the target rule biting and not the unrelated subscriber FK.
@@ -312,13 +340,27 @@ def test_two_series_cannot_cover_one_scope_for_the_same_period(
     _alembic(migrated_database, "head")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
-        _insert(conn, policy_key="internal_measurement:global", version=1)
+        _insert(
+            conn,
+            policy_key="internal_measurement:global",
+            version=1,
+            effective_to=NOW + timedelta(days=30),
+        )
         # A second series name over the SAME scope and period must still be
         # rejected — the exclusion keys on (source, scope, range).
+        # Same scope, same period, a different series name. Either the
+        # derived-key rule rejects the name or the scope-keyed exclusion
+        # rejects the overlap — both close the gap the review identified.
         with pytest.raises(
             (pg_errors.ExclusionViolation, pg_errors.CheckViolation)
         ) as caught:
-            _insert(conn, policy_key="internal_measurement:other", version=2)
+            _insert(
+                conn,
+                policy_key="internal_measurement:other",
+                version=2,
+                effective_from=NOW + timedelta(days=10),
+                effective_to=NOW + timedelta(days=40),
+            )
     assert caught.value.diag.constraint_name in {
         "ex_sla_policy_versions_no_overlap",
         "ck_sla_policy_versions_key_is_derived",
@@ -364,7 +406,14 @@ def test_a_replayed_command_cannot_append_a_second_row(engine, migrated_database
     _alembic(migrated_database, "head")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
-        _insert(conn, version=1, command_fingerprint="sha256:same")
+        # Close the first range so the ranges abut rather than overlap — the
+        # exclusion constraint must not fire first and mask the fingerprint.
+        _insert(
+            conn,
+            version=1,
+            effective_to=NOW + timedelta(days=1),
+            command_fingerprint="sha256:same",
+        )
         with pytest.raises(pg_errors.UniqueViolation) as caught:
             _insert(
                 conn,
