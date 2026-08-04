@@ -1,7 +1,7 @@
 """add Quote PDF exports and email delivery requests
 
-Revision ID: 470_quote_documents_and_delivery
-Revises: 469_meta_direct_message_channels
+Revision ID: 471_quote_documents_and_delivery
+Revises: 470_inbox_lead_intake
 Create Date: 2026-08-04
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "470_quote_documents_and_delivery"
-down_revision: str | None = "469_meta_direct_message_channels"
+revision: str = "471_quote_documents_and_delivery"
+down_revision: str | None = "470_inbox_lead_intake"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

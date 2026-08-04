@@ -169,7 +169,6 @@ def test_pdf_export_is_content_addressed_and_audited_once(db_session, monkeypatc
     quote, _primary = _quote(db_session)
     quote_id = quote.id
     _stub_pdf_storage(monkeypatch)
-    db_session.rollback()
 
     first = quote_documents.generate_quote_pdf(
         db_session,
@@ -256,7 +255,6 @@ def test_send_email_queues_one_pdf_intent_and_replays(db_session, monkeypatch):
         "emit_event",
         lambda *_args, **_kwargs: None,
     )
-    db_session.rollback()
     key = f"pytest-quote-email:{uuid4()}"
     command = quote_delivery.SendQuoteEmailCommand(
         context=_context(key=key),
@@ -327,7 +325,6 @@ def test_suppressed_email_does_not_mark_quote_sent(db_session, monkeypatch):
         "emit_event",
         lambda *_args, **_kwargs: None,
     )
-    db_session.rollback()
     outcome = quote_delivery.send_quote_email(
         db_session,
         quote_delivery.SendQuoteEmailCommand(
