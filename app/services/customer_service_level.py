@@ -177,6 +177,18 @@ def resolve_effective_policy(
     )
     if covering:
         return _row_to_policy(covering[0])
+    return _legacy_offer_policy(db, subscription)
+
+
+def _legacy_offer_policy(
+    db: Session, subscription: Subscription
+) -> SlaPolicyVersion | None:
+    """The mutable-``SlaProfile`` derivation this slice supersedes.
+
+    Retained as the fallback for subscriptions with no persisted policy, and
+    as the scorer's only input until segmented scoring lands. Retired by the
+    cutover PR.
+    """
 
     offer = (
         db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
@@ -315,7 +327,14 @@ def score_subscription_period(
     evaluated_at = now or datetime.now(UTC)
     if period_start is None or period_end is None:
         period_start, period_end = period_bounds(evaluated_at)
-    policy = resolve_effective_policy(db, subscription)
+    # GATED: this scorer still applies ONE policy across the whole requested
+    # period, so consuming persisted effective-dated versions here would let a
+    # policy recorded today govern a historical or mid-period score — exactly
+    # the retroactive defect this programme exists to remove. Segmented
+    # scoring lands with PR 2 (`policy_segments_for_period` is its input);
+    # until then the scorer deliberately reads only the legacy offer profile,
+    # so recording a policy version changes no existing score.
+    policy = _legacy_offer_policy(db, subscription)
 
     # Eligibility approximation for the shadow phase: an active subscription
     # is entitled from its creation; non-active subscriptions score
@@ -478,9 +497,14 @@ class RecordPolicyVersionCommand:
     ``effective_from`` is the instant the terms begin, not the instant the
     record was typed — a contract signed today may start next month, and the
     resolver answers by instant, so the two must not be conflated.
+
+    There is deliberately no ``policy_key``: the series identity is derived
+    from ``(source, scope)`` inside the owner. A caller-supplied key would let
+    two different keys target the same subscription for the same period,
+    producing two equal-precedence policies and an undefined resolver winner —
+    the exclusion constraint only forbids overlap *within* a key.
     """
 
-    policy_key: str
     source: SlaPolicySource
     effective_from: datetime
     availability_target_percent: float | None
@@ -495,6 +519,89 @@ class RecordPolicyVersionCommand:
     contract_reference: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyVersionOutcome:
+    """Immutable result of recording terms — never the ORM row itself.
+
+    Returning the entity would hand callers a mutable handle to a record whose
+    entire purpose is being append-only, and would let a caller edit terms
+    after the command validated them.
+    """
+
+    policy_version_id: UUID
+    policy_key: str
+    version: int
+    source: SlaPolicySource
+    effective_from: datetime
+    superseded_version_id: UUID | None
+    superseded_at: datetime | None
+    replayed: bool
+    fingerprint: str
+
+
+def derive_policy_key(
+    source: SlaPolicySource,
+    *,
+    subscription_id: UUID | None = None,
+    subscriber_id: UUID | None = None,
+    offer_id: UUID | None = None,
+) -> str:
+    """The series identity for one real scope. Owner-derived, never supplied.
+
+    One scope has exactly one policy series, so "the terms in force for this
+    subscription at T" cannot have two equal-precedence answers. The database
+    enforces the same shape: a unique index on (source, scope) inside the
+    exclusion constraint.
+    """
+
+    if source is SlaPolicySource.subscription_contract:
+        if subscription_id is None:
+            raise SlaPolicyError(
+                code="customer.service_level.scope_required",
+                message="A subscription contract needs its subscription.",
+            )
+        return f"subscription_contract:{subscription_id}"
+    if source is SlaPolicySource.account_contract:
+        if subscriber_id is None:
+            raise SlaPolicyError(
+                code="customer.service_level.scope_required",
+                message="An account contract needs its account.",
+            )
+        return f"account_contract:{subscriber_id}"
+    if source is SlaPolicySource.offer_version:
+        if offer_id is None:
+            raise SlaPolicyError(
+                code="customer.service_level.scope_required",
+                message="An offer policy needs its offer.",
+            )
+        return f"offer_version:{offer_id}"
+    return "internal_measurement:global"
+
+
+def _policy_fingerprint(command: RecordPolicyVersionCommand, key: str) -> str:
+    """Stable identity of the *intent*, for replay arbitration.
+
+    A retry of the same command must return the original outcome rather than
+    raising ``not_after_current`` against the row it already created.
+    """
+
+    material = "\0".join(
+        str(part)
+        for part in (
+            key,
+            command.source.value,
+            _utc(command.effective_from),
+            command.availability_target_percent,
+            command.calendar_timezone,
+            command.maintenance_excludable,
+            command.credit_percent_per_breach,
+            command.credit_cap_percent,
+            command.contract_reference,
+        )
+    )
+    return f"sha256:{hashlib.sha256(material.encode()).hexdigest()}"
+
+
 def _policy_command(name: str):
     from app.services.owner_commands import OwnerCommandDefinition
 
@@ -505,27 +612,53 @@ def _policy_command(name: str):
     )
 
 
+def _outcome(record: SlaPolicyVersionRecord, *, replayed: bool) -> PolicyVersionOutcome:
+    return PolicyVersionOutcome(
+        policy_version_id=record.id,
+        policy_key=record.policy_key,
+        version=record.version,
+        source=SlaPolicySource(record.source),
+        effective_from=_utc(record.effective_from) or datetime.now(UTC),
+        superseded_version_id=record.supersedes_id,
+        superseded_at=_utc(record.effective_from),
+        replayed=replayed,
+        fingerprint=record.command_fingerprint or "",
+    )
+
+
 def record_policy_version(
     db: Session, command: RecordPolicyVersionCommand
-) -> SlaPolicyVersionRecord:
+) -> PolicyVersionOutcome:
     """Append a new version, closing the one it supersedes. Never edits terms.
 
     A period already scored keeps the terms that were in force when it was
     measured — that is the whole reason this table is append-only. Changing
-    terms therefore means closing the open version at ``effective_from`` and
-    inserting the next one, so the two abut exactly and the database's
-    exclusion constraint stays satisfiable.
+    terms means closing the open version at ``effective_from`` and inserting
+    the next, so the two abut exactly and the exclusion constraint stays
+    satisfiable.
+
+    Concurrency and replay:
+
+    - the series row set is locked ``FOR UPDATE`` before any decision, so two
+      concurrent writers on one scope serialise rather than both reading a
+      stale "current version";
+    - a replay of the same command fingerprint returns the original outcome
+      instead of raising against the row it already created;
+    - a different command that loses the race surfaces
+      ``concurrent_version_conflict`` rather than a raw database error.
 
     Backdating behind an already-closed version is refused: it would silently
     rewrite a scored period, which is exactly what superseding ``SlaProfile``
     was meant to stop.
     """
 
+    from sqlalchemy.exc import IntegrityError
+
     from app.services.events.dispatcher import emit_event
     from app.services.events.types import EventType
     from app.services.owner_commands import execute_owner_command
 
-    def operation() -> SlaPolicyVersionRecord:
+    def operation() -> PolicyVersionOutcome:
         effective_from = _utc(command.effective_from)
         if effective_from is None:
             raise SlaPolicyError(
@@ -544,12 +677,29 @@ def record_policy_version(
                 ),
             )
 
+        policy_key = derive_policy_key(
+            command.source,
+            subscription_id=command.subscription_id,
+            subscriber_id=command.subscriber_id,
+            offer_id=command.offer_id,
+        )
+        fingerprint = _policy_fingerprint(command, policy_key)
+
+        # Serialise writers on this series before reading "current version".
         existing = (
             db.query(SlaPolicyVersionRecord)
-            .filter(SlaPolicyVersionRecord.policy_key == command.policy_key)
+            .filter(SlaPolicyVersionRecord.policy_key == policy_key)
             .order_by(SlaPolicyVersionRecord.version.desc())
+            .with_for_update()
             .all()
         )
+
+        replay = next(
+            (r for r in existing if r.command_fingerprint == fingerprint), None
+        )
+        if replay is not None:
+            return _outcome(replay, replayed=True)
+
         for row in existing:
             row_end = _utc(row.effective_to)
             if row_end is not None and row_end > effective_from:
@@ -559,7 +709,7 @@ def record_policy_version(
                         "Backdating behind a closed version would rewrite a "
                         "period that may already have been scored."
                     ),
-                    details={"policy_key": command.policy_key},
+                    details={"policy_key": policy_key},
                 )
 
         open_row = next((r for r in existing if r.effective_to is None), None)
@@ -570,11 +720,12 @@ def record_policy_version(
                     message=(
                         "New terms must begin after the version currently in force."
                     ),
+                    details={"policy_key": policy_key},
                 )
             open_row.effective_to = effective_from
 
         record = SlaPolicyVersionRecord(
-            policy_key=command.policy_key,
+            policy_key=policy_key,
             version=(existing[0].version + 1) if existing else 1,
             source=command.source.value,
             subscription_id=command.subscription_id,
@@ -602,9 +753,25 @@ def record_policy_version(
             contract_reference=command.contract_reference,
             established_by=command.context.actor,
             supersedes_id=open_row.id if open_row is not None else None,
+            command_fingerprint=fingerprint,
+            command_idempotency_key=getattr(command.context, "idempotency_key", None),
         )
         db.add(record)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            # The exclusion/unique constraints are the real arbiter under
+            # concurrency; surface a stable domain error rather than a raw
+            # database exception the adapter cannot classify.
+            raise SlaPolicyError(
+                code="customer.service_level.concurrent_version_conflict",
+                message=(
+                    "Another version of this policy was recorded concurrently; "
+                    "re-read the series and retry."
+                ),
+                details={"policy_key": policy_key},
+            ) from exc
+
         emit_event(
             db,
             EventType.sla_policy_version_recorded,
@@ -614,10 +781,11 @@ def record_policy_version(
                 "source": record.source,
                 "effective_from": effective_from.isoformat(),
                 "supersedes_id": str(open_row.id) if open_row is not None else None,
+                "fingerprint": fingerprint,
             },
             actor=command.context.actor,
         )
-        return record
+        return _outcome(record, replayed=False)
 
     return execute_owner_command(
         db,

@@ -455,7 +455,6 @@ def test_recording_a_new_version_closes_the_one_it_supersedes(
     first = sla.record_policy_version(
         db_session,
         sla.RecordPolicyVersionCommand(
-            policy_key=f"sub:{subscription.id}",
             source=sla.SlaPolicySource.subscription_contract,
             effective_from=NOW - timedelta(days=60),
             availability_target_percent=99.0,
@@ -466,7 +465,6 @@ def test_recording_a_new_version_closes_the_one_it_supersedes(
     second = sla.record_policy_version(
         db_session,
         sla.RecordPolicyVersionCommand(
-            policy_key=f"sub:{subscription.id}",
             source=sla.SlaPolicySource.subscription_contract,
             effective_from=NOW - timedelta(days=30),
             availability_target_percent=99.9,
@@ -475,16 +473,18 @@ def test_recording_a_new_version_closes_the_one_it_supersedes(
         ),
     )
 
-    db_session.refresh(first)
+    from app.models.catalog import SlaPolicyVersion as Record
+
+    first_row = db_session.get(Record, first.policy_version_id)
     # SQLite returns naive datetimes; normalise rather than assert a dialect
     # behaviour. The migrated-PostgreSQL canary covers the tz-aware storage.
-    closed_at = first.effective_to
+    closed_at = first_row.effective_to
     if closed_at.tzinfo is None:
         closed_at = closed_at.replace(tzinfo=UTC)
     assert closed_at == NOW - timedelta(days=30), "must abut exactly"
     assert second.version == 2
-    assert second.supersedes_id == first.id
-    assert second.effective_to is None
+    assert second.superseded_version_id == first.policy_version_id
+    assert second.replayed is False
     # The old terms still govern the period they covered.
     assert (
         sla.resolve_effective_policy(
@@ -500,12 +500,10 @@ def test_backdating_behind_a_closed_version_is_refused(
     """Rewriting an already-scored period is exactly what superseding the
     mutable SlaProfile was meant to stop."""
 
-    key = f"sub:{subscription.id}"
     for days, target in ((60, 99.0), (30, 99.9)):
         sla.record_policy_version(
             db_session,
             sla.RecordPolicyVersionCommand(
-                policy_key=key,
                 source=sla.SlaPolicySource.subscription_contract,
                 effective_from=NOW - timedelta(days=days),
                 availability_target_percent=target,
@@ -518,7 +516,6 @@ def test_backdating_behind_a_closed_version_is_refused(
         sla.record_policy_version(
             db_session,
             sla.RecordPolicyVersionCommand(
-                policy_key=key,
                 source=sla.SlaPolicySource.subscription_contract,
                 effective_from=NOW - timedelta(days=45),
                 availability_target_percent=98.0,
@@ -535,7 +532,6 @@ def test_a_contractual_version_requires_a_target(
         sla.record_policy_version(
             db_session,
             sla.RecordPolicyVersionCommand(
-                policy_key=f"sub:{subscription.id}",
                 source=sla.SlaPolicySource.subscription_contract,
                 effective_from=NOW,
                 availability_target_percent=None,
@@ -550,10 +546,9 @@ def test_internal_measurement_may_have_no_target(
 ):
     """It states what we measure, never what we promised."""
 
-    record = sla.record_policy_version(
+    outcome = sla.record_policy_version(
         db_session,
         sla.RecordPolicyVersionCommand(
-            policy_key="internal:default",
             source=sla.SlaPolicySource.internal_measurement,
             effective_from=NOW - timedelta(days=1),
             availability_target_percent=None,
@@ -561,9 +556,128 @@ def test_internal_measurement_may_have_no_target(
         ),
     )
 
-    assert record.availability_target_percent is None
+    assert outcome.policy_key == "internal_measurement:global"
     # It must not masquerade as a contractual promise.
     policy = sla.resolve_effective_policy(db_session, subscription, at=NOW)
     assert policy is not None
     assert policy.source is sla.SlaPolicySource.internal_measurement
     assert policy.availability_target_percent is None
+
+
+# --- review blockers: identity, replay, and the scorer gate ------------------
+
+
+def test_policy_identity_is_derived_from_the_real_scope(db_session, subscription):
+    """A caller-supplied key would let two series target one subscription for
+    the same period, giving two equal-precedence policies and an undefined
+    winner. The key is a function of (source, scope)."""
+
+    assert (
+        sla.derive_policy_key(
+            sla.SlaPolicySource.subscription_contract,
+            subscription_id=subscription.id,
+        )
+        == f"subscription_contract:{subscription.id}"
+    )
+    assert (
+        sla.derive_policy_key(sla.SlaPolicySource.internal_measurement)
+        == "internal_measurement:global"
+    )
+    # A precedence claim with no scope cannot name a series at all.
+    with pytest.raises(sla.SlaPolicyError):
+        sla.derive_policy_key(sla.SlaPolicySource.subscription_contract)
+    with pytest.raises(sla.SlaPolicyError):
+        sla.derive_policy_key(sla.SlaPolicySource.account_contract)
+
+
+def test_replaying_the_same_command_returns_the_original_outcome(
+    db_session, subscription, staged_owner_command
+):
+    """A retry must not raise `not_after_current` against the row it already
+    created."""
+
+    def _cmd():
+        return sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.subscription_contract,
+            effective_from=NOW - timedelta(days=10),
+            availability_target_percent=99.9,
+            subscription_id=subscription.id,
+            context=_ctx(),
+        )
+
+    first = sla.record_policy_version(db_session, _cmd())
+    replay = sla.record_policy_version(db_session, _cmd())
+
+    assert first.replayed is False
+    assert replay.replayed is True
+    assert replay.policy_version_id == first.policy_version_id
+    assert replay.version == first.version
+    assert replay.fingerprint == first.fingerprint
+
+    from app.models.catalog import SlaPolicyVersion as Record
+
+    assert (
+        db_session.query(Record).filter(Record.policy_key == first.policy_key).count()
+        == 1
+    ), "a replay must not append a second version"
+
+
+def test_the_outcome_is_immutable_and_not_the_orm_row(
+    db_session, subscription, staged_owner_command
+):
+    """Returning the entity would hand callers a mutable handle to an
+    append-only record."""
+
+    outcome = sla.record_policy_version(
+        db_session,
+        sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.subscription_contract,
+            effective_from=NOW - timedelta(days=5),
+            availability_target_percent=99.5,
+            subscription_id=subscription.id,
+            context=_ctx(),
+        ),
+    )
+
+    assert isinstance(outcome, sla.PolicyVersionOutcome)
+    with pytest.raises((AttributeError, TypeError)):
+        outcome.version = 99  # frozen
+
+
+def test_recording_a_policy_does_not_change_an_existing_score(
+    db_session, subscription, staged_owner_command
+):
+    """PR-1 gate: the scorer still applies one policy across the whole period,
+    so consuming persisted versions here would let terms recorded today govern
+    a historical score. Segmented scoring lands with PR 2."""
+
+    _activate(db_session, subscription)
+    _interval(
+        db_session,
+        subscription.id,
+        start=NOW - timedelta(hours=2),
+        end=NOW - timedelta(hours=1),
+    )
+    before = sla.score_subscription_period(db_session, subscription, now=NOW)
+
+    sla.record_policy_version(
+        db_session,
+        sla.RecordPolicyVersionCommand(
+            source=sla.SlaPolicySource.subscription_contract,
+            effective_from=NOW - timedelta(days=1),
+            availability_target_percent=99.999,
+            subscription_id=subscription.id,
+            context=_ctx(),
+        ),
+    )
+    after = sla.score_subscription_period(db_session, subscription, now=NOW)
+
+    assert after.verdict == before.verdict
+    assert after.evidence_digest == before.evidence_digest
+    # ...while the resolver DOES see it, ready for PR 2.
+    assert (
+        sla.resolve_effective_policy(
+            db_session, subscription, at=NOW
+        ).availability_target_percent
+        == 99.999
+    )

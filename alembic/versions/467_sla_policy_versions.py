@@ -16,6 +16,9 @@ model metadata alone, so both carry executable canaries in
 - `ck_sla_policy_versions_scope_matches_source` — binds the precedence claim
   to the scope column, so a row cannot claim subscription-contract precedence
   with no subscription.
+- `ck_sla_policy_versions_key_is_derived` — binds `policy_key` to the derived
+  `(source, scope)` identity, so the series name cannot disagree with the real
+  scope it governs.
 
 Requires the `btree_gist` extension for the mixed equality/range exclusion.
 
@@ -58,19 +61,19 @@ def upgrade() -> None:
         sa.Column(
             "subscription_id",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("subscriptions.id", ondelete="CASCADE"),
+            sa.ForeignKey("subscriptions.id", ondelete="RESTRICT"),
             nullable=True,
         ),
         sa.Column(
             "subscriber_id",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("subscribers.id", ondelete="CASCADE"),
+            sa.ForeignKey("subscribers.id", ondelete="RESTRICT"),
             nullable=True,
         ),
         sa.Column(
             "offer_id",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("catalog_offers.id", ondelete="CASCADE"),
+            sa.ForeignKey("catalog_offers.id", ondelete="RESTRICT"),
             nullable=True,
         ),
         sa.Column("effective_from", sa.DateTime(timezone=True), nullable=False),
@@ -92,10 +95,20 @@ def upgrade() -> None:
         sa.Column("credit_cap_percent", sa.Numeric(6, 3), nullable=True),
         sa.Column("contract_reference", sa.String(length=200), nullable=True),
         sa.Column("established_by", sa.String(length=120), nullable=True),
-        sa.Column("supersedes_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "supersedes_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("sla_policy_versions.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
+        sa.Column("command_fingerprint", sa.String(length=80), nullable=True),
+        sa.Column("command_idempotency_key", sa.String(length=200), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint(
             "policy_key", "version", name="uq_sla_policy_versions_key_version"
+        ),
+        sa.UniqueConstraint(
+            "command_fingerprint", name="uq_sla_policy_versions_fingerprint"
         ),
         sa.CheckConstraint("version >= 1", name="ck_sla_policy_versions_version"),
         sa.CheckConstraint(
@@ -144,16 +157,45 @@ def upgrade() -> None:
     )
 
     if is_postgres:
-        # One policy_key may not have two versions covering the same instant.
-        # tstzrange with '[)' matches the half-open semantics the resolver
-        # uses; a NULL effective_to becomes an unbounded upper edge.
+        # The series identity is (source, scope). Keying the exclusion on
+        # policy_key ALONE would let two different keys target the same
+        # subscription for the same period, producing two equal-precedence
+        # policies and an undefined resolver winner. Coalescing the three
+        # nullable scope columns to a single non-null discriminator makes the
+        # real scope the thing that cannot overlap.
+        #
+        # tstzrange '[)' matches the half-open semantics the resolver uses, so
+        # one version may end exactly where the next begins; a NULL
+        # effective_to becomes an unbounded upper edge.
         op.execute(
             """
             ALTER TABLE sla_policy_versions
             ADD CONSTRAINT ex_sla_policy_versions_no_overlap
             EXCLUDE USING gist (
-                policy_key WITH =,
+                source WITH =,
+                (COALESCE(subscription_id, subscriber_id, offer_id,
+                          '00000000-0000-0000-0000-000000000000'::uuid))
+                    WITH =,
                 tstzrange(effective_from, effective_to, '[)') WITH &&
+            )
+            """
+        )
+        # policy_key is a FUNCTION of (source, scope), so it must not be able
+        # to disagree with them. A unique index over (source, scope, key) would
+        # not do this — it permits many keys per scope, each trivially unique.
+        # This binds the derived identity instead, matching
+        # `derive_policy_key`.
+        op.execute(
+            """
+            ALTER TABLE sla_policy_versions
+            ADD CONSTRAINT ck_sla_policy_versions_key_is_derived
+            CHECK (
+                policy_key = source || ':' || COALESCE(
+                    subscription_id::text,
+                    subscriber_id::text,
+                    offer_id::text,
+                    'global'
+                )
             )
             """
         )
@@ -165,6 +207,11 @@ def downgrade() -> None:
         op.execute(
             "ALTER TABLE sla_policy_versions "
             "DROP CONSTRAINT IF EXISTS ex_sla_policy_versions_no_overlap"
+        )
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            "ALTER TABLE sla_policy_versions "
+            "DROP CONSTRAINT IF EXISTS ck_sla_policy_versions_key_is_derived"
         )
     for index in (
         "ix_sla_policy_versions_effective",

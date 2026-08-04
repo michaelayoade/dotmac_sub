@@ -127,7 +127,7 @@ def _constraints(url: URL) -> dict[str, str]:
 def _insert(conn, **overrides) -> None:
     payload = {
         "id": uuid.uuid4(),
-        "policy_key": "policy:acceptance",
+        "policy_key": "internal_measurement:global",
         "version": 1,
         "source": "internal_measurement",
         "subscription_id": None,
@@ -138,6 +138,8 @@ def _insert(conn, **overrides) -> None:
         "availability_target_percent": 99.5,
         "calendar_timezone": "Africa/Lagos",
         "maintenance_excludable": True,
+        "command_fingerprint": None,
+        "command_idempotency_key": None,
         "created_at": NOW,
     }
     payload.update(overrides)
@@ -146,12 +148,14 @@ def _insert(conn, **overrides) -> None:
         INSERT INTO sla_policy_versions
           (id, policy_key, version, source, subscription_id, subscriber_id,
            offer_id, effective_from, effective_to, availability_target_percent,
-           calendar_timezone, maintenance_excludable, created_at)
+           calendar_timezone, maintenance_excludable, command_fingerprint,
+           command_idempotency_key, created_at)
         VALUES
           (%(id)s, %(policy_key)s, %(version)s, %(source)s, %(subscription_id)s,
            %(subscriber_id)s, %(offer_id)s, %(effective_from)s, %(effective_to)s,
            %(availability_target_percent)s, %(calendar_timezone)s,
-           %(maintenance_excludable)s, %(created_at)s)
+           %(maintenance_excludable)s, %(command_fingerprint)s,
+           %(command_idempotency_key)s, %(created_at)s)
         """,
         payload,
     )
@@ -237,7 +241,7 @@ def test_abutting_versions_of_one_policy_are_allowed(engine, migrated_database):
 
         count = conn.execute(
             "SELECT count(*) FROM sla_policy_versions WHERE policy_key = %s",
-            ("policy:acceptance",),
+            ("internal_measurement:global",),
         ).fetchone()[0]
     assert count == 2
 
@@ -294,3 +298,78 @@ def test_a_contractual_policy_may_not_omit_its_target(engine, migrated_database)
             ("internal-ok",),
         ).fetchone()[0]
     assert stored is None
+
+
+# --- scope-bound identity and retention safety (review blockers 1 and 2) -----
+
+
+def test_two_series_cannot_cover_one_scope_for_the_same_period(
+    engine, migrated_database
+):
+    """Keying the exclusion on policy_key alone would let two different keys
+    target one subscription for the same period, producing two
+    equal-precedence policies and an undefined resolver winner."""
+    _alembic(migrated_database, "head")
+
+    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+        _insert(conn, policy_key="internal_measurement:global", version=1)
+        # A second series name over the SAME scope and period must still be
+        # rejected — the exclusion keys on (source, scope, range).
+        with pytest.raises(
+            (pg_errors.ExclusionViolation, pg_errors.CheckViolation)
+        ) as caught:
+            _insert(conn, policy_key="internal_measurement:other", version=2)
+    assert caught.value.diag.constraint_name in {
+        "ex_sla_policy_versions_no_overlap",
+        "ck_sla_policy_versions_key_is_derived",
+    }
+
+
+def test_policy_key_must_match_the_derived_scope_identity(engine, migrated_database):
+    _alembic(migrated_database, "head")
+
+    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+        with pytest.raises(pg_errors.CheckViolation) as caught:
+            _insert(conn, policy_key="something:invented")
+    assert caught.value.diag.constraint_name == "ck_sla_policy_versions_key_is_derived"
+
+
+def test_contractual_history_outlives_its_parents(engine, migrated_database):
+    """CASCADE would erase the record of what a customer was owed. The FKs
+    must RESTRICT so a parent delete fails loudly instead."""
+    _alembic(migrated_database, "head")
+
+    with psycopg.connect(_render(migrated_database)) as conn:
+        rows = conn.execute(
+            """
+            SELECT a.attname, c.confdeltype
+            FROM pg_constraint c
+            JOIN pg_attribute a
+              ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+            WHERE c.conrelid = 'sla_policy_versions'::regclass
+              AND c.contype = 'f'
+            """
+        ).fetchall()
+    behaviour = {name: delete_rule for name, delete_rule in rows}
+    for column in ("subscription_id", "subscriber_id", "offer_id", "supersedes_id"):
+        assert behaviour.get(column) == "r", (
+            f"{column} must RESTRICT (got {behaviour.get(column)!r}); "
+            "cascading would delete contractual history"
+        )
+
+
+def test_a_replayed_command_cannot_append_a_second_row(engine, migrated_database):
+    """The fingerprint uniqueness is the durable backstop for replay, holding
+    even when two processes retry concurrently."""
+    _alembic(migrated_database, "head")
+
+    with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+        _insert(conn, version=1, command_fingerprint="sha256:same")
+        with pytest.raises(pg_errors.UniqueViolation) as caught:
+            _insert(
+                conn,
+                version=2,
+                effective_from=NOW + timedelta(days=1),
+                command_fingerprint="sha256:same",
+            )
+    assert caught.value.diag.constraint_name == "uq_sla_policy_versions_fingerprint"

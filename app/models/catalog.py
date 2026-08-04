@@ -1523,6 +1523,9 @@ class SlaPolicyVersion(Base):
             " AND subscriber_id IS NULL AND offer_id IS NULL)",
             name="ck_sla_policy_versions_scope_matches_source",
         ),
+        UniqueConstraint(
+            "command_fingerprint", name="uq_sla_policy_versions_fingerprint"
+        ),
         Index("ix_sla_policy_versions_key", "policy_key", "version"),
         Index("ix_sla_policy_versions_subscription", "subscription_id"),
         Index("ix_sla_policy_versions_subscriber", "subscriber_id"),
@@ -1538,14 +1541,17 @@ class SlaPolicyVersion(Base):
     # subscription_contract | account_contract | offer_version |
     # internal_measurement  (SlaPolicySource in service_impact_contracts)
     source: Mapped[str] = mapped_column(String(30), nullable=False)
+    # RESTRICT, never CASCADE: this table exists to preserve what a customer
+    # was owed. Cascading a parent delete would erase the contractual history
+    # a later compensation or dispute has to be settled against.
     subscription_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="CASCADE")
+        UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="RESTRICT")
     )
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id", ondelete="CASCADE")
+        UUID(as_uuid=True), ForeignKey("subscribers.id", ondelete="RESTRICT")
     )
     offer_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("catalog_offers.id", ondelete="CASCADE")
+        UUID(as_uuid=True), ForeignKey("catalog_offers.id", ondelete="RESTRICT")
     )
     effective_from: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -1563,7 +1569,14 @@ class SlaPolicyVersion(Base):
     # Provenance: who established these terms and against what evidence.
     contract_reference: Mapped[str | None] = mapped_column(String(200))
     established_by: Mapped[str | None] = mapped_column(String(120))
-    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sla_policy_versions.id", ondelete="RESTRICT"),
+    )
+    # Durable replay evidence: a retry of the same intent returns the original
+    # outcome instead of raising against the row it already created.
+    command_fingerprint: Mapped[str | None] = mapped_column(String(80))
+    command_idempotency_key: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

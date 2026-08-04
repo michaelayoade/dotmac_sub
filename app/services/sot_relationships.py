@@ -1914,16 +1914,44 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     transaction=TransactionContract(
                         mode=TransactionMode.OWNER_MANAGED,
                         boundary=(
-                            "Scores are computed on read from committed "
-                            "ledger and catalog state; nothing is persisted "
-                            "in the shadow phase."
+                            "record_policy_version appends one immutable "
+                            "version and closes the version it supersedes in "
+                            "a single owner-managed transaction, staging its "
+                            "typed output with the write. Scoring stays a "
+                            "pure read over committed ledger and catalog "
+                            "state and persists nothing."
                         ),
-                        locking="Read scoring acquires no mutation locks.",
+                        locking=(
+                            "The writer locks the target policy series "
+                            "(SELECT ... FOR UPDATE on sla_policy_versions "
+                            "for one policy_key, ordered by version desc) "
+                            "before reading the version in force, so "
+                            "concurrent writers on one scope serialise "
+                            "instead of both acting on a stale current "
+                            "version. No other table is locked, so the "
+                            "single-resource order cannot deadlock against "
+                            "the accrual ledger. Scoring acquires no "
+                            "mutation locks."
+                        ),
                         idempotency=(
-                            "The same intervals, policy, and period produce "
-                            "the same score and evidence digest."
+                            "A durable command fingerprint over derived "
+                            "policy key, source, effective_from and terms is "
+                            "stored on the row under a unique constraint; a "
+                            "replay returns the original PolicyVersionOutcome "
+                            "with replayed=True rather than raising against "
+                            "the row it already created. Scoring is "
+                            "naturally idempotent: the same intervals, "
+                            "policy and period yield the same score and "
+                            "evidence digest."
                         ),
-                        retries="Read scoring calls are safe to retry.",
+                        retries=(
+                            "A writer that loses the race surfaces "
+                            "customer.service_level.concurrent_version_"
+                            "conflict from the exclusion/unique constraints "
+                            "rather than a raw database error, and is safe "
+                            "to retry after re-reading the series. Reads are "
+                            "always safe to retry."
+                        ),
                     ),
                     errors=ErrorContract(
                         domain_codes=(
@@ -1934,12 +1962,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             "customer.service_level.missing_effective_from",
                             "customer.service_level.not_after_current",
                             "customer.service_level.would_rewrite_closed_period",
+                            "customer.service_level.scope_required",
+                            "customer.service_level.concurrent_version_conflict",
                         ),
                         mapping_owner="app.services.web_customer_details",
                         fail_closed_on=(
                             "contractual source without an availability target",
                             "effective_from at or before the version in force",
                             "backdating behind an already-closed version",
+                            "a precedence claim with no matching scope",
+                            "a concurrent writer winning the series race",
                         ),
                     ),
                     events=EventContract(
