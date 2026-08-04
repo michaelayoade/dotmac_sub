@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.models.audit import AuditEvent
 from app.models.notification import (
@@ -60,7 +60,7 @@ def _brand() -> ResolvedBrand:
     )
 
 
-def _quote(db_session) -> tuple[Quote, PartyContactPoint]:
+def _quote(db_session) -> tuple[Quote, PartyContactPoint, UUID]:
     party = Party(
         party_type=PartyType.person.value,
         display_name="Amina Bello",
@@ -114,8 +114,9 @@ def _quote(db_session) -> tuple[Quote, PartyContactPoint]:
             amount=Decimal("100000.00"),
         )
     )
+    quote_id = quote.id
     db_session.commit()
-    return quote, primary
+    return quote, primary, quote_id
 
 
 def _context(*, key: str | None = None) -> CommandContext:
@@ -156,7 +157,7 @@ def _stub_pdf_storage(monkeypatch) -> None:
 
 
 def test_recipient_uses_primary_active_party_email(db_session):
-    quote, primary = _quote(db_session)
+    quote, primary, _quote_id = _quote(db_session)
     recipient = quote_documents.resolve_quote_recipient(db_session, quote)
 
     assert recipient is not None
@@ -166,8 +167,7 @@ def test_recipient_uses_primary_active_party_email(db_session):
 
 
 def test_pdf_export_is_content_addressed_and_audited_once(db_session, monkeypatch):
-    quote, _primary = _quote(db_session)
-    quote_id = quote.id
+    _quote_record, _primary, quote_id = _quote(db_session)
     _stub_pdf_storage(monkeypatch)
 
     first = quote_documents.generate_quote_pdf(
@@ -204,8 +204,7 @@ def test_pdf_export_is_content_addressed_and_audited_once(db_session, monkeypatc
 
 
 def test_send_email_queues_one_pdf_intent_and_replays(db_session, monkeypatch):
-    quote, primary = _quote(db_session)
-    quote_id = quote.id
+    _quote_record, primary, quote_id = _quote(db_session)
     _stub_pdf_storage(monkeypatch)
     captured = []
 
@@ -290,8 +289,7 @@ def test_send_email_queues_one_pdf_intent_and_replays(db_session, monkeypatch):
 
 
 def test_suppressed_email_does_not_mark_quote_sent(db_session, monkeypatch):
-    quote, _primary = _quote(db_session)
-    quote_id = quote.id
+    _quote_record, _primary, quote_id = _quote(db_session)
     _stub_pdf_storage(monkeypatch)
 
     def submit_suppressed(db, intent):
