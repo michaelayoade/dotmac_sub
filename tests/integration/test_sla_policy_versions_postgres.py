@@ -313,17 +313,18 @@ def test_a_contractual_policy_may_not_omit_its_target(engine, migrated_database)
     # The other direction: internal_measurement legitimately has no target,
     # and the constraint must not block it.
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
+        # The key must be the derived one — `ck_sla_policy_versions_key_is_derived`
+        # rejects an invented name, which is the point of that constraint.
         _insert(
             conn,
             source="internal_measurement",
             subscription_id=None,
             availability_target_percent=None,
-            policy_key="internal-ok",
         )
         stored = conn.execute(
             "SELECT availability_target_percent FROM sla_policy_versions "
             "WHERE policy_key = %s",
-            ("internal-ok",),
+            ("internal_measurement:global",),
         ).fetchone()[0]
     assert stored is None
 
