@@ -240,14 +240,20 @@ def test_new_connection_hands_off_to_sales_only(db_session, monkeypatch, categor
         lambda *args, **kwargs: handoffs.append(kwargs),
     )
 
-    ai_intake.classify_and_route(
+    first = ai_intake.classify_and_route(
+        db_session, conversation_id=conversation.id, message_id=message.id
+    )
+    replay = ai_intake.classify_and_route(
         db_session, conversation_id=conversation.id, message_id=message.id
     )
 
     db_session.refresh(conversation)
+    assert first is not None and first.replayed is False
+    assert replay is not None and replay.replayed is True
     assert conversation.primary_service_team_id == sales.id
     assert len(handoffs) == 1
     assert handoffs[0]["message_id"] == message.id
+    assert db_session.query(InboxConversationAssignment).count() == 0
 
 
 def test_disabled_config_and_unsupported_email_never_call_ai(db_session, monkeypatch):

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import InboxChannelType, InboxConversation, InboxMessage
@@ -227,3 +229,82 @@ def test_receive_whatsapp_webhook_normalizes_and_deduplicates(db_session):
     assert message.channel_type == InboxChannelType.whatsapp.value
     assert message.from_address == "+2348012345678"
     assert message.body == "Hello"
+
+
+def test_committed_whatsapp_batch_calls_shared_customer_ai_intake(
+    db_session, monkeypatch
+):
+    calls: list[tuple[object, object]] = []
+    monkeypatch.setattr(
+        team_inbox_channel_receive,
+        "_run_customer_ai_intake_after_commit",
+        lambda _db, *, conversation_id, message_id: calls.append(
+            (conversation_id, message_id)
+        ),
+    )
+
+    results, statuses = (
+        team_inbox_channel_receive.receive_whatsapp_webhook_batch_committed(
+            db_session,
+            provider="meta_cloud_api",
+            payloads=[
+                {
+                    "message": {
+                        "from": "2348012345678",
+                        "text": "I need a new connection",
+                        "id": "wamid-shared-ai-hook",
+                    },
+                    "observed_at": datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+                    "metadata": {"phone_number_id": "phone-1"},
+                }
+            ],
+        )
+    )
+
+    assert statuses == []
+    assert len(results) == 1
+    assert len(calls) == 1
+    assert str(calls[0][0]) == results[0]["conversation_id"]
+    assert str(calls[0][1]) == results[0]["message_id"]
+
+
+@pytest.mark.parametrize(
+    "channel_type",
+    [
+        InboxChannelType.facebook_messenger.value,
+        InboxChannelType.instagram_dm.value,
+    ],
+)
+def test_committed_meta_social_batch_calls_same_shared_customer_ai_intake(
+    db_session, monkeypatch, channel_type
+):
+    calls: list[tuple[object, object]] = []
+    monkeypatch.setattr(
+        team_inbox_channel_receive,
+        "_run_customer_ai_intake_after_commit",
+        lambda _db, *, conversation_id, message_id: calls.append(
+            (conversation_id, message_id)
+        ),
+    )
+
+    results = team_inbox_channel_receive.receive_inbound_channel_batch_committed(
+        db_session,
+        [
+            team_inbox_channel_receive.InboundChannelPayload(
+                channel_type=channel_type,
+                contact_address=f"sender-{channel_type}",
+                body="I need a new connection",
+                external_message_id=f"{channel_type}-shared-ai-hook",
+                received_at=datetime(2026, 8, 4, 12, 1, tzinfo=UTC),
+                metadata={
+                    "provider": "meta_social",
+                    "page_or_account_id": f"account-{channel_type}",
+                },
+            )
+        ],
+    )
+
+    assert len(results) == 1
+    assert len(calls) == 1
+    assert str(calls[0][0]) == results[0]["conversation_id"]
+    assert str(calls[0][1]) == results[0]["message_id"]
