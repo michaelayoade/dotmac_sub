@@ -16,13 +16,17 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import InternalError, OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError
 
 from app.models.catalog import SubscriptionStatus
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-_REJECTED = (InternalError, OperationalError, ProgrammingError)
+
+# SQLAlchemy wraps psycopg's RestrictViolation (raised by the trigger) and
+# CheckViolation in IntegrityError. Each test asserts on the specific message
+# too, so a rejection for some unrelated reason cannot pass as the proof.
+_REJECTED = IntegrityError
 
 
 @pytest.fixture
@@ -60,7 +64,7 @@ def test_updating_a_transition_is_rejected(db_session, transition):
     """The exact hole: to_status was freely settable, so entitlement history
     could be rewritten after a period had been scored against it."""
 
-    with pytest.raises(_REJECTED):
+    with pytest.raises(_REJECTED) as caught:
         db_session.execute(
             text(
                 "UPDATE subscription_lifecycle_events "
@@ -68,6 +72,8 @@ def test_updating_a_transition_is_rejected(db_session, transition):
             ),
             {"id": str(transition.id)},
         )
+    assert "append-only" in str(caught.value)
+    assert "UPDATE" in str(caught.value)
     db_session.rollback()
 
 
@@ -75,7 +81,7 @@ def test_rewriting_the_timestamp_is_rejected(db_session, transition):
     """created_at is the instant the window opens; moving it moves the
     customer's entitlement boundary."""
 
-    with pytest.raises(_REJECTED):
+    with pytest.raises(_REJECTED) as caught:
         db_session.execute(
             text(
                 "UPDATE subscription_lifecycle_events "
@@ -83,15 +89,18 @@ def test_rewriting_the_timestamp_is_rejected(db_session, transition):
             ),
             {"when": NOW, "id": str(transition.id)},
         )
+    assert "append-only" in str(caught.value)
     db_session.rollback()
 
 
 def test_deleting_a_transition_is_rejected(db_session, transition):
-    with pytest.raises(_REJECTED):
+    with pytest.raises(_REJECTED) as caught:
         db_session.execute(
             text("DELETE FROM subscription_lifecycle_events WHERE id = :id"),
             {"id": str(transition.id)},
         )
+    assert "append-only" in str(caught.value)
+    assert "DELETE" in str(caught.value)
     db_session.rollback()
 
 
@@ -119,7 +128,7 @@ def test_inserting_a_new_transition_is_still_allowed(db_session, subscription):
 
 
 def test_the_evidence_grade_is_constrained(db_session, subscription):
-    with pytest.raises(_REJECTED):
+    with pytest.raises(_REJECTED) as caught:
         db_session.execute(
             text(
                 "INSERT INTO subscription_lifecycle_events "
@@ -128,4 +137,5 @@ def test_the_evidence_grade_is_constrained(db_session, subscription):
             ),
             {"id": str(uuid.uuid4()), "sub": str(subscription.id), "when": NOW},
         )
+    assert "ck_subscription_lifecycle_events_evidence_grade" in str(caught.value)
     db_session.rollback()
