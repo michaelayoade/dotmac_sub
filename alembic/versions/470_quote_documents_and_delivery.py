@@ -10,9 +10,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 revision: str = "470_quote_documents_and_delivery"
 down_revision: str | None = "469_meta_direct_message_channels"
@@ -76,9 +76,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["pdf_export_id"], ["quote_pdf_exports.id"], ondelete="RESTRICT"
         ),
-        sa.ForeignKeyConstraint(
-            ["quote_id"], ["quotes.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["quote_id"], ["quotes.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["recipient_contact_point_id"],
             ["party_contact_points.id"],

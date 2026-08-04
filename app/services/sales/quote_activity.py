@@ -86,9 +86,7 @@ def _audit_items(db: Session, quote_id: UUID, limit: int) -> list[QuoteActivityI
     return items
 
 
-def _delivery_items(
-    db: Session, quote_id: UUID, limit: int
-) -> list[QuoteActivityItem]:
+def _delivery_items(db: Session, quote_id: UUID, limit: int) -> list[QuoteActivityItem]:
     requests = list(
         db.scalars(
             select(QuoteDeliveryRequest)

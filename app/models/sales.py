@@ -536,9 +536,7 @@ class Quote(Base):
         foreign_keys="Project.quote_id",
     )
     pdf_exports = relationship("QuotePdfExport", back_populates="quote")
-    delivery_requests = relationship(
-        "QuoteDeliveryRequest", back_populates="quote"
-    )
+    delivery_requests = relationship("QuoteDeliveryRequest", back_populates="quote")
 
     @property
     def person_id(self) -> uuid.UUID | None:

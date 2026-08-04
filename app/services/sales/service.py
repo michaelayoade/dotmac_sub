@@ -95,6 +95,7 @@ def _stage_quote_audit(
         metadata=metadata,
     )
 
+
 # Normalized lead-source vocabulary. ``Portal`` is the addition — the
 # self-serve (map-pin) quote request tags its leads with it.
 LEAD_SOURCE_OPTIONS = (

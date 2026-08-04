@@ -37970,9 +37970,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     ),
                     errors=ErrorContract(
                         domain_codes=(
-                            *owner_command_boundary_error_codes(
-                                "sales.quote_delivery"
-                            ),
+                            *owner_command_boundary_error_codes("sales.quote_delivery"),
                             "sales.quote_delivery.idempotency_conflict",
                             "sales.quote_delivery.idempotency_key_required",
                             "sales.quote_delivery.line_items_required",

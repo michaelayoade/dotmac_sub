@@ -1212,8 +1212,7 @@ def quote_send_email(
             quote_delivery.SendQuoteEmailCommand(
                 context=CommandContext.system(
                     actor=str(
-                        getattr(request.state, "actor_id", None)
-                        or "admin-sales-user"
+                        getattr(request.state, "actor_id", None) or "admin-sales-user"
                     ),
                     scope="sales:quote-delivery",
                     reason="Admin requested branded Quote email",

@@ -37,7 +37,7 @@ def test_quote_email_attachment_resolves_only_the_owned_pdf_artifact():
 
     assert "CommunicationAttachmentKind.quote_pdf" in attachments
     assert "quote_documents.stream_export" in attachments
-    assert "notification.metadata_.get(\"quote_id\")" in attachments
+    assert 'notification.metadata_.get("quote_id")' in attachments
     assert "resolve_quote_recipient" in delivery
     assert "PartyContactPoint" not in delivery
     assert "send_email(" not in delivery

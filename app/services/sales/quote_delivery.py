@@ -152,8 +152,7 @@ def send_quote_email(
     def operation() -> SendQuoteEmailOutcome:
         existing = db.scalars(
             select(QuoteDeliveryRequest).where(
-                QuoteDeliveryRequest.idempotency_key
-                == command.context.idempotency_key
+                QuoteDeliveryRequest.idempotency_key == command.context.idempotency_key
             )
         ).one_or_none()
         if existing is not None:
@@ -183,8 +182,7 @@ def send_quote_email(
         currency = str(snapshot.get("currency") or quote.currency)
         total = Decimal(str(snapshot.get("total") or "0.00"))
         subject = (
-            "Quote from "
-            f"{brand.get('legal_name') or brand.get('name') or 'Dotmac'}"
+            f"Quote from {brand.get('legal_name') or brand.get('name') or 'Dotmac'}"
         )
         body = (
             f"Dear {recipient.display_name},\n\n"
