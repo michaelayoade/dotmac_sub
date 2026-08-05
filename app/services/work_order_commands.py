@@ -39,6 +39,7 @@ from app.schemas.dispatch import (
     WorkOrderHeaderCreate,
     WorkOrderHeaderUpdate,
 )
+from app.services import service_address as service_address_service
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.field.source import mark_sub_authoritative
@@ -396,6 +397,24 @@ class WorkOrderCommands:
                 data["project_id"],
                 subscriber_id=data["subscriber_id"],
             )
+        if not str(data.get("address") or "").strip():
+            project = (
+                db.get(Project, data["project_id"]) if data.get("project_id") else None
+            )
+            resolved_address = (
+                str(project.customer_address).strip()
+                if project is not None and str(project.customer_address or "").strip()
+                else service_address_service.format_address(
+                    service_address_service.service_address(db, data["subscriber_id"])
+                )
+            )
+            if resolved_address and len(resolved_address) > 255:
+                raise WorkOrderCommandError(
+                    "work_order_address_too_long",
+                    "The resolved work-order address exceeds 255 characters",
+                    kind="invalid",
+                )
+            data["address"] = resolved_address
         normalized_origin_ticket_id: uuid.UUID | None = None
         if origin_ticket_id is not None:
             normalized_origin_ticket_id = coerce_uuid(origin_ticket_id)

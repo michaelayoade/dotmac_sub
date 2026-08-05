@@ -490,12 +490,15 @@ SERVICES: tuple[SOTService, ...] = (
             "native work-order creation and header commands",
             "native work-order project binding",
             "native work-order project-task binding",
+            "native work-order site resolution",
             "work-order as-built evidence requirement",
             "work-order assignment decisions and projection",
             "work-order assignment-queue transitions",
         ),
         depends_on=(
             "customer.identity_scope",
+            "customer.accounts",
+            "operations.project_lifecycle",
             "operations.work_order_status",
             "observability.audit_log",
         ),
@@ -508,7 +511,10 @@ SERVICES: tuple[SOTService, ...] = (
             "provenance only; field execution statuses remain "
             "owned by operations.field_completion. Native project-binding "
             "and evidence-policy rejections are transport-neutral "
-            "WorkOrderCommandError values mapped only by the app boundary."
+            "WorkOrderCommandError values mapped only by the app boundary. "
+            "Explicit site input wins; otherwise creation resolves the linked "
+            "project customer address, then the subscriber's canonical service "
+            "Address."
         ),
     ),
     SOTService(
