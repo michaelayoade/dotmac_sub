@@ -349,6 +349,79 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="network.ont_provisioning_defaults",
+        module="app.services.network.ont_provisioning_defaults",
+        owns=("approved ONT provisioning layout defaults",),
+        depends_on=(),
+        notes=(
+            "Owns only reviewed device-layout defaults that may become "
+            "executable desired values. It is deliberately separate "
+            "from the stateful provisioning executor: declaring the "
+            "first TR-069 WANPPPConnection instance is a pure policy "
+            "decision, not an execution transition."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="approved ONT provisioning layout defaults",
+                    role=OwnerRole.POLICY,
+                    input_names=("approved Huawei provisioning layout",),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="approved Huawei provisioning layout",
+                    owner="network.ont_provisioning_defaults",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "PppoeInstanceLayout declaration reviewed with "
+                        "the ONT rollout eligibility cohort"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.NOT_APPLICABLE,
+                boundary="Pure typed policy values; no session or I/O.",
+                locking="None: immutable module-level declarations.",
+                idempotency=(
+                    "Repeated resolution returns the same immutable layout value."
+                ),
+                retries="Not applicable: resolution cannot fail transiently.",
+            ),
+            errors=ErrorContract(
+                domain_codes=("ont_provisioning_default_unsupported_layout",),
+                mapping_owner="app.services.network.ont_provisioning_defaults",
+                fail_closed_on=(
+                    "a device layout without an approved typed declaration",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner="raw literal fallback in effective ONT configuration",
+                new_owner="network.ont_provisioning_defaults",
+                verification=(
+                    "tests/test_reconcile_sentinels.py pins the declared "
+                    "owner, executable value, and absence of authority debt."
+                ),
+                cutover_gate=(
+                    "The composer obtains the instance index from this owner."
+                ),
+                fallback_retirement=(
+                    "The raw literal fallback is removed from composer and adapter."
+                ),
+            ),
+            steward="network",
+            design_refs=(
+                "docs/designs/ONT_RECONCILE_ELIGIBILITY_SOT.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_reconcile_sentinels.py",
+                "tests/architecture/test_control_plane_desired_value_policy.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="network.ont_provisioning_execution",
         module="app.services.network.ont_provisioning_execution",
         owns=(

@@ -218,7 +218,10 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="network.ont_reconcile_eligibility",
         module="app.services.network.ont_reconcile_eligibility",
-        owns=("per-ONT automatic reconciliation eligibility",),
+        owns=(
+            "per-ONT automatic reconciliation eligibility",
+            "overdue reconcile-hold alert consequence policy",
+        ),
         depends_on=(),
         notes=(
             "Replaces the fleet-wide network.ont_reconcile control as the "
@@ -228,7 +231,9 @@ SERVICES: tuple[SOTService, ...] = (
             "_reconcile_dialer_credentials run inside "
             "run_ont_reconcile_sweep AFTER the gate, disabling it also "
             "silently pauses expired remote-access cleanup and the dialer "
-            "reconcile."
+            "reconcile. Active holds past review_due_at remain in force; "
+            "this owner also projects one critical, idempotent alert "
+            "consequence per overdue hold for the shared admin-alert sink."
         ),
         contract=ServiceContract(
             concerns=(
@@ -237,6 +242,11 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=("reviewed hold decision",),
                     canonical_writer="network.ont_reconcile_eligibility",
+                ),
+                ConcernContract(
+                    name="overdue reconcile-hold alert consequence policy",
+                    role=OwnerRole.EVENT_POLICY,
+                    input_names=("reviewed hold decision",),
                 ),
             ),
             authoritative_inputs=(
@@ -283,6 +293,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "reconcile_hold_already_active",
                     "reconcile_hold_not_found",
                     "reconcile_hold_already_released",
+                    "reconcile_hold_missing_idempotency_key",
+                    "reconcile_hold_idempotency_conflict",
+                    "reconcile_hold_ont_not_found",
+                    "reconcile_hold_concurrent_release",
                     # Owner-command boundary codes, raised by
                     # execute_owner_command before this owner's own
                     # validation runs.
@@ -327,7 +341,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "tests/test_ont_reconcile_eligibility.py pins that an "
                     "OVERDUE hold still suppresses, that the sweeper skips "
                     "held ONTs before any ping/read/write, and that held "
-                    "is reported separately from skipped_unreachable."
+                    "is reported separately from skipped_unreachable. "
+                    "tests/test_ont_reconcile_hold_alerts.py pins durable, "
+                    "idempotent critical alert delivery and resolution."
                 ),
                 cutover_gate=(
                     "The fleet-wide hold stays active until reviewed "
@@ -346,7 +362,10 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/designs/ONT_RECONCILE_ELIGIBILITY_SOT.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
             ),
-            test_refs=("tests/test_ont_reconcile_eligibility.py",),
+            test_refs=(
+                "tests/test_ont_reconcile_eligibility.py",
+                "tests/test_ont_reconcile_hold_alerts.py",
+            ),
         ),
     ),
     SOTService(
