@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 from app.services.network.olt_ssh import ServicePortEntry
 from app.services.network.ont_provision_steps import (
-    _any_phase_succeeded,
+    _any_device_phase_succeeded,
     _igd_management_wcd_indexes,
     _resolve_igd_pppoe_wcd_index,
 )
@@ -97,13 +97,52 @@ def test_management_indexes_are_collected_from_the_snapshot():
 
 
 def test_partial_run_is_distinguishable_from_total_failure():
-    assert _any_phase_succeeded([{"phase": "internet_l2", "success": True}]) is True
-    assert _any_phase_succeeded([{"phase": "internet_l2", "success": False}]) is False
+    assert (
+        _any_device_phase_succeeded([{"phase": "internet_l2", "success": True}]) is True
+    )
+    assert (
+        _any_device_phase_succeeded([{"phase": "internet_l2", "success": False}])
+        is False
+    )
 
 
 def test_phases_without_a_success_key_are_not_assumed_successful():
-    assert _any_phase_succeeded([{"phase": "prepare"}]) is False
-    assert _any_phase_succeeded([]) is False
+    assert _any_device_phase_succeeded([{"phase": "prepare"}]) is False
+    assert _any_device_phase_succeeded([]) is False
+
+
+def test_preparatory_phases_do_not_make_a_failed_run_look_partial():
+    """Resolving config and passing prerequisites touches no device.
+
+    A run that got no further than preparation must still read ``failed``,
+    otherwise a customer who never got service looks half-provisioned.
+    """
+    assert (
+        _any_device_phase_succeeded(
+            [
+                {"phase": "config_pack_resolution", "success": True},
+                {"phase": "prerequisite_validation", "success": True},
+                {"phase": "olt_provisioning", "success": False, "subphases": []},
+            ]
+        )
+        is False
+    )
+
+
+def test_device_work_nested_in_subphases_counts_as_partial():
+    """``olt_provisioning`` carries its inner apply steps as subphases."""
+    assert (
+        _any_device_phase_succeeded(
+            [
+                {
+                    "phase": "olt_provisioning",
+                    "success": False,
+                    "subphases": [{"phase": "internet_l2", "success": True}],
+                }
+            ]
+        )
+        is True
+    )
 
 
 # ── Service-port idempotency by exact readback ──────────────────────────────

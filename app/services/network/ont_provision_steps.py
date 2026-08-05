@@ -531,17 +531,44 @@ def _igd_wan_instance_for_vlan_from_snapshot(
     return None
 
 
-def _any_phase_succeeded(phase_timings: list[dict[str, Any]]) -> bool:
-    """Return True when at least one recorded provisioning phase succeeded.
+# Phases that represent state actually applied to a device. Preparatory phases
+# (config-pack resolution, prerequisite validation, state reads) succeeding
+# says nothing about whether the customer got service, so they must not make a
+# wholly failed run look partial.
+_DEVICE_APPLY_PHASES = frozenset(
+    {
+        "olt_provisioning",
+        "post_authorization_acs_link",
+        "internet_l2",
+        "management_and_omci_apply",
+        "stale_wan_cleanup",
+    }
+)
+
+
+def _any_device_phase_succeeded(phase_timings: list[dict[str, Any]]) -> bool:
+    """Return True when at least one phase that writes to a device succeeded.
 
     Used to distinguish a partial run from a total failure. Phases that do not
-    report a ``success`` key are ignored rather than assumed successful.
+    report a ``success`` key are ignored rather than assumed successful, and
+    ``olt_provisioning`` carries its inner steps as ``subphases``.
     """
-    return any(
-        entry.get("success") is True
-        for entry in phase_timings
-        if isinstance(entry, dict)
-    )
+
+    def _succeeded(entry: object) -> bool:
+        return (
+            isinstance(entry, dict)
+            and entry.get("phase") in _DEVICE_APPLY_PHASES
+            and entry.get("success") is True
+        )
+
+    for entry in phase_timings:
+        if _succeeded(entry):
+            return True
+        if isinstance(entry, dict) and any(
+            _succeeded(sub) for sub in entry.get("subphases") or ()
+        ):
+            return True
+    return False
 
 
 def _wcd_index_or_none(value: object) -> int | None:
@@ -1757,7 +1784,7 @@ def apply_authorization_baseline(
             # triage: the field reads as down while the service is up.
             final_status = (
                 OntProvisioningStatus.partial
-                if _any_phase_succeeded(phase_timings)
+                if _any_device_phase_succeeded(phase_timings)
                 else OntProvisioningStatus.failed
             )
         set_provisioning_status(
