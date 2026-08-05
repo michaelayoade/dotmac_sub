@@ -217,11 +217,8 @@ def project_customer_network_map(
 
     for subscription in subscriptions:
         subscription_id = str(getattr(subscription, "id", ""))
-        electronic_view = (
-            network_paths.get(subscription_id).view
-            if network_paths and network_paths.get(subscription_id)
-            else None
-        )
+        network_path = network_paths.get(subscription_id) if network_paths else None
+        electronic_view = network_path.view if network_path else None
         try:
             trace = trace_fiber_subscription(db, subscription_id)
         except ValueError:
@@ -232,9 +229,16 @@ def project_customer_network_map(
             coordinates: tuple[float, float] | None = None
             source = hop.evidence
             if hop.kind == "pop" and hop.asset_id is not None:
-                asset = db.get(PopSite, hop.asset_id)
-                if asset and asset.latitude is not None and asset.longitude is not None:
-                    coordinates = (float(asset.longitude), float(asset.latitude))
+                pop_asset = db.get(PopSite, hop.asset_id)
+                if (
+                    pop_asset
+                    and pop_asset.latitude is not None
+                    and pop_asset.longitude is not None
+                ):
+                    coordinates = (
+                        float(pop_asset.longitude),
+                        float(pop_asset.latitude),
+                    )
                     pop_coordinates = coordinates
             elif hop.kind in {"olt", "pon_port"} and pop_coordinates is not None:
                 # The fiber owner explicitly orders the resolved POP immediately
@@ -242,22 +246,43 @@ def project_customer_network_map(
                 # describes containment and does not invent connectivity.
                 coordinates = pop_coordinates
             elif hop.kind == "fdh" and hop.asset_id is not None:
-                asset = db.get(FdhCabinet, hop.asset_id)
-                if asset and asset.latitude is not None and asset.longitude is not None:
-                    coordinates = (float(asset.longitude), float(asset.latitude))
+                fdh_asset = db.get(FdhCabinet, hop.asset_id)
+                if (
+                    fdh_asset
+                    and fdh_asset.latitude is not None
+                    and fdh_asset.longitude is not None
+                ):
+                    coordinates = (
+                        float(fdh_asset.longitude),
+                        float(fdh_asset.latitude),
+                    )
             elif hop.kind == "splitter" and hop.asset_id is not None:
                 splitter = db.get(Splitter, hop.asset_id)
-                asset = (
+                splitter_fdh = (
                     db.get(FdhCabinet, splitter.fdh_id)
                     if splitter is not None and splitter.fdh_id is not None
                     else None
                 )
-                if asset and asset.latitude is not None and asset.longitude is not None:
-                    coordinates = (float(asset.longitude), float(asset.latitude))
+                if (
+                    splitter_fdh
+                    and splitter_fdh.latitude is not None
+                    and splitter_fdh.longitude is not None
+                ):
+                    coordinates = (
+                        float(splitter_fdh.longitude),
+                        float(splitter_fdh.latitude),
+                    )
             elif hop.kind == "termination" and hop.asset_id is not None:
-                asset = db.get(FiberTerminationPoint, hop.asset_id)
-                if asset and asset.latitude is not None and asset.longitude is not None:
-                    coordinates = (float(asset.longitude), float(asset.latitude))
+                termination = db.get(FiberTerminationPoint, hop.asset_id)
+                if (
+                    termination
+                    and termination.latitude is not None
+                    and termination.longitude is not None
+                ):
+                    coordinates = (
+                        float(termination.longitude),
+                        float(termination.latitude),
+                    )
             elif hop.kind in {"ont", "customer"}:
                 coordinates = customer_coordinates
             elif hop.kind.endswith("_segment") and hop.asset_id is not None:
