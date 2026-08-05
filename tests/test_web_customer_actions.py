@@ -378,6 +378,9 @@ def test_create_person_rejects_overlong_name(db_session):
 
 
 def test_create_person_trims_surrounding_whitespace(db_session):
+    house = Reseller(name="House", code="HOUSE", is_active=True, is_house=True)
+    db_session.add(house)
+    db_session.commit()
     _, created_id = actions.create_customer_from_form(
         db=db_session,
         customer_type="person",
@@ -391,7 +394,7 @@ def test_create_person_trims_surrounding_whitespace(db_session):
     created = db_session.get(Subscriber, created_id)
     assert created.first_name == "John"
     assert created.last_name == "Smith"
-    assert db_session.get(Reseller, created.reseller_id).is_house is True
+    assert created.reseller_id == house.id
 
 
 def test_create_person_assigns_selected_reseller(db_session):

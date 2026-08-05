@@ -2336,12 +2336,6 @@ def create_customer_from_form(
     contact_rows = parse_contact_rows(contact_columns)
     if customer_type not in {"person", "business"}:
         raise ValueError("customer_type must be person or business")
-    reseller_id = resolve_customer_reseller_id(
-        db,
-        managed_by_reseller=bool(form_data.get("managed_by_reseller")),
-        reseller_id=str(form_data.get("reseller_id") or ""),
-    )
-
     if customer_type == "person":
         normalized_email = _normalize_optional(form_data.get("email"))
         if not normalized_email:
@@ -2351,6 +2345,11 @@ def create_customer_from_form(
         )
         last_name = _require_text(
             form_data.get("last_name"), "Last name", max_length=80
+        )
+        reseller_id = resolve_customer_reseller_id(
+            db,
+            managed_by_reseller=bool(form_data.get("managed_by_reseller")),
+            reseller_id=str(form_data.get("reseller_id") or ""),
         )
         # Email is contact info, not an identity — duplicates are valid.
         customer = _create_subscriber(
@@ -2394,6 +2393,11 @@ def create_customer_from_form(
         return "person", str(customer.id)
 
     company_name = _require_text(form_data.get("name"), "Business name", max_length=120)
+    reseller_id = resolve_customer_reseller_id(
+        db,
+        managed_by_reseller=bool(form_data.get("managed_by_reseller")),
+        reseller_id=str(form_data.get("reseller_id") or ""),
+    )
     identity = _business_identity_from_contacts(company_name, contact_rows)
     business = _create_subscriber(
         db=db,
