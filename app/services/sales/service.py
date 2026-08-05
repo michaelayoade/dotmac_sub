@@ -38,7 +38,7 @@ from fastapi import HTTPException
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.elements import ColumnElement, SQLColumnExpression
 
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
@@ -311,7 +311,9 @@ def _normalize_lead_list_query(
     )
 
 
-def _phone_search_value(column: ColumnElement[str | None]) -> ColumnElement[str]:
+def _phone_search_value(
+    column: SQLColumnExpression[str | None],
+) -> ColumnElement[str]:
     normalized: ColumnElement[str] = func.coalesce(column, "")
     for character in (" ", "-", "(", ")", ".", "+"):
         normalized = func.replace(normalized, character, "")

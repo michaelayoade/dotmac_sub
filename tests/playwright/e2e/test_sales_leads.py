@@ -45,7 +45,7 @@ class TestSalesLeads:
         expect(admin_page.get_by_text("Showing 1 to 1 of 1 leads")).to_be_visible()
         expect(admin_page.get_by_role("alert")).to_have_count(0)
 
-        admin_page.get_by_label("Status").select_option("new")
+        admin_page.get_by_label("Status", exact=True).select_option("new")
         admin_page.get_by_role("button", name="Filter").click()
 
         admin_page.wait_for_url("**/admin/sales/leads?*search=*&status=new*")
