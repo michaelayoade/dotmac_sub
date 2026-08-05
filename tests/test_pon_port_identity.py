@@ -204,3 +204,27 @@ def test_a_canonical_name_without_a_hardware_link_is_still_assignable(db_session
 
     assert classify(db_session, pon) == "underivable"
     assert assert_assignable(db_session, pon) is None
+
+
+# ── The board/port split used when writing ONT inventory ────────────────────
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("0/1/13", ("0/1", "13")),
+        # Splitting on "/" alone accepted this as three parts and returned
+        # board "pon-0/1" -- a board that names nothing -- instead of failing
+        # closed or reading the real identity.
+        ("pon-0/1/13", ("0/1", "13")),
+        ("pon1", (None, None)),
+        ("board-2", (None, None)),
+        ("0/1", (None, None)),
+        ("", (None, None)),
+        (None, (None, None)),
+    ],
+)
+def test_board_port_split_never_emits_a_board_that_names_nothing(name, expected):
+    from app.services.network.ont_assignment_commands import _fsp_parts
+
+    assert _fsp_parts(name) == expected
