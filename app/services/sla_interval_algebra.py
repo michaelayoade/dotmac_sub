@@ -13,8 +13,9 @@ instant being counted twice or dropped. A closed convention would make
 The operations exist because a period score is a set-algebra problem:
 
     downtime  = confirmed ∩ eligible          (never outside entitlement)
-    unknown   = eligible − monitored          (absence of evidence, explicit)
-    uptime    = eligible − downtime − unknown (never assumed)
+    excluded  = reviewed/non-exact ∩ eligible − downtime
+    unknown   = eligible − monitored − downtime − excluded
+    uptime    = eligible − downtime − unknown − excluded (never assumed)
 
 Overlapping intervals are unioned, never summed: two concurrent incidents on
 one subscription are one outage to the customer, and adding them would invent
