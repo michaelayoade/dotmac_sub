@@ -385,29 +385,47 @@ def customer_infrastructure_option_by_id(
         raise ValueError("infrastructure_id must be a valid UUID") from exc
 
     if kind is CustomerInfrastructureType.nas:
-        row = db.get(NasDevice, target_id)
-        return CustomerInfrastructureOption(row.id, row.name) if row else None
+        nas = db.get(NasDevice, target_id)
+        return CustomerInfrastructureOption(nas.id, nas.name) if nas else None
     if kind is CustomerInfrastructureType.location:
-        row = db.get(PopSite, target_id)
-        return CustomerInfrastructureOption(row.id, row.name) if row else None
+        location = db.get(PopSite, target_id)
+        return (
+            CustomerInfrastructureOption(location.id, location.name)
+            if location
+            else None
+        )
     if kind is CustomerInfrastructureType.access_point:
-        row = db.get(NetworkDevice, target_id)
-        return CustomerInfrastructureOption(row.id, row.name) if row else None
+        access_point = db.get(NetworkDevice, target_id)
+        return (
+            CustomerInfrastructureOption(access_point.id, access_point.name)
+            if access_point
+            else None
+        )
     if kind is CustomerInfrastructureType.base_station:
-        row = db.get(PopSite, target_id)
-        return CustomerInfrastructureOption(row.id, row.name) if row else None
+        base_station = db.get(PopSite, target_id)
+        return (
+            CustomerInfrastructureOption(base_station.id, base_station.name)
+            if base_station
+            else None
+        )
     if kind is CustomerInfrastructureType.olt:
-        row = db.get(OLTDevice, target_id)
-        return CustomerInfrastructureOption(row.id, row.name) if row else None
+        olt = db.get(OLTDevice, target_id)
+        return CustomerInfrastructureOption(olt.id, olt.name) if olt else None
     if kind is CustomerInfrastructureType.pon_port:
-        row = db.get(PonPort, target_id)
-        if row is None:
+        pon_port = db.get(PonPort, target_id)
+        if pon_port is None:
             return None
         return CustomerInfrastructureOption(
-            row.id, row.name, row.olt.name if row.olt else None
+            pon_port.id,
+            pon_port.name,
+            pon_port.olt.name if pon_port.olt else None,
         )
-    row = db.get(FdhCabinet, target_id)
-    return CustomerInfrastructureOption(row.id, row.name, row.code) if row else None
+    cabinet = db.get(FdhCabinet, target_id)
+    return (
+        CustomerInfrastructureOption(cabinet.id, cabinet.name, cabinet.code)
+        if cabinet
+        else None
+    )
 
 
 def build_customer_list_query(
