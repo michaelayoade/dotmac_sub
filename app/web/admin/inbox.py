@@ -496,7 +496,7 @@ def _inbox_action_permissions(
 @router.post(
     "/{conversation_id}/actions/{intent}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def resolve_inbox_action(
     conversation_id: UUID,
@@ -542,7 +542,6 @@ def resolve_inbox_action(
                 ),
             )
         except DomainError as exc:
-            db.rollback()
             return _detail_redirect(
                 conversation_id, status="error", message=exc.message
             )
@@ -574,7 +573,6 @@ def resolve_inbox_action(
                 ),
             )
         except DomainError as exc:
-            db.rollback()
             return _detail_redirect(
                 conversation_id, status="error", message=exc.message
             )
@@ -611,7 +609,6 @@ def resolve_inbox_action(
                 ),
             )
         except DomainError as exc:
-            db.rollback()
             return _detail_redirect(
                 conversation_id, status="error", message=exc.message
             )

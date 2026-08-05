@@ -82,7 +82,7 @@ replaying the command.
 
 ## Historical data and repair
 
-Migration 474 is expand-only and performs no speculative backfill. Existing
+Migration 475 is expand-only and performs no speculative backfill. Existing
 completed Lead-intake invitations are exact provenance and may establish the
 native relationship on an idempotent command replay. All other historical
 conversations remain explicitly unlinked until a reviewed decision supplies an

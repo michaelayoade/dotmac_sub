@@ -1,7 +1,7 @@
 """add durable Inbox conversation-to-Lead provenance
 
-Revision ID: 474_inbox_conversation_lead_links
-Revises: 473_lead_reseller_ownership
+Revision ID: 475_inbox_conversation_lead_links
+Revises: 474_lifecycle_evidence_authority
 Create Date: 2026-08-05
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "474_inbox_conversation_lead_links"
-down_revision: str | None = "473_lead_reseller_ownership"
+revision: str = "475_inbox_conversation_lead_links"
+down_revision: str | None = "474_lifecycle_evidence_authority"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
