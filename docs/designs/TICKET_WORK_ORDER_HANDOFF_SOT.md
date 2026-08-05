@@ -28,11 +28,10 @@ delete so operational evidence cannot be orphaned. Generic work-order create
 and update contracts expose the field for reads only and cannot establish or
 change it.
 
-Work-order site resolution belongs to `operations.work_order_commands` so every
-native creation path behaves consistently. Explicit operator input wins;
-otherwise a linked project's customer address is used, followed by the
-subscriber's canonical service `Address`. The ticket UI displays and prefills
-that canonical service location but does not create a private address copy.
+Ticket work-order site resolution belongs to this handoff coordinator. Explicit
+operator input wins; otherwise a linked project's customer address is used,
+followed by the subscriber's canonical service `Address`. The ticket UI displays
+and prefills that canonical service location but does not create a private copy.
 
 ## Lifecycle
 

@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.project import Project, ProjectTask
-from app.models.subscriber import Address, AddressType, Subscriber, UserType
+from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.schemas.dispatch import (
     WorkOrderAssignmentQueueUpdate,
@@ -106,53 +106,6 @@ def test_project_binding_and_evidence_policy_are_owned_by_work_order_command(
         WorkOrderHeaderUpdate(requires_as_built_evidence=False),
     )
     assert updated.requires_as_built_evidence is False
-
-
-def test_create_defaults_site_from_project_then_canonical_service_address(db_session):
-    subscriber = _subscriber(db_session)
-    address = Address(
-        subscriber_id=subscriber.id,
-        address_type=AddressType.service,
-        is_primary=True,
-        address_line1="14 Service Lane",
-        city="Abuja",
-    )
-    project = Project(
-        name="Customer installation",
-        subscriber_id=subscriber.id,
-        customer_address="22 Project Close, Abuja",
-    )
-    db_session.add_all([address, project])
-    db_session.flush()
-
-    project_work_order = work_order_commands.create(
-        db_session,
-        WorkOrderHeaderCreate(
-            subscriber_id=subscriber.id,
-            project_id=project.id,
-            title="Install project drop",
-        ),
-    )
-    service_work_order = work_order_commands.create(
-        db_session,
-        WorkOrderHeaderCreate(
-            subscriber_id=subscriber.id,
-            title="Repair customer drop",
-        ),
-    )
-    explicit_work_order = work_order_commands.create(
-        db_session,
-        WorkOrderHeaderCreate(
-            subscriber_id=subscriber.id,
-            project_id=project.id,
-            title="Survey alternate entrance",
-            address="Gate 2, alternate entrance",
-        ),
-    )
-
-    assert project_work_order.address == "22 Project Close, Abuja"
-    assert service_work_order.address == "14 Service Lane, Abuja"
-    assert explicit_work_order.address == "Gate 2, alternate entrance"
 
 
 def test_work_order_rejects_cross_subscriber_project_binding(db_session):

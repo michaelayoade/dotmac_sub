@@ -3875,9 +3875,7 @@ Dependency order:
    `work_order.project_task_id`, and internal-only `work_order.origin_ticket_id`
    bindings, the default-enabled
    `requires_as_built_evidence` policy, assignment decisions/projection, and
-   assignment-queue transitions. It also resolves the native work-order site:
-   explicit input wins, followed by the linked project's customer address and
-   then the subscriber's canonical service `Address`.
+   assignment-queue transitions.
    Dispatch API/web and field-manager handlers are authorization/transport
    adapters around this owner. Assignment preview is read-only; execution locks
    the work order, atomically updates the queue and assignee projection, records
