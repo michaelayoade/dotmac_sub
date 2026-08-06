@@ -347,8 +347,8 @@ def preview_subscription_service_access_move(
 def _prior_outcome(
     db: Session,
     *,
+    command: MoveSubscriptionServiceAccessCommand,
     idempotency_key: str,
-    preview_fingerprint: str,
 ) -> ServiceAccessMoveOutcome | None:
     prior = db.scalar(
         select(AuditEvent).where(
@@ -359,20 +359,20 @@ def _prior_outcome(
     )
     if prior is None:
         return None
-    metadata = prior.metadata_ if isinstance(prior.metadata_, dict) else {}
-    prior_fingerprint = str(metadata.get("preview_fingerprint") or "")
-    if not secrets.compare_digest(prior_fingerprint, preview_fingerprint):
+    evidence = prior.metadata_ if isinstance(prior.metadata_, dict) else {}
+    prior_fingerprint = str(evidence.get("preview_fingerprint") or "")
+    if not secrets.compare_digest(prior_fingerprint, command.preview_fingerprint):
         _error(
             "idempotency_conflict",
             "The idempotency key was already used for a different service move.",
         )
     return ServiceAccessMoveOutcome(
-        subscription_id=UUID(str(metadata["subscription_id"])),
-        previous_nas_device_id=UUID(str(metadata["previous_nas_device_id"])),
-        target_nas_device_id=UUID(str(metadata["target_nas_device_id"])),
-        previous_ipv4=str(metadata["previous_ipv4"]),
-        target_ipv4=str(metadata["target_ipv4"]),
-        desired_assignment_id=UUID(str(metadata["desired_assignment_id"])),
+        subscription_id=command.subscription_id,
+        previous_nas_device_id=UUID(str(evidence["previous_nas_device_id"])),
+        target_nas_device_id=UUID(str(evidence["target_nas_device_id"])),
+        previous_ipv4=str(evidence["previous_ipv4"]),
+        target_ipv4=str(evidence["target_ipv4"]),
+        desired_assignment_id=UUID(str(evidence["desired_assignment_id"])),
         preview_fingerprint=prior_fingerprint,
         replayed=True,
     )
@@ -387,8 +387,8 @@ def _move_subscription_service_access(
         _error("missing_idempotency_key", "An idempotency key is required.")
     prior = _prior_outcome(
         db,
+        command=command,
         idempotency_key=idempotency_key,
-        preview_fingerprint=command.preview_fingerprint,
     )
     if prior is not None:
         return prior
@@ -442,8 +442,8 @@ def _move_subscription_service_access(
 
     prior = _prior_outcome(
         db,
+        command=command,
         idempotency_key=idempotency_key,
-        preview_fingerprint=command.preview_fingerprint,
     )
     if prior is not None:
         return prior
