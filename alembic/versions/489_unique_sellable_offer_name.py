@@ -22,7 +22,7 @@ belongs on ``OfferPrice``, not on a duplicated offer — see
 docs/PLAN_FAMILY_ARCHITECTURE.md section 7.
 
 Revision ID: 489_unique_sellable_offer_name
-Revises: 488_capacity_domains
+Revises: 488_pon_port_capacity
 """
 
 from collections.abc import Sequence
@@ -32,7 +32,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "489_unique_sellable_offer_name"
-down_revision: str | None = "488_capacity_domains"
+down_revision: str | None = "488_pon_port_capacity"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

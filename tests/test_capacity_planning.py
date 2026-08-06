@@ -9,12 +9,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.models.capacity import CapacityDomainKind
 from app.services.capacity_planning import (
-    CapacityUsage,
     CapacityVerdict,
-    _verdict,
+    SegmentUsage,
     can_accept,
+    verdict_for,
 )
 
 
@@ -30,11 +29,10 @@ class _Offer:
         self.guaranteed_speed_limit_at = floor
 
 
-def _usage(**kwargs) -> CapacityUsage:
+def _usage(**kwargs) -> SegmentUsage:
     base = dict(
-        domain_id="d1",
-        domain_name="OLT-1 PON 1/1/1",
-        kind=CapacityDomainKind.pon_port,
+        segment_id="p1",
+        segment_name="OLT-1 PON 1/1/1",
         downstream_mbps=2488,
         upstream_mbps=1244,
         target_oversubscription=Decimal("5"),
@@ -46,11 +44,11 @@ def _usage(**kwargs) -> CapacityUsage:
         verdict=CapacityVerdict.ok,
     )
     base.update(kwargs)
-    return CapacityUsage(**base)
+    return SegmentUsage(**base)
 
 
 def test_a_lightly_loaded_segment_is_ok():
-    verdict = _verdict(
+    verdict = verdict_for(
         downstream_mbps=2488,
         sold_downstream_mbps=1000,
         committed_downstream_mbps=0,
@@ -62,7 +60,7 @@ def test_a_lightly_loaded_segment_is_ok():
 
 def test_selling_beyond_the_allowance_is_oversubscribed():
     """2488 x 5 = 12440 sellable; 13000 sold is past it."""
-    verdict = _verdict(
+    verdict = verdict_for(
         downstream_mbps=2488,
         sold_downstream_mbps=13000,
         committed_downstream_mbps=0,
@@ -74,7 +72,7 @@ def test_selling_beyond_the_allowance_is_oversubscribed():
 
 def test_approaching_the_allowance_flags_at_risk_before_it_breaches():
     """A check that only fires after the fact is a report, not a control."""
-    verdict = _verdict(
+    verdict = verdict_for(
         downstream_mbps=1000,
         sold_downstream_mbps=4300,  # 86% of 1000 x 5
         committed_downstream_mbps=0,
@@ -88,7 +86,7 @@ def test_committed_rates_beyond_physical_capacity_are_overcommitted():
     """Reserved bandwidth is held whether or not it is used, so no
     oversubscription allowance can rescue it — a generous target must not turn
     an unkeepable set of guarantees into a pass."""
-    verdict = _verdict(
+    verdict = verdict_for(
         downstream_mbps=1000,
         sold_downstream_mbps=1200,
         committed_downstream_mbps=1200,
@@ -100,7 +98,7 @@ def test_committed_rates_beyond_physical_capacity_are_overcommitted():
 
 def test_overcommitment_outranks_oversubscription():
     """Both conditions hold; the caller must be told the unfixable one."""
-    verdict = _verdict(
+    verdict = verdict_for(
         downstream_mbps=100,
         sold_downstream_mbps=100_000,
         committed_downstream_mbps=500,
@@ -112,7 +110,7 @@ def test_overcommitment_outranks_oversubscription():
 
 def test_one_to_one_target_permits_exactly_capacity_and_no_more():
     assert (
-        _verdict(
+        verdict_for(
             downstream_mbps=1000,
             sold_downstream_mbps=1000,
             committed_downstream_mbps=0,
@@ -121,7 +119,7 @@ def test_one_to_one_target_permits_exactly_capacity_and_no_more():
         is not CapacityVerdict.oversubscribed
     )
     assert (
-        _verdict(
+        verdict_for(
             downstream_mbps=1000,
             sold_downstream_mbps=1001,
             committed_downstream_mbps=0,
@@ -132,10 +130,10 @@ def test_one_to_one_target_permits_exactly_capacity_and_no_more():
 
 
 def test_an_unsurveyed_segment_is_unknown_not_healthy():
-    """A domain exists before it is measured, so the survey backlog can be
+    """A port is nameable before it is measured, so the survey backlog can be
     enumerated. Returning ok on a NULL capacity would make the ports nobody has
     measured look like the safest on the network."""
-    verdict = _verdict(
+    verdict = verdict_for(
         downstream_mbps=None,
         sold_downstream_mbps=5000,
         committed_downstream_mbps=1000,

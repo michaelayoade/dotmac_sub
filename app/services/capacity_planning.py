@@ -1,22 +1,32 @@
 """What has been sold behind a shared segment, against what it can carry.
 
-Owner of "does this segment have room". Contention was an integer on a
-catalogue offer that nothing enforced and nothing measured; this compares the
-sold total against the recorded capacity of the segment it is actually sold
-behind.
+Owner of the question "does this segment have room". It owns **no storage**:
+capacity is a fact about hardware and already belongs to the thing that has it.
 
-Two rules shape everything here.
+    PON port        pon_ports.downstream_mbps / upstream_mbps
+    interface       device_interfaces.speed_mbps
+    link / uplink   network_topology_links.capacity_bps
 
-**Committed capacity is not the same as sold capacity.** A best-effort tier
-sells a ceiling; a dedicated tier with a CIR *reserves* its rate. Reserved
-bandwidth is unavailable to anyone else whether or not it is in use, so it is
-counted at full weight, while best-effort peaks are counted against the
-oversubscription allowance. Treating them alike would either block every fibre
-sale or wave through an unhonourable guarantee.
+This resolver reads whichever applies and applies planning policy on top. An
+earlier draft stored its own copy of those figures in a ``capacity_domains``
+table; that was a second authority over facts that already had one, and would
+have drifted from them.
 
-**A segment with no recorded capacity returns UNKNOWN, never OK.** The check
-exists to stop overselling; a missing capacity figure is exactly the state in
-which overselling is most likely, so it must not read as a pass.
+Three rules shape the verdicts.
+
+**Committed capacity is not sold capacity.** A best-effort tier sells a
+ceiling; a dedicated tier with a CIR *reserves* its rate. Reserved bandwidth is
+unavailable to anyone else whether or not it is in use, so it is checked
+against physical capacity first and yields ``overcommitted`` — which no
+oversubscription allowance can rescue.
+
+**An unmeasured segment returns UNKNOWN, never OK.** The check exists to stop
+overselling; a missing capacity figure is exactly the state in which
+overselling hides, so it must not read as a pass.
+
+**Sold is not used.** Everything here derives from what was sold. Measured
+utilisation lives in ``bandwidth_samples`` and is a better input where coverage
+allows; this module deliberately does not conflate the two.
 """
 
 from __future__ import annotations
@@ -27,15 +37,23 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models.capacity import CapacityDomain, CapacityDomainKind
 from app.models.catalog import (
     CatalogOffer,
     GuaranteedSpeedType,
     Subscription,
     SubscriptionStatus,
 )
-from app.models.network import OntAssignment
+from app.models.network import OntAssignment, PonPort
 from app.services.domain_errors import DomainError
+
+#: Fallback when a port carries no explicit target. Deliberately 1:1 — the
+#: safest assumption for a segment nobody has made a planning decision about is
+#: that it may not be oversold at all.
+DEFAULT_OVERSUBSCRIPTION = Decimal("1")
+
+#: Sold above this share of the allowance flags a segment before it breaches.
+#: A check that only fires after the fact is a report, not a control.
+_AT_RISK_SHARE = Decimal("0.85")
 
 
 class CapacityError(DomainError):
@@ -43,11 +61,7 @@ class CapacityError(DomainError):
 
 
 class CapacityVerdict(enum.StrEnum):
-    """Whether a segment can take more.
-
-    ``unknown`` is never silently treated as ``ok`` — an unmeasured segment is
-    where overselling hides.
-    """
+    """Whether a segment can take more."""
 
     ok = "ok"
     at_risk = "at_risk"
@@ -56,22 +70,18 @@ class CapacityVerdict(enum.StrEnum):
     #: oversubscribed because no amount of statistical multiplexing helps: the
     #: promises cannot all be kept simultaneously.
     overcommitted = "overcommitted"
+    #: Never silently treated as ok — an unmeasured segment is where
+    #: overselling hides.
     unknown = "unknown"
 
 
-#: Sold above this share of the allowance flags a segment before it breaches.
-_AT_RISK_SHARE = Decimal("0.85")
-
-
 @dataclass(frozen=True, slots=True)
-class CapacityUsage:
+class SegmentUsage:
     """One segment's position. Immutable: it is evidence for a sales decision."""
 
-    domain_id: object
-    domain_name: str
-    kind: CapacityDomainKind
-    #: None until the segment has been surveyed — an unmeasured segment, not a
-    #: segment with no capacity.
+    segment_id: object
+    segment_name: str
+    #: None until surveyed — an unmeasured segment, not one with no capacity.
     downstream_mbps: int | None
     upstream_mbps: int | None
     target_oversubscription: Decimal
@@ -88,9 +98,9 @@ class CapacityUsage:
     def sellable_downstream_mbps(self) -> Decimal | None:
         """Capacity times the allowance — the budget sold peaks draw on.
 
-        ``None`` on an unsurveyed segment. Returning 0 would read as "no room"
-        and returning a guess would read as room that may not exist; neither is
-        the truth, which is that nobody has measured it.
+        ``None`` on an unsurveyed segment. Zero would read as "full" and a
+        guess as room that may not exist; neither is the truth, which is that
+        nobody has measured it.
         """
         if not self.downstream_mbps:
             return None
@@ -111,7 +121,7 @@ class CapacityUsage:
         return Decimal(self.committed_downstream_mbps) / Decimal(self.downstream_mbps)
 
 
-def _committed_for(offer: CatalogOffer) -> tuple[int, int]:
+def committed_for(offer: CatalogOffer) -> tuple[int, int]:
     """(upstream, downstream) Mbps this offer RESERVES, not merely allows."""
     if offer.guaranteed_speed is GuaranteedSpeedType.fixed:
         floor = offer.guaranteed_speed_limit_at
@@ -133,7 +143,7 @@ def _committed_for(offer: CatalogOffer) -> tuple[int, int]:
     return 0, 0
 
 
-def _verdict(
+def verdict_for(
     *,
     downstream_mbps: int | None,
     sold_downstream_mbps: int,
@@ -141,7 +151,7 @@ def _verdict(
     target_oversubscription: Decimal,
 ) -> CapacityVerdict:
     # An unsurveyed segment cannot be judged. Returning ok here would make the
-    # 502 ports nobody has measured look like the safest on the network.
+    # ports nobody has measured look like the safest on the network.
     if not downstream_mbps:
         return CapacityVerdict.unknown
     # Checked before oversubscription: committed rates exceeding physical
@@ -160,11 +170,11 @@ def _verdict(
     return CapacityVerdict.ok
 
 
-def _pon_subscription_offers(db: Session) -> dict[object, list[CatalogOffer]]:
+def _offers_by_pon_port(db: Session) -> dict[object, list[CatalogOffer]]:
     """PON port id -> the offers of the active subscriptions behind it.
 
-    The path is ONT assignment -> subscriber -> active subscription, which is
-    the only populated route from a customer to a shared segment today.
+    ONT assignment -> subscriber -> active subscription is the only populated
+    route from a customer to a shared access segment today.
     """
     rows = (
         db.query(OntAssignment.pon_port_id, CatalogOffer)
@@ -183,68 +193,60 @@ def _pon_subscription_offers(db: Session) -> dict[object, list[CatalogOffer]]:
     return grouped
 
 
-def usage_for_domains(db: Session) -> list[CapacityUsage]:
-    """Every active capacity domain with what is sold behind it.
+def pon_port_usage(db: Session) -> list[SegmentUsage]:
+    """Every active PON port with what is sold behind it.
 
-    Only PON ports resolve to subscribers today — that is the one populated
-    path. Wireless sectors, OLT uplinks and BNGs return zero sold with an
-    ``unknown`` verdict rather than a reassuring ``ok``, because "no data" and
-    "no load" must not look the same to whoever reads this.
+    Capacity is read from the port itself. Ports nobody has surveyed appear
+    with an ``unknown`` verdict rather than being omitted — the survey backlog
+    is part of the answer, not noise to filter out.
     """
-    by_pon = _pon_subscription_offers(db)
-    usages: list[CapacityUsage] = []
+    by_port = _offers_by_pon_port(db)
+    usages: list[SegmentUsage] = []
 
-    domains = (
-        db.query(CapacityDomain)
-        .filter(CapacityDomain.is_active.is_(True))
-        .order_by(CapacityDomain.name)
+    ports = (
+        db.query(PonPort)
+        .filter(PonPort.is_active.is_(True))
+        .order_by(PonPort.name)
         .all()
     )
-    for domain in domains:
-        offers: list[CatalogOffer] = []
-        resolvable = domain.kind is CapacityDomainKind.pon_port
-        if resolvable:
-            offers = by_pon.get(domain.pon_port_id, [])
-
+    for port in ports:
+        offers = by_port.get(port.id, [])
         sold_down = sum(offer.speed_download_mbps or 0 for offer in offers)
         sold_up = sum(offer.speed_upload_mbps or 0 for offer in offers)
-        committed = [_committed_for(offer) for offer in offers]
+        committed = [committed_for(offer) for offer in offers]
         committed_up = sum(item[0] for item in committed)
         committed_down = sum(item[1] for item in committed)
-        target = Decimal(str(domain.target_oversubscription))
-
-        verdict = (
-            _verdict(
-                downstream_mbps=domain.downstream_mbps,
-                sold_downstream_mbps=sold_down,
-                committed_downstream_mbps=committed_down,
-                target_oversubscription=target,
-            )
-            if resolvable
-            else CapacityVerdict.unknown
+        target = (
+            Decimal(str(port.target_oversubscription))
+            if port.target_oversubscription is not None
+            else DEFAULT_OVERSUBSCRIPTION
         )
 
         usages.append(
-            CapacityUsage(
-                domain_id=domain.id,
-                domain_name=domain.name,
-                kind=domain.kind,
-                downstream_mbps=domain.downstream_mbps,
-                upstream_mbps=domain.upstream_mbps,
+            SegmentUsage(
+                segment_id=port.id,
+                segment_name=port.name,
+                downstream_mbps=port.downstream_mbps,
+                upstream_mbps=port.upstream_mbps,
                 target_oversubscription=target,
                 subscriber_count=len(offers),
                 sold_downstream_mbps=sold_down,
                 sold_upstream_mbps=sold_up,
                 committed_downstream_mbps=committed_down,
                 committed_upstream_mbps=committed_up,
-                verdict=verdict,
+                verdict=verdict_for(
+                    downstream_mbps=port.downstream_mbps,
+                    sold_downstream_mbps=sold_down,
+                    committed_downstream_mbps=committed_down,
+                    target_oversubscription=target,
+                ),
             )
         )
     return usages
 
 
 def can_accept(
-    usage: CapacityUsage, offer: CatalogOffer
+    usage: SegmentUsage, offer: CatalogOffer
 ) -> tuple[bool, CapacityVerdict, str]:
     """Would adding ``offer`` to this segment still be within budget?
 
@@ -255,8 +257,8 @@ def can_accept(
     if usage.verdict is CapacityVerdict.unknown:
         return False, CapacityVerdict.unknown, "segment capacity is not established"
 
-    committed_up, committed_down = _committed_for(offer)
-    projected = _verdict(
+    _committed_up, committed_down = committed_for(offer)
+    projected = verdict_for(
         downstream_mbps=usage.downstream_mbps,
         sold_downstream_mbps=usage.sold_downstream_mbps
         + (offer.speed_download_mbps or 0),
