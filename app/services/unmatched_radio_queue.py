@@ -140,18 +140,21 @@ def open_item(
         "opened_by": "unmatched_radio_queue",
         **(details or {}),
     }
+    ticket_payload = TicketCreate.model_validate(
+        {
+            "title": title,
+            "description": description,
+            "status": TicketStatus.open.value,
+            "channel": TicketChannel.api,
+            "ticket_type": TICKET_TYPE,
+            "tags": [TAG],
+            "subscriber_id": subscriber_id,
+            "metadata": metadata,
+        }
+    )
     ticket = support_service.tickets.stage_internal_creation_participant(
         db,
-        TicketCreate(
-            title=title,
-            description=description,
-            status=TicketStatus.open.value,
-            channel=TicketChannel.api,
-            ticket_type=TICKET_TYPE,
-            tags=[TAG],
-            subscriber_id=subscriber_id,
-            metadata_=metadata,
-        ),
+        ticket_payload,
         source=support_service.InternalOperationalTicketSource.unmatched_radio_queue,
     )
     logger.info(
