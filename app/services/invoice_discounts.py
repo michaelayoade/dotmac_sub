@@ -26,6 +26,7 @@ from app.models.system_user import SystemUser
 from app.services.billing._common import _recalculate_invoice_totals
 from app.services.common import round_money
 from app.services.domain_errors import DomainError
+from app.services.events import EventType, emit_event
 from app.timezone import APP_TIMEZONE
 
 OWNER = "financial.invoice_discounts"
@@ -315,6 +316,33 @@ def stage_invoice_discount(
         applied_at=applied_at,
     )
     db.add(history)
+    event_type = {
+        InvoiceDiscountAction.applied: EventType.invoice_discount_applied,
+        InvoiceDiscountAction.changed: EventType.invoice_discount_changed,
+        InvoiceDiscountAction.removed: EventType.invoice_discount_removed,
+        InvoiceDiscountAction.inherited: EventType.invoice_discount_inherited,
+    }[action]
+    emit_event(
+        db,
+        event_type,
+        {
+            "invoice_id": str(invoice.id),
+            "revision": revision,
+            "action": action.value,
+            "source": history.source,
+            "source_quote_id": (
+                str(history.source_quote_id) if history.source_quote_id else None
+            ),
+            "discount_type": evidence.discount_type.value,
+            "discount_value": str(evidence.value),
+            "discount_amount": str(evidence.amount),
+            "currency": invoice.currency,
+            "total": str(invoice.total),
+        },
+        actor=str(actor.id),
+        account_id=invoice.account_id,
+        invoice_id=invoice.id,
+    )
     db.flush()
     return history
 

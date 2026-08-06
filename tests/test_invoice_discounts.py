@@ -20,6 +20,7 @@ from app.models.billing import (
     InvoiceStatus,
     TaxRate,
 )
+from app.models.event_store import EventStore
 from app.models.sales import Quote
 from app.models.system_user import SystemUser
 from app.schemas.billing import InvoiceCreate, InvoiceLineCreate, InvoiceUpdate
@@ -102,6 +103,14 @@ def test_percentage_discount_recalculates_tax_and_saves_history(
     assert history.action == InvoiceDiscountAction.applied.value
     assert history.original_subtotal == Decimal("1000.00")
     assert history.total_after_discount == Decimal("967.50")
+    discount_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "invoice.discount_applied")
+        .one()
+    )
+    assert discount_event.invoice_id == invoice.id
+    assert discount_event.payload["revision"] == 1
+    assert discount_event.payload["total"] == "967.50"
 
     issued = billing_service.invoices.update(
         db_session,

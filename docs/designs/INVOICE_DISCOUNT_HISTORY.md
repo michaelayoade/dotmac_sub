@@ -12,6 +12,11 @@ deposit Invoice from a discounted native Quote. The discount participant only
 flushes; the coordinator commits the Invoice, current discount, recalculated
 totals, audit/outbox effects, and history together.
 
+Every applied, changed, removed, or Quote-inherited revision stages the matching
+`invoice.discount_*` event in that same transaction. The event identifies the
+Invoice and financial change without customer contact details; the durable event
+dispatcher owns delivery after commit.
+
 ## Authoritative facts
 
 The `invoices` row stores the current discount type, entered value, actual

@@ -440,8 +440,16 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
             discount_amount = round_money(
                 to_decimal(getattr(invoice, "discount_amount", Decimal("0.00")))
             )
-            discounted_subtotal = max(Decimal("0.00"), subtotal - discount_amount)
-            total = round_money(discounted_subtotal + tax_total)
+            if discount_amount > 0:
+                discounted_subtotal = max(Decimal("0.00"), subtotal - discount_amount)
+                total = round_money(discounted_subtotal + tax_total)
+            else:
+                # Legacy and externally-created Invoices may carry an explicit
+                # total without line rows or a populated subtotal. Preserve that
+                # authoritative amount when there is no discount to reprice.
+                total = round_money(
+                    to_decimal(invoice.total, default=subtotal + tax_total)
+                )
             invoice.subtotal = subtotal
             invoice.tax_total = tax_total
             invoice.total = total

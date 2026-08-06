@@ -224,6 +224,7 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         depends_on=(
             "auth.staff_provisioning",
+            "events.dispatcher",
             "financial.invoices",
             "sales.service",
         ),
@@ -339,6 +340,25 @@ SERVICES: tuple[SOTService, ...] = (
                     "missing or inactive staff actor",
                     "issued manual discount mutation",
                     "missing Quote source evidence or double discount",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "invoice.discount_applied",
+                    "invoice.discount_changed",
+                    "invoice.discount_removed",
+                    "invoice.discount_inherited",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 identifies the Invoice, revision, action, source, "
+                    "discount type/value/amount, currency, and resulting total "
+                    "without customer contact details."
+                ),
+                replay=(
+                    "The unique command UUID and canonical fingerprint suppress "
+                    "duplicate history and event staging."
                 ),
             ),
             migration=MigrationContract(
