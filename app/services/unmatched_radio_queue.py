@@ -150,7 +150,7 @@ def open_item(
             ticket_type=TICKET_TYPE,
             tags=[TAG],
             subscriber_id=subscriber_id,
-            metadata=metadata,
+            metadata_=metadata,
         ),
         source=support_service.InternalOperationalTicketSource.unmatched_radio_queue,
     )
