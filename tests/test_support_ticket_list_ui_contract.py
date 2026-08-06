@@ -135,9 +135,14 @@ def test_ticket_query_normalizes_declared_state_and_rejects_unknown_values():
 def test_not_closed_status_scope_excludes_only_closed_and_aligns_paging(
     db_session,
 ):
+    tickets_per_status = 3
     db_session.add_all(
-        _ticket(title=f"{status.value} ticket", status=status.value)
+        _ticket(
+            title=f"{status.value} ticket {index}",
+            status=status.value,
+        )
         for status in TicketStatus
+        for index in range(tickets_per_status)
     )
     db_session.commit()
 
@@ -147,15 +152,15 @@ def test_not_closed_status_scope_excludes_only_closed_and_aligns_paging(
 
     context = web_support_tickets.build_tickets_list_context(
         db_session,
-        list_query=_query(status="not_closed", page=1, per_page=2),
+        list_query=_query(status="not_closed", page=1, per_page=25),
         actor_id=None,
         visible_columns_cookie=None,
     )
 
     assert context["status"] == "not_closed"
-    assert context["total"] == len(expected_statuses)
-    assert context["total_pages"] == (len(expected_statuses) + 1) // 2
-    assert len(context["tickets"]) == 2
+    assert context["total"] == len(expected_statuses) * tickets_per_status
+    assert context["total_pages"] == 2
+    assert len(context["tickets"]) == 25
     assert {ticket.status for ticket in context["tickets"]}.isdisjoint({"closed"})
     assert "status=not_closed" in context["list_query"].url(
         "/admin/support/tickets/export.csv"
