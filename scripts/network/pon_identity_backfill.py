@@ -1,6 +1,6 @@
 """Establish stored structural identity on PON ports. Idempotent.
 
-Migration ``483_pon_structural_identity`` adds the columns and the two partial
+Migration ``487_pon_structural_identity`` adds the columns and the two partial
 unique indexes but deliberately writes no data: resolving identity needs the
 platform shape and the identity owner's refusals, which is application logic,
 not SQL.

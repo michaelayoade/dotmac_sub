@@ -33,7 +33,7 @@ generated placeholder: a fabricated name is indistinguishable from a real one
 the moment it is written.
 
 Identity is now **stored**, not re-parsed from the name on every read. Migration
-``483_pon_structural_identity`` adds ``identity_frame``/``identity_slot``/
+``487_pon_structural_identity`` adds ``identity_frame``/``identity_slot``/
 ``identity_port`` and constrains them with two partial unique indexes, one per
 shape — because a single universal constraint could never cover both. Those
 columns are owned here: no UI or import path may write them.

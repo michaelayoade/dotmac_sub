@@ -35,8 +35,8 @@ agrees with their name, so 308 rows are backfillable with no device I/O. The
 remaining 194 are Huawei rows with no derivable identity and no ONTs attached;
 they stay NULL and unconstrained until the topology import or their deletion.
 
-Revision ID: 483_pon_structural_identity
-Revises: 482_sla_period_score_revisions
+Revision ID: 487_pon_structural_identity
+Revises: 486_service_handoffs
 Create Date: 2026-08-06
 """
 
@@ -46,8 +46,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "483_pon_structural_identity"
-down_revision = "482_sla_period_score_revisions"
+revision = "487_pon_structural_identity"
+down_revision = "486_service_handoffs"
 branch_labels = None
 depends_on = None
 
