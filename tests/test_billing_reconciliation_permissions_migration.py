@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCE_KEY = "billing:invoice:update"
 READ_KEY = "billing:reconciliation:read"
 WRITE_KEY = "billing:reconciliation:write"
-MIGRATION = "480_billing_reconciliation_permissions.py"
+MIGRATION = "481_billing_reconciliation_permissions.py"
 
 
 def _load(name: str, file_name: str):
@@ -138,7 +138,7 @@ def _seed_source_holders(connection, tables, ids, now) -> None:
 
 def test_migration_extends_the_single_head_chain():
     migration = _load("billing_recon_chain", MIGRATION)
-    parent = _load("billing_recon_parent", "479_inbox_lifecycle_audit.py")
+    parent = _load("billing_recon_parent", "480_quote_discount_history.py")
 
     assert migration.down_revision == parent.revision
 

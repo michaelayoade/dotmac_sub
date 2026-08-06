@@ -22,8 +22,8 @@ leave the operator-created billing roles locked out. Reconciling billing dates
 is part of the authority to amend billing documents; copying grants it to
 exactly those principals and to nobody who could not already edit an invoice.
 
-Revision ID: 480_billing_reconciliation_permissions
-Revises: 479_inbox_lifecycle_audit
+Revision ID: 481_billing_reconciliation_permissions
+Revises: 480_quote_discount_history
 Create Date: 2026-08-06
 """
 
@@ -37,8 +37,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "480_billing_reconciliation_permissions"
-down_revision: str | None = "479_inbox_lifecycle_audit"
+revision: str = "481_billing_reconciliation_permissions"
+down_revision: str | None = "480_quote_discount_history"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
