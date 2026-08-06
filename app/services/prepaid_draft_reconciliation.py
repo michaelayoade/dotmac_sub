@@ -878,17 +878,10 @@ def preview_funded_prepaid_proforma_adoption(
         )
 
     funding = _funding_preview(db, invoice)
-    # A fully payment-backed invoice does not consume, depend on, or repair a
-    # migrated opening position. Requiring a baseline before recognizing that
-    # exact native settlement stranded otherwise valid post-cutover cash.
-    opening = (
-        None
-        if funding.fully_funded
-        else _reviewed_opening_funding_preview(
-            db,
-            invoice=invoice,
-            payment_funding=funding,
-        )
+    opening = _reviewed_opening_funding_preview(
+        db,
+        invoice=invoice,
+        payment_funding=funding,
     )
     if (
         not funding.fully_funded
@@ -896,7 +889,7 @@ def preview_funded_prepaid_proforma_adoption(
         or funding.spendable_credit != invoice_total
         or funding.unbacked_credit != Decimal("0.00")
         or len(funding.source_payment_ids) != 1
-        or (opening is not None and opening.authoritative_funding < invoice_total)
+        or opening.authoritative_funding < invoice_total
     ):
         return _build_proforma_adoption_preview(
             invoice=invoice,
@@ -1460,10 +1453,20 @@ def _existing_missing_paid_invoice_repair(
     invoices = tuple(
         db.scalars(
             select(Invoice)
+            .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+            .join(
+                PaymentAllocation,
+                PaymentAllocation.invoice_id == Invoice.id,
+            )
             .where(
                 Invoice.account_id == query.account_id,
                 Invoice.is_active.is_(True),
+                InvoiceLine.subscription_id == query.subscription_id,
+                InvoiceLine.is_active.is_(True),
+                PaymentAllocation.payment_id == query.payment_id,
+                PaymentAllocation.is_active.is_(True),
             )
+            .distinct()
             .order_by(Invoice.created_at, Invoice.id)
         ).all()
     )
@@ -1474,9 +1477,7 @@ def _existing_missing_paid_invoice_repair(
         if not isinstance(metadata, dict):
             continue
         if (
-            str(metadata.get("subscription_id")) == str(query.subscription_id)
-            and str(metadata.get("payment_id")) == str(query.payment_id)
-            and str(metadata.get("issued_on")) == query.issued_on.isoformat()
+            str(metadata.get("issued_on")) == query.issued_on.isoformat()
             and str(metadata.get("due_on")) == query.due_on.isoformat()
             and str(metadata.get("next_billing_on"))
             == query.next_billing_on.isoformat()
@@ -2514,6 +2515,7 @@ def _stage_action(
     context: CommandContext | None,
     due_at: datetime | None = None,
     reviewed_document_correction: bool = False,
+    selected_payment_id: UUID | None = None,
 ) -> tuple[
     Invoice,
     Decimal,
@@ -2537,8 +2539,28 @@ def _stage_action(
                 reason="reconcile_exactly_funded_prepaid_draft",
                 apply_available_credit=False,
             )
-            funding = _funding_preview(db, invoice)
-            if preview.disposition is PrepaidDraftDisposition.reviewed_opening_fundable:
+            if selected_payment_id is not None:
+                if not reviewed_document_correction:
+                    _error(
+                        "review_required",
+                        "Selected-payment settlement requires reviewed document correction.",
+                    )
+                result = (
+                    AccountCreditApplications.apply_invoice_from_selected_payment_fully(
+                        db,
+                        invoice,
+                        payment_id=selected_payment_id,
+                        expected_amount=preview.invoice_total,
+                    )
+                )
+                opening_consumption = None
+            else:
+                funding = _funding_preview(db, invoice)
+            if (
+                selected_payment_id is None
+                and preview.disposition
+                is PrepaidDraftDisposition.reviewed_opening_fundable
+            ):
                 if context is None:
                     _error(
                         "review_required",
@@ -2570,7 +2592,7 @@ def _stage_action(
                     effective_at=_utc(effective_at),
                 )
                 reviewed_opening_correction = True
-            else:
+            elif selected_payment_id is None:
                 result = AccountCreditApplications.apply_invoice_fully(
                     db,
                     invoice,
@@ -3047,12 +3069,16 @@ def create_reviewed_paid_prepaid_invoice(
                 participant_error=exc.code,
             )
 
-        draft_preview = preview_prepaid_draft_reconciliation(db, invoice.id)
-        if (
-            draft_preview.disposition
-            is not PrepaidDraftDisposition.exact_payment_fundable
-            or draft_preview.invoice_total != current.total
-        ):
+        funding = _funding_preview(db, invoice)
+        draft_preview = _build_preview(
+            invoice=invoice,
+            disposition=PrepaidDraftDisposition.exact_payment_fundable,
+            action=PrepaidDraftAction.settle_paid,
+            funding=funding,
+            subscription_ids=(locked_subscription.id,),
+            reason="selected reviewed payment fully funds the missing invoice",
+        )
+        if not funding.fully_funded or draft_preview.invoice_total != current.total:
             _error(
                 "incomplete_repair",
                 "Constructed invoice did not become exactly payment-fundable.",
@@ -3065,6 +3091,7 @@ def create_reviewed_paid_prepaid_invoice(
             due_at=current.due_at,
             context=command.context,
             reviewed_document_correction=True,
+            selected_payment_id=command.query.payment_id,
         )
         if (
             applied != current.total

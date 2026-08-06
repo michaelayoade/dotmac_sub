@@ -694,6 +694,7 @@ def test_reviewed_missing_invoice_uses_exact_payment_without_opening_baseline(
     assert preview.billing_period_start == datetime(2026, 8, 5, 23, tzinfo=UTC)
     assert preview.billing_period_end == datetime(2026, 9, 4, 23, tzinfo=UTC)
     assert preview.due_at == datetime(2026, 9, 4, 23, tzinfo=UTC)
+    db_session.commit()
 
     command = CreateReviewedPaidPrepaidInvoiceCommand(
         context=CommandContext.system(
