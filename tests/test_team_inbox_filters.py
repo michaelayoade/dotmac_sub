@@ -15,7 +15,6 @@ from app.models.team_inbox import (
 )
 from app.services import team_inbox_filters, team_inbox_read
 
-
 _FILTER_TEAM_ID = UUID("33333333-3333-3333-3333-333333333333")
 
 
