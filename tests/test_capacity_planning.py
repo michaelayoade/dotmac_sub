@@ -176,9 +176,7 @@ def test_a_best_effort_sale_fits_where_a_guaranteed_one_would_not():
 
     from app.models.catalog import GuaranteedSpeedType
 
-    guaranteed = _Offer(
-        1000, 1000, guaranteed=GuaranteedSpeedType.fixed, floor=1000
-    )
+    guaranteed = _Offer(1000, 1000, guaranteed=GuaranteedSpeedType.fixed, floor=1000)
     usage_with_load = _usage(
         downstream_mbps=1000,
         sold_downstream_mbps=800,
