@@ -1555,7 +1555,6 @@ def quote_line_item_delete(
             context=_quote_command_context(request, quote_id, action="line-remove"),
         )
     except (DomainError, ValidationError, ValueError) as exc:
-        db.rollback()
         context = _ctx(request, db, "sales-quotes")
         context.update(
             web_sales_service.build_quote_detail_context(db, quote_id=quote_id)

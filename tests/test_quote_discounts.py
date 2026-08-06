@@ -28,6 +28,7 @@ from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.sales import quote_authoring, quote_discount_reporting
 from app.services.sales import service as sales_service
+from app.timezone import localize_datetime
 
 
 def _identity(db_session) -> tuple[SystemUser, Lead, Party]:
@@ -256,12 +257,15 @@ def test_history_query_filters_customer_actor_type_status_and_date(db_session):
     actor, lead, _party = _identity(db_session)
     quote = _author_discounted_quote(db_session, actor=actor, lead=lead)
     history = db_session.query(QuoteDiscountHistory).filter_by(quote_id=quote.id).one()
+    local_applied_at = localize_datetime(history.applied_at)
+    assert local_applied_at is not None
+    applied_date = local_applied_at.date()
 
     result = quote_discount_reporting.list_quote_discount_history(
         db_session,
         quote_discount_reporting.QuoteDiscountHistoryQuery(
-            date_from=history.applied_at.date(),
-            date_to=history.applied_at.date(),
+            date_from=applied_date,
+            date_to=applied_date,
             customer="Discount Customer",
             salesperson_id=actor.id,
             discount_type=QuoteDiscountType.percentage,
