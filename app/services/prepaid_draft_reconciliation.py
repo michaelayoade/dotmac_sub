@@ -896,10 +896,7 @@ def preview_funded_prepaid_proforma_adoption(
         or funding.spendable_credit != invoice_total
         or funding.unbacked_credit != Decimal("0.00")
         or len(funding.source_payment_ids) != 1
-        or (
-            opening is not None
-            and opening.authoritative_funding < invoice_total
-        )
+        or (opening is not None and opening.authoritative_funding < invoice_total)
     ):
         return _build_proforma_adoption_preview(
             invoice=invoice,
