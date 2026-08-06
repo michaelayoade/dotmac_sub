@@ -1294,9 +1294,7 @@ DOMAIN = DomainSOT(
                     ConcernContract(
                         name="staff login identity resolution",
                         role=OwnerRole.RESOLVER,
-                        input_names=(
-                            "canonical staff identity and credential state",
-                        ),
+                        input_names=("canonical staff identity and credential state",),
                     ),
                 ),
                 authoritative_inputs=(

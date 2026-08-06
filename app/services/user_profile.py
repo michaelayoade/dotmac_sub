@@ -104,7 +104,7 @@ def update_me(
     """Update the current user's profile and return the updated profile."""
     update_data = payload.model_dump(exclude_unset=True)
     if principal_type == "system_user":
-        disallowed_fields = {
+        system_disallowed_fields = {
             "date_of_birth",
             "gender",
             "preferred_contact_method",
@@ -123,7 +123,7 @@ def update_me(
         fields = frozenset(
             supported[name]
             for name in update_data
-            if name in supported and name not in disallowed_fields
+            if name in supported and name not in system_disallowed_fields
         )
         if fields:
             desired_fingerprint = hashlib.sha256(
@@ -158,10 +158,14 @@ def update_me(
                     ),
                 )
             except DomainError as exc:
-                status_code = 404 if exc.code.endswith("staff_account_not_found") else 409
-                raise HTTPException(status_code=status_code, detail=exc.message) from exc
-        person = _get_system_user_or_404(db, principal_id)
-        return _build_me_response(person, roles, scopes)
+                status_code = (
+                    404 if exc.code.endswith("staff_account_not_found") else 409
+                )
+                raise HTTPException(
+                    status_code=status_code, detail=exc.message
+                ) from exc
+        system_user = _get_system_user_or_404(db, principal_id)
+        return _build_me_response(system_user, roles, scopes)
 
     person = _get_subscriber_or_404(db, principal_id)
     disallowed_fields: set[str] = set()

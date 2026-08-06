@@ -114,8 +114,7 @@ def apply_plan(
                         scope=staff_provisioning.STAFF_ASSIGN_SCOPE,
                         reason=reason,
                         idempotency_key=(
-                            f"{idempotency_prefix}:{item.user_id}:"
-                            f"{item.email_sha256}"
+                            f"{idempotency_prefix}:{item.user_id}:{item.email_sha256}"
                         ),
                     ),
                     user_id=item.user_id,

@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.db import finish_read_transaction
 from app.models.auth import (
     ApiKey,
-    AuthProvider,
     MFAMethod,
     UserCredential,
 )

@@ -140,7 +140,5 @@ def test_login_card_fails_closed_on_missing_local_credential(db_session) -> None
 
     assert detail is not None
     assert detail["credential"] is None
-    assert detail["credential_issue"] == (
-        "No local login credential is configured."
-    )
+    assert detail["credential_issue"] == ("No local login credential is configured.")
     assert detail["credential_recovery"].allowed is True

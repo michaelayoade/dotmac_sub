@@ -11,9 +11,7 @@ ADAPTER = PROJECT_ROOT / "app" / "api" / "staff_sync.py"
 HANDLER = PROJECT_ROOT / "app" / "services" / "events" / "handlers" / "staff_invite.py"
 ADMIN_ROUTE = PROJECT_ROOT / "app" / "web" / "admin" / "system.py"
 EDIT_ADAPTER = PROJECT_ROOT / "app" / "services" / "web_system_user_edit.py"
-RECOVERY_ADAPTER = (
-    PROJECT_ROOT / "app" / "services" / "web_system_user_mutations.py"
-)
+RECOVERY_ADAPTER = PROJECT_ROOT / "app" / "services" / "web_system_user_mutations.py"
 PROFILE_ADAPTER = PROJECT_ROOT / "app" / "services" / "user_profile.py"
 PROFILE_READ_ADAPTER = PROJECT_ROOT / "app" / "services" / "web_system_profiles.py"
 

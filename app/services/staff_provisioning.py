@@ -1168,7 +1168,9 @@ def update_staff_identity(
             else 0
         )
         _invalidate_auth_after_commit(db, user.id)
-        changed_fields_tuple = tuple(sorted(changed_fields, key=lambda item: item.value))
+        changed_fields_tuple = tuple(
+            sorted(changed_fields, key=lambda item: item.value)
+        )
         metadata = {
             "changed_fields": [field.value for field in changed_fields_tuple],
             "credential_reconciled": credential_reconciled,
@@ -1434,7 +1436,7 @@ def get_staff_login_identity_view(
         .limit(1)
     ).scalar_one_or_none()
     if not credentials:
-        issue = (
+        missing_issue = (
             StaffLoginIdentityIssue.username_conflict
             if conflict is not None
             else StaffLoginIdentityIssue.missing_credential
@@ -1450,7 +1452,7 @@ def get_staff_login_identity_view(
         )
         return StaffLoginIdentityView(
             credential=None,
-            issue=issue,
+            issue=missing_issue,
             recovery=StaffCredentialRecoveryEligibility(
                 allowed=blocked_by is None,
                 blocked_by=blocked_by,
@@ -1464,7 +1466,7 @@ def get_staff_login_identity_view(
                 allowed=False,
                 blocked_by=StaffCredentialRecoveryBlock.multiple_credentials,
             ),
-    )
+        )
     credential = credentials[0]
     aligned = (credential.username or "").strip().lower() == user.email.strip().lower()
     activation_aligned = credential.is_active == user.is_active
