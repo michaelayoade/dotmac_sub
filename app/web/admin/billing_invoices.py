@@ -305,8 +305,8 @@ def invoices_export_csv(
 )
 def invoice_discounts_list(
     request: Request,
-    date_from: date | None = Query(None),
-    date_to: date | None = Query(None),
+    date_from: OptionalDateQuery = None,
+    date_to: OptionalDateQuery = None,
     customer: str | None = Query(None),
     salesperson_id: str | None = Query(None),
     discount_type: str | None = Query(None),
