@@ -2902,9 +2902,6 @@ def create_reviewed_paid_prepaid_invoice(
         if not key or len(key) > 120:
             _error("missing_idempotency_key", "A bounded idempotency key is required.")
 
-        subscription = db.get(Subscription, command.query.subscription_id)
-        if subscription is None:
-            _error("not_actionable", "Subscription was not found.")
         lock_account(db, str(command.query.account_id))
         locked_subscription = lock_for_update(
             db,
@@ -2914,6 +2911,8 @@ def create_reviewed_paid_prepaid_invoice(
         locked_payment = lock_for_update(db, Payment, str(command.query.payment_id))
         if locked_subscription is None or locked_payment is None:
             _error("not_actionable", "Reviewed subscription or payment was not found.")
+        db.refresh(locked_subscription)
+        db.refresh(locked_payment)
 
         reservation = db.scalar(
             select(IdempotencyKey)
