@@ -589,7 +589,10 @@ def _manual_invitation_eligibility(
             False, "This conversation channel cannot deliver a Lead intake form."
         )
     resolution = dict((conversation.metadata_ or {}).get("contact_resolution") or {})
-    if conversation.subscriber_id is not None or resolution.get("status") != "unmatched":
+    if (
+        conversation.subscriber_id is not None
+        or resolution.get("status") != "unmatched"
+    ):
         return ManualInvitationEligibility(
             False, "Lead intake is only for people not linked to a customer account."
         )

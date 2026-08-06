@@ -35,7 +35,6 @@ from app.services import (
     team_inbox_read_state,
 )
 from app.services.catalog import plan_family_catalogues
-from app.services.sales import lead_intake
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
@@ -43,6 +42,7 @@ from app.services.list_query import (
     PageMeta,
     request_needs_canonicalization,
 )
+from app.services.sales import lead_intake
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -185,9 +185,7 @@ class InboxConversationProjection:
     conversation_labels: tuple[team_inbox_operations.LabelOption, ...]
     macro_options: tuple[team_inbox_operations.MacroOption, ...]
     template_options: tuple[team_inbox_operations.MessageTemplateOption, ...]
-    catalogue_options: tuple[
-        plan_family_catalogues.PlanFamilyCatalogueOption, ...
-    ]
+    catalogue_options: tuple[plan_family_catalogues.PlanFamilyCatalogueOption, ...]
     action_eligibility: InboxActionEligibility
     is_unread: bool
     priority_options: tuple[InboxPriorityOption, ...]

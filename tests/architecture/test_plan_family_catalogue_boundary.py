@@ -44,8 +44,7 @@ def test_catalogue_schema_is_versioned_and_has_one_current_publication():
     storage = _source("app/services/file_storage.py")
 
     assert (
-        'down_revision: str | None = "494_team_inbox_agent_introductions"'
-        in migration
+        'down_revision: str | None = "494_team_inbox_agent_introductions"' in migration
     )
     assert "uq_plan_family_catalogues_family_version" in migration
     assert "uq_plan_family_catalogues_one_published_family" in migration

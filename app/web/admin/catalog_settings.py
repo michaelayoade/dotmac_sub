@@ -169,9 +169,7 @@ def plan_catalogue_publish(
                     actor=f"system_user:{actor_id}",
                     scope="catalog:write",
                     reason="publish approved plan-family catalogue PDF",
-                    idempotency_key=(
-                        f"plan-family-catalogue:{plan_family}:{uuid4()}"
-                    ),
+                    idempotency_key=(f"plan-family-catalogue:{plan_family}:{uuid4()}"),
                 ),
                 plan_family=plan_family,
                 display_name=display_name,
@@ -192,7 +190,9 @@ def plan_catalogue_publish(
             ),
             status_code=400,
         )
-    action = "already current" if outcome.replayed else f"published as v{outcome.version}"
+    action = (
+        "already current" if outcome.replayed else f"published as v{outcome.version}"
+    )
     return RedirectResponse(
         "/admin/catalog/settings/catalogues"
         f"?status=success&message={quote_plus(f'{outcome.display_name} {action}')}",
