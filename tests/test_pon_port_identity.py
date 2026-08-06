@@ -287,7 +287,7 @@ def test_a_canonical_name_without_a_hardware_link_is_still_assignable(db_session
 def test_board_port_split_never_emits_a_board_that_names_nothing(name, expected):
     from app.services.network.ont_assignment_commands import _fsp_parts
 
-    assert _fsp_parts(name) == expected
+    assert _fsp_parts(name, vendor="Huawei") == expected
 
 
 # ── Single-box platforms have no chassis ────────────────────────────────────
@@ -372,3 +372,27 @@ def test_chassis_platforms_are_unaffected_by_the_variant(db_session):
     assert assert_assignable(db_session, good) is None
     with pytest.raises(PonPortIdentityError):
         assert_assignable(db_session, bare)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # There is no board on a single-box OLT; say so rather than invent one.
+        ("pon5", (None, "5")),
+        ("PON8", (None, "8")),
+        ("3", (None, "3")),
+        # A chassis name names nothing on a box with no slots.
+        ("0/1/13", (None, None)),
+        ("board-2", (None, None)),
+    ],
+)
+def test_board_port_split_on_a_single_box_keeps_the_port(name, expected):
+    """Reading a ``pon<n>`` name as a chassis name discarded the port number.
+
+    The type checker caught the union-attr error on ``identity.frame``; it could
+    not see this. Every UF-OLT assignment and move would have written
+    ``board=None, port=None`` and silently lost which port the ONT is on.
+    """
+    from app.services.network.ont_assignment_commands import _fsp_parts
+
+    assert _fsp_parts(name, vendor="ubiquiti") == expected
