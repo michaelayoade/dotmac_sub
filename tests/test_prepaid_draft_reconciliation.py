@@ -701,7 +701,7 @@ def test_reviewed_missing_invoice_uses_exact_payment_without_opening_baseline(
             actor="pytest:billing-operator",
             scope="prepaid_draft_reconciliation",
             reason="Reviewed one exact missing prepaid paid invoice",
-            idempotency_key=f"pytest-missing-paid-invoice-{subscription.id}",
+            idempotency_key=f"pytest-missing-paid-invoice-{query.subscription_id}",
         ),
         query=query,
         preview_fingerprint=preview.fingerprint,
