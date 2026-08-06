@@ -662,6 +662,7 @@ from app.models.party import (  # noqa: F401
     SubscriberContactPointProjection,
     SubscriberContactRelationshipProjection,
 )
+from app.models.plan_family_catalogue import PlanFamilyCatalogue  # noqa: F401
 from app.models.payment_arrangement import (  # noqa: F401
     ArrangementStatus,
     InstallmentStatus,
