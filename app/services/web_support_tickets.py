@@ -157,7 +157,19 @@ SUPPORT_TICKET_LIST_DEFINITION = ListDefinition(
     default_sort_dir="desc",
 )
 
-_TICKET_STATUSES = frozenset(status.value for status in TicketStatus)
+NOT_CLOSED_TICKET_STATUS_FILTER = "not_closed"
+_TICKET_STATUS_FILTERS = frozenset(
+    {*(status.value for status in TicketStatus), NOT_CLOSED_TICKET_STATUS_FILTER}
+)
+
+
+def _ticket_status_scope(value: str | None) -> support_service.TicketStatusScope:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return support_service.TicketStatusScope.all()
+    if normalized == NOT_CLOSED_TICKET_STATUS_FILTER:
+        return support_service.TicketStatusScope.not_closed()
+    return support_service.TicketStatusScope.matching(TicketStatus(normalized))
 
 
 def _normalize_ticket_uuid_filter(value: str | None, name: str) -> str | None:
@@ -212,7 +224,7 @@ def build_ticket_list_query(
     """Normalize the admin support queue through its declared capabilities."""
 
     normalized_status = str(status or "").strip().lower() or None
-    if normalized_status and normalized_status not in _TICKET_STATUSES:
+    if normalized_status and normalized_status not in _TICKET_STATUS_FILTERS:
         raise ValueError(f"Unsupported ticket status: {normalized_status}")
     return SUPPORT_TICKET_LIST_DEFINITION.build_query(
         search=search,
@@ -322,7 +334,7 @@ def _ticket_scope_count(
     return support_service.tickets.count(
         db,
         search=list_query.search,
-        status=status,
+        status_scope=_ticket_status_scope(status),
         ticket_type=list_query.filter_value("ticket_type"),
         region=list_query.filter_value("region"),
         assigned_to_person_id=(
@@ -1077,7 +1089,7 @@ def build_tickets_list_context(
     rows = support_service.tickets.list(
         db,
         search=effective_query.search,
-        status=effective_query.filter_value("status"),
+        status_scope=_ticket_status_scope(effective_query.filter_value("status")),
         ticket_type=effective_query.filter_value("ticket_type"),
         region=effective_query.filter_value("region"),
         assigned_to_person_id=(
@@ -1208,7 +1220,7 @@ def list_tickets_for_scope(
     return support_service.tickets.list(
         db,
         search=list_query.search,
-        status=list_query.filter_value("status"),
+        status_scope=_ticket_status_scope(list_query.filter_value("status")),
         ticket_type=list_query.filter_value("ticket_type"),
         region=list_query.filter_value("region"),
         assigned_to_person_id=(
@@ -1357,6 +1369,7 @@ def build_ticket_detail_context(
     *,
     ticket_lookup: str,
     actor_id: str | None = None,
+    can_read_material_requests: bool = False,
 ) -> dict:
     from uuid import uuid4
 
@@ -1367,6 +1380,20 @@ def build_ticket_detail_context(
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
     linked_work_orders = ticket_work_order_handoff.list_for_ticket(db, ticket.id)
+    if can_read_material_requests:
+        from app.services.field.material_requests import (
+            MaterialRequestScope,
+            list_staff_material_requests,
+        )
+
+        material_requests = list_staff_material_requests(
+            db,
+            scope=MaterialRequestScope(ticket_id=ticket.id),
+            page=1,
+            per_page=100,
+        ).items
+    else:
+        material_requests = ()
     # Customer conversation history, so an agent sees what was already said on
     # other channels before replying here. `communications.team_inbox` owns these
     # rows; this is a read. Scoped by subscriber because no conversation-to-ticket
@@ -1465,6 +1492,10 @@ def build_ticket_detail_context(
         ),
         "identity_resolution": _identity_resolution_summary(ticket),
         "linked_work_orders": linked_work_orders,
+        "material_requests": material_requests,
+        "material_request_create_url": (
+            f"/admin/operations/material-requests/new?ticket_id={ticket.id}"
+        ),
         "ticket_conversations": ticket_conversations,
         "linked_project_tasks": linked_project_tasks,
         "issue_work_order_action": ticket_work_order_handoff.issue_action(

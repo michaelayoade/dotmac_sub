@@ -2332,6 +2332,19 @@ SETTINGS_SPECS: list[SettingSpec] = [
         allowed={"HIGH", "MEDIUM"},
         label="Sensitive Automation Minimum Identity Confidence",
     ),
+    # customer.service_level PR-3 preparation.  The selector is deliberately
+    # one-valued until an accepted discrepancy review authorizes the separate
+    # cutover change.  A database row containing any other value resolves back
+    # to this safe default.
+    SettingSpec(
+        domain=SettingDomain.subscriber,
+        key="sla_admin_display_authority",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="legacy_availability",
+        allowed={"legacy_availability"},
+        label="Admin SLA Display Authority (pre-cutover)",
+    ),
     # Referral program (— migrated from the CRM subscriber
     # domain; there is no program table, these five keys ARE the program).
     SettingSpec(
@@ -3337,6 +3350,24 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="selfcare",
         allowed={"selfcare", "crm"},
         label="Live chat authority",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="inbox_reply_reminder_delay_minutes",
+        env_var="INBOX_REPLY_REMINDER_DELAY_MINUTES",
+        value_type=SettingValueType.integer,
+        default=15,
+        min_value=1,
+        label="Team Inbox first reply reminder delay (minutes)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="inbox_reply_reminder_repeat_minutes",
+        env_var="INBOX_REPLY_REMINDER_REPEAT_MINUTES",
+        value_type=SettingValueType.integer,
+        default=15,
+        min_value=1,
+        label="Team Inbox reply reminder repeat interval (minutes)",
     ),
     SettingSpec(
         domain=SettingDomain.comms,

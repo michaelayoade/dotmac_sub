@@ -236,6 +236,7 @@ DOMAIN = DomainSOT(
                 "immutable integration configuration revisions",
                 "integration capability grants and bindings",
                 "Meta social installation configuration",
+                "pre-activation integration webhook verification",
             ),
             depends_on=("integration.registry", "secrets.reference_store"),
             notes=(
@@ -297,6 +298,15 @@ DOMAIN = DomainSOT(
                             "canonical integration installation aggregate",
                         ),
                         canonical_writer="integration.installations",
+                    ),
+                    ConcernContract(
+                        name="pre-activation integration webhook verification",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "approved integration secret references",
+                            "integration installation protocol",
+                            "canonical integration installation aggregate",
+                        ),
                     ),
                 ),
                 authoritative_inputs=(
@@ -381,6 +391,12 @@ DOMAIN = DomainSOT(
                         "integration.installations.meta_configuration_ambiguous",
                         "integration.installations.meta_configuration_invalid",
                         "integration.installations.meta_configuration_scope_invalid",
+                        "integration.installations.whatsapp_webhook_not_configured",
+                        "integration.installations.whatsapp_webhook_configuration_ambiguous",
+                        "integration.installations.whatsapp_webhook_installation_not_ready",
+                        "integration.installations.whatsapp_webhook_configuration_invalid",
+                        "integration.installations.whatsapp_webhook_secret_reference_missing",
+                        "integration.installations.whatsapp_webhook_secret_unavailable",
                     ),
                     mapping_owner=(
                         "app.api.integrations and integration admin web adapters"
@@ -391,6 +407,7 @@ DOMAIN = DomainSOT(
                         "undeclared or materialized secret value",
                         "ambiguous enabled default capability",
                         "retired or quarantined lifecycle mismatch",
+                        "ambiguous, invalid, or unavailable pre-activation webhook verification input",
                     ),
                 ),
                 events=EventContract(
@@ -445,6 +462,7 @@ DOMAIN = DomainSOT(
                     "tests/test_integration_installations.py",
                     "tests/test_integration_installation_api.py",
                     "tests/test_integration_meta_social.py",
+                    "tests/test_team_inbox_whatsapp_webhook.py",
                     "tests/test_integration_manifest_deployment_gate.py",
                     "tests/architecture/test_integration_platform_boundary.py",
                 ),
@@ -1485,8 +1503,9 @@ DOMAIN = DomainSOT(
                         owner="control.settings_spec",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "material_request flow ownership, ERP sync enablement, ISSUE "
-                            "payload schema, bounded batch size, and retry cadence"
+                            "material_request flow ownership, validated ERP capability "
+                            "bindings, ISSUE payload schema, bounded batch size, and "
+                            "retry cadence"
                         ),
                     ),
                 ),
@@ -1534,7 +1553,7 @@ DOMAIN = DomainSOT(
                     ),
                     fail_closed_on=(
                         "flow not owned by Sub",
-                        "disabled ERP synchronization after cutover",
+                        "missing ERP delivery capability after cutover",
                         "missing warehouse, technician, item, or serial evidence",
                         "changed ERP material-request identity",
                     ),
