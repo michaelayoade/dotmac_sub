@@ -12,13 +12,19 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.dispatch import (
     DispatchQueueStatus,
     TechnicianProfile,
     WorkOrderAssignmentQueue,
+)
+from app.models.field_erp_sync import (
+    FieldErpSyncEvent,
+    FieldErpSyncFlow,
+    SyncFlowOwner,
+    get_flow_ownership,
 )
 from app.models.field_material import (
     FIELD_MATERIAL_REQUEST_PRIORITIES,
@@ -28,6 +34,7 @@ from app.models.field_material import (
     FieldMaterialRequestItem,
     FieldWorkOrderMaterial,
 )
+from app.models.project import ProjectTask
 from app.models.work_order import WorkOrder
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.domain_errors import DomainError
@@ -160,6 +167,29 @@ class MaterialRequestFormOptions:
     inventory_items: tuple[MaterialRequestInventoryOption, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class MaterialRequestScope:
+    """Native navigation scope for the work order that owns a request."""
+
+    ticket_id: UUID | None = None
+    project_id: UUID | None = None
+    project_task_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialRequestDeliveryView:
+    """Read-only projection of the durable ERP delivery state."""
+
+    flow_owner: str
+    sub_owns_delivery: bool
+    event_status: str | None
+    attempts: int
+    last_error: str | None
+    queued_at: datetime | None
+    updated_at: datetime | None
+    sent_at: datetime | None
+
+
 class MaterialRequestError(DomainError):
     """Transport-neutral material dependency decision failure."""
 
@@ -259,6 +289,7 @@ def list_staff_material_requests(
     *,
     status: MaterialRequestStatus | None = None,
     work_order_public_id: str | None = None,
+    scope: MaterialRequestScope | None = None,
     page: int = 1,
     per_page: int = 25,
 ) -> MaterialRequestPage:
@@ -269,6 +300,32 @@ def list_staff_material_requests(
         query = query.join(FieldMaterialRequest.work_order_mirror).filter(
             WorkOrder.public_id == work_order_public_id.strip()
         )
+    if scope is not None and any(
+        (scope.ticket_id, scope.project_id, scope.project_task_id)
+    ):
+        if scope.ticket_id is not None:
+            query = query.filter(
+                FieldMaterialRequest.work_order_mirror.has(
+                    or_(
+                        WorkOrder.origin_ticket_id == scope.ticket_id,
+                        WorkOrder.project_task.has(
+                            ProjectTask.ticket_id == scope.ticket_id
+                        ),
+                    )
+                )
+            )
+        if scope.project_id is not None:
+            query = query.filter(
+                FieldMaterialRequest.work_order_mirror.has(
+                    WorkOrder.project_id == scope.project_id
+                )
+            )
+        if scope.project_task_id is not None:
+            query = query.filter(
+                FieldMaterialRequest.work_order_mirror.has(
+                    WorkOrder.project_task_id == scope.project_task_id
+                )
+            )
     total = int(query.with_entities(func.count(FieldMaterialRequest.id)).scalar() or 0)
     safe_page = max(1, page)
     safe_per_page = min(100, max(10, per_page))
@@ -297,6 +354,32 @@ def get_staff_material_request(db: Session, request_id: UUID) -> MaterialRequest
     return _request_view(row)
 
 
+def get_material_request_delivery(
+    db: Session, request_id: UUID
+) -> MaterialRequestDeliveryView:
+    owner = get_flow_ownership(db)[FieldErpSyncFlow.material_request.value]
+    event = (
+        db.query(FieldErpSyncEvent)
+        .filter(
+            FieldErpSyncEvent.flow == FieldErpSyncFlow.material_request.value,
+            FieldErpSyncEvent.entity_type == "field_material_request",
+            FieldErpSyncEvent.entity_id == request_id,
+        )
+        .order_by(FieldErpSyncEvent.created_at.desc())
+        .first()
+    )
+    return MaterialRequestDeliveryView(
+        flow_owner=owner,
+        sub_owns_delivery=owner == SyncFlowOwner.sub.value,
+        event_status=event.status if event is not None else None,
+        attempts=event.attempts if event is not None else 0,
+        last_error=event.last_error if event is not None else None,
+        queued_at=event.created_at if event is not None else None,
+        updated_at=event.updated_at if event is not None else None,
+        sent_at=event.sent_at if event is not None else None,
+    )
+
+
 def _technician_label(profile: TechnicianProfile) -> str:
     if profile.system_user is not None:
         label = str(profile.system_user.display_name or "").strip()
@@ -310,7 +393,22 @@ def _technician_label(profile: TechnicianProfile) -> str:
     return profile.crm_person_id or str(profile.person_id)
 
 
-def staff_material_request_form_options(db: Session) -> MaterialRequestFormOptions:
+def staff_material_request_form_options(
+    db: Session, *, scope: MaterialRequestScope | None = None
+) -> MaterialRequestFormOptions:
+    ticket_task_ids = (
+        {
+            row[0]
+            for row in db.query(ProjectTask.id)
+            .filter(
+                ProjectTask.ticket_id == scope.ticket_id,
+                ProjectTask.is_active.is_(True),
+            )
+            .all()
+        }
+        if scope is not None and scope.ticket_id is not None
+        else set()
+    )
     assignments = (
         db.query(WorkOrderAssignmentQueue)
         .options(
@@ -336,6 +434,23 @@ def staff_material_request_form_options(db: Session) -> MaterialRequestFormOptio
             or not work_order.is_active
         ):
             continue
+        if scope is not None:
+            if (
+                scope.ticket_id is not None
+                and work_order.origin_ticket_id != scope.ticket_id
+                and work_order.project_task_id not in ticket_task_ids
+            ):
+                continue
+            if (
+                scope.project_id is not None
+                and work_order.project_id != scope.project_id
+            ):
+                continue
+            if (
+                scope.project_task_id is not None
+                and work_order.project_task_id != scope.project_task_id
+            ):
+                continue
         seen.add(work_order.id)
         work_orders.append(
             MaterialRequestWorkOrderOption(
