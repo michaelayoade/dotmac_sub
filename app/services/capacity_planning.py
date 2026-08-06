@@ -172,7 +172,7 @@ def _pon_subscription_offers(db: Session) -> dict[object, list[CatalogOffer]]:
         .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
         .filter(
             OntAssignment.pon_port_id.isnot(None),
-            OntAssignment.is_active.is_(True),
+            OntAssignment.active.is_(True),
             Subscription.status == SubscriptionStatus.active,
         )
         .all()

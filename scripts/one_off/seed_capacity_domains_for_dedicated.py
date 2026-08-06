@@ -63,7 +63,7 @@ def main() -> None:
             )
             .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
             .filter(
-                OntAssignment.is_active.is_(True),
+                OntAssignment.active.is_(True),
                 OntAssignment.pon_port_id.isnot(None),
                 Subscription.status == SubscriptionStatus.active,
                 CatalogOffer.plan_family == args.family,
