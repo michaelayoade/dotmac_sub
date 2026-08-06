@@ -32,7 +32,7 @@ def test_invoice_discount_is_inside_typed_creation_boundaries() -> None:
 
 def test_invoice_discount_history_has_database_and_orm_immutability() -> None:
     model = _source("app/models/billing.py")
-    migration = _source("alembic/versions/482_invoice_discount_history.py")
+    migration = _source("alembic/versions/483_invoice_discount_history.py")
     assert '@event.listens_for(InvoiceDiscountHistory, "before_update")' in model
     assert '@event.listens_for(InvoiceDiscountHistory, "before_delete")' in model
     assert "trg_invoice_discount_history_append_only" in migration

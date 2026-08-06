@@ -1,7 +1,7 @@
 """Add Invoice-level discounts and append-only history.
 
-Revision ID: 482_invoice_discount_history
-Revises: 481_billing_reconciliation_permissions
+Revision ID: 483_invoice_discount_history
+Revises: 482_sla_period_score_revisions
 Create Date: 2026-08-06
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "482_invoice_discount_history"
-down_revision: str | None = "481_billing_reconciliation_permissions"
+revision: str = "483_invoice_discount_history"
+down_revision: str | None = "482_sla_period_score_revisions"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
