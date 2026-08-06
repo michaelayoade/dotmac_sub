@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import backoffice
 from app.services.auth_dependencies import can, require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
@@ -130,7 +131,7 @@ def _detail_response(
         {
             **_base_context(request, db),
             "material_request": material_request,
-            "delivery": material_service.get_material_request_delivery(db, request_id),
+            "delivery": backoffice.get_material_request_delivery(db, request_id),
             "error": error,
             "notice": notice,
             "request_id": str(uuid4()),

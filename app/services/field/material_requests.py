@@ -20,12 +20,6 @@ from app.models.dispatch import (
     TechnicianProfile,
     WorkOrderAssignmentQueue,
 )
-from app.models.field_erp_sync import (
-    FieldErpSyncEvent,
-    FieldErpSyncFlow,
-    SyncFlowOwner,
-    get_flow_ownership,
-)
 from app.models.field_material import (
     FIELD_MATERIAL_REQUEST_PRIORITIES,
     FIELD_MATERIAL_REQUEST_STATUSES,
@@ -174,20 +168,6 @@ class MaterialRequestScope:
     ticket_id: UUID | None = None
     project_id: UUID | None = None
     project_task_id: UUID | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class MaterialRequestDeliveryView:
-    """Read-only projection of the durable ERP delivery state."""
-
-    flow_owner: str
-    sub_owns_delivery: bool
-    event_status: str | None
-    attempts: int
-    last_error: str | None
-    queued_at: datetime | None
-    updated_at: datetime | None
-    sent_at: datetime | None
 
 
 class MaterialRequestError(DomainError):
@@ -352,32 +332,6 @@ def get_staff_material_request(db: Session, request_id: UUID) -> MaterialRequest
     if row is None:
         raise _material_error("request_not_found", "Material request was not found.")
     return _request_view(row)
-
-
-def get_material_request_delivery(
-    db: Session, request_id: UUID
-) -> MaterialRequestDeliveryView:
-    owner = get_flow_ownership(db)[FieldErpSyncFlow.material_request.value]
-    event = (
-        db.query(FieldErpSyncEvent)
-        .filter(
-            FieldErpSyncEvent.flow == FieldErpSyncFlow.material_request.value,
-            FieldErpSyncEvent.entity_type == "field_material_request",
-            FieldErpSyncEvent.entity_id == request_id,
-        )
-        .order_by(FieldErpSyncEvent.created_at.desc())
-        .first()
-    )
-    return MaterialRequestDeliveryView(
-        flow_owner=owner,
-        sub_owns_delivery=owner == SyncFlowOwner.sub.value,
-        event_status=event.status if event is not None else None,
-        attempts=event.attempts if event is not None else 0,
-        last_error=event.last_error if event is not None else None,
-        queued_at=event.created_at if event is not None else None,
-        updated_at=event.updated_at if event is not None else None,
-        sent_at=event.sent_at if event is not None else None,
-    )
 
 
 def _technician_label(profile: TechnicianProfile) -> str:

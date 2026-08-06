@@ -24,6 +24,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.services import backoffice
 from app.services.field import material_requests
 from app.services.owner_commands import CommandContext
 from app.web.admin import material_requests as material_requests_web
@@ -278,7 +279,7 @@ def test_material_request_delivery_projection_exposes_retry_state(db_session):
     )
     db_session.commit()
 
-    delivery = material_requests.get_material_request_delivery(db_session, created.id)
+    delivery = backoffice.get_material_request_delivery(db_session, created.id)
 
     assert delivery.sub_owns_delivery is True
     assert delivery.event_status == FieldErpSyncStatus.pending.value
