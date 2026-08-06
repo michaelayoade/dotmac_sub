@@ -121,8 +121,15 @@ subscription line through the invoice participant, issues it at the selected
 Payment timestamp, allocates only that Payment, creates the exact entitlement,
 and asks the renewal owner for a reviewed billing-anchor projection. Date-only
 period and due boundaries use Africa/Lagos midnight converted to UTC. The
-invoice, allocation ledger evidence, entitlement, anchor, audit, event,
-metadata, and idempotency reservation commit together.
+invoice, allocation ledger evidence, entitlement, anchor, audit, metadata, and
+idempotency reservation commit together.
+
+The selected-payment allocation uses a typed reviewed-document finalization.
+It creates the canonical paid-invoice and entitlement evidence but does not
+emit a second funding-increase observation or invoke financial-access
+restoration. The money was already settled before this correction, and the
+repair owner projects the reviewed billing anchor; existing funding-event
+owners remain responsible for access decisions.
 
 This path neither reconstructs nor consumes a prepaid opening baseline. When
 the selected native Payment alone fully backs the invoice, the missing

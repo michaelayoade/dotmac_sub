@@ -76,6 +76,9 @@ def test_reconciler_has_no_rounding_tolerance_or_raw_money_writes():
     assert "AccountAdjustment(" not in source
     assert "execute_owner_command(" in source
     assert "AccountCreditApplications.apply_invoice_fully(" in source
+    assert (
+        "AccountCreditApplications.apply_invoice_from_selected_payment_fully(" in source
+    )
     assert "result.invoice_remaining" in source
     assert "Invoices.void_pristine_draft_for_owner(" in source
     assert "Invoices.adopt_prepaid_proforma_document_for_owner(" in source

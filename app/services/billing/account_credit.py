@@ -483,13 +483,15 @@ class AccountCreditApplications:
         )
         try:
             allocation_preview = PaymentAllocations.preview(db, request)
-            confirmation = PaymentAllocations.stage_confirm(
-                db,
-                PaymentAllocationConfirm(
-                    **request.model_dump(),
-                    preview_fingerprint=allocation_preview.fingerprint,
-                    idempotency_key=_allocation_key(payment, invoice),
-                ),
+            confirmation = (
+                PaymentAllocations.stage_confirm_reviewed_document_correction(
+                    db,
+                    PaymentAllocationConfirm(
+                        **request.model_dump(),
+                        preview_fingerprint=allocation_preview.fingerprint,
+                        idempotency_key=_allocation_key(payment, invoice),
+                    ),
+                )
             )
         except HTTPException as exc:
             raise AccountCreditApplicationError(

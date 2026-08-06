@@ -24,6 +24,7 @@ from app.models.billing import (
     TaxRate,
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.event_store import EventStore
 from app.models.prepaid_funding import (
     PrepaidDraftReconciliationException,
     PrepaidOpeningFundingConsumption,
@@ -31,6 +32,7 @@ from app.models.prepaid_funding import (
 from app.services import prepaid_draft_reconciliation as reconciliation_service
 from app.services.customer_financial_position import prepaid_available_balance
 from app.services.domain_errors import DomainError
+from app.services.events.types import EventType
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_draft_reconciliation import (
     AdoptFundedPrepaidProformaCommand,
@@ -728,6 +730,13 @@ def test_reviewed_missing_invoice_uses_exact_payment_without_opening_baseline(
     assert subscription.next_billing_at == datetime(2026, 9, 4, 23)
     assert result.remaining_credit == Decimal("75.00")
     assert db_session.query(PaymentAllocation).one().amount == Decimal("18812.50")
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == EventType.payment_received.value)
+        .filter(EventStore.invoice_id == invoice.id)
+        .count()
+        == 0
+    )
     entitlement = db_session.query(ServiceEntitlement).one()
     assert entitlement.source_invoice_id == invoice.id
     assert entitlement.subscription_id == subscription.id
