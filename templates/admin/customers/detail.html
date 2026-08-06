@@ -448,8 +448,9 @@
                         </div>
 
                         {% if map_data %}
-                        <div class="space-y-3 rounded-lg border border-slate-200/80 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-900/30">
-                            <div id="customer-overview-map" class="customer-location-map w-full overflow-hidden rounded-lg"></div>
+                        <div class="overflow-hidden rounded-lg border border-slate-200/80 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/30">
+                            <div id="customer-overview-map" class="customer-location-map w-full overflow-hidden"></div>
+                            <div class="space-y-3 p-3">
                             <div class="flex flex-wrap items-center gap-2">
                                 <button type="button"
                                         id="customer-map-click-toggle"
@@ -484,6 +485,7 @@
                             </button>
                             <div class="text-xs text-slate-500 dark:text-slate-400">
                                 <div id="customer-map-nearby-assets"></div>
+                            </div>
                             </div>
                         </div>
                         {% elif geocode_target %}
