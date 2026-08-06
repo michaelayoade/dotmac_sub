@@ -1478,14 +1478,14 @@ def reconcile_contact_points(
     by_value = {point.normalized_value: point for point in existing}
 
     # Clear the partial-unique primary slot before assigning its replacement.
-    for point in existing:
-        point.is_primary = False
+    for existing_point in existing:
+        existing_point.is_primary = False
     db.flush()
 
     desired_set = set(desired)
-    for point in existing:
-        if point.normalized_value not in desired_set:
-            point.is_active = False
+    for existing_point in existing:
+        if existing_point.normalized_value not in desired_set:
+            existing_point.is_active = False
 
     result: list[PartyContactPoint] = []
     for index, value in enumerate(desired):
