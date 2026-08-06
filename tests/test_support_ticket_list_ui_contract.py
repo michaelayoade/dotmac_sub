@@ -373,6 +373,14 @@ def test_ticket_full_and_htmx_views_share_canonical_accessible_partials():
     assert 'hx-push-url="true"' in list_partial
     assert 'aria-current="page"' in list_partial
     assert 'x-bind:aria-expanded="open.toString()"' in list_partial
+    assert 'id="ticket-column-toggle"' in list_partial
+    assert 'aria-labelledby="ticket-column-toggle"' in list_partial
+    assert '@click.outside="open = false"' in list_partial
+    assert '@keydown.escape.window="open = false"' in list_partial
+    assert (
+        '<div id="ticket-column-options" x-show="open" @click.outside='
+        not in list_partial
+    )
     assert 'name="region" data-auto-submit' in list_partial
     assert "All Regions" in list_partial
     assert "{% for option in region_options %}" in list_partial
