@@ -18,10 +18,12 @@ Two grammar facts drive the parse, both verified against production configs:
   ONT id. Parsing these lines outside their block context yields a port number
   attached to nothing, which is the same class of mistake as ``pon-{port}``.
 
-Ports are therefore a *lower bound*: a port only appears here if an ONT was
-added to it. An empty port is real hardware this parse cannot see, so callers
-must treat the result as evidence of what exists, never as proof of what does
-not.
+Ports come from ``port <n> ont-auto-find ...``, which every archived config
+lists for the board's whole complement regardless of whether an ONT sits on the
+port. Ports mentioned only by an ``ont add`` line are folded in as well, so an
+occupied port is never missed if a firmware omits its auto-find line. Reading
+ports from ``ont add`` alone would have made the result a lower bound covering
+only occupied ports, which is what an earlier cut of this module did.
 
 Pure and offline by construction: text in, typed records out, no database and no
 network. That keeps the grammar testable against captured fixtures and keeps the
@@ -56,6 +58,11 @@ _ONT_ADD = re.compile(
     r"^\s*ont\s+add\s+(\d+)\s+(\d+)\s+sn-auth\s+\"?([0-9A-Za-z]+)\"?",
     re.IGNORECASE,
 )
+
+#: ``port 13 ont-auto-find enable`` — the board's full port complement, listed
+#: whether or not any ONT sits on the port. This is the authoritative port
+#: enumeration; ``ont add`` only reveals ports that happen to be occupied.
+_PORT_LINE = re.compile(r"^\s*port\s+(\d+)\s+ont-auto-find\b", re.IGNORECASE)
 
 #: ``quit`` leaves the interface block.
 _QUIT = re.compile(r"^\s*quit\s*$", re.IGNORECASE)
@@ -165,6 +172,11 @@ def parse_running_config(text: str) -> OltTopologyReading:
 
         if _QUIT.match(raw) or _INTERFACE_ANY.match(raw):
             _close()
+            continue
+
+        declared = _PORT_LINE.match(raw)
+        if declared is not None:
+            current.ports.add(int(declared[1]))
             continue
 
         ont = _ONT_ADD.match(raw)

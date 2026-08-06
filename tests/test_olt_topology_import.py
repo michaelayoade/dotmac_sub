@@ -26,6 +26,9 @@ board add 0/1 H803GPFD
 board add 0/4 H801MPWC
 #
 interface gpon 0/1
+ port 0 ont-auto-find enable
+ port 1 ont-auto-find enable
+ port 13 ont-auto-find enable
  ont add 0 0 sn-auth "48575443A31C862D" omci ont-lineprofile-id 40
  ont add 0 1 sn-auth "485754436835E484" omci ont-lineprofile-id 40
  ont add 13 1 sn-auth "48575443617CA06D" omci ont-lineprofile-id 40
@@ -59,7 +62,7 @@ def test_frames_and_slots_come_from_the_interface_blocks():
     reading = parse_running_config(_CONFIG)
 
     assert [(i.frame, i.slot) for i in reading.interfaces] == [(0, 1)]
-    assert reading.interfaces[0].ports == (0, 13)
+    assert reading.interfaces[0].ports == (0, 1, 13)
 
 
 def test_ont_lines_inherit_frame_and_slot_from_their_block():
@@ -107,7 +110,7 @@ def test_import_builds_the_chain_and_links_the_pon_row(db_session):
     outcome = import_topology(db_session, olt, parse_running_config(_CONFIG))
 
     assert (outcome.shelves_created, outcome.cards_created) == (1, 1)
-    assert outcome.ports_created == 2
+    assert outcome.ports_created == 3
     assert outcome.pon_rows_linked == 1
     assert outcome.identities_established == 1
     assert pon.olt_card_port_id is not None
@@ -137,7 +140,7 @@ def test_a_position_with_no_pon_row_is_reported_not_invented(db_session):
 
     outcome = import_topology(db_session, olt, parse_running_config(_CONFIG))
 
-    assert set(outcome.unmatched_positions) == {"0/1/0", "0/1/13"}
+    assert set(outcome.unmatched_positions) == {"0/1/0", "0/1/1", "0/1/13"}
     assert outcome.pon_rows_linked == 0
     assert db_session.query(PonPort).filter(PonPort.olt_id == olt.id).count() == 0
 
@@ -215,3 +218,25 @@ def test_two_canonical_names_for_one_position_link_neither(db_session):
     assert padded.olt_card_port_id is None
     assert outcome.pon_rows_linked == 0
     assert any("more than one PON row" in c.detail for c in outcome.conflicts)
+
+
+def test_idle_ports_are_seen_because_the_config_enumerates_them(db_session):
+    """``port <n> ont-auto-find`` lists the board's whole complement.
+
+    Port 1 has no ONT. Reading ports from ``ont add`` alone -- as an earlier cut
+    did -- would have made every idle port invisible and the import a lower
+    bound over occupied ports only.
+    """
+    reading = parse_running_config(_CONFIG)
+
+    assert 1 in reading.interfaces[0].ports
+    assert not any(o.port == 1 for o in reading.onts)
+
+
+def test_an_occupied_port_is_kept_even_without_an_auto_find_line():
+    """Belt and braces: a firmware that omits the line must not lose the port."""
+    reading = parse_running_config(
+        'interface gpon 0/2\n ont add 7 1 sn-auth "ABC"\n quit\n'
+    )
+
+    assert reading.interfaces[0].ports == (7,)
