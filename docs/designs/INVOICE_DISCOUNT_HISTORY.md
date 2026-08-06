@@ -72,6 +72,6 @@ history.
 
 ## Existing Invoices
 
-Migration 481 adds an empty current discount state to existing Invoices. It does
+Migration 482 adds an empty current discount state to existing Invoices. It does
 not invent historical discounts from totals, metadata, payments, or Credit
 Notes. Any existing Invoice remains financially unchanged.
