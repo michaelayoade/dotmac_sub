@@ -52,9 +52,10 @@ def test_update_me_supports_system_user(db_session):
     )
     db_session.add(user)
     db_session.flush()
+    user_id = user.id
     db_session.add(
         UserCredential(
-            system_user_id=user.id,
+            system_user_id=user_id,
             provider=AuthProvider.local,
             username=user.email,
             password_hash=hash_password("Profile-owner-test-password"),
@@ -65,7 +66,7 @@ def test_update_me_supports_system_user(db_session):
 
     result = user_profile_service.update_me(
         db_session,
-        principal_id=user.id,
+        principal_id=user_id,
         principal_type="system_user",
         payload=MeUpdateRequest(first_name="Operations", phone="+2348000000000"),
         roles=["admin"],
@@ -87,8 +88,9 @@ def test_update_me_keeps_email_and_disabled_login_username_aligned(db_session):
     )
     db_session.add(user)
     db_session.flush()
+    user_id = user.id
     credential = UserCredential(
-        system_user_id=user.id,
+        system_user_id=user_id,
         provider=AuthProvider.local,
         username=user.email,
         password_hash=hash_password("Profile-owner-test-password"),
@@ -99,7 +101,7 @@ def test_update_me_keeps_email_and_disabled_login_username_aligned(db_session):
 
     result = user_profile_service.update_me(
         db_session,
-        principal_id=user.id,
+        principal_id=user_id,
         principal_type="system_user",
         payload=MeUpdateRequest(email="corrected-field-engineer@example.com"),
         roles=["staff"],
