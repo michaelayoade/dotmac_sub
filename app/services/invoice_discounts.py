@@ -113,7 +113,7 @@ class InvoiceDiscountActorOption:
 
 
 def _error(suffix: str, message: str, **details: object) -> InvoiceDiscountError:
-    return InvoiceDiscountError(  # type: ignore[call-arg]
+    return InvoiceDiscountError(
         code=f"{OWNER}.{suffix}", message=message, details=details
     )
 
