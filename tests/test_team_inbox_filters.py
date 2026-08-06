@@ -16,6 +16,9 @@ from app.models.team_inbox import (
 from app.services import team_inbox_filters, team_inbox_read
 
 
+_FILTER_TEAM_ID = UUID("33333333-3333-3333-3333-333333333333")
+
+
 def _team(db_session, name: str, *, is_active: bool = True) -> ServiceTeam:
     team = ServiceTeam(
         name=name,
@@ -71,7 +74,7 @@ def _payload(
     (
         ("not json", "Invalid JSON"),
         (
-            json.dumps([["Ticket", "service_team_id", "=", str(uuid4())]]),
+            json.dumps([["Ticket", "service_team_id", "=", str(_FILTER_TEAM_ID)]]),
             "not allowed",
         ),
         (
@@ -80,7 +83,14 @@ def _payload(
         ),
         (
             json.dumps(
-                [["InboxConversation", "service_team_id", "like", str(uuid4())]]
+                [
+                    [
+                        "InboxConversation",
+                        "service_team_id",
+                        "like",
+                        str(_FILTER_TEAM_ID),
+                    ]
+                ]
             ),
             "not allowed",
         ),
