@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 OWNER = ROOT / "app/services/subscription_nas_assignment.py"
 IP_OWNER = ROOT / "app/services/ip_assignment_lifecycle.py"
