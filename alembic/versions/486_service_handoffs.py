@@ -11,8 +11,8 @@ One row per subscription. Each handoff type carries only the fields it needs,
 enforced in the database: a BGP handoff without an ASN cannot be provisioned,
 and a clear channel carrying an ASN is a contradiction.
 
-Revision ID: 484_service_handoffs
-Revises: 483_bandwidth_price_bands
+Revision ID: 486_service_handoffs
+Revises: 485_bandwidth_price_bands
 """
 
 from collections.abc import Sequence
@@ -22,8 +22,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "484_service_handoffs"
-down_revision: str | None = "483_bandwidth_price_bands"
+revision: str = "486_service_handoffs"
+down_revision: str | None = "485_bandwidth_price_bands"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

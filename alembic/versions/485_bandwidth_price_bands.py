@@ -11,8 +11,8 @@ bandwidth cheaper than less. See ``app/services/bandwidth_pricing.py``.
 
 No seed data: the rates are a commercial decision, not a schema concern.
 
-Revision ID: 483_bandwidth_price_bands
-Revises: 482_sla_policy_plan_family_scope
+Revision ID: 485_bandwidth_price_bands
+Revises: 484_sla_policy_plan_family_scope
 """
 
 from collections.abc import Sequence
@@ -22,8 +22,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "483_bandwidth_price_bands"
-down_revision: str | None = "482_sla_policy_plan_family_scope"
+revision: str = "485_bandwidth_price_bands"
+down_revision: str | None = "484_sla_policy_plan_family_scope"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

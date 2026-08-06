@@ -18,7 +18,8 @@ failing the derived-key CHECK on every family insert. Both are Postgres-only
 (``EXCLUDE USING gist``), so a SQLite test lane cannot observe either. This
 revision replaces both definitions.
 
-Revision ID: 482_sla_policy_plan_family_scope
+Revision ID: 484_sla_policy_plan_family_scope
+Revises: 483_invoice_discount_history
 Revises: 481_billing_reconciliation_permissions
 """
 
@@ -28,8 +29,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "482_sla_policy_plan_family_scope"
-down_revision: str | None = "481_billing_reconciliation_permissions"
+revision: str = "484_sla_policy_plan_family_scope"
+down_revision: str | None = "483_invoice_discount_history"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
