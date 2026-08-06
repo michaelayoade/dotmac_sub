@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.models.plan_family_catalogue import PlanFamilyCatalogue
 from app.models.stored_file import StoredFile
@@ -15,7 +15,7 @@ from app.services.owner_commands import CommandContext
 from app.services.sales import lead_intake
 
 
-def _staff(db_session) -> SystemUser:
+def _staff(db_session) -> UUID:
     user = SystemUser(
         first_name="Catalogue",
         last_name="Publisher",
@@ -23,14 +23,16 @@ def _staff(db_session) -> SystemUser:
         is_active=True,
     )
     db_session.add(user)
+    db_session.flush()
+    user_id = user.id
     db_session.commit()
-    return user
+    return user_id
 
 
-def _command(user: SystemUser, *, payload: bytes) -> PublishPlanFamilyCatalogueCommand:
+def _command(user_id: UUID, *, payload: bytes) -> PublishPlanFamilyCatalogueCommand:
     return PublishPlanFamilyCatalogueCommand(
         context=CommandContext.system(
-            actor=f"system_user:{user.id}",
+            actor=f"system_user:{user_id}",
             scope="catalog:write",
             reason="pytest catalogue publication",
             idempotency_key=f"catalogue:{uuid4()}",
@@ -41,7 +43,7 @@ def _command(user: SystemUser, *, payload: bytes) -> PublishPlanFamilyCatalogueC
         original_filename="home-flex.pdf",
         content_type="application/pdf",
         file_bytes=payload,
-        actor_system_user_id=user.id,
+        actor_system_user_id=user_id,
     )
 
 
