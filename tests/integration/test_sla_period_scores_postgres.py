@@ -37,7 +37,7 @@ from app.models.subscriber import Reseller, Subscriber
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "479_inbox_lifecycle_audit"
-CANDIDATE = "480_sla_period_score_revisions"
+CANDIDATE = "482_sla_period_score_revisions"
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 TABLES = (
     "sla_period_score_revisions",

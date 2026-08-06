@@ -1,7 +1,7 @@
 """Persist immutable SLA period-score revisions and their evidence snapshots.
 
-Revision ID: 480_sla_period_score_revisions
-Revises: 479_inbox_lifecycle_audit
+Revision ID: 482_sla_period_score_revisions
+Revises: 481_billing_reconciliation_permissions
 Create Date: 2026-08-05
 
 The scorer composes facts owned elsewhere, but its reproducible result is an
@@ -22,8 +22,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "480_sla_period_score_revisions"
-down_revision: str | None = "479_inbox_lifecycle_audit"
+revision: str = "482_sla_period_score_revisions"
+down_revision: str | None = "481_billing_reconciliation_permissions"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
