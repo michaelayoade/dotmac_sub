@@ -20,8 +20,8 @@ No rows are seeded. Capacity is recorded, never inferred: split ratio, XGS-PON
 upgrades and shared uplinks all move the real number, and a guessed figure
 produces a check that quietly passes.
 
-Revision ID: 487_capacity_domains
-Revises: 486_service_handoffs
+Revision ID: 488_capacity_domains
+Revises: 487_pon_structural_identity
 """
 
 from collections.abc import Sequence
@@ -31,8 +31,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "487_capacity_domains"
-down_revision: str | None = "486_service_handoffs"
+revision: str = "488_capacity_domains"
+down_revision: str | None = "487_pon_structural_identity"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

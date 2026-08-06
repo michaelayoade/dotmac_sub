@@ -21,8 +21,8 @@ If regional pricing ever needs the same product name at two prices, the region
 belongs on ``OfferPrice``, not on a duplicated offer — see
 docs/PLAN_FAMILY_ARCHITECTURE.md section 7.
 
-Revision ID: 488_unique_sellable_offer_name
-Revises: 487_capacity_domains
+Revision ID: 489_unique_sellable_offer_name
+Revises: 488_capacity_domains
 """
 
 from collections.abc import Sequence
@@ -31,8 +31,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "488_unique_sellable_offer_name"
-down_revision: str | None = "487_capacity_domains"
+revision: str = "489_unique_sellable_offer_name"
+down_revision: str | None = "488_capacity_domains"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
