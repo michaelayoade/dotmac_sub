@@ -9,8 +9,8 @@ Admissions expire closed: elapsed authority stops working without a writer.
 Expired and revoked rows remain as evidence, while the partial unique index
 allows a newly reviewed admission to supersede that history.
 
-Revision ID: 487_ont_reconcile_positive_admission
-Revises: 486_service_handoffs
+Revision ID: 490_ont_reconcile_positive_admission
+Revises: 489_unique_sellable_offer_name
 Create Date: 2026-08-05
 """
 
@@ -19,8 +19,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "487_ont_reconcile_positive_admission"
-down_revision = "486_service_handoffs"
+revision = "490_ont_reconcile_positive_admission"
+down_revision = "489_unique_sellable_offer_name"
 branch_labels = None
 depends_on = None
 

@@ -9,7 +9,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "alembic/versions/487_ont_reconcile_positive_admission.py"
+MIGRATION = ROOT / "alembic/versions/490_ont_reconcile_positive_admission.py"
 
 
 def _module():
@@ -28,9 +28,16 @@ def test_positive_admission_is_the_single_linear_head():
     config.set_main_option("script_location", str(ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert module.revision == "487_ont_reconcile_positive_admission"
-    assert module.down_revision == "486_service_handoffs"
-    assert script.get_heads() == ["487_ont_reconcile_positive_admission"]
+    assert module.revision == "490_ont_reconcile_positive_admission"
+    assert module.down_revision == "489_unique_sellable_offer_name"
+    # Single-headed with this revision in the head's ancestry. Naming the
+    # exact head breaks the test on every later migration.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert module.revision in {
+        item.revision
+        for item in script.iterate_revisions(heads[0], module.revision, inclusive=True)
+    }
 
 
 def test_schema_enforces_expiry_idempotency_and_one_active_admission():
