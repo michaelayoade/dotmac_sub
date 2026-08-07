@@ -225,4 +225,3 @@ app.services.web_vpn_servers
 app.services.whatsapp_notification_templates
 app.services.wireless_mast
 app.services.workqueue.snooze
-
