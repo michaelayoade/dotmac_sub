@@ -1113,6 +1113,7 @@ def build_project_detail_context(
     *,
     project: Project,
     can_read_work_orders: bool = False,
+    can_read_material_requests: bool = False,
     can_read_vendor_operations: bool = False,
     can_read_vendor_routes: bool = False,
     can_read_vendor_financials: bool = False,
@@ -1159,6 +1160,20 @@ def build_project_detail_context(
             )
         except DomainError:
             template = None
+    if can_read_material_requests:
+        from app.services.field.material_requests import (
+            MaterialRequestScope,
+            list_staff_material_requests,
+        )
+
+        material_requests = list_staff_material_requests(
+            db,
+            scope=MaterialRequestScope(project_id=project.id),
+            page=1,
+            per_page=100,
+        ).items
+    else:
+        material_requests = ()
     return {
         "project": project,
         "project_url": project_url(project),
@@ -1168,6 +1183,10 @@ def build_project_detail_context(
             work_order_views.list_project_work_order_summaries(db, project.id)
             if can_read_work_orders
             else ()
+        ),
+        "material_requests": material_requests,
+        "material_request_create_url": (
+            f"/admin/operations/material-requests/new?project_id={project.id}"
         ),
         "vendor_delivery": project_vendor_delivery.get_project_vendor_delivery(
             db,
@@ -1203,38 +1222,44 @@ def add_project_comment_from_form(
     attachments: list | None = None,
     mentions: str | None = None,
 ) -> ProjectComment:
-    project = projects_service.projects.get(db, project_id)
-    uploaded = stage_comment_attachments(
+    def create_comment(context):
+        projects_service.projects.get(db, project_id)
+        uploaded = stage_comment_attachments(
+            db,
+            comment_scope_id=project_id,
+            entity_type="project_comment_attachment",
+            attachments=attachments or [],
+        )
+        payload = ProjectCommentCreate(
+            project_id=coerce_uuid(project_id),
+            author_person_id=parse_uuid_or_none(actor_id),
+            body=body,
+            attachments=uploaded or None,
+        )
+        comment = projects_service.project_comments.create(
+            db,
+            payload,
+            mentioned_agent_ids=parse_mentions_payload(mentions),
+            actor_person_id=actor_id,
+            context=context,
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action="comment",
+            entity_type="project",
+            entity_id=str(project_id),
+            actor_id=actor_id,
+        )
+        return comment
+
+    return projects_service.execute_project_mutation(
         db,
-        comment_scope_id=project_id,
-        entity_type="project_comment_attachment",
-        attachments=attachments or [],
+        action="create_project_comment",
+        actor=actor_id,
+        aggregate_id=project_id,
+        operation=create_comment,
     )
-    payload = ProjectCommentCreate(
-        project_id=coerce_uuid(project_id),
-        author_person_id=parse_uuid_or_none(actor_id),
-        body=body,
-        attachments=uploaded or None,
-    )
-    comment = projects_service.project_comments.create(db, payload)
-    project_mentions.notify_project_comment_mentions(
-        db,
-        target_kind="project",
-        target_ref=project.number or project_id,
-        target_title=project.name,
-        comment_preview=body[:140],
-        mentioned_agent_ids=parse_mentions_payload(mentions),
-        actor_person_id=actor_id,
-    )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="comment",
-        entity_type="project",
-        entity_id=str(project_id),
-        actor_id=actor_id,
-    )
-    return comment
 
 
 def update_project_comment_from_form(
@@ -1566,6 +1591,7 @@ def build_task_detail_context(
     *,
     task: ProjectTask,
     can_read_work_orders: bool = False,
+    can_read_material_requests: bool = False,
 ) -> dict:
     project = projects_service.projects.get(db, str(task.project_id))
     comments = projects_service.project_task_comments.list(
@@ -1587,6 +1613,20 @@ def build_task_detail_context(
     create_work_order_action, work_order_create_url = _task_work_order_create_action(
         task, project
     )
+    if can_read_material_requests:
+        from app.services.field.material_requests import (
+            MaterialRequestScope,
+            list_staff_material_requests,
+        )
+
+        material_requests = list_staff_material_requests(
+            db,
+            scope=MaterialRequestScope(project_task_id=task.id),
+            page=1,
+            per_page=100,
+        ).items
+    else:
+        material_requests = ()
     return {
         "task": task,
         "task_url": task_url(task),
@@ -1597,6 +1637,11 @@ def build_task_detail_context(
             work_order_views.list_task_work_order_summaries(db, task.id)
             if can_read_work_orders
             else ()
+        ),
+        "material_requests": material_requests,
+        "material_request_create_url": (
+            "/admin/operations/material-requests/new?"
+            f"project_task_id={task.id}&project_id={task.project_id}"
         ),
         "create_work_order_action": create_work_order_action,
         "work_order_create_url": work_order_create_url,
@@ -1626,38 +1671,44 @@ def add_task_comment_from_form(
     attachments: list | None = None,
     mentions: str | None = None,
 ):
-    task = projects_service.project_tasks.get(db, task_id)
-    uploaded = stage_comment_attachments(
+    def create_comment(context):
+        projects_service.project_tasks.get(db, task_id)
+        uploaded = stage_comment_attachments(
+            db,
+            comment_scope_id=task_id,
+            entity_type="project_task_comment_attachment",
+            attachments=attachments or [],
+        )
+        payload = ProjectTaskCommentCreate(
+            task_id=coerce_uuid(task_id),
+            author_person_id=parse_uuid_or_none(actor_id),
+            body=body,
+            attachments=uploaded or None,
+        )
+        comment = projects_service.project_task_comments.create(
+            db,
+            payload,
+            mentioned_agent_ids=parse_mentions_payload(mentions),
+            actor_person_id=actor_id,
+            context=context,
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action="comment",
+            entity_type="project_task",
+            entity_id=str(task_id),
+            actor_id=actor_id,
+        )
+        return comment
+
+    return projects_service.execute_project_mutation(
         db,
-        comment_scope_id=task_id,
-        entity_type="project_task_comment_attachment",
-        attachments=attachments or [],
+        action="create_project_task_comment",
+        actor=actor_id,
+        aggregate_id=task_id,
+        operation=create_comment,
     )
-    payload = ProjectTaskCommentCreate(
-        task_id=coerce_uuid(task_id),
-        author_person_id=parse_uuid_or_none(actor_id),
-        body=body,
-        attachments=uploaded or None,
-    )
-    comment = projects_service.project_task_comments.create(db, payload)
-    project_mentions.notify_project_comment_mentions(
-        db,
-        target_kind="project_task",
-        target_ref=task.number or task_id,
-        target_title=task.title,
-        comment_preview=body[:140],
-        mentioned_agent_ids=parse_mentions_payload(mentions),
-        actor_person_id=actor_id,
-    )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="comment",
-        entity_type="project_task",
-        entity_id=str(task_id),
-        actor_id=actor_id,
-    )
-    return comment
 
 
 # ── project templates admin ──────────────────────────────────────────────────

@@ -27,24 +27,31 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, TypedDict
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, case, cast, func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.catalog import RegionZone
 from app.models.field_material import FieldInventoryItem
-from app.models.party import Party, PartyContactPoint, PartyIdentityStatus
+from app.models.organization import Organization
+from app.models.party import (
+    Party,
+    PartyContactPoint,
+    PartyContactPointType,
+    PartyIdentityStatus,
+)
 from app.models.project import ProjectType
 from app.models.sales import (
     Lead,
     LeadStatus,
     Pipeline,
     PipelineStage,
-    Quote,
+    QuoteDiscountType,
     QuoteStatus,
     SalesOrder,
     SalesOrderPaymentStatus,
     SalesOrderStatus,
 )
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber
 from app.schemas.sales import (
     LeadCreate,
     LeadUpdate,
@@ -82,11 +89,13 @@ from app.services.sales import (
     quote_activity,
     quote_authoring,
     quote_delivery,
+    quote_discount_reporting,
     quote_documents,
 )
 from app.services.sales.selfserve import compute_feasibility
 from app.services.sales_orders import _resolve_project_for_sales_order
 from app.services.team_inbox_projection import list_agent_options
+from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +214,7 @@ class LeadFormFields:
 @dataclass(frozen=True, slots=True)
 class NewLeadFormFields:
     submission_id: str
+    title: str
     display_name: str
     status: str
     owner_agent_id: str
@@ -236,6 +246,7 @@ class NewLeadFormFields:
     expected_close_date: str
     lost_reason: str
     notes: str
+    address: str
     is_active: bool
 
 
@@ -337,6 +348,21 @@ QUOTE_LIST_DEFINITION = ListDefinition(
         ListFieldDefinition("updated_at", "Updated", sortable=True),
     ),
     default_sort="created_at",
+    default_sort_dir="desc",
+)
+
+QUOTE_DISCOUNT_LIST_DEFINITION = ListDefinition(
+    key="quote_discounts",
+    fields=(
+        ListFieldDefinition("customer", "Customer", searchable=True),
+        ListFieldDefinition("date_from", "From date", filterable=True),
+        ListFieldDefinition("date_to", "To date", filterable=True),
+        ListFieldDefinition("salesperson_id", "Salesperson", filterable=True),
+        ListFieldDefinition("discount_type", "Discount type", filterable=True),
+        ListFieldDefinition("quote_status", "Quote status", filterable=True),
+        ListFieldDefinition("applied_at", "Applied", sortable=True),
+    ),
+    default_sort="applied_at",
     default_sort_dir="desc",
 )
 
@@ -795,6 +821,7 @@ def _lead_form_context(
 def _new_lead_fields(
     *,
     submission_id: str | None = None,
+    title: str | None = None,
     display_name: str | None = None,
     status: str | None = None,
     owner_agent_id: str | None = None,
@@ -826,12 +853,14 @@ def _new_lead_fields(
     expected_close_date: str | None = None,
     lost_reason: str | None = None,
     notes: str | None = None,
+    address: str | None = None,
     is_active: bool = True,
 ) -> NewLeadFormFields:
     email_rows = tuple(str(value or "") for value in (emails or ("",))) or ("",)
     phone_rows = tuple(str(value or "") for value in (phones or ("",))) or ("",)
     return NewLeadFormFields(
         submission_id=(submission_id or str(uuid4())).strip(),
+        title=(title or "").strip(),
         display_name=(display_name or "").strip(),
         status=(status or LeadStatus.new.value).strip(),
         owner_agent_id=(owner_agent_id or "").strip(),
@@ -865,6 +894,7 @@ def _new_lead_fields(
         expected_close_date=(expected_close_date or "").strip(),
         lost_reason=(lost_reason or "").strip(),
         notes=(notes or "").strip(),
+        address=(address or "").strip(),
         is_active=is_active,
     )
 
@@ -875,6 +905,8 @@ def _new_lead_context(
     lead_form: NewLeadFormFields,
     actor_system_user_id: str | None,
     field_errors: dict[str, str] | None = None,
+    mode: str = "create",
+    lead: Lead | None = None,
 ) -> dict[str, Any]:
     options = _sales_options(db)
     regions = region_zones_service.list(
@@ -889,12 +921,41 @@ def _new_lead_context(
     if not owner_id and actor_system_user_id in options["agent_map"]:
         owner_id = str(actor_system_user_id)
         lead_form = replace(lead_form, owner_agent_id=owner_id)
+    is_edit = mode == "edit"
+    edit_party = _lead_person(lead) if is_edit and lead is not None else None
     return {
         "lead_form": lead_form,
-        "lead": None,
-        "form_title": "New Lead",
-        "submit_label": "Create Lead",
-        "action_url": "/admin/sales/leads",
+        "lead": lead,
+        "is_edit": is_edit,
+        "form_title": "Edit Lead" if is_edit else "New Lead",
+        "form_description": (
+            "Update the contact and sales opportunity information"
+            if is_edit
+            else "Create and qualify a new sales opportunity"
+        ),
+        "submit_label": "Update Lead" if is_edit else "Create Lead",
+        "submitting_label": "Updating..." if is_edit else "Submitting...",
+        "action_url": (
+            f"/admin/sales/leads/{lead.id}/edit"
+            if is_edit and lead is not None
+            else "/admin/sales/leads"
+        ),
+        "cancel_url": (
+            f"/admin/sales/leads/{lead.id}"
+            if is_edit and lead is not None
+            else "/admin/sales/leads"
+        ),
+        "error_title": (
+            "We could not update this Lead."
+            if is_edit
+            else "We could not create this Lead."
+        ),
+        "lead_source_locked": bool(is_edit and lead and lead.origin_capture),
+        "nin_stored": bool(
+            edit_party
+            and isinstance(edit_party.metadata_, dict)
+            and edit_party.metadata_.get("nin_encrypted")
+        ),
         "lead_statuses": lead_operator_status_values(lead_form.status),
         "lead_sources": list(sales_service.LEAD_SOURCE_OPTIONS),
         "lost_reasons": LOST_REASON_OPTIONS,
@@ -940,6 +1001,7 @@ def build_lead_create_error_context(
         db,
         lead_form=_new_lead_fields(
             submission_id=str(fields.get("submission_id") or ""),
+            title=str(fields.get("title") or ""),
             display_name=str(fields.get("display_name") or ""),
             status=str(fields.get("status") or ""),
             owner_agent_id=str(fields.get("owner_agent_id") or ""),
@@ -973,6 +1035,7 @@ def build_lead_create_error_context(
             expected_close_date=str(fields.get("expected_close_date") or ""),
             lost_reason=str(fields.get("lost_reason") or ""),
             notes=str(fields.get("notes") or ""),
+            address=str(fields.get("address") or ""),
             is_active=bool(fields.get("is_active")),
         ),
         actor_system_user_id=actor_system_user_id,
@@ -980,27 +1043,164 @@ def build_lead_create_error_context(
     )
 
 
+def _metadata_uuid(metadata: dict[str, object], key: str) -> UUID | None:
+    try:
+        return UUID(str(metadata.get(key) or ""))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _lead_person(lead: Lead) -> Party | None:
+    if lead.party is not None:
+        return lead.party
+    if lead.subscriber is not None:
+        return lead.subscriber.party
+    return None
+
+
 def build_lead_edit_context(db: Session, *, lead_id: str) -> dict[str, Any]:
     lead = sales_service.leads.get(db, lead_id)
-    contact_map, _ = _lead_contact_views(db, [lead])
-    contact = contact_map.get(str(lead.id))
-    return _lead_form_context(
+    party = _lead_person(lead)
+    if party is None:
+        raise LeadFormValidationError(
+            {"form": "This Lead does not have an editable Person profile."}
+        )
+    metadata = dict(party.metadata_) if isinstance(party.metadata_, dict) else {}
+    lead_metadata = dict(lead.metadata_) if isinstance(lead.metadata_, dict) else {}
+    points = (
+        db.query(PartyContactPoint)
+        .filter(
+            PartyContactPoint.party_id == party.id,
+            PartyContactPoint.is_active.is_(True),
+            PartyContactPoint.scope_key == "default",
+            PartyContactPoint.channel_type.in_(
+                (
+                    PartyContactPointType.email.value,
+                    PartyContactPointType.phone.value,
+                    PartyContactPointType.whatsapp.value,
+                )
+            ),
+        )
+        .order_by(
+            PartyContactPoint.channel_type,
+            PartyContactPoint.is_primary.desc(),
+            PartyContactPoint.created_at,
+            PartyContactPoint.id,
+        )
+        .all()
+    )
+    emails = tuple(
+        point.display_value or point.normalized_value
+        for point in points
+        if point.channel_type == PartyContactPointType.email.value
+    )
+    phones = tuple(
+        point.display_value or point.normalized_value
+        for point in points
+        if point.channel_type == PartyContactPointType.phone.value
+    )
+    whatsapp_values = {
+        point.normalized_value
+        for point in points
+        if point.channel_type == PartyContactPointType.whatsapp.value
+    }
+    whatsapp_indices = tuple(
+        str(index)
+        for index, point in enumerate(
+            point
+            for point in points
+            if point.channel_type == PartyContactPointType.phone.value
+        )
+        if point.normalized_value in whatsapp_values
+    )
+    organization_id = _metadata_uuid(metadata, "organization_id") or _metadata_uuid(
+        lead_metadata, "organization_id"
+    )
+    organization = db.get(Organization, organization_id) if organization_id else None
+    reseller = db.get(Reseller, lead.reseller_id) if lead.reseller_id else None
+    region_zone_id = _metadata_uuid(lead_metadata, "region_zone_id")
+    if region_zone_id is None and lead.region:
+        configured_region = (
+            db.query(RegionZone)
+            .filter(RegionZone.name == lead.region, RegionZone.is_active.is_(True))
+            .one_or_none()
+        )
+        region_zone_id = configured_region.id if configured_region else None
+    subscriber = lead.subscriber
+    email_rows = emails or (
+        (subscriber.email,) if subscriber is not None and subscriber.email else ("",)
+    )
+    phone_rows = phones or (
+        (subscriber.phone,) if subscriber is not None and subscriber.phone else ("",)
+    )
+
+    return _new_lead_context(
         db,
-        lead_form=_lead_form_fields(
+        lead_form=_new_lead_fields(
             title=lead.title,
+            display_name=party.display_name,
             status=lead.status,
-            party_id=str(lead.party_id) if lead.party_id else None,
-            contact_label=contact.name if contact else None,
             owner_agent_id=(str(lead.owner_agent_id) if lead.owner_agent_id else None),
+            emails=email_rows,
+            primary_email="0",
+            phones=phone_rows,
+            primary_phone="0",
+            whatsapp_phone_indices=whatsapp_indices,
+            address_line1=str(
+                metadata.get("address_line1")
+                or (subscriber.address_line1 if subscriber is not None else "")
+                or ""
+            ),
+            address_line2=str(
+                metadata.get("address_line2")
+                or (subscriber.address_line2 if subscriber is not None else "")
+                or ""
+            ),
+            date_of_birth=str(
+                metadata.get("date_of_birth")
+                or (
+                    subscriber.date_of_birth.isoformat()
+                    if subscriber is not None and subscriber.date_of_birth
+                    else ""
+                )
+            ),
+            gender=str(
+                metadata.get("gender")
+                or (
+                    subscriber.gender.value
+                    if subscriber is not None and subscriber.gender
+                    else "unknown"
+                )
+            ),
+            nin=None,
+            city=str(
+                metadata.get("city")
+                or (subscriber.city if subscriber is not None else "")
+                or ""
+            ),
+            postal_code=str(
+                metadata.get("postal_code")
+                or (subscriber.postal_code if subscriber is not None else "")
+                or ""
+            ),
+            country_code=str(
+                metadata.get("country_code")
+                or (subscriber.country_code if subscriber is not None else "")
+                or ""
+            ),
+            organization_id=str(organization.id) if organization else None,
+            organization_label=organization.name if organization else None,
+            managed_by_reseller=reseller is not None,
+            reseller_id=str(reseller.id) if reseller else None,
+            reseller_label=reseller.name if reseller else None,
             pipeline_id=str(lead.pipeline_id) if lead.pipeline_id else None,
             stage_id=str(lead.stage_id) if lead.stage_id else None,
             lead_source=lead.lead_source,
-            region=lead.region,
+            region_zone_id=str(region_zone_id) if region_zone_id else None,
             estimated_value=(
                 str(lead.estimated_value) if lead.estimated_value is not None else None
             ),
             currency=lead.currency,
-            address=lead.address,
             probability=(
                 str(lead.probability) if lead.probability is not None else "0"
             ),
@@ -1011,48 +1211,75 @@ def build_lead_edit_context(db: Session, *, lead_id: str) -> dict[str, Any]:
             ),
             lost_reason=lead.lost_reason,
             notes=lead.notes,
+            address=lead.address,
             is_active=lead.is_active,
         ),
-        mode="update",
-        lead_id=lead_id,
+        actor_system_user_id=None,
+        mode="edit",
+        lead=lead,
     )
 
 
-def build_lead_form_error_context(
+def build_lead_edit_error_context(
     db: Session,
     *,
-    mode: str,
-    lead_id: str | None,
+    lead_id: str,
     field_errors: dict[str, str],
-    **fields: str | bool | None,
+    **fields: object,
 ) -> dict[str, Any]:
-    context = _lead_form_context(
+    lead = sales_service.leads.get(db, lead_id)
+
+    def string_tuple(value: object, *, default: tuple[str, ...]) -> tuple[str, ...]:
+        if not isinstance(value, (list, tuple)):
+            return default
+        return tuple(str(item or "") for item in value)
+
+    return _new_lead_context(
         db,
-        lead_form=_lead_form_fields(
+        lead_form=_new_lead_fields(
+            submission_id=str(fields.get("submission_id") or ""),
             title=str(fields.get("title") or ""),
+            display_name=str(fields.get("display_name") or ""),
             status=str(fields.get("status") or ""),
-            party_id=str(fields.get("party_id") or ""),
-            contact_label=str(fields.get("contact_label") or ""),
             owner_agent_id=str(fields.get("owner_agent_id") or ""),
+            emails=string_tuple(fields.get("emails"), default=("",)),
+            primary_email=str(fields.get("primary_email") or "0"),
+            phones=string_tuple(fields.get("phones"), default=("",)),
+            primary_phone=str(fields.get("primary_phone") or "0"),
+            whatsapp_phone_indices=string_tuple(
+                fields.get("whatsapp_phone_indices"), default=()
+            ),
+            address_line1=str(fields.get("address_line1") or ""),
+            address_line2=str(fields.get("address_line2") or ""),
+            date_of_birth=str(fields.get("date_of_birth") or ""),
+            gender=str(fields.get("gender") or "unknown"),
+            nin=str(fields.get("nin") or ""),
+            city=str(fields.get("city") or ""),
+            postal_code=str(fields.get("postal_code") or ""),
+            country_code=str(fields.get("country_code") or ""),
+            organization_id=str(fields.get("organization_id") or ""),
+            organization_label=str(fields.get("organization_label") or ""),
+            managed_by_reseller=bool(fields.get("managed_by_reseller")),
+            reseller_id=str(fields.get("reseller_id") or ""),
+            reseller_label=str(fields.get("reseller_label") or ""),
             pipeline_id=str(fields.get("pipeline_id") or ""),
             stage_id=str(fields.get("stage_id") or ""),
             lead_source=str(fields.get("lead_source") or ""),
-            region=str(fields.get("region") or ""),
+            region_zone_id=str(fields.get("region_zone_id") or ""),
             estimated_value=str(fields.get("estimated_value") or ""),
             currency=str(fields.get("currency") or ""),
-            address=str(fields.get("address") or ""),
             probability=str(fields.get("probability") or ""),
             expected_close_date=str(fields.get("expected_close_date") or ""),
             lost_reason=str(fields.get("lost_reason") or ""),
             notes=str(fields.get("notes") or ""),
+            address=str(fields.get("address") or ""),
             is_active=bool(fields.get("is_active")),
         ),
-        mode=mode,
-        lead_id=lead_id,
+        actor_system_user_id=None,
+        field_errors=field_errors,
+        mode="edit",
+        lead=lead,
     )
-    context["field_errors"] = field_errors
-    context["error"] = "Please correct the highlighted fields."
-    return context
 
 
 def _validate_lead_form(
@@ -1392,16 +1619,33 @@ def create_lead_from_form(
 def update_lead_from_form(
     db: Session,
     *,
+    actor_system_user_id: str,
+    submission_id: str | None,
     lead_id: str,
     title: str | None,
+    display_name: str | None,
     status: str | None,
-    party_id: str | None,
-    contact_label: str | None,
     owner_agent_id: str | None,
+    emails: list[str] | tuple[str, ...],
+    primary_email: str | None,
+    phones: list[str] | tuple[str, ...],
+    primary_phone: str | None,
+    whatsapp_phone_indices: list[str] | tuple[str, ...],
+    address_line1: str | None,
+    address_line2: str | None,
+    date_of_birth: str | None,
+    gender: str | None,
+    nin: str | None,
+    city: str | None,
+    postal_code: str | None,
+    country_code: str | None,
+    organization_id: str | None,
+    managed_by_reseller: bool,
+    reseller_id: str | None,
     pipeline_id: str | None,
     stage_id: str | None,
     lead_source: str | None,
-    region: str | None,
+    region_zone_id: str | None,
     estimated_value: str | None,
     currency: str | None,
     address: str | None,
@@ -1410,54 +1654,137 @@ def update_lead_from_form(
     lost_reason: str | None,
     notes: str | None,
     is_active: bool,
-) -> None:
-    lead = sales_service.leads.get(db, lead_id)
-    contact_map, _ = _lead_contact_views(db, [lead])
-    current_contact = contact_map.get(str(lead.id))
-    if not (party_id or "").strip() and current_contact is not None:
-        raise LeadFormValidationError(
-            {"party_id": "Select a Person/Contact from the search results."}
-        )
-    values = _validate_lead_form(
-        title=title,
-        status=status,
-        party_id=party_id,
-        owner_agent_id=owner_agent_id,
-        pipeline_id=pipeline_id,
-        stage_id=stage_id,
-        lead_source=lead_source,
-        region=region,
-        estimated_value=estimated_value,
-        currency=currency,
-        address=address,
-        probability=probability,
-        expected_close_date=expected_close_date,
-        lost_reason=lost_reason,
-        notes=notes,
+) -> lead_authoring.EditLeadOutcome:
+    errors: dict[str, str] = {}
+
+    def required_uuid(value: str | None, field: str) -> UUID:
+        try:
+            return UUID((value or "").strip())
+        except (TypeError, ValueError, AttributeError):
+            errors[field] = "This form expired or is invalid. Reload and try again."
+            return UUID(int=0)
+
+    def optional_uuid(value: str | None, field: str) -> UUID | None:
+        clean = (value or "").strip()
+        if not clean:
+            return None
+        try:
+            return UUID(clean)
+        except (TypeError, ValueError, AttributeError):
+            errors[field] = "Select a valid option."
+            return None
+
+    def optional_date(value: str | None, field: str) -> date | None:
+        clean = (value or "").strip()
+        if not clean:
+            return None
+        try:
+            return date.fromisoformat(clean)
+        except ValueError:
+            errors[field] = "Enter a valid date."
+            return None
+
+    def index(value: str | None, field: str) -> int:
+        try:
+            return int((value or "0").strip())
+        except ValueError:
+            errors[field] = "Select a valid primary row."
+            return 0
+
+    actor_id = required_uuid(actor_system_user_id, "form")
+    edit_id = required_uuid(submission_id, "form")
+    parsed_lead_id = required_uuid(lead_id, "form")
+    clean_title = (title or "").strip()
+    if not clean_title:
+        errors["title"] = "Lead Name is required."
+    try:
+        lead_status = LeadStatus((status or LeadStatus.new.value).strip())
+    except ValueError:
+        errors["status"] = "Select a valid Lead Status."
+        lead_status = LeadStatus.new
+    if (lead_source or "").strip() and (
+        lead_source or ""
+    ).strip() not in sales_service.LEAD_SOURCE_OPTIONS:
+        errors["lead_source"] = "Select a valid Lead Source."
+
+    amount: Decimal | None = None
+    if (estimated_value or "").strip():
+        try:
+            amount = Decimal((estimated_value or "").strip())
+        except (ArithmeticError, ValueError):
+            errors["estimated_value"] = "Estimated Value must be a number."
+    probability_value: int | None = None
+    if (probability or "").strip():
+        try:
+            probability_value = int((probability or "").strip())
+        except ValueError:
+            errors["probability"] = "Probability must be a whole number."
+
+    whatsapp_indexes: list[int] = []
+    for raw in whatsapp_phone_indices:
+        try:
+            whatsapp_indexes.append(int(str(raw)))
+        except ValueError:
+            continue
+    selected_reseller_id = (
+        optional_uuid(reseller_id, "reseller_id") if managed_by_reseller else None
+    )
+    if managed_by_reseller and selected_reseller_id is None:
+        errors["reseller_id"] = "Select the reseller that manages this customer."
+    if errors:
+        raise LeadFormValidationError(errors)
+
+    command = lead_authoring.EditLeadCommand(
+        context=CommandContext.system(
+            actor=str(actor_id),
+            scope="sales:lead-maintenance",
+            reason="Authenticated staff updated a Lead and its Person profile",
+            idempotency_key=f"admin-lead-edit:{parsed_lead_id}:{edit_id}",
+        ),
+        edit_id=edit_id,
+        lead_id=parsed_lead_id,
+        actor_system_user_id=actor_id,
+        title=clean_title,
+        status=lead_status,
+        owner_system_user_id=optional_uuid(owner_agent_id, "owner_agent_id"),
+        pipeline_id=optional_uuid(pipeline_id, "pipeline_id"),
+        stage_id=optional_uuid(stage_id, "stage_id"),
+        lead_source=(lead_source or "").strip() or None,
+        region_zone_id=optional_uuid(region_zone_id, "region_zone_id"),
+        estimated_value=amount,
+        currency=(currency or "").strip().upper() or None,
+        address=(address or "").strip() or None,
+        probability=probability_value,
+        expected_close_date=optional_date(expected_close_date, "expected_close_date"),
+        lost_reason=(lost_reason or "").strip() or None,
+        notes=(notes or "").strip() or None,
         is_active=is_active,
+        person=lead_authoring.LeadPersonDraft(
+            display_name=(display_name or "").strip(),
+            emails=lead_authoring.LeadContactDraft(
+                values=tuple(str(value or "") for value in emails),
+                primary_index=index(primary_email, "primary_email"),
+            ),
+            phones=lead_authoring.LeadContactDraft(
+                values=tuple(str(value or "") for value in phones),
+                primary_index=index(primary_phone, "primary_phone"),
+            ),
+            whatsapp_phone_indices=tuple(whatsapp_indexes),
+            address_line1=(address_line1 or "").strip() or None,
+            address_line2=(address_line2 or "").strip() or None,
+            date_of_birth=optional_date(date_of_birth, "date_of_birth"),
+            gender=(gender or "unknown").strip(),
+            nin=(nin or "").strip() or None,
+            city=(city or "").strip() or None,
+            postal_code=(postal_code or "").strip() or None,
+            country_code=(country_code or "").strip().upper() or None,
+            organization_id=optional_uuid(organization_id, "organization_id"),
+            reseller_id=selected_reseller_id,
+        ),
     )
-    if lead.party_id != values.party_id:
-        raise LeadFormValidationError(
-            {"party_id": "Lead identity cannot be changed through the edit form."}
-        )
-    payload = LeadUpdate(
-        owner_agent_id=values.owner_agent_id,
-        pipeline_id=values.pipeline_id,
-        stage_id=values.stage_id,
-        title=values.title,
-        status=values.status,
-        lead_source=values.lead_source,
-        region=values.region,
-        estimated_value=values.estimated_value,
-        currency=values.currency,
-        address=values.address,
-        probability=values.probability,
-        expected_close_date=values.expected_close_date,
-        lost_reason=values.lost_reason,
-        notes=values.notes,
-        is_active=values.is_active,
-    )
-    sales_service.leads.update(db, lead_id, payload)
+    if errors:
+        raise LeadFormValidationError(errors)
+    return lead_authoring.edit_lead(db, command)
 
 
 def set_lead_status(db: Session, *, lead_id: str, status: str | None) -> None:
@@ -1793,47 +2120,6 @@ def bulk_assign_leads(
 # ---------------------------------------------------------------------------
 
 
-def _count_quotes(
-    db: Session,
-    *,
-    status: str | None,
-    lead_id: str | None,
-    search: str | None,
-) -> int:
-    query = db.query(func.count(func.distinct(Quote.id))).select_from(Quote)
-    query = query.filter(Quote.is_active.is_(True))
-    if status:
-        query = query.filter(Quote.status == status)
-    if lead_id:
-        query = query.filter(Quote.lead_id == coerce_uuid(lead_id))
-    if search:
-        like = f"%{search.strip()}%"
-        query = (
-            query.outerjoin(Subscriber, Quote.subscriber_id == Subscriber.id)
-            .outerjoin(Lead, Quote.lead_id == Lead.id)
-            .outerjoin(Party, Lead.party_id == Party.id)
-            .outerjoin(
-                PartyContactPoint,
-                (PartyContactPoint.party_id == Party.id)
-                & PartyContactPoint.is_active.is_(True),
-            )
-            .filter(
-                or_(
-                    Subscriber.display_name.ilike(like),
-                    Subscriber.first_name.ilike(like),
-                    Subscriber.last_name.ilike(like),
-                    Subscriber.email.ilike(like),
-                    Party.display_name.ilike(like),
-                    PartyContactPoint.display_value.ilike(like),
-                    PartyContactPoint.normalized_value.ilike(like),
-                    Lead.title.ilike(like),
-                    cast(Quote.id, String).ilike(like),
-                )
-            )
-        )
-    return int(query.scalar() or 0)
-
-
 def _coordinate(
     value: str | None, *, field: str, low: float, high: float
 ) -> float | None:
@@ -1928,6 +2214,9 @@ def _quote_form_fields(
     tax_rate: str | None = None,
     tax_rate_id: str | None = None,
     manual_tax_total: str | None = None,
+    discount_type: str | None = None,
+    discount_value: str | None = None,
+    discount_reason: str | None = None,
     project_type: str | None = None,
     expires_at: str | None = None,
     notes: str | None = None,
@@ -1947,6 +2236,9 @@ def _quote_form_fields(
         "tax_rate": (tax_rate or "").strip(),
         "tax_rate_id": (tax_rate_id or "").strip(),
         "manual_tax_total": (manual_tax_total or "0.00").strip(),
+        "discount_type": (discount_type or "").strip(),
+        "discount_value": (discount_value or "").strip(),
+        "discount_reason": (discount_reason or "").strip(),
         "project_type": (project_type or "").strip(),
         "expires_at": (expires_at or "").strip(),
         "notes": (notes or "").strip(),
@@ -1962,7 +2254,6 @@ def _quote_form_fields(
                 "description": "",
                 "quantity": "",
                 "unit_price": "",
-                "discount_percent": "",
                 "sub_offer_id": "",
                 "inventory_item_id": "",
             }
@@ -1975,7 +2266,6 @@ def quote_form_item_rows(
     descriptions: list[str],
     quantities: list[str],
     unit_prices: list[str],
-    discount_percents: list[str],
     sub_offer_ids: list[str],
     inventory_item_ids: list[str],
 ) -> list[dict[str, str]]:
@@ -1985,7 +2275,6 @@ def quote_form_item_rows(
         len(descriptions),
         len(quantities),
         len(unit_prices),
-        len(discount_percents),
         len(sub_offer_ids),
         len(inventory_item_ids),
         1,
@@ -1995,9 +2284,6 @@ def quote_form_item_rows(
             "description": descriptions[index] if index < len(descriptions) else "",
             "quantity": quantities[index] if index < len(quantities) else "",
             "unit_price": unit_prices[index] if index < len(unit_prices) else "",
-            "discount_percent": (
-                discount_percents[index] if index < len(discount_percents) else ""
-            ),
             "sub_offer_id": (
                 sub_offer_ids[index] if index < len(sub_offer_ids) else ""
             ),
@@ -2140,6 +2426,10 @@ def _quote_form_options(db: Session) -> dict[str, Any]:
             {"value": value, "label": label}
             for value, label in QUOTE_PROJECT_TYPE_OPTIONS
         ],
+        "discount_types": [
+            {"value": QuoteDiscountType.percentage.value, "label": "Percentage"},
+            {"value": QuoteDiscountType.fixed_amount.value, "label": "Fixed Amount"},
+        ],
         "form_warnings": warnings,
     }
 
@@ -2164,6 +2454,7 @@ def build_quote_new_context(
         "action_url": "/admin/sales/quotes",
         "error": None,
         "is_editing": False,
+        "discount_applied_date": datetime.now(APP_TIMEZONE).date().isoformat(),
     }
     context.update(options)
     return context
@@ -2184,6 +2475,11 @@ def build_quote_edit_context(db: Session, *, quote_id: str) -> dict[str, Any]:
             tax_rate=str(quote.tax_rate) if quote.tax_rate is not None else None,
             tax_rate_id=str(meta.get("tax_rate_id") or ""),
             manual_tax_total=(str(quote.tax_total)),
+            discount_type=quote.discount_type,
+            discount_value=(
+                str(quote.discount_value) if quote.discount_value is not None else None
+            ),
+            discount_reason=quote.discount_reason,
             project_type=str(quote.project_type or ""),
             expires_at=(
                 quote.expires_at.strftime("%Y-%m-%dT%H:%M")
@@ -2248,6 +2544,7 @@ def build_quote_form_error_context(
             f"/admin/sales/quotes/{quote_id}/edit" if editing else "/admin/sales/quotes"
         ),
         "is_editing": editing,
+        "discount_applied_date": datetime.now(APP_TIMEZONE).date().isoformat(),
     }
     context.update(options)
     return context
@@ -2284,6 +2581,9 @@ def create_quote_from_form(
     project_type: str | None,
     tax_rate_id: str | None,
     manual_tax_total: str | None,
+    discount_type: str | None,
+    discount_value: str | None,
+    discount_reason: str | None,
     expires_at: str | None,
     is_active: bool,
     notes: str | None,
@@ -2294,7 +2594,6 @@ def create_quote_from_form(
     descriptions: list[str],
     quantities: list[str],
     unit_prices: list[str],
-    discount_percents: list[str],
     sub_offer_ids: list[str],
     inventory_item_ids: list[str],
 ) -> str:
@@ -2336,7 +2635,6 @@ def create_quote_from_form(
         len(descriptions),
         len(quantities),
         len(unit_prices),
-        len(discount_percents),
         len(sub_offer_ids),
         len(inventory_item_ids),
         0,
@@ -2347,9 +2645,6 @@ def create_quote_from_form(
             "description": descriptions[index] if index < len(descriptions) else "",
             "quantity": quantities[index] if index < len(quantities) else "",
             "unit_price": unit_prices[index] if index < len(unit_prices) else "",
-            "discount_percent": (
-                discount_percents[index] if index < len(discount_percents) else ""
-            ),
             "sub_offer_id": (
                 sub_offer_ids[index] if index < len(sub_offer_ids) else ""
             ),
@@ -2370,11 +2665,6 @@ def create_quote_from_form(
                 unit_price=parsed_decimal(
                     raw["unit_price"], f"Line Item {index + 1} Unit Price"
                 ),
-                discount_percent=parsed_decimal(
-                    raw["discount_percent"],
-                    f"Line Item {index + 1} Discount",
-                    blank=Decimal("0"),
-                ),
                 sub_offer_id=parsed_uuid(
                     raw["sub_offer_id"], f"Line Item {index + 1} offer"
                 ),
@@ -2384,6 +2674,23 @@ def create_quote_from_form(
                 ),
             )
         )
+
+    requested_discount: quote_authoring.QuoteDiscountInput | None = None
+    raw_discount_type = (discount_type or "").strip()
+    raw_discount_value = (discount_value or "").strip()
+    raw_discount_reason = (discount_reason or "").strip()
+    if raw_discount_type:
+        try:
+            selected_discount_type = QuoteDiscountType(raw_discount_type)
+        except ValueError:
+            raise ValueError("Select Percentage or Fixed Amount.") from None
+        requested_discount = quote_authoring.QuoteDiscountInput(
+            discount_type=selected_discount_type,
+            value=parsed_decimal(raw_discount_value, "Discount value"),
+            reason=raw_discount_reason or None,
+        )
+    elif raw_discount_value or raw_discount_reason:
+        raise ValueError("Select a Discount type before entering discount details.")
 
     try:
         actor_id = UUID(str(actor_system_user_id))
@@ -2426,6 +2733,7 @@ def create_quote_from_form(
             region=(region or "").strip() or None,
         ),
         lines=tuple(line_drafts),
+        discount=requested_discount,
     )
     db_session_adapter.release_read_transaction(db)
     outcome = quote_authoring.author_quote(db, command)
@@ -2483,7 +2791,6 @@ def add_quote_line_item_from_form(
     description: str | None,
     quantity: str | None,
     unit_price: str | None,
-    discount_percent: str | None,
     context: CommandContext | None = None,
 ) -> None:
     """Add a priced line to a quote.
@@ -2509,7 +2816,6 @@ def add_quote_line_item_from_form(
         description=clean_description,
         quantity=_decimal(quantity, "Quantity", "1"),
         unit_price=_decimal(unit_price, "Unit price", "0"),
-        discount_percent=_decimal(discount_percent, "Discount", "0"),
     )
     sales_service.quote_line_items.create(db, payload, context=context)
 
@@ -2521,6 +2827,56 @@ def delete_quote_line_item(
     context: CommandContext | None = None,
 ) -> None:
     sales_service.quote_line_items.delete(db, item_id, context=context)
+
+
+def change_quote_discount_from_form(
+    db: Session,
+    *,
+    quote_id: str,
+    actor_system_user_id: str,
+    expected_revision: str | None,
+    discount_type: str | None,
+    discount_value: str | None,
+    discount_reason: str | None,
+    remove: bool,
+    context: CommandContext,
+) -> quote_authoring.ChangeQuoteDiscountOutcome:
+    try:
+        quote_uuid = UUID(str(quote_id))
+        actor_uuid = UUID(str(actor_system_user_id))
+        revision = int((expected_revision or "0").strip())
+    except (TypeError, ValueError):
+        raise ValueError("The Quote discount request is not valid.") from None
+    if revision < 0:
+        raise ValueError("The Quote discount revision is not valid.")
+
+    discount: quote_authoring.QuoteDiscountInput | None = None
+    if not remove:
+        try:
+            selected_type = QuoteDiscountType((discount_type or "").strip())
+        except ValueError:
+            raise ValueError("Select Percentage or Fixed Amount.") from None
+        try:
+            value = Decimal((discount_value or "").strip())
+        except (ArithmeticError, ValueError):
+            raise ValueError("Discount value must be a number.") from None
+        discount = quote_authoring.QuoteDiscountInput(
+            discount_type=selected_type,
+            value=value,
+            reason=(discount_reason or "").strip() or None,
+        )
+
+    db_session_adapter.release_read_transaction(db)
+    return quote_authoring.change_quote_discount(
+        db,
+        quote_authoring.ChangeQuoteDiscountCommand(
+            context=context,
+            quote_id=quote_uuid,
+            actor_system_user_id=actor_uuid,
+            expected_revision=revision,
+            discount=discount,
+        ),
+    )
 
 
 def set_quote_status(
@@ -2561,45 +2917,34 @@ def build_quotes_list_context(
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
-    requested_status = status
-    requested_lead_id = lead_id
-    status = _clean_choice(status, quote_status_values())
-    lead_id = _clean_uuid(lead_id)
-    safe_sort = (
-        sort_by
-        if sort_by in QUOTE_LIST_DEFINITION.sortable_keys
-        else QUOTE_LIST_DEFINITION.default_sort
-    )
-    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
-    safe_per_page = (
-        per_page
-        if per_page in QUOTE_LIST_DEFINITION.per_page_options
-        else QUOTE_LIST_DEFINITION.default_per_page
-    )
-    requested_query = QUOTE_LIST_DEFINITION.build_query(
-        search=search,
-        filters={"status": status, "lead_id": lead_id},
-        sort_by=safe_sort,
-        sort_dir=safe_dir,
-        page=max(1, page),
-        per_page=safe_per_page,
-    )
-    total = _count_quotes(
-        db, status=status, lead_id=lead_id, search=requested_query.search
-    )
-    page_meta = PageMeta.from_query(requested_query, total)
-    list_query = requested_query.with_page(page_meta.page)
-    quotes = sales_service.quotes.list(
+    requested_filters = {"status": status, "lead_id": lead_id}
+    result = sales_service.quotes.query(
         db,
-        lead_id=lead_id or None,
-        status=status,
-        is_active=None,
-        order_by=list_query.sort_by,
-        order_dir=list_query.sort_dir,
-        limit=list_query.per_page,
-        offset=(page_meta.page - 1) * list_query.per_page,
-        search=list_query.search,
+        sales_service.QuoteListQueryInput(
+            search_term=search,
+            status=status,
+            lead_id=lead_id,
+            sort_field=sort_by,
+            sort_direction=sort_dir,
+            page=page,
+            page_size=per_page,
+        ),
     )
+    normalized = result.query
+    normalized_filters = {
+        "status": normalized.status.value if normalized.status is not None else None,
+        "lead_id": str(normalized.lead_id) if normalized.lead_id is not None else None,
+    }
+    list_query = QUOTE_LIST_DEFINITION.build_query(
+        search=normalized.search_term,
+        filters=normalized_filters,
+        sort_by=normalized.sort_field.value,
+        sort_dir=normalized.sort_direction.value,
+        page=normalized.page,
+        per_page=normalized.page_size,
+    )
+    page_meta = PageMeta.from_query(list_query, result.total_count)
+    quotes = list(result.items)
 
     leads = sales_service.leads.list(
         db,
@@ -2613,6 +2958,12 @@ def build_quotes_list_context(
         limit=500,
         offset=0,
     )
+    if normalized.lead_id is not None and all(
+        lead.id != normalized.lead_id for lead in leads
+    ):
+        selected_lead = db.get(Lead, normalized.lead_id)
+        if selected_lead is not None and selected_lead.is_active:
+            leads.append(selected_lead)
     subscriber_map = _subscriber_map(db, [quote.subscriber_id for quote in quotes])
 
     return {
@@ -2621,7 +2972,7 @@ def build_quotes_list_context(
         "canonicalization_needed": request_needs_canonicalization(
             list_query,
             search=search,
-            filters={"status": requested_status, "lead_id": requested_lead_id},
+            filters=requested_filters,
             sort_by=sort_by,
             sort_dir=sort_dir,
             page=page,
@@ -2632,8 +2983,8 @@ def build_quotes_list_context(
         "per_page": page_meta.per_page,
         "total": page_meta.total_items,
         "total_pages": page_meta.total_pages,
-        "status": status or "",
-        "lead_id": lead_id or "",
+        "status": normalized_filters["status"] or "",
+        "lead_id": normalized_filters["lead_id"] or "",
         "search": list_query.search or "",
         "quote_statuses": quote_status_values(),
         "leads": leads,
@@ -2641,6 +2992,223 @@ def build_quotes_list_context(
         "subscriber_map": subscriber_map,
         "stats": sales_service.quotes.count_by_status(db),
         "today": datetime.now(UTC),
+        "filters_active": bool(list_query.search or list_query.filters),
+        "api_error": None,
+    }
+
+
+def build_quotes_failure_context(
+    *,
+    status: str | None,
+    lead_id: str | None,
+    search: str | None,
+    sort_by: str | None,
+    sort_dir: str | None,
+    page: int,
+    per_page: int,
+) -> dict[str, Any]:
+    """Build a truthful, retryable Quote-list state without touching the database."""
+
+    normalized_status = _clean_choice(status, quote_status_values())
+    normalized_lead_id = _clean_uuid(lead_id)
+    safe_sort = (
+        sort_by
+        if sort_by in QUOTE_LIST_DEFINITION.sortable_keys
+        else QUOTE_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in QUOTE_LIST_DEFINITION.per_page_options
+        else QUOTE_LIST_DEFINITION.default_per_page
+    )
+    list_query = QUOTE_LIST_DEFINITION.build_query(
+        search=sales_service.normalize_quote_search(search),
+        filters={"status": normalized_status, "lead_id": normalized_lead_id},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    page_meta = PageMeta.from_query(list_query, 0)
+    return {
+        "quotes": [],
+        "list_query": list_query,
+        "canonicalization_needed": False,
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": 0,
+        "total_pages": page_meta.total_pages,
+        "status": normalized_status or "",
+        "lead_id": normalized_lead_id or "",
+        "search": list_query.search or "",
+        "quote_statuses": quote_status_values(),
+        "leads": [],
+        "lead_map": {},
+        "subscriber_map": {},
+        "stats": {status.value: None for status in QuoteStatus} | {"total": None},
+        "today": datetime.now(UTC),
+        "filters_active": bool(list_query.search or list_query.filters),
+        "api_error": "Quotes could not be loaded. No CRM data was changed.",
+        "retry_url": list_query.url("/admin/sales/quotes"),
+    }
+
+
+def build_quote_discounts_list_context(
+    db: Session,
+    *,
+    date_from: str | None,
+    date_to: str | None,
+    customer: str | None,
+    salesperson_id: str | None,
+    discount_type: str | None,
+    quote_status: str | None,
+    page: int,
+    per_page: int,
+) -> dict[str, Any]:
+    def parsed_date(value: str | None, label: str) -> date | None:
+        candidate = (value or "").strip()
+        if not candidate:
+            return None
+        try:
+            return date.fromisoformat(candidate)
+        except ValueError:
+            raise ValueError(f"{label} must be a valid date.") from None
+
+    def parsed_uuid(value: str | None) -> UUID | None:
+        candidate = (value or "").strip()
+        if not candidate:
+            return None
+        try:
+            return UUID(candidate)
+        except ValueError:
+            raise ValueError("Select a valid salesperson.") from None
+
+    try:
+        selected_type = (
+            QuoteDiscountType((discount_type or "").strip())
+            if (discount_type or "").strip()
+            else None
+        )
+    except ValueError:
+        raise ValueError("Select a valid Discount type.") from None
+    try:
+        selected_status = (
+            QuoteStatus((quote_status or "").strip())
+            if (quote_status or "").strip()
+            else None
+        )
+    except ValueError:
+        raise ValueError("Select a valid Quote status.") from None
+
+    safe_per_page = (
+        per_page
+        if per_page in QUOTE_DISCOUNT_LIST_DEFINITION.per_page_options
+        else QUOTE_DISCOUNT_LIST_DEFINITION.default_per_page
+    )
+    result = quote_discount_reporting.list_quote_discount_history(
+        db,
+        quote_discount_reporting.QuoteDiscountHistoryQuery(
+            date_from=parsed_date(date_from, "From date"),
+            date_to=parsed_date(date_to, "To date"),
+            customer=" ".join((customer or "").split()) or None,
+            salesperson_id=parsed_uuid(salesperson_id),
+            discount_type=selected_type,
+            quote_status=selected_status,
+            page=max(1, page),
+            page_size=safe_per_page,
+        ),
+    )
+    filters = {
+        "date_from": (date_from or "").strip() or None,
+        "date_to": (date_to or "").strip() or None,
+        "salesperson_id": (salesperson_id or "").strip() or None,
+        "discount_type": selected_type.value if selected_type else None,
+        "quote_status": selected_status.value if selected_status else None,
+    }
+    list_query = QUOTE_DISCOUNT_LIST_DEFINITION.build_query(
+        search=" ".join((customer or "").split()) or None,
+        filters=filters,
+        sort_by="applied_at",
+        sort_dir="desc",
+        page=result.page,
+        per_page=result.page_size,
+    )
+    page_meta = PageMeta.from_query(list_query, result.total_count)
+    return {
+        "discounts": list(result.items),
+        "actors": list(quote_discount_reporting.quote_discount_actor_options(db)),
+        "discount_types": list(QuoteDiscountType),
+        "quote_statuses": list(QuoteStatus),
+        "list_query": list_query,
+        "page_meta": page_meta,
+        "total": result.total_count,
+        "date_from": filters["date_from"] or "",
+        "date_to": filters["date_to"] or "",
+        "customer": list_query.search or "",
+        "salesperson_id": filters["salesperson_id"] or "",
+        "discount_type": filters["discount_type"] or "",
+        "quote_status": filters["quote_status"] or "",
+    }
+
+
+def build_quote_discounts_failure_context(
+    *,
+    date_from: str | None,
+    date_to: str | None,
+    customer: str | None,
+    salesperson_id: str | None,
+    discount_type: str | None,
+    quote_status: str | None,
+    page: int,
+    per_page: int,
+) -> dict[str, Any]:
+    """Build a retryable discount-history state without database access."""
+
+    normalized_type = _clean_choice(
+        discount_type, [item.value for item in QuoteDiscountType]
+    )
+    normalized_status = _clean_choice(
+        quote_status, [item.value for item in QuoteStatus]
+    )
+    normalized_actor = _clean_uuid(salesperson_id)
+    safe_per_page = (
+        per_page
+        if per_page in QUOTE_DISCOUNT_LIST_DEFINITION.per_page_options
+        else QUOTE_DISCOUNT_LIST_DEFINITION.default_per_page
+    )
+    filters = {
+        "date_from": (date_from or "").strip() or None,
+        "date_to": (date_to or "").strip() or None,
+        "salesperson_id": normalized_actor,
+        "discount_type": normalized_type,
+        "quote_status": normalized_status,
+    }
+    list_query = QUOTE_DISCOUNT_LIST_DEFINITION.build_query(
+        search=" ".join((customer or "").split()) or None,
+        filters=filters,
+        sort_by="applied_at",
+        sort_dir="desc",
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    return {
+        "discounts": [],
+        "actors": [],
+        "discount_types": list(QuoteDiscountType),
+        "quote_statuses": list(QuoteStatus),
+        "list_query": list_query,
+        "page_meta": PageMeta.from_query(list_query, 0),
+        "total": 0,
+        "date_from": filters["date_from"] or "",
+        "date_to": filters["date_to"] or "",
+        "customer": list_query.search or "",
+        "salesperson_id": filters["salesperson_id"] or "",
+        "discount_type": filters["discount_type"] or "",
+        "quote_status": filters["quote_status"] or "",
+        "error": "Quote discounts could not be loaded. No Quote data was changed.",
+        "retry_url": list_query.url("/admin/sales/quote-discounts"),
     }
 
 
@@ -2683,6 +3251,21 @@ def build_quote_detail_context(db: Session, *, quote_id: str) -> dict[str, Any]:
     elif expires_at_utc is not None and expires_at_utc <= datetime.now(UTC):
         email_reason = "This Quote has expired."
 
+    discount_change_reason: str | None = None
+    if not quote.is_active:
+        discount_change_reason = "This Quote is inactive."
+    elif quote.status == QuoteStatus.accepted.value:
+        discount_change_reason = "Accepted Quotes cannot be changed."
+    elif quote.status not in {QuoteStatus.draft.value, QuoteStatus.sent.value}:
+        discount_change_reason = "Only Draft or Sent Quotes can be discounted."
+    discount_actor = quote.discount_applied_by
+    discount_actor_label = None
+    if discount_actor is not None:
+        discount_actor_label = (
+            discount_actor.display_name
+            or f"{discount_actor.first_name} {discount_actor.last_name}".strip()
+        )
+
     return {
         "quote": quote,
         "items": items,
@@ -2700,6 +3283,16 @@ def build_quote_detail_context(db: Session, *, quote_id: str) -> dict[str, Any]:
         "pricing_mode": meta.get("pricing_mode"),
         "feasibility": feasibility,
         "install": install,
+        "discount_types": [
+            {"value": QuoteDiscountType.percentage.value, "label": "Percentage"},
+            {"value": QuoteDiscountType.fixed_amount.value, "label": "Fixed Amount"},
+        ],
+        "discount_actor_label": discount_actor_label,
+        "discount_action": {
+            "allowed": discount_change_reason is None,
+            "reason": discount_change_reason,
+            "request_id": str(uuid4()),
+        },
         "email_action": {
             "allowed": email_reason is None,
             "reason": email_reason,

@@ -1467,25 +1467,45 @@ DOMAIN = DomainSOT(
             owns=(
                 "per-subscription SLA policy resolution and period score",
                 "immutable effective-dated SLA policy versions",
+                "immutable SLA period-score revisions and evidence snapshots",
             ),
             depends_on=(
+                "access.subscription_lifecycle_evidence",
+                "billing.contracts",
+                "financial.prepaid_service_coverage",
                 "network.customer_outage_accrual",
+                "sessions.radius_resolution",
                 "service_intent.catalog_policy",
+                "control.settings_spec",
             ),
             notes=(
                 "Shadow-phase read-time scorer (OUTAGE_SLA_SPINE §4): "
-                "resolves the effective policy (offer-version precedence "
-                "today; subscription/account contracts and persisted "
-                "immutable policy versions arrive with cutover), merges "
+                "resolves persisted subscription, account, offer, "
+                "SLA-enabled plan-family, and internal-measurement policy "
+                "versions under one precedence order, with the mutable "
+                "offer profile retained only as the shadow fallback; merges "
                 "the accrual ledger's qualifying intervals per "
                 "Africa/Lagos calendar month, and never invents a "
                 "contractual SLA — no policy renders measured "
-                "availability as no_contractual_sla. Overlaps union, "
-                "exclusions and estimated evidence report in their own "
-                "bucket, unknown time is provisional never uptime. The "
+                "availability as no_contractual_sla. Eligibility is the "
+                "intersection of immutable lifecycle evidence and exact "
+                "prepaid entitlement or authoritative postpaid contract "
+                "history. Positive subscription-bound RADIUS accounting "
+                "proves monitored time; every remaining eligible gap is "
+                "unknown, never uptime. Overlaps union, exclusions and "
+                "estimated evidence report in their own bucket. Each run "
+                "appends a reproducible score revision and exact evidence "
+                "snapshots; incomplete evidence may prove a breach but can "
+                "never produce passing or at-risk. The "
                 "legacy topology.customer_availability stays the "
-                "displayed authority until the shadow-comparison gate "
-                "cuts over; two displayed scores must never coexist."
+                "admin display authority until the shadow-comparison gate "
+                "cuts over. The restricted admin review compares one exact "
+                "closed month and classifies missing, incomplete, unavailable, "
+                "matching, and unreviewed-difference evidence without guessing "
+                "a cause or tolerance. The selector vocabulary is deliberately "
+                "legacy-only in this slice, so configuration cannot arm the "
+                "candidate. SLA remains absent from customer portal/API "
+                "surfaces; two operational admin scores never coexist."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1501,9 +1521,31 @@ DOMAIN = DomainSOT(
                         ),
                         role=OwnerRole.RESOLVER,
                         input_names=(
+                            "contractual SLA terms",
+                            "period-scoped lifecycle evidence",
+                            "period-scoped prepaid entitlement evidence",
+                            "period-scoped postpaid contract evidence",
+                            "positive subscription monitoring evidence",
                             "qualifying downtime intervals",
                             "offer SLA policy inputs",
+                            "admin SLA display control",
                         ),
+                    ),
+                    ConcernContract(
+                        name=(
+                            "immutable SLA period-score revisions and evidence "
+                            "snapshots"
+                        ),
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "contractual SLA terms",
+                            "period-scoped lifecycle evidence",
+                            "period-scoped prepaid entitlement evidence",
+                            "period-scoped postpaid contract evidence",
+                            "positive subscription monitoring evidence",
+                            "qualifying downtime intervals",
+                        ),
+                        canonical_writer="customer.service_level",
                     ),
                 ),
                 authoritative_inputs=(
@@ -1514,7 +1556,52 @@ DOMAIN = DomainSOT(
                         source=(
                             "immutable effective-dated sla_policy_versions "
                             "rows, append-only, one version in force per "
-                            "policy_key per instant"
+                            "policy_key per instant. Scope precedence, highest "
+                            "first: subscription_contract, account_contract, "
+                            "offer_version, plan_family, internal_measurement. "
+                            "The plan_family scope carries a commercial-family "
+                            "default (unlimited/dedicated/home_flex) so a family "
+                            "promise has one owner instead of being copied onto "
+                            "every offer in it"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="period-scoped lifecycle evidence",
+                        owner="access.subscription_lifecycle_evidence",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "trusted append-only lifecycle transitions projected "
+                            "into proven-active intervals with explicit coverage "
+                            "issues"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="period-scoped prepaid entitlement evidence",
+                        owner="financial.prepaid_service_coverage",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "exact funded ServiceEntitlement and applied service-"
+                            "extension grant intervals with unresolved paid-through "
+                            "projection diagnostics"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="period-scoped postpaid contract evidence",
+                        owner="billing.contracts",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "authoritative effective/superseded billing-contract "
+                            "versions; shadow rows are explicit incomplete evidence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="positive subscription monitoring evidence",
+                        owner="sessions.radius_resolution",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "exact-subscription RADIUS accounting session start to "
+                            "stop/last-observation intervals; unbound sessions and "
+                            "unobserved gaps prove nothing"
                         ),
                     ),
                     AuthorityInput(
@@ -1532,9 +1619,20 @@ DOMAIN = DomainSOT(
                         owner="service_intent.catalog_policy",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
+                            "CatalogOffer.plan_family classification plus "
                             "CatalogOffer.sla_profile_id and SlaProfile "
-                            "uptime/credit fields as display-only policy "
-                            "evidence until effective-dated versions land"
+                            "uptime/credit fields as display-only fallback "
+                            "evidence during shadow verification"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="admin SLA display control",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "subscriber.sla_admin_display_authority; the allowed "
+                            "vocabulary is legacy_availability only until a later "
+                            "accepted-review activation change"
                         ),
                     ),
                 ),
@@ -1544,9 +1642,11 @@ DOMAIN = DomainSOT(
                         "record_policy_version appends one immutable "
                         "version and closes the version it supersedes in "
                         "a single owner-managed transaction, staging its "
-                        "typed output with the write. Scoring stays a "
-                        "pure read over committed ledger and catalog "
-                        "state and persists nothing."
+                        "typed output with the write. record_period_score locks "
+                        "one subscription, calculates from typed owner facts, "
+                        "appends one revision plus its eligibility/monitoring "
+                        "snapshots, and stages its event in one transaction. The "
+                        "read scorer performs the same calculation without writes."
                     ),
                     locking=(
                         "The writer locks the target policy series "
@@ -1557,7 +1657,9 @@ DOMAIN = DomainSOT(
                         "instead of both acting on a stale current "
                         "version. No other table is locked, so the "
                         "single-resource order cannot deadlock against "
-                        "the accrual ledger. Scoring acquires no "
+                        "the accrual ledger. Period-score writers lock only the "
+                        "Subscription row before reading the latest revision; source "
+                        "owners never lock score rows. Read scoring acquires no "
                         "mutation locks."
                     ),
                     idempotency=(
@@ -1576,9 +1678,12 @@ DOMAIN = DomainSOT(
                         "replay returns the original PolicyVersionOutcome "
                         "with replayed=True rather than raising against "
                         "the row it already created. Scoring is "
-                        "naturally idempotent: the same intervals, "
-                        "policy and period yield the same score and "
-                        "evidence digest."
+                        "naturally idempotent: canonical JSON over the exact "
+                        "intervals, policy segments, lineage and measured-through "
+                        "instant yields one evidence digest. The same command/key "
+                        "and digest replays; changed evidence under the same identity "
+                        "conflicts; exact evidence under another identity is rejected "
+                        "instead of reporting an unreserved success."
                     ),
                     retries=(
                         "A writer that loses the race surfaces "
@@ -1594,8 +1699,9 @@ DOMAIN = DomainSOT(
                         "or driver failure is re-raised unchanged — an "
                         "unexpected defect must stay unexpected. Scope "
                         "and parent existence are validated before the "
-                        "database sees the row. Reads are always safe to "
-                        "retry."
+                        "database sees the row. Period-score uniqueness races "
+                        "surface concurrent_score_conflict; reads are always safe "
+                        "to retry."
                     ),
                 ),
                 errors=ErrorContract(
@@ -1608,10 +1714,20 @@ DOMAIN = DomainSOT(
                         "customer.service_level.scope_required",
                         "customer.service_level.invalid_scope",
                         "customer.service_level.unknown_scope",
+                        "customer.service_level.unknown_plan_family",
                         "customer.service_level.idempotency_conflict",
                         "customer.service_level.duplicate_policy_terms",
                         "customer.service_level.invalid_policy_version",
                         "customer.service_level.concurrent_version_conflict",
+                        "customer.service_level.unknown_subscription",
+                        "customer.service_level.score_idempotency_conflict",
+                        "customer.service_level.duplicate_score_evidence",
+                        "customer.service_level.concurrent_score_conflict",
+                        "customer.service_level.invalid_review_period",
+                        "customer.service_level.review_period_not_closed",
+                        "customer.service_level.unknown_review_subscription",
+                        "customer.service_level.invalid_display_authority",
+                        "customer.service_level.candidate_display_not_armed",
                     ),
                     mapping_owner="app.services.web_customer_details",
                     fail_closed_on=(
@@ -1621,20 +1737,31 @@ DOMAIN = DomainSOT(
                         "a precedence claim with no matching scope",
                         "a scope id that does not belong to the source",
                         "a scope id with no such parent record",
+                        "a plan-family scope outside the SLA-enabled protocol",
                         "an idempotency key reused for different terms",
                         "identical terms already recorded under another key",
                         "a concurrent writer winning the series race",
+                        "missing subscription identity for period scoring",
+                        "a score command identity reused after evidence changes",
+                        "exact score evidence submitted under another identity",
+                        "a concurrent writer winning the score revision race",
+                        "an open or non-calendar discrepancy-review period",
+                        "a subscription outside the requested customer scope",
+                        "an invalid or prematurely armed admin display selector",
                     ),
                 ),
                 events=EventContract(
-                    event_types=("sla_policy_version.recorded",),
+                    event_types=(
+                        "sla_policy_version.recorded",
+                        "sla_period_score.recorded",
+                    ),
                     schema_version=1,
                     delivery_owner="events.dispatcher",
                     compatibility=(
-                        "Version 1 carries policy key, version, source, "
-                        "effective_from and the superseded version; "
-                        "fields are additive. The authoritative record is "
-                        "the immutable row, not this breadcrumb."
+                        "Version 1 policy events carry key, version, source and "
+                        "supersession; score events carry revision identity, period, "
+                        "verdict, completeness and digest. Fields are additive. The "
+                        "immutable rows, not these breadcrumbs, are authoritative."
                     ),
                     replay=(
                         "No projection handler consumes it; replay writes nothing."
@@ -1649,29 +1776,35 @@ DOMAIN = DomainSOT(
                     ),
                     new_owner="customer.service_level",
                     verification=(
-                        "shadow_compare discrepancy review across the "
-                        "active base plus the scorer's period, union, "
-                        "exclusion, and verdict tests."
+                        "The admin-only exact-period review classifies candidate "
+                        "and legacy evidence without guessing, while focused "
+                        "tests pin missing/incomplete/unavailable/match/difference "
+                        "states, staff-only routing and the inert selector."
                     ),
                     cutover_gate=(
-                        "Displayed availability switches only after the "
-                        "discrepancy review passes and evidence coverage "
-                        "gates customer visibility; two displayed scores "
-                        "never coexist."
+                        "The operational admin display switches only in a later "
+                        "change after the discrepancy review and evidence-coverage "
+                        "threshold are explicitly accepted. Customer presentation "
+                        "is out of scope; two operational admin scores never coexist."
                     ),
                     fallback_retirement=(
-                        "The legacy trailing-window derivation is "
-                        "retired at cutover with explicit approval."
+                        "The legacy trailing-window admin derivation is retired "
+                        "after the approved admin cutover and rollback window."
                     ),
                 ),
                 steward="customer operations",
                 design_refs=(
                     "docs/designs/OUTAGE_SLA_SPINE.md",
+                    "docs/PLAN_FAMILY_ARCHITECTURE.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
                 test_refs=(
                     "tests/test_customer_service_level.py",
                     "tests/integration/test_sla_policy_versions_postgres.py",
+                    "tests/integration/test_sla_period_scores_postgres.py",
+                    "tests/architecture/test_customer_service_level_boundary.py",
+                    "tests/test_sla_admin_review.py",
+                    "tests/architecture/test_sla_admin_only_boundary.py",
                 ),
             ),
         ),

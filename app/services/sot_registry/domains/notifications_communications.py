@@ -184,6 +184,181 @@ DOMAIN = DomainSOT(
     domain="notifications_communications",
     services=(
         SOTService(
+            name="communication.document_delivery",
+            module="app.services.document_delivery",
+            owns=(
+                "branded document email delivery sequence",
+                "document delivery idempotency arbitration",
+            ),
+            depends_on=(
+                "communications.intents",
+                "events.dispatcher",
+                "observability.audit_log",
+                "party.registry",
+            ),
+            notes=(
+                "Owns the SEQUENCE every emailed document repeats — arbitrate "
+                "the idempotency key, render branded bodies, submit one "
+                "communication intent, derive queued-or-suppressed, stage "
+                "audit, emit the domain event. It deliberately owns no "
+                "storage: each document type keeps its own typed row and passes "
+                "a record callback, because a Quote delivery request is "
+                "contractual evidence with RESTRICT foreign keys while a shared "
+                "catalog is marketing. Duplicated rows are acceptable when the "
+                "content genuinely differs; duplicated decisions are not. "
+                "Suppression, dedupe and channel policy stay with "
+                "communications.intents; recipient resolution stays with "
+                "party.registry."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="branded document email delivery sequence",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "resolved email recipient",
+                            "staged document artifact",
+                            "document composition",
+                        ),
+                        canonical_writer="communication.document_delivery",
+                    ),
+                    ConcernContract(
+                        name="document delivery idempotency arbitration",
+                        role=OwnerRole.POLICY,
+                        input_names=("prior delivery under the same key",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="resolved email recipient",
+                        owner="party.registry",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "party.resolve_email_recipient — active email contact "
+                            "point, primary then oldest then id"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="staged document artifact",
+                        owner="sales.quote_documents",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "an immutable rendered export staged by the document "
+                            "type before delivery is attempted"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="document composition",
+                        owner="sales.quote_delivery",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "subject, body, template code, category and brand "
+                            "supplied by the document type"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="prior delivery under the same key",
+                        owner="sales.quote_delivery",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "the document type's own delivery table, read by the "
+                            "caller and passed in — this owner never reads "
+                            "storage it does not own"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary=(
+                        "Runs inside the calling owner's command transaction. "
+                        "Submits the intent, invokes the caller's record "
+                        "callback, stages audit and emits the event, then "
+                        "flushes. Never commits or rolls back — the document "
+                        "owner's command boundary does."
+                    ),
+                    locking=(
+                        "Acquires no locks. The document type locks its own "
+                        "entity before calling (Quote takes SELECT ... FOR "
+                        "UPDATE), so two concurrent sends of one document "
+                        "serialise at the caller rather than here."
+                    ),
+                    idempotency=(
+                        "The key is mandatory; an un-keyed send cannot be safely "
+                        "retried and is refused. Same key with the same document "
+                        "replays the original outcome and writes nothing. Same "
+                        "key with a DIFFERENT document raises "
+                        "idempotency_conflict rather than sending a second time. "
+                        "Replay is arbitrated before the recipient is resolved, "
+                        "so learning what was already sent cannot fail because "
+                        "the address was since deactivated."
+                    ),
+                    retries=(
+                        "Safe to retry under the same key: a retry replays "
+                        "rather than re-sending. The record callback runs only "
+                        "after the intent is submitted, so a failed submit "
+                        "leaves no delivery row behind."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "communication.document_delivery.idempotency_key_required",
+                        "communication.document_delivery.idempotency_conflict",
+                    ),
+                    mapping_owner="the calling document owner's HTTP adapter",
+                    fail_closed_on=(
+                        "communication.document_delivery.idempotency_conflict",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    new_owner="communication.document_delivery",
+                    old_owner="sales.quote_delivery",
+                    verification=(
+                        "sales.quote_delivery was migrated onto this owner with "
+                        "its existing behaviour tests unchanged, including "
+                        "replay, suppression and audit assertions — the "
+                        "abstraction was proved against a real path rather than "
+                        "one invented to fit it."
+                    ),
+                    cutover_gate=(
+                        "Each new emailed document type calls this owner instead "
+                        "of rebuilding the sequence; tests/architecture/"
+                        "test_quote_document_delivery_boundary.py asserts the "
+                        "Quote adapter does not construct its own intent."
+                    ),
+                    fallback_retirement=(
+                        "No parallel path remains for Quote delivery; the "
+                        "in-module sequence was removed, not deprecated."
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("quote.delivery_requested",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "The envelope is document-kind tagged rather than "
+                        "quote-specific — document_kind, entity_id, delivery_id, "
+                        "communication_intent_id, artifact_id, queued — so a new "
+                        "document type adds an event type without changing the "
+                        "shape consumers already parse."
+                    ),
+                    replay=(
+                        "Emitted once per non-replayed send, inside the caller's "
+                        "transaction, so a rolled-back command emits nothing. A "
+                        "replayed idempotency key emits no event: the send it "
+                        "refers to already emitted one."
+                    ),
+                ),
+                steward="Sales and Communications",
+                design_refs=("docs/PLAN_FAMILY_ARCHITECTURE.md",),
+                test_refs=(
+                    "tests/test_quote_documents_and_delivery.py",
+                    "tests/test_party_email_recipient.py",
+                    "tests/architecture/test_quote_document_delivery_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communications.surveys",
             module="app.services.surveys",
             owns=(
@@ -986,6 +1161,237 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.nextcloud_talk_staff",
+            module="app.services.nextcloud_talk_staff",
+            owns=(
+                "staff-to-Nextcloud username mapping",
+                "staff direct-room token projection",
+                "Nextcloud Talk staff delivery admission and idempotency",
+                "Nextcloud Talk staff delivery retry and reconciliation policy",
+            ),
+            depends_on=(
+                "auth.permission_gate",
+                "auth.staff_provisioning",
+                "communications.notification_service",
+                "events.dispatcher",
+                "integration.installations",
+                "integration.runtime",
+            ),
+            notes=(
+                "Ticket and project owners stage a notification row in their "
+                "own transaction. This owner resolves the explicit staff mapping "
+                "and calls only the version-pinned collaboration capability from "
+                "the asynchronous notification worker."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="staff-to-Nextcloud username mapping",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "validated staff Talk command",
+                            "canonical staff account identity",
+                            "enabled Talk installation and binding",
+                            "current staff Talk state",
+                        ),
+                        canonical_writer="communications.nextcloud_talk_staff",
+                    ),
+                    ConcernContract(
+                        name="staff direct-room token projection",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "current staff Talk state",
+                            "version-pinned Talk operation outcome",
+                        ),
+                        canonical_writer="communications.nextcloud_talk_staff",
+                    ),
+                    ConcernContract(
+                        name=(
+                            "Nextcloud Talk staff delivery admission and idempotency"
+                        ),
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "canonical staff account identity",
+                            "current staff notification delivery row",
+                            "enabled Talk installation and binding",
+                        ),
+                        canonical_writer="communications.nextcloud_talk_staff",
+                    ),
+                    ConcernContract(
+                        name=(
+                            "Nextcloud Talk staff delivery retry and reconciliation policy"
+                        ),
+                        role=OwnerRole.RECONCILER,
+                        input_names=(
+                            "current staff notification delivery row",
+                            "current staff Talk state",
+                            "version-pinned Talk operation outcome",
+                        ),
+                        canonical_writer="communications.nextcloud_talk_staff",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="validated staff Talk command",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Authorized system-user CommandContext plus normalized "
+                            "mapping, disable, or connection-test input."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff account identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active SystemUser identity selected by the business owner.",
+                    ),
+                    AuthorityInput(
+                        name="current staff notification delivery row",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Pinned Nextcloud Talk Notification and NotificationDelivery "
+                            "outbox evidence."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="enabled Talk installation and binding",
+                        owner="integration.installations",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Enabled version-pinned Nextcloud Talk installation, "
+                            "capability binding, configuration, and secret reference."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="version-pinned Talk operation outcome",
+                        owner="integration.runtime",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "Sanitized room-create, message-post, and reconciliation "
+                            "outcomes returned by the pinned connector runtime."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current staff Talk state",
+                        owner="communications.nextcloud_talk_staff",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "NextcloudTalkStaffAccount mapping and the invalidatable "
+                            "NextcloudTalkNotificationRoom projection."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Admin mapping and connection-test commands enter "
+                        "execute_owner_command on a transaction-free session. Business "
+                        "owners stage notification outbox rows as transaction-neutral "
+                        "participants, and the worker completes only delivery-owned rows."
+                    ),
+                    locking=(
+                        "Mapping and room rows use stable user/installation uniqueness; "
+                        "delivery claims use FOR UPDATE SKIP LOCKED and pinned binding ids."
+                    ),
+                    idempotency=(
+                        "Mapping uniqueness, channel/dedupe identity, deterministic "
+                        "message reference ids, and cached room identity make replay stable."
+                    ),
+                    retries=(
+                        "Only retryable connector outcomes receive bounded backoff; stale "
+                        "rooms are invalidated and recreated once before terminal failure."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "communications.nextcloud_talk_staff.invalid_mapping",
+                        "communications.nextcloud_talk_staff.installation_not_found",
+                        "communications.nextcloud_talk_staff.binding_unavailable",
+                        "communications.nextcloud_talk_staff.username_mapping_missing",
+                        "communications.nextcloud_talk_staff.room_create_failed",
+                        "communications.nextcloud_talk_staff.talk_connection_test_failed",
+                        "communications.nextcloud_talk_staff.delivery_failed",
+                        *owner_command_boundary_error_codes(
+                            "communications.nextcloud_talk_staff"
+                        ),
+                    ),
+                    mapping_owner=(
+                        "admin system routes and the notification delivery worker"
+                    ),
+                    retryable_codes=(
+                        "communications.nextcloud_talk_staff.room_create_failed",
+                        "communications.nextcloud_talk_staff.delivery_failed",
+                    ),
+                    fail_closed_on=(
+                        "missing explicit username mapping",
+                        "disabled or unpinned integration binding",
+                        "unsafe connector target",
+                        "ambiguous or stale room identity",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "communications.nextcloud_talk_staff.delivery_changed.v1",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 identifies the notification, recipient, pinned "
+                        "binding, delivery state, and sanitized provider outcome without "
+                        "credentials or response bodies."
+                    ),
+                    replay=(
+                        "Notification, delivery, mapping, and room-cache rows rebuild "
+                        "pending, successful, retryable, and terminal delivery state."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="staff direct-room token projection",
+                        input_names=(
+                            "current staff Talk state",
+                            "version-pinned Talk operation outcome",
+                        ),
+                        writer="communications.nextcloud_talk_staff",
+                        freshness=(
+                            "Transaction-current until a mapping change or stale-room "
+                            "provider outcome invalidates the cached token."
+                        ),
+                        stale_behavior=(
+                            "The token is invalidated, recreated once, and never treated "
+                            "as successful delivery without a confirmed post outcome."
+                        ),
+                        drift_signal=(
+                            "A 403/404-style Talk outcome or invite-target mismatch marks "
+                            "the cached room stale."
+                        ),
+                        rebuild_operation=(
+                            "The next delivery or admin connection test creates a fresh "
+                            "one-to-one room and replaces the invalidated token."
+                        ),
+                        repair_owner="communications.nextcloud_talk_staff",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="communications.nextcloud_talk_staff",
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                    "docs/designs/NOTIFICATION_CHANNEL_POLICY.md",
+                ),
+                test_refs=(
+                    "tests/test_nextcloud_talk_staff_notifications.py",
+                    "tests/architecture/test_sot_manifest_contracts.py",
+                    "tests/architecture/test_adapter_transaction_ownership.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communications.campaigns",
             module="app.services.comms_campaigns",
             owns=(
@@ -1258,6 +1664,8 @@ DOMAIN = DomainSOT(
             owns=(
                 "routing assignment and escalation policy",
                 "routing assignment and escalation transitions",
+                "immutable routing assignment and escalation evidence",
+                "durable FIFO queue admission and promotion",
             ),
             depends_on=(
                 "ai.intake",
@@ -1271,6 +1679,14 @@ DOMAIN = DomainSOT(
                     ("routing assignment and escalation policy", OwnerRole.POLICY),
                     (
                         "routing assignment and escalation transitions",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                    (
+                        "immutable routing assignment and escalation evidence",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
+                    (
+                        "durable FIFO queue admission and promotion",
                         OwnerRole.COMMAND_WRITER,
                     ),
                 ),
@@ -1304,6 +1720,236 @@ DOMAIN = DomainSOT(
                 event_types=(
                     "team_inbox.assignment_changed.v1",
                     "team_inbox.escalated.v1",
+                    "team_inbox.queue_promoted.v1",
+                ),
+                projections=("FIFO queue position and estimated wait",),
+                test_refs=("tests/test_team_inbox_fifo_queue.py",),
+            ),
+        ),
+        SOTService(
+            name="communications.team_inbox_automation",
+            module="app.services.team_inbox_automation",
+            owns=(
+                "Team Inbox automation trigger matching",
+                "ordered Inbox automation action execution",
+            ),
+            depends_on=(
+                "communications.team_inbox_threads",
+                "communications.team_inbox_routing",
+                "communications.team_inbox_commands",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_automation",
+                concerns=(
+                    ("Team Inbox automation trigger matching", OwnerRole.POLICY),
+                    (
+                        "ordered Inbox automation action execution",
+                        OwnerRole.APPLICATION_COORDINATOR,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="conversation trigger facts",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed conversation channel, status, priority, team and contact-resolution state.",
+                    ),
+                    AuthorityInput(
+                        name="routing and collaboration commands",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Validated assign, auto-assign and label participant operations.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                event_types=("team_inbox.automation_executed.v1",),
+                test_refs=("tests/test_team_inbox_automation.py",),
+            ),
+        ),
+        SOTService(
+            name="communications.team_inbox_reply_reminders",
+            module="app.services.team_inbox_reply_reminders",
+            owns=("agent reply reminder scheduling and repeat delivery",),
+            depends_on=(
+                "communications.team_inbox_threads",
+                "communications.team_inbox_routing",
+                "communications.intents",
+                "control.settings_spec",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_reply_reminders",
+                concerns=(
+                    (
+                        "agent reply reminder scheduling and repeat delivery",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="assignment and message chronology",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active assignment plus latest inbound and agent outbound timestamps.",
+                    ),
+                    AuthorityInput(
+                        name="configured reminder intervals",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Validated delay and repeat minute settings.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                event_types=("team_inbox.reply_reminder_queued.v1",),
+                test_refs=("tests/test_team_inbox_reply_reminders.py",),
+            ),
+        ),
+        SOTService(
+            name="communications.team_inbox_agent_introduction",
+            module="app.services.team_inbox_agent_introduction",
+            owns=(
+                "per-agent introduction preference",
+                "chat-widget first-pickup introduction policy",
+            ),
+            depends_on=(
+                "communications.team_inbox_routing",
+                "communications.team_inbox_outbound_intents",
+                "auth.permission_gate",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_agent_introduction",
+                concerns=(
+                    ("per-agent introduction preference", OwnerRole.COMMAND_WRITER),
+                    ("chat-widget first-pickup introduction policy", OwnerRole.POLICY),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="agent pickup and channel",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Assigned system-user identity and exact conversation channel.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.PARTICIPANT,
+                event_types=("team_inbox.agent_introduction_sent.v1",),
+                test_refs=("tests/test_team_inbox_agent_introduction.py",),
+            ),
+        ),
+        SOTService(
+            name="communications.team_inbox_status",
+            module="app.services.team_inbox_status",
+            owns=("conversation status transitions and immutable evidence",),
+            depends_on=(
+                "communications.team_inbox_threads",
+                "auth.permission_gate",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_status",
+                concerns=(
+                    (
+                        "conversation status transitions and immutable evidence",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="current conversation status",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Locked active conversation and current lifecycle status.",
+                    ),
+                    AuthorityInput(
+                        name="typed status transition command",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Actor, target status, typed reason, occurrence time and idempotency identity.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.PARTICIPANT,
+                event_types=("team_inbox.status_changed.v1",),
+                projections=("current conversation status",),
+                test_refs=(
+                    "tests/test_team_inbox_lifecycle_audit.py",
+                    "tests/architecture/test_team_inbox_lifecycle_audit_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.team_inbox_audit_reconstruction",
+            module="app.services.team_inbox_audit_reconstruction",
+            owns=("reviewed Team Inbox historical audit reconstruction",),
+            depends_on=(
+                "communications.team_inbox_routing",
+                "communications.team_inbox_status",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_audit_reconstruction",
+                concerns=(
+                    (
+                        "reviewed Team Inbox historical audit reconstruction",
+                        OwnerRole.RECONCILER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="reviewed historical evidence manifest",
+                        owner="communications.team_inbox_audit_reconstruction",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Complete deterministic source watermark, SHA-256, operator and approval reference.",
+                    ),
+                    AuthorityInput(
+                        name="legacy routing and status evidence",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Existing assignment rows and explicitly stored bounded history only; unknown facts remain unknown.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                event_types=("team_inbox.historical_evidence_recorded.v1",),
+                projections=("provenance-graded historical lifecycle evidence",),
+                test_refs=(
+                    "tests/test_team_inbox_lifecycle_audit.py",
+                    "tests/architecture/test_team_inbox_lifecycle_audit_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.team_inbox_audit_projection",
+            module="app.services.team_inbox_audit",
+            owns=("Team Inbox lifecycle audit timeline and drift projection",),
+            depends_on=(
+                "communications.team_inbox_routing",
+                "communications.team_inbox_status",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_audit_projection",
+                concerns=(
+                    (
+                        "Team Inbox lifecycle audit timeline and drift projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="immutable routing evidence",
+                        owner="communications.team_inbox_routing",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Native and provenance-graded historical routing events plus assignment intervals.",
+                    ),
+                    AuthorityInput(
+                        name="immutable status evidence",
+                        owner="communications.team_inbox_status",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Native and provenance-graded historical status transition events.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.READ_ONLY,
+                projections=(
+                    "chronological lifecycle audit timeline",
+                    "current-state drift findings and audit coverage boundary",
+                ),
+                test_refs=(
+                    "tests/test_team_inbox_lifecycle_audit.py",
+                    "tests/architecture/test_team_inbox_lifecycle_audit_boundary.py",
                 ),
             ),
         ),
@@ -1433,6 +2079,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_threads",
                 "communications.team_inbox_contact_resolution",
                 "communications.team_inbox_routing",
+                "communications.team_inbox_status",
                 "communications.team_inbox_outbound_intents",
                 "communications.team_inbox_operator_state",
             ),

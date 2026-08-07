@@ -51,6 +51,10 @@ from app.models.billing import (  # noqa: F401
     InvoiceClosureLedgerEvidence,
     InvoiceClosureOrigin,
     InvoiceClosureType,
+    InvoiceDiscountAction,
+    InvoiceDiscountHistory,
+    InvoiceDiscountSource,
+    InvoiceDiscountType,
     InvoiceLine,
     InvoicePdfExport,
     InvoicePdfExportStatus,
@@ -564,6 +568,10 @@ from app.models.network_operation import (  # noqa: F401
     NetworkOperationTargetType,
     NetworkOperationType,
 )
+from app.models.nextcloud_talk import (  # noqa: F401
+    NextcloudTalkNotificationRoom,
+    NextcloudTalkStaffAccount,
+)
 from app.models.notification import (  # noqa: F401
     AlertNotificationLog,
     AlertNotificationPolicy,
@@ -674,6 +682,7 @@ from app.models.payment_proof import (  # noqa: F401
     WithholdingTaxTransition,
     WithholdingTaxTransitionImmutableError,
 )
+from app.models.plan_family_catalogue import PlanFamilyCatalogue  # noqa: F401
 from app.models.portal_message import (  # noqa: F401
     PortalMessage,
     PortalMessageStatus,
@@ -803,6 +812,10 @@ from app.models.sales import (  # noqa: F401
     Quote,
     QuoteDeliveryRequest,
     QuoteDeliveryRequestStatus,
+    QuoteDepositInvoiceLink,
+    QuoteDiscountAction,
+    QuoteDiscountHistory,
+    QuoteDiscountType,
     QuoteLineItem,
     QuotePdfExport,
     QuoteStatus,
@@ -849,6 +862,11 @@ from app.models.service_team import (  # noqa: F401
     ServiceTeamScopeBinding,
     ServiceTeamScopeType,
     ServiceTeamType,
+)
+from app.models.sla import (  # noqa: F401
+    SlaEligibilityInterval,
+    SlaMonitoringInterval,
+    SlaPeriodScoreRevision,
 )
 from app.models.snmp import (  # noqa: F401
     SnmpAuthProtocol,
@@ -922,8 +940,12 @@ from app.models.task_execution import (  # noqa: F401
     TaskExecutionStatus,
 )
 from app.models.team_inbox import (  # noqa: F401
+    InboxAgentIntroductionPreference,
     InboxAgentPresence,
     InboxAgentPresenceStatus,
+    InboxAutomationActionType,
+    InboxAutomationRule,
+    InboxAutomationTrigger,
     InboxChannelType,
     InboxComment,
     InboxContactLink,
@@ -931,6 +953,7 @@ from app.models.team_inbox import (  # noqa: F401
     InboxConversationAssignment,
     InboxConversationLabel,
     InboxConversationLeadLink,
+    InboxConversationQueueEntry,
     InboxConversationStatus,
     InboxConversationTeam,
     InboxLabel,
@@ -939,6 +962,7 @@ from app.models.team_inbox import (  # noqa: F401
     InboxMessageDirection,
     InboxMessageTemplate,
     InboxReplyMacro,
+    InboxReplyReminder,
     InboxSavedFilter,
     InboxTeamRole,
     InboxTeamSource,

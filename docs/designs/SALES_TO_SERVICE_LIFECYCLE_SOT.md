@@ -1,6 +1,6 @@
 # Sales-to-Service Lifecycle Source of Truth
 
-**Status:** Approved and implemented through migration 462
+**Status:** Approved and implemented through migration 480
 **System of record:** Sub
 **Decision owner:** Michael
 
@@ -93,7 +93,7 @@ closed before SalesOrder money can be overwritten.
 | --- | --- |
 | Verified provider receipt | `integration.inbox` |
 | Party-first capture and source replay | `sales.capture` |
-| Atomic admin Person and Lead authoring | `sales.lead_authoring` |
+| Atomic admin Person and Lead authoring and maintenance | `sales.lead_authoring` |
 | Immutable origin | `sales.lead_lifecycle` |
 | Atomic Lead-backed New Quote authoring | `sales.quote_authoring` |
 | Atomic Quote acceptance and sales conversion | `sales.quote_acceptance` |
@@ -134,6 +134,17 @@ depend on HTTP request/response or exception types.
 - Actions: create/edit/status use `crm:lead:write`; list/detail use
   `crm:lead:read`; delete uses `crm:lead:delete`; quote creation uses
   `crm:quote:write` and navigates to the quote editor with the Lead selected.
+- Edit contract: the editor loads the existing Person Party and Lead into the
+  same complete profile/opportunity form used for creation. One typed
+  `sales.lead_authoring` maintenance command preserves the exact Party binding,
+  canonicalizes a legacy Subscriber-only Lead to that Subscriber's already
+  reviewed Person Party without contact-value identity inference,
+  reconciles active email/phone/WhatsApp contact points without deleting their
+  verification or consent history, updates the Person profile and optional
+  Organization relationship, and stages editable Lead values, audit, and a
+  PII-free `lead.updated` event in one transaction. Blank NIN input preserves
+  the stored encrypted value; immutable origin/source and converted-account
+  reseller ownership fail closed.
 - List contract: server-side search across Lead title plus authoritative
   contact name/email/phone, status/pipeline/stage/owner/source filters,
   updated/created ordering, 10/25/50/100 page sizes, and URL-preserved state.
@@ -155,6 +166,43 @@ depend on HTTP request/response or exception types.
 - Out of scope: no activity timeline, appointments, tasks, conversation
   history, import/export, bulk Lead commands, aging analytics, or parallel
   Lead persistence is introduced by these screens.
+
+## Selfcare CRM Quotes list page contract
+
+- Screen identifier and route: `sales-quotes-list` at
+  `/admin/sales/quotes`.
+- Audience and job: authorized sales staff find and compare active commercial
+  proposals by Quote identity, status, Lead, Party, contact, and optional
+  Subscriber context.
+- Authoritative owner: `sales.service` accepts one typed Quote list input and
+  returns one typed outcome containing the normalized scope, exact unique
+  count, and deterministically ordered page. `app.services.web_sales`, the
+  route, and the template translate and render that contract; none owns a
+  parallel search predicate.
+- Search contract: whitespace is collapsed and an empty result means no
+  search. Quote UUID (including partial UUID), Lead title, Party display name,
+  every active Party contact-point display/normalized value, and optional
+  Subscriber display/first/last/email values are matched case-insensitively.
+  Inactive Party contact points never match. LIKE metacharacters are escaped
+  and bound as parameters.
+- Query shape: the outer result and count select directly from active Quotes.
+  Related-record matches use correlated `EXISTS`; one-to-many contact points
+  never multiply Quote rows, and PostgreSQL never applies full-row `DISTINCT`
+  to the Quote's `json` metadata column. The exact same predicate tuple drives
+  count and rows before stable created/updated ordering, Quote-ID tie-breaking,
+  and pagination.
+- Filters and state: status and Lead filters work independently and combine
+  with search using AND semantics. Unknown status, malformed/stale Lead,
+  sort, direction, page, and page-size values canonicalize to the owner-defined
+  safe URL. Search/filter/sort/page-size state remains URL-addressable; changing
+  the form resets page to one and Reset clears the complete scope.
+- States and recovery: empty and database-failure states are distinct. A failed
+  read reports that Quotes could not be loaded and no CRM data was changed,
+  offers a retry using safe normalized list state, emits a structured diagnostic
+  without the search term, and performs no writes.
+- Responsive projection: filters stack on narrow screens and the table retains
+  Quote identity, status, value, related Lead/customer context, and its direct
+  detail link.
 
 ## Selfcare New Quote page contract
 
@@ -182,8 +230,11 @@ depend on HTTP request/response or exception types.
   ignored; custom descriptions are allowed; active Selfcare offers and native
   field-inventory items are suggested in batches; submitted identifiers are
   batch-resolved and must match their descriptions. Amount, Subtotal, configured
-  Tax Total, and Total are server-derived with Decimal money rounding. Manual
-  Tax Total is accepted only without a configured Tax Rate.
+  Tax Total, and Total are server-derived with Decimal money rounding. New Line
+  Items are gross-priced. One optional mutually exclusive percentage or fixed
+  Quote discount applies to the complete subtotal before configured tax; it
+  records the authenticated SystemUser and server time, and its reason is
+  optional. Manual Tax Total is accepted only without a configured Tax Rate.
 - Lifecycle contract: new Quotes may be Draft or Sent only. Draft has no
   downstream consequences and Sent sets `sent_at`; Accepted is a separate
   action invoking the atomic acceptance coordinator. Rejecting or expiring one
@@ -201,6 +252,16 @@ depend on HTTP request/response or exception types.
   rows stack on narrow screens; each Line Item becomes a touch-friendly card;
   keyboard focus, accessible labels, and light/dark variants use shared admin
   design tokens.
+
+## Quote discounts history page contract
+
+The complete command, evidence, migration, and page contract is
+`docs/designs/QUOTE_DISCOUNT_HISTORY.md`. `sales.quote_authoring` owns current
+discount application, replacement, removal, recalculation, and append-only
+history. `sales.quote_discount_reporting` owns the filtered staff projection at
+`/admin/sales/quote-discounts`. Previous Quote Line Item discounts remain
+read-only historical evidence and new writers always store zero in that legacy
+field.
 
 ## Configuration versus code contracts
 

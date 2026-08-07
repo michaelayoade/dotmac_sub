@@ -154,6 +154,10 @@ A detail page establishes the decision context before exposing exhaustive data.
   the canonical work-order detail view. Creation and technician assignment are
   displayed as consecutive actions because their command owners remain
   separate; creation must not imply that a technician was assigned.
+- Material requests remain work-order-owned. Ticket, project, and project-task
+  detail pages project requests from their linked native work orders and scope
+  the create action to an actively assigned work order; they do not maintain
+  duplicate material-request relationships.
 
 ### Editor Or Form
 
@@ -314,23 +318,57 @@ Historical plans may provide requirements or research, but each item must be
 revalidated against this standard and the current domain SOT before
 implementation.
 
-## Inbox Lead Intake Page Contract
+## Inbox Lead Intake And Catalogue Action Contract
 
-- Audience and task: an unknown Meta prospect supplies identity and service
-  location; Sales administrators manage immutable form versions; Inbox staff
-  can issue, revoke, and reissue links.
+- Audience and task: a prospect who is neither a customer nor a customer contact
+  supplies identity and service location; Sales administrators manage immutable
+  form versions; Inbox staff can issue, revoke, and reissue links. Any Inbox
+  participant may receive a plan-family catalogue.
 - Authority: `sales.lead_intake` owns template, eligibility, invitation, and
-  completion decisions. The public and admin routes and templates are adapters.
+  completion decisions. `service_intent.plan_family_catalogues` owns catalogue
+  publication, versioning, and current-document resolution. The public and admin
+  routes and templates are adapters.
 - First viewport: form purpose, customer-type fields, address search and
   confirmation, privacy notice, error state, and one primary Save action.
 - Action eligibility: automatic send is disabled until explicitly enabled and
-  both template types are published. Manual actions require `crm:lead:write`
-  and an unmatched WhatsApp, Messenger, or Instagram DM conversation.
+  both template types are published. Manual Lead actions require
+  `crm:lead:write`, a reply-capable supported channel, and owner-resolved proof
+  that the sender is neither a customer nor a customer contact; ambiguous
+  identity fails closed. The Lead action is rendered beside the conversation
+  composer. The catalogue action is visible for every conversation and enables
+  only plan families with a currently published PDF and a reply-capable thread.
 - State semantics: issued, effectively expired, revoked, completed, and failed
   delivery are distinct. Unknown/expired tokens render the same unavailable
   response and never reveal whether a digest exists.
 - Responsive behavior: fields stack on small screens, controls retain a
   44-pixel target, and address results remain adjacent to their search field.
+
+## Customer Quote Payment Page Contract
+
+- Audience and task: an authenticated customer reviews and pays the exact
+  deposit for a quotation owned by an authorized subscriber identity.
+- Authority: `app.services.quote_deposits` resolves quotation eligibility and
+  the server-owned deposit amount; `financial.payment_routing` resolves
+  Paystack availability; established invoice, intent, payment-verification, and
+  Quote-acceptance owners retain every financial transition. The route and
+  template are adapters.
+- First viewport: quotation identity, expiry, authoritative currency and
+  deposit amount, secure-payment explanation, and one Paystack action.
+- GET state: authentication, ownership, active status, expiry, paid state,
+  positive deposit, and Paystack availability are checked without creating an
+  invoice or payment intent. Missing or unauthorized quotations render the same
+  not-found state.
+- Mutation: the customer confirms through the CSRF-protected POST intent route.
+  The request carries idempotency evidence only; it cannot submit amount,
+  currency, invoice identity, or provider choice. The server fixes the provider
+  to Paystack and re-derives the amount before delegating to the established
+  quotation-deposit capability.
+- States: unauthenticated, unauthorized/not found, expired, cancelled/inactive,
+  already paid, Paystack unavailable, checkout failed, pending verification,
+  and confirmed are distinct and fail closed.
+- Responsive behavior: summary and action stack on small screens, retain the
+  authoritative amount and primary action, and do not expose internal
+  collection-account or payment-intent identifiers.
 
 ## Inbox Customer Context Page Contract
 

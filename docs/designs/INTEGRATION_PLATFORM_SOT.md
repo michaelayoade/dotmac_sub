@@ -235,6 +235,21 @@ Required constraints include:
 
 ## Execution flows
 
+### Pre-activation webhook verification
+
+Provider callback verification is an installation-owned, read-only setup
+query, not an inbound message operation. It may compare the provider-presented
+verification token against the exact secret reference on the single statically
+valid installation while that installation is `disabled` or `enabled`. The
+query returns only a sanitized acceptance result; secret material is never
+returned to the HTTP adapter, persisted, or logged.
+
+This setup exception does not grant an ingress capability. Webhook `POST`
+requests, signature materialization, receipt creation, and message consequences
+continue to require an enabled receive binding. Draft, validating,
+quarantined, retired, ambiguous, invalid, or secret-unavailable installations
+fail closed during callback verification.
+
 ### Outbound domain event
 
 1. The domain owner commits its state change and stages an `EventStore` row in
@@ -421,6 +436,7 @@ interactive traffic uses typed service ports.
 | CRM | Direct `CRMClient` construction and CRM-specific delivery records | `dotmac.crm` capabilities plus `integration.inbox` | All subscriber, ticket, operational, portal, quote, and inbound-event calls use the runtime; enabled ticket pull additionally requires one connection-validated ticket binding and one active bound manual job |
 | Outbound webhooks and hooks | `events.webhook_deliveries`, webhook endpoint tables, and `integration.hooks` | `integration.delivery` using `events.deliver.v1` | Duplicate tables, services, routes, tasks, and CLI execution are removed |
 | WhatsApp messaging | Settings-backed provider client | Direct Meta `messaging.send.v1`, `messaging.receive.v1`, and `messaging.templates.read.v1` bindings | Outbound callers and the verified inbound route use one installation |
+| Nextcloud Talk staff notifications | Direct credentials and legacy `/room/{token}/message` calls | `nextcloud.talk` `collaboration.message.send.v1` capability plus communications-owned staff mapping, room cache, and notification outbox | Assignments and explicit mentions stage locally; the worker creates/reuses a one-to-one room and posts with a deterministic reference ID |
 | Meta social inbox | Settings-backed app secrets, expired OAuth projections, and direct `meta_pages` delivery | `meta.social` with separate Facebook Page and Instagram Login credentials behind `messaging.send.v1` and `messaging.receive.v1` | New delivery and webhook verification use one version-pinned installation; production traffic cutover remains operator-gated |
 | ERP | Direct ERP client construction | `dotmac.erp` versioned capabilities | Outbox, inventory, operations, expense, purchasing, and regulatory calls use the runtime |
 | Payments | Direct Paystack and Flutterwave services plus a payment-specific webhook dead-letter store | Billing-owned decisions using typed payment capabilities and `integration.inbox` | Intent, signature verification, reconciliation, refund, and replay evidence use one binding |
@@ -451,6 +467,12 @@ delivery/inbox evidence remain intact.
 10. Meta social inbox transport with distinct Facebook Page and Instagram
     Login account bindings, Meta-owned webhook verification, and no WhatsApp or
     expired-OAuth credential fallback.
+11. Nextcloud Talk staff notification transport with a pinned installation,
+    OpenBao app-password reference, public-HTTPS egress validation, explicit
+    `SystemUser` username mappings, cached one-to-one rooms, deterministic chat
+    references, and asynchronous retry/reconciliation. The capability binding's
+    `approved_egress_hosts` must explicitly include the hostname from the
+    installation URL before static validation can enable it.
 
 Signed external artifacts and OAuth installation grants require separate
 approved designs before they can become live owners. They are not implicit

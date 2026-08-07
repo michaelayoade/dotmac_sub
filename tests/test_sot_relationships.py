@@ -658,6 +658,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     ) == (
         "network.access_path",
         "network.fiber_topology",
+        "customer.identity_scope",
         "ui.status_presentation",
     )
     assert sot_relationships.dependencies_for("ui.status_presentation") == (
@@ -729,6 +730,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "communications.team_inbox_threads",
         "communications.team_inbox_contact_resolution",
         "communications.team_inbox_routing",
+        "communications.team_inbox_status",
         "communications.team_inbox_outbound_intents",
         "communications.team_inbox_operator_state",
     )
@@ -750,6 +752,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "events.dispatcher",
         "communications.notification_service",
         "communications.staff_notifications",
+        "communications.nextcloud_talk_staff",
         "operations.work_order_commands",
     )
     assert sot_relationships.dependencies_for("operations.work_order_commands") == (

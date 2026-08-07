@@ -29,7 +29,7 @@ native models (``app/models/sales.py``), with the deltas applied:
 import logging
 import uuid
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum, StrEnum
 from typing import TypeVar
@@ -70,6 +70,7 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.owner_commands import CommandContext
 from app.services.response import ListResponseMixin
@@ -115,6 +116,35 @@ class LeadSource(StrEnum):
 
 
 LEAD_SOURCE_OPTIONS = tuple(source.value for source in LeadSource)
+
+
+@dataclass(frozen=True, slots=True)
+class LeadMaintenanceUpdate:
+    """Validated Lead values staged by the admin maintenance coordinator."""
+
+    lead_id: uuid.UUID
+    title: str
+    status: LeadStatus
+    owner_agent_id: uuid.UUID | None
+    pipeline_id: uuid.UUID | None
+    stage_id: uuid.UUID | None
+    lead_source: str | None
+    region: str | None
+    estimated_value: Decimal | None
+    currency: str | None
+    address: str | None
+    probability: int | None
+    expected_close_date: date | None
+    lost_reason: str | None
+    notes: str | None
+    is_active: bool
+    reseller_id: uuid.UUID | None
+    organization_id: uuid.UUID | None
+    region_zone_id: uuid.UUID | None
+    reseller_routed: bool
+    edit_key: uuid.UUID
+    edit_fingerprint: str
+
 
 _LEAD_SOURCE_NORMALIZED_MAP = {
     "facebook": "Facebook",
@@ -231,6 +261,55 @@ class LeadListQueryResult:
     summary: LeadPipelineSummary
 
 
+class QuoteListSortField(StrEnum):
+    CREATED_AT = "created_at"
+    UPDATED_AT = "updated_at"
+
+
+class QuoteListSortDirection(StrEnum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteListQueryInput:
+    """Raw adapter values for the authoritative Quote list query."""
+
+    search_term: str | None = None
+    status: str | None = None
+    lead_id: str | None = None
+    sort_field: str | None = None
+    sort_direction: str | None = None
+    page: int = 1
+    page_size: int = 25
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteListQuery:
+    """Normalized Quote scope shared by rows, count, ordering, and pagination."""
+
+    search_term: str | None
+    status: QuoteStatus | None
+    lead_id: uuid.UUID | None
+    sort_field: QuoteListSortField
+    sort_direction: QuoteListSortDirection
+    page: int
+    page_size: int
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.page_size
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteListQueryResult:
+    """One unique, deterministically ordered Quote page and its exact count."""
+
+    items: tuple[Quote, ...]
+    total_count: int
+    query: QuoteListQuery
+
+
 @dataclass(frozen=True, slots=True)
 class _LeadListFilters:
     search_term: str | None
@@ -242,11 +321,32 @@ class _LeadListFilters:
     is_active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _QuoteListFilters:
+    search_term: str | None
+    status: str | None
+    lead_id: uuid.UUID | None
+    is_active: bool
+
+
 def normalize_lead_search(value: str | None) -> str | None:
     """Collapse user-entered whitespace without changing search casing."""
 
     normalized = " ".join(str(value or "").split())
     return normalized or None
+
+
+def normalize_quote_search(value: str | None) -> str | None:
+    """Collapse whitespace while retaining the operator's literal search text."""
+
+    normalized = " ".join(str(value or "").split())
+    return normalized or None
+
+
+def _escape_like_pattern(value: str) -> str:
+    """Treat LIKE metacharacters as ordinary user-entered search characters."""
+
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _optional_uuid_filter(value: str | None) -> uuid.UUID | None:
@@ -305,6 +405,33 @@ def _normalize_lead_list_query(
         sort_direction=(
             _optional_enum_filter(request.sort_direction, LeadListSortDirection)
             or LeadListSortDirection.DESC
+        ),
+        page=max(1, request.page),
+        page_size=request.page_size if request.page_size in (10, 25, 50, 100) else 25,
+    )
+
+
+def _normalize_quote_list_query(
+    db: Session,
+    request: QuoteListQueryInput,
+) -> QuoteListQuery:
+    lead_id = _optional_uuid_filter(request.lead_id)
+    if lead_id is not None:
+        selected_lead = db.get(Lead, lead_id)
+        if selected_lead is None or not selected_lead.is_active:
+            lead_id = None
+
+    return QuoteListQuery(
+        search_term=normalize_quote_search(request.search_term),
+        status=_optional_enum_filter(request.status, QuoteStatus),
+        lead_id=lead_id,
+        sort_field=(
+            _optional_enum_filter(request.sort_field, QuoteListSortField)
+            or QuoteListSortField.CREATED_AT
+        ),
+        sort_direction=(
+            _optional_enum_filter(request.sort_direction, QuoteListSortDirection)
+            or QuoteListSortDirection.DESC
         ),
         page=max(1, request.page),
         page_size=request.page_size if request.page_size in (10, 25, 50, 100) else 25,
@@ -391,6 +518,84 @@ def _lead_search_predicate(search_term: str) -> ColumnElement[bool]:
     )
 
 
+def _quote_search_predicate(search_term: str) -> ColumnElement[bool]:
+    """Search authoritative Quote relationships without multiplying Quote rows."""
+
+    escaped = _escape_like_pattern(search_term)
+    pattern = f"%{escaped}%"
+    subscriber_full_name = func.trim(
+        func.coalesce(Subscriber.first_name, "")
+        + " "
+        + func.coalesce(Subscriber.last_name, "")
+    )
+    subscriber_matches = (
+        select(1)
+        .where(
+            Subscriber.id == Quote.subscriber_id,
+            or_(
+                Subscriber.display_name.ilike(pattern, escape="\\"),
+                subscriber_full_name.ilike(pattern, escape="\\"),
+                Subscriber.first_name.ilike(pattern, escape="\\"),
+                Subscriber.last_name.ilike(pattern, escape="\\"),
+                Subscriber.email.ilike(pattern, escape="\\"),
+            ),
+        )
+        .correlate(Quote)
+        .exists()
+    )
+    lead_matches = (
+        select(1)
+        .where(
+            Lead.id == Quote.lead_id,
+            Lead.title.ilike(pattern, escape="\\"),
+        )
+        .correlate(Quote)
+        .exists()
+    )
+    party_matches = (
+        select(1)
+        .select_from(Lead)
+        .join(Party, Party.id == Lead.party_id)
+        .where(
+            Lead.id == Quote.lead_id,
+            Party.display_name.ilike(pattern, escape="\\"),
+        )
+        .correlate(Quote)
+        .exists()
+    )
+    contact_conditions: list[ColumnElement[bool]] = [
+        PartyContactPoint.display_value.ilike(pattern, escape="\\"),
+        PartyContactPoint.normalized_value.ilike(pattern, escape="\\"),
+    ]
+    digits = "".join(character for character in search_term if character.isdigit())
+    if len(digits) >= 4:
+        contact_conditions.append(
+            (PartyContactPoint.channel_type == "phone")
+            & _phone_search_value(PartyContactPoint.display_value).ilike(
+                f"%{digits}%", escape="\\"
+            )
+        )
+    contact_matches = (
+        select(1)
+        .select_from(Lead)
+        .join(PartyContactPoint, PartyContactPoint.party_id == Lead.party_id)
+        .where(
+            Lead.id == Quote.lead_id,
+            PartyContactPoint.is_active.is_(True),
+            or_(*contact_conditions),
+        )
+        .correlate(Quote)
+        .exists()
+    )
+    return or_(
+        cast(Quote.id, String).ilike(pattern, escape="\\"),
+        lead_matches,
+        party_matches,
+        contact_matches,
+        subscriber_matches,
+    )
+
+
 def _lead_list_predicates(
     filters: _LeadListFilters,
 ) -> tuple[ColumnElement[bool], ...]:
@@ -418,6 +623,28 @@ def _lead_list_filters(query: LeadListQuery) -> _LeadListFilters:
         stage_id=query.stage_id,
         owner_agent_id=query.owner_agent_id,
         lead_source=query.lead_source.value if query.lead_source is not None else None,
+        is_active=True,
+    )
+
+
+def _quote_list_predicates(
+    filters: _QuoteListFilters,
+) -> tuple[ColumnElement[bool], ...]:
+    predicates: list[ColumnElement[bool]] = [Quote.is_active == filters.is_active]
+    if filters.status is not None:
+        predicates.append(Quote.status == filters.status)
+    if filters.lead_id is not None:
+        predicates.append(Quote.lead_id == filters.lead_id)
+    if filters.search_term is not None:
+        predicates.append(_quote_search_predicate(filters.search_term))
+    return tuple(predicates)
+
+
+def _quote_list_filters(query: QuoteListQuery) -> _QuoteListFilters:
+    return _QuoteListFilters(
+        search_term=query.search_term,
+        status=query.status.value if query.status is not None else None,
+        lead_id=query.lead_id,
         is_active=True,
     )
 
@@ -761,36 +988,45 @@ def _prepare_quote_ownership(
         data["sent_at"] = datetime.now(UTC)
 
 
-def _line_amount(quantity, unit_price, discount_percent) -> Decimal:
-    """Net line amount: quantity * unit_price, less the line discount percent."""
+def _line_amount(quantity, unit_price) -> Decimal:
+    """Gross Line Item amount; new discounts apply once at Quote level."""
     qty = Decimal(quantity or 0)
     price = Decimal(unit_price or 0)
-    discount = Decimal(discount_percent or 0)
-    if discount < 0:
-        discount = Decimal("0")
-    if discount > 100:
-        discount = Decimal("100")
     gross = qty * price
-    net = gross * (Decimal("100") - discount) / Decimal("100")
-    if net < 0:
-        net = Decimal("0")
-    return net.quantize(Decimal("0.01"))
+    return max(gross, Decimal("0")).quantize(Decimal("0.01"))
+
+
+def _assert_no_active_quote_discount(quote: Quote) -> None:
+    from app.models.sales import QuoteDiscountType
+    from app.services.sales import quote_authoring
+
+    quote_authoring.assert_line_mutation_allowed(
+        quote_id=quote.id,
+        discount_type=(
+            QuoteDiscountType(quote.discount_type) if quote.discount_type else None
+        ),
+    )
 
 
 def _recalculate_quote_totals(db: Session, quote: Quote) -> None:
     db.flush()
     items = db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == quote.id).all()
-    # Subtotal is the sum of net (discounted) line amounts.
+    # Previous Quotes may still contain immutable net Line Item amounts. New
+    # Line Items are gross and the current Quote discount applies once here.
     subtotal = round_money(
         sum((Decimal(item.amount or 0) for item in items), Decimal("0.00"))
     )
     quote.subtotal = subtotal
+    discounted_subtotal = round_money(
+        subtotal - Decimal(quote.discount_amount or Decimal("0.00"))
+    )
     # Auto-derive tax from the applied rate when one is set; otherwise keep the
-    # manually entered tax_total. Tax always follows the (discounted) subtotal.
+    # manually entered tax_total. Configured tax follows the Quote-discounted
+    # subtotal.
     if quote.tax_rate is not None:
         rate = Decimal(quote.tax_rate or 0)
-        quote.tax_total = round_money(subtotal * rate / Decimal("100"))
-    quote.total = subtotal + Decimal(quote.tax_total or 0)
+        quote.tax_total = round_money(discounted_subtotal * rate / Decimal("100"))
+    quote.total = discounted_subtotal + Decimal(quote.tax_total or 0)
     db.flush()
 
 
@@ -1026,6 +1262,81 @@ class PipelineStages(ListResponseMixin):
             stage_map[stage_id].order_index = order_index
         db.commit()
         return stage_ids
+
+
+def stage_lead_maintenance(db: Session, command: LeadMaintenanceUpdate) -> Lead:
+    """Stage explicit Lead maintenance values without completing a transaction."""
+
+    lead = db.scalars(
+        select(Lead).where(Lead.id == command.lead_id).with_for_update()
+    ).one_or_none()
+    if lead is None:
+        raise DomainError(
+            code="sales.service.lead_not_found",
+            message="Lead not found.",
+            details={"lead_id": str(command.lead_id)},
+        )
+    clean_title = command.title.strip()
+    if not clean_title or len(clean_title) > 200:
+        raise DomainError(
+            code="sales.service.lead_title_invalid",
+            message="Lead Name is required and must be 200 characters or fewer.",
+            details={"field": "title"},
+        )
+    if command.status == LeadStatus.won and lead.status != LeadStatus.won.value:
+        raise DomainError(
+            code="sales.service.lead_won_transition_forbidden",
+            message="A Lead becomes Won only through Quote acceptance.",
+            details={"field": "status"},
+        )
+    if (
+        lead.origin_capture is not None
+        and command.lead_source != lead.origin_capture.lead_source
+    ):
+        raise DomainError(
+            code="sales.service.lead_origin_immutable",
+            message="Lead Source is fixed by the captured Lead origin.",
+            details={"field": "lead_source"},
+        )
+    if lead.subscriber_id is not None and command.reseller_id != lead.reseller_id:
+        raise DomainError(
+            code="sales.service.converted_lead_reseller_immutable",
+            message="Reseller ownership cannot change after account conversion.",
+            details={"field": "reseller_id"},
+        )
+
+    previous_status = lead.status
+    lead.title = clean_title
+    lead.status = command.status.value
+    lead.owner_agent_id = command.owner_agent_id
+    lead.pipeline_id = command.pipeline_id
+    lead.stage_id = command.stage_id
+    lead.lead_source = command.lead_source
+    lead.region = command.region
+    lead.estimated_value = command.estimated_value
+    lead.currency = command.currency
+    lead.address = command.address
+    lead.probability = command.probability
+    lead.expected_close_date = command.expected_close_date
+    lead.lost_reason = command.lost_reason
+    lead.notes = command.notes
+    lead.is_active = command.is_active
+    lead.reseller_id = command.reseller_id
+    _apply_lead_closed_at(lead, lead.status, previous_status=previous_status)
+    metadata = dict(lead.metadata_) if isinstance(lead.metadata_, dict) else {}
+    metadata["last_edit_key"] = str(command.edit_key)
+    metadata["last_edit_fingerprint"] = command.edit_fingerprint
+    metadata["organization_id"] = (
+        str(command.organization_id) if command.organization_id else None
+    )
+    metadata["reseller_id"] = str(command.reseller_id) if command.reseller_id else None
+    metadata["region_zone_id"] = (
+        str(command.region_zone_id) if command.region_zone_id else None
+    )
+    metadata["communication_routed_through_reseller"] = command.reseller_routed
+    lead.metadata_ = metadata
+    db.flush()
+    return lead
 
 
 class Leads(ListResponseMixin):
@@ -1616,6 +1927,46 @@ class Leads(ListResponseMixin):
 
 class Quotes(ListResponseMixin):
     @staticmethod
+    def query(db: Session, request: QuoteListQueryInput) -> QuoteListQueryResult:
+        """Return one Quote page from the shared, read-only query specification."""
+
+        normalized = _normalize_quote_list_query(db, request)
+        predicates = _quote_list_predicates(_quote_list_filters(normalized))
+        total_count = int(
+            db.query(func.count(Quote.id)).filter(*predicates).scalar() or 0
+        )
+        total_pages = max(
+            1,
+            (total_count + normalized.page_size - 1) // normalized.page_size,
+        )
+        if normalized.page > total_pages:
+            normalized = replace(normalized, page=total_pages)
+
+        order_columns = {
+            QuoteListSortField.CREATED_AT.value: Quote.created_at,
+            QuoteListSortField.UPDATED_AT.value: Quote.updated_at,
+        }
+        rows_query = db.query(Quote).filter(*predicates)
+        rows_query = apply_ordering(
+            rows_query,
+            normalized.sort_field.value,
+            normalized.sort_direction.value,
+            order_columns,
+        ).order_by(Quote.id.asc())
+        items = tuple(
+            apply_pagination(
+                rows_query,
+                normalized.page_size,
+                normalized.offset,
+            ).all()
+        )
+        return QuoteListQueryResult(
+            items=items,
+            total_count=total_count,
+            query=normalized,
+        )
+
+    @staticmethod
     def create(
         db: Session,
         payload: QuoteCreate,
@@ -1718,43 +2069,13 @@ class Quotes(ListResponseMixin):
         offset: int,
         search: str | None = None,
     ):
-        query = db.query(Quote)
-        if lead_id:
-            query = query.filter(Quote.lead_id == coerce_uuid(lead_id))
-        if status:
-            query = query.filter(
-                Quote.status == _enum_str(status, QuoteStatus, "status")
-            )
-        if search:
-            like = f"%{search.strip()}%"
-            query = (
-                query.outerjoin(Subscriber, Quote.subscriber_id == Subscriber.id)
-                .outerjoin(Lead, Quote.lead_id == Lead.id)
-                .outerjoin(Party, Lead.party_id == Party.id)
-                .outerjoin(
-                    PartyContactPoint,
-                    (PartyContactPoint.party_id == Party.id)
-                    & PartyContactPoint.is_active.is_(True),
-                )
-                .filter(
-                    or_(
-                        Subscriber.display_name.ilike(like),
-                        Subscriber.first_name.ilike(like),
-                        Subscriber.last_name.ilike(like),
-                        Subscriber.email.ilike(like),
-                        Party.display_name.ilike(like),
-                        PartyContactPoint.display_value.ilike(like),
-                        PartyContactPoint.normalized_value.ilike(like),
-                        Lead.title.ilike(like),
-                        cast(Quote.id, String).ilike(like),
-                    )
-                )
-                .distinct()
-            )
-        if is_active is None:
-            query = query.filter(Quote.is_active.is_(True))
-        else:
-            query = query.filter(Quote.is_active == is_active)
+        filters = _QuoteListFilters(
+            search_term=normalize_quote_search(search),
+            status=_enum_str(status, QuoteStatus, "status") if status else None,
+            lead_id=coerce_uuid(lead_id) if lead_id else None,
+            is_active=True if is_active is None else is_active,
+        )
+        query = db.query(Quote).filter(*_quote_list_predicates(filters))
         query = apply_ordering(
             query,
             order_by,
@@ -1961,13 +2282,14 @@ class QuoteLineItems(ListResponseMixin):
             quote,
             mutation="line_item_create",
         )
+        _assert_no_active_quote_discount(quote)
         data = payload.model_dump()
         # ``inventory_item_id`` is a CRM inventory UUID carried verbatim —
         # inventory is so there is nothing to validate against.
-        # Always derive amount server-side (net of any line discount).
-        data["amount"] = _line_amount(
-            data.get("quantity"), data.get("unit_price"), data.get("discount_percent")
-        )
+        # Always derive gross amount server-side. The retained database column
+        # is zero for every new Line Item and exists only for previous Quotes.
+        data["discount_percent"] = Decimal("0.00")
+        data["amount"] = _line_amount(data.get("quantity"), data.get("unit_price"))
         item = QuoteLineItem(**data)
         db.add(item)
         _recalculate_quote_totals(db, quote)
@@ -2006,13 +2328,12 @@ class QuoteLineItems(ListResponseMixin):
             quote,
             mutation="line_item_update",
         )
+        _assert_no_active_quote_discount(quote)
         data = payload.model_dump(exclude_unset=True)
         for key, value in data.items():
             setattr(item, key, value)
-        if {"quantity", "unit_price", "discount_percent"} & set(data):
-            item.amount = _line_amount(
-                item.quantity, item.unit_price, item.discount_percent
-            )
+        if {"quantity", "unit_price"} & set(data):
+            item.amount = _line_amount(item.quantity, item.unit_price)
         _recalculate_quote_totals(db, quote)
         _stage_quote_audit(
             db,
@@ -2050,6 +2371,7 @@ class QuoteLineItems(ListResponseMixin):
             quote,
             mutation="line_item_delete",
         )
+        _assert_no_active_quote_discount(quote)
         line_id = item.id
         description = item.description
         db.delete(item)

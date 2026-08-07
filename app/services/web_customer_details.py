@@ -80,6 +80,7 @@ from app.services.collections import get_available_balance
 from app.services.credential_crypto import decrypt_credential
 from app.services.customer_network_path import (
     SubscriptionNetworkPath,
+    project_customer_network_map,
     project_subscription_network_path,
     unresolved_subscription_network_path,
 )
@@ -1140,18 +1141,67 @@ def _build_service_impact(db: Session, subscription) -> dict[str, object] | None
     }
 
 
-def _build_service_level(db: Session, subscription) -> dict[str, object] | None:
-    """This period's SLA context from customer.service_level (shadow phase).
+def _build_service_level(
+    db: Session,
+    subscription,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object] | None:
+    """The one selected admin availability/SLA projection for this service.
 
-    Admin-facing: verdicts render honestly, including no_contractual_sla
-    with measured availability and the provisional flag.
+    The database-authoritative selector remains fail-closed on legacy evidence
+    in this slice. The candidate branch is present for the later reviewed
+    cutover but cannot be armed by a settings edit yet.
     """
 
-    from app.services.customer_service_level import score_subscription_period
+    from app.services.customer_service_level import (
+        resolve_admin_display_authority,
+        score_subscription_period,
+    )
+    from app.services.sla_admin_review import SlaAdminDisplayAuthority
     from app.services.status_presentation import sla_verdict_presentation
 
     try:
-        score = score_subscription_period(db, subscription)
+        decision = resolve_admin_display_authority(db)
+        review_url = (
+            f"/admin/customers/{subscription.subscriber_id}/subscriptions/"
+            f"{subscription.id}/sla-review"
+        )
+        if decision.authority is SlaAdminDisplayAuthority.legacy_availability:
+            from app.services.topology.customer_availability import (
+                customer_availability,
+            )
+
+            report = customer_availability(
+                db,
+                subscription,
+                days=30,
+                now=now or datetime.now(UTC),
+            )
+            return {
+                "authority": decision.authority.value,
+                "authority_label": "Legacy availability evidence",
+                "authority_source": decision.source,
+                "verdict": None,
+                "presentation": None,
+                "availability_percent": (
+                    report.effective_uptime_percent
+                    if report.has_infrastructure_coverage
+                    else None
+                ),
+                "target_percent": None,
+                "unavailable_seconds": report.effective_downtime_seconds,
+                "excluded_seconds": 0,
+                "provisional": not report.has_infrastructure_coverage,
+                "period_start": report.period_start.isoformat(),
+                "period_end": report.period_end.isoformat(),
+                "detail_url": (
+                    f"/admin/customers/{subscription.subscriber_id}/availability"
+                ),
+                "review_url": review_url,
+            }
+
+        score = score_subscription_period(db, subscription, now=now)
     except Exception:
         logger.warning(
             "SLA scoring failed for subscription %s",
@@ -1160,6 +1210,9 @@ def _build_service_level(db: Session, subscription) -> dict[str, object] | None:
         )
         return None
     return {
+        "authority": decision.authority.value,
+        "authority_label": "Authoritative period SLA",
+        "authority_source": decision.source,
         "verdict": score.verdict.value,
         "presentation": sla_verdict_presentation(score.verdict),
         "availability_percent": score.measured_availability_percent,
@@ -1171,6 +1224,8 @@ def _build_service_level(db: Session, subscription) -> dict[str, object] | None:
         "provisional": score.is_provisional,
         "period_start": score.period_start.isoformat(),
         "period_end": score.period_end.isoformat(),
+        "detail_url": review_url,
+        "review_url": review_url,
     }
 
 
@@ -1778,6 +1833,7 @@ def build_customer_detail_snapshot(
     endpoints_by_subscription: dict[str, dict[str, object]] = {}
     traces_by_subscription: dict[str, dict[str, object] | None] = {}
     network_path_by_subscription: dict[str, dict[str, object] | None] = {}
+    network_path_projections: dict[str, SubscriptionNetworkPath] = {}
     access_state_by_subscription: dict[str, dict[str, object] | None] = {}
     incident_by_subscription: dict[str, dict[str, object] | None] = {}
     service_impact_by_subscription: dict[str, dict[str, object] | None] = {}
@@ -1794,6 +1850,7 @@ def build_customer_detail_snapshot(
         service_impact_by_subscription[str(sub.id)] = _build_service_impact(db, sub)
         service_level_by_subscription[str(sub.id)] = _build_service_level(db, sub)
         path_projection = _build_access_endpoint_projection(db, sub)
+        network_path_projections[str(sub.id)] = path_projection
         endpoints_by_subscription[str(sub.id)] = path_projection.endpoint.to_dict()
         traces_by_subscription[str(sub.id)] = path_projection.trace_dict
         network_path_by_subscription[str(sub.id)] = path_projection.view_dict
@@ -1818,6 +1875,19 @@ def build_customer_detail_snapshot(
     network_access_inactive_count = (
         len(network_access_cards) - network_access_active_count
     )
+    if map_data and primary_address:
+        map_data = project_customer_network_map(
+            db,
+            customer_name=customer_name,
+            customer_latitude=float(primary_address.latitude),
+            customer_longitude=float(primary_address.longitude),
+            subscriptions=[
+                subscription
+                for subscription in subscriptions
+                if subscription.status == SubscriptionStatus.active
+            ],
+            network_paths=network_path_projections,
+        ).to_dict()
     pending_location_request = (
         db.query(CustomerLocationChangeRequest)
         .filter(CustomerLocationChangeRequest.subscriber_id == customer.id)

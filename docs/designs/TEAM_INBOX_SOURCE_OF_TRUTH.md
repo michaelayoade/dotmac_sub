@@ -29,7 +29,13 @@ combined Inbox/Support workspace.
 | Conversation-to-Lead provenance | `communications.conversation_lead_relationships` | Owns the durable, auditable, one-active-Lead-per-conversation relationship |
 | Customer context drawer | `communications.team_inbox_contact_context` | Composes permission-scoped Party, Lead, Ticket, conversation, Project, and Task sections with typed availability |
 | Profile and Lead action resolution | `communications.inbox_lead_actions` | Resolves and coordinates identity-aware actions without owning Party or Lead fields |
-| Routing, assignment, and escalation | `communications.team_inbox_routing` | Applies configured team, availability, permission, and SLA policy |
+| Routing, assignment, escalation, and FIFO queue | `communications.team_inbox_routing` | Applies configured team, availability, permission, SLA, durable queue admission, and promotion policy |
+| Inbox automation | `communications.team_inbox_automation` | Matches Inbox-scoped conversation triggers and coordinates ordered assign, auto-assign, and tag actions |
+| Reply reminders | `communications.team_inbox_reply_reminders` | Owns configured first/repeat due times and queues internal agent notifications until a reply settles the schedule |
+| Agent introductions | `communications.team_inbox_agent_introduction` | Owns per-agent templates and the chat-widget-only first-pickup auto-send decision |
+| Conversation status | `communications.team_inbox_status` | Owns every status transition and its immutable evidence |
+| Historical lifecycle reconstruction | `communications.team_inbox_audit_reconstruction` | Applies only reviewed, hash-bound, provenance-graded historical evidence |
+| Lifecycle audit timeline and drift | `communications.team_inbox_audit_projection` | Combines immutable evidence, exposes coverage, and reports current-state drift |
 | Operator read/unread state | `communications.team_inbox_operator_state` | Owns per-person monotonic read cursors and unread repair |
 | Outbound communication intent | `communications.team_inbox_outbound_intents` | Stages the intent, notification outbox record, and Inbox attempt together |
 | Provider receipts | `communications.team_inbox_delivery_receipts` | Applies timestamp-monotonic sent/delivered/read/failed projections |
@@ -85,6 +91,14 @@ default or configured fallback team remains the primary team. The route rows
 are routing policy only; provider credentials and SMTP listener secrets remain
 owned by configuration and secret-management contracts.
 
+When no eligible agent has capacity, routing records one durable queue entry
+with a team-scoped monotonic admission position and entry timestamp. The
+periodic promotion command locks the oldest entries and each target team before
+rechecking live capacity, promotes only the oldest eligible conversation, and
+durably settles invalid or already-assigned entries. The agent projection
+derives current FIFO rank and an estimated wait from that ledger and the live
+capacity snapshot; it never makes a routing decision.
+
 ## Outbound flow
 
 An operator command locks the active conversation and records a communication
@@ -119,6 +133,32 @@ The admin CRM-replication controls use these existing owners:
   metadata. SMTP places CC in the MIME header, never emits a BCC header, and
   sends the primary, CC and BCC addresses in the envelope.
 
+## Lifecycle audit evidence
+
+Routing, status, and presence transitions append immutable native evidence in
+the same transaction as current-state projection changes. Routing evidence is
+authoritative for why an assignment ended; an assignment interval stores only
+`ended_at` and `ended_by_event_id`, avoiding a second copy of the reason.
+Queueing always appends a routing event even though it creates no person
+assignment. Escalations are events rather than overwriteable conversation
+metadata. Status and presence JSON histories are compatibility projections and
+are not audit authority.
+
+Native evidence records typed source and reason codes, actor identity when
+known, occurrence and recording time, and a unique source identity. Automatic
+routing additionally preserves the selected assignment outcome; candidate
+decision evidence remains bounded and excludes message content and customer
+identity.
+
+Historical reconstruction is a separate reviewed reconciler. Preview scans
+the complete eligible source set, emits explicit unknown exceptions, binds a
+source watermark and canonical SHA-256, and performs no writes. Apply refuses
+changed evidence, a mismatched hash, missing approval reference, or duplicate
+source identity. Reconstructed events retain an evidence grade and
+`historical_backfill` provenance. The process never invents an actor, reason,
+queue interval, or assignment ending timestamp. See
+`docs/runbooks/TEAM_INBOX_AUDIT_RECONSTRUCTION.md`.
+
 ## Derived state and repair
 
 | Projection | Inputs | Canonical writer | Repair |
@@ -129,6 +169,7 @@ The admin CRM-replication controls use these existing owners:
 | Customer context drawer | Exact Party/Subscriber/Lead links plus permission-scoped owner queries | contact-context query owner | Recompute on drawer load; per-section failures remain explicit and retryable |
 | Realtime envelope | Current committed Inbox projection | realtime transport | `rebuild_conversation_projection` republishes a snapshot; clients refetch |
 | Media and failed worklists | Authoritative message/intent metadata | maintenance owner | Idempotent scheduled maintenance commands |
+| Lifecycle audit timeline | Immutable routing/status events and assignment intervals | audit-projection owner | Recompute on query; findings identify status mismatch and missing assignment-end evidence |
 
 Database reads remain authoritative when Redis realtime is unavailable or
 stale. Realtime has no replay authority.
@@ -179,7 +220,8 @@ stale. Realtime has no replay authority.
   inbound message in the conversation is unread; outbound and internal
   messages never contribute.
 - Sort: the typed allow-list in `InboxListSort`; unknown values fall back to
-  the priority-ascending, last-message-descending queue order. Page size is
+  newest activity first (`last_message_at` descending). Priority remains an
+  explicit sort and filter, not the default queue ordering. Page size is
   restricted to the declared options.
 - Actions: routes map permission and domain outcomes only. Templates render
   owner-provided eligibility and never reconstruct lifecycle rules. Operators
@@ -192,6 +234,11 @@ stale. Realtime has no replay authority.
 - Responsive behavior: the queue and conversation actions remain usable at
   narrow widths; desktop-only density must not hide the primary reply/read
   actions.
+- Sales actions: the projection supplies owner-resolved Lead-form eligibility
+  and plan-family catalogue options to the composer. Templates display those
+  outcomes without independently deciding customer/contact identity or
+  catalogue availability. See
+  `docs/designs/INBOX_PLAN_CATALOGUE_SHARING.md`.
 
 ## Schema and migration
 
