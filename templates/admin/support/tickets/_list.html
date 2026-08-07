@@ -104,7 +104,6 @@
                 <div class="relative"
                      @click.window.capture="if (!$el.contains($event.target)) open = false"
                      @click.window="if (!$el.contains($event.target)) open = false"
-                     @click.outside="open = false"
                      @keydown.escape.window="open = false">
                     <button type="button"
                             id="ticket-column-toggle"
