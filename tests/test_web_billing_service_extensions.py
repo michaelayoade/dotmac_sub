@@ -221,6 +221,7 @@ def test_actor_label_snapshot_survives_staff_rename_and_deletion(
         email=f"extension-{uuid4().hex}@example.com",
     )
     db_session.add(actor)
+    subscriber_id = str(subscriber.id)
     db_session.commit()
     created = service_extensions.create_service_extension(
         db_session,
@@ -236,7 +237,7 @@ def test_actor_label_snapshot_survives_staff_rename_and_deletion(
             window_end=_NOW - timedelta(hours=1),
             days=1,
             scope_type=ServiceExtensionScope.subscribers,
-            subscriber_identifiers=(str(subscriber.id),),
+            subscriber_identifiers=(subscriber_id,),
             subscriber_ids_resolved=True,
         ),
     )

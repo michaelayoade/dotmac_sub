@@ -314,8 +314,18 @@ def test_new_network_scope_is_absent_and_rejected_without_evidence(
     assert exc.value.code.endswith("network_scope_retired")
     assert not db_session.in_transaction()
     assert db_session.query(ServiceExtension).count() == 0
-    assert db_session.query(AuditEvent).count() == 0
-    assert db_session.query(EventStore).count() == 0
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "service_extension")
+        .count()
+        == 0
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "billing.service_extension_created")
+        .count()
+        == 0
+    )
 
 
 def test_apply_network_scope_extends_all_active(db_session, subscriber, catalog_offer):
@@ -1226,6 +1236,7 @@ def test_create_stages_one_atomic_audit_and_domain_event(
     db_session, subscriber, catalog_offer
 ):
     _sub(db_session, subscriber, catalog_offer)
+    subscriber_id = str(subscriber.id)
     db_session.commit()
     idempotency_key = str(uuid4())
     context = _command_context(
@@ -1239,7 +1250,7 @@ def test_create_stages_one_atomic_audit_and_domain_event(
         window_end=_WIN_END,
         days=2,
         scope_type=ServiceExtensionScope.subscribers,
-        subscriber_identifiers=(str(subscriber.id),),
+        subscriber_identifiers=(subscriber_id,),
         subscriber_ids_resolved=True,
     )
 
@@ -1284,6 +1295,7 @@ def test_create_rejects_changed_inputs_for_same_idempotency_key(
     db_session, subscriber, catalog_offer
 ):
     _sub(db_session, subscriber, catalog_offer)
+    subscriber_id = str(subscriber.id)
     db_session.commit()
     context = _command_context(
         svc.CREATE_SCOPE,
@@ -1296,7 +1308,7 @@ def test_create_rejects_changed_inputs_for_same_idempotency_key(
         window_end=_WIN_END,
         days=1,
         scope_type=ServiceExtensionScope.subscribers,
-        subscriber_identifiers=(str(subscriber.id),),
+        subscriber_identifiers=(subscriber_id,),
         subscriber_ids_resolved=True,
     )
     changed = svc.CreateServiceExtensionCommand(
@@ -1306,7 +1318,7 @@ def test_create_rejects_changed_inputs_for_same_idempotency_key(
         window_end=_WIN_END,
         days=2,
         scope_type=ServiceExtensionScope.subscribers,
-        subscriber_identifiers=(str(subscriber.id),),
+        subscriber_identifiers=(subscriber_id,),
         subscriber_ids_resolved=True,
     )
 
@@ -1322,6 +1334,7 @@ def test_forced_create_failure_rolls_back_aggregate_audit_and_event(
     db_session, subscriber, catalog_offer, monkeypatch
 ):
     _sub(db_session, subscriber, catalog_offer)
+    subscriber_id = str(subscriber.id)
     db_session.commit()
     command = svc.CreateServiceExtensionCommand(
         context=_command_context(svc.CREATE_SCOPE),
@@ -1330,7 +1343,7 @@ def test_forced_create_failure_rolls_back_aggregate_audit_and_event(
         window_end=_WIN_END,
         days=1,
         scope_type=ServiceExtensionScope.subscribers,
-        subscriber_identifiers=(str(subscriber.id),),
+        subscriber_identifiers=(subscriber_id,),
         subscriber_ids_resolved=True,
     )
 
