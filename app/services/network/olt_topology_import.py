@@ -45,6 +45,7 @@ from app.models.network import (
     OltShelf,
     PonPort,
 )
+from app.services.events import EventType, emit_event
 from app.services.network.olt_topology_parse import OltTopologyReading
 from app.services.network.pon_port_identity import (
     PonIdentityShape,
@@ -232,6 +233,25 @@ def import_topology(
             counters.linked += 1
             if materialize_identity(db, matched) is not None:
                 counters.identities += 1
+
+    if counters.shelves or counters.cards or counters.ports or counters.linked:
+        # Learning that an OLT has hardware Sub never recorded is a new fact
+        # about the estate, even though the device was always that shape. It is
+        # emitted only when something was actually established, so a re-run
+        # that changes nothing stays silent.
+        emit_event(
+            db,
+            EventType.olt_topology_imported,
+            {
+                "olt_id": str(olt.id),
+                "olt_name": olt.name,
+                "shelves_created": counters.shelves,
+                "cards_created": counters.cards,
+                "ports_created": counters.ports,
+                "pon_rows_linked": counters.linked,
+                "identities_established": counters.identities,
+            },
+        )
 
     return TopologyImportOutcome(
         olt_id=str(olt.id),
