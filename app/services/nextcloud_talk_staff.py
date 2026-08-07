@@ -31,16 +31,39 @@ from app.models.notification import (
 from app.models.system_user import SystemUser
 from app.schemas.notification import NotificationCreate
 from app.services.branding_config import get_brand
+from app.services.domain_errors import DomainError
 from app.services.integrations import installations, nextcloud_talk_capability
 from app.services.integrations.runtime import OperationStatus
 from app.services.notification import notifications as notifications_svc
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
 FEATURE_SETTING = "nextcloud_talk_staff_notifications_enabled"
+OWNER = "communications.nextcloud_talk_staff"
+COMMAND_SCOPE = "communications:nextcloud-talk-staff"
 MAX_RETRIES = 3
 STALE_ROOM_ERROR_CODES = frozenset({"provider_resource_not_found", "room_forbidden"})
+_SET_MAPPING_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="staff-to-Nextcloud username mapping",
+    name="set_staff_account_mapping",
+)
+_DISABLE_MAPPING_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="staff-to-Nextcloud username mapping",
+    name="disable_staff_account_mapping",
+)
+_TEST_CONNECTION_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="staff direct-room token projection",
+    name="test_staff_talk_connection",
+)
 
 
 class StaffTalkEventType(StrEnum):
@@ -76,6 +99,32 @@ class TalkDeliveryBatchResult:
 class TalkConnectionTestResult:
     succeeded: bool
     error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SetStaffAccountMappingCommand:
+    context: CommandContext
+    system_user_id: UUID
+    integration_installation_id: UUID
+    nextcloud_username: str
+
+
+@dataclass(frozen=True, slots=True)
+class DisableStaffAccountMappingCommand:
+    context: CommandContext
+    system_user_id: UUID
+    integration_installation_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class TestStaffTalkConnectionCommand:
+    context: CommandContext
+    system_user_id: UUID
+    integration_installation_id: UUID
+
+
+class NextcloudTalkStaffCommandError(DomainError):
+    """Safe failure returned by a contracted staff-Talk owner command."""
 
 
 def _enabled(db: Session) -> bool:
@@ -236,6 +285,26 @@ def set_staff_account_mapping(
     return mapping
 
 
+def execute_set_staff_account_mapping(
+    db: Session,
+    command: SetStaffAccountMappingCommand,
+) -> NextcloudTalkStaffAccount:
+    """Persist one mapping through the contracted owner transaction."""
+
+    return execute_owner_command(
+        db,
+        definition=_SET_MAPPING_COMMAND,
+        context=command.context,
+        operation=lambda: set_staff_account_mapping(
+            db,
+            system_user_id=command.system_user_id,
+            integration_installation_id=command.integration_installation_id,
+            nextcloud_username=command.nextcloud_username,
+            actor=command.context.actor,
+        ),
+    )
+
+
 def disable_staff_account_mapping(
     db: Session,
     *,
@@ -264,6 +333,25 @@ def disable_staff_account_mapping(
     )
     db.flush()
     return True
+
+
+def execute_disable_staff_account_mapping(
+    db: Session,
+    command: DisableStaffAccountMappingCommand,
+) -> bool:
+    """Disable one mapping through the contracted owner transaction."""
+
+    return execute_owner_command(
+        db,
+        definition=_DISABLE_MAPPING_COMMAND,
+        context=command.context,
+        operation=lambda: disable_staff_account_mapping(
+            db,
+            system_user_id=command.system_user_id,
+            integration_installation_id=command.integration_installation_id,
+            actor=command.context.actor,
+        ),
+    )
 
 
 def staff_account_mapping_rows(
@@ -772,6 +860,34 @@ def test_staff_talk_connection(
     return TalkConnectionTestResult(
         False,
         outcome.error_code or "talk_connection_test_failed",
+    )
+
+
+def execute_test_staff_talk_connection(
+    db: Session,
+    command: TestStaffTalkConnectionCommand,
+) -> TalkConnectionTestResult:
+    """Run the operator-requested test in one complete owner transaction."""
+
+    def operation() -> TalkConnectionTestResult:
+        result = test_staff_talk_connection(
+            db,
+            system_user_id=command.system_user_id,
+            integration_installation_id=command.integration_installation_id,
+        )
+        if not result.succeeded:
+            error_code = result.error_code or "talk_connection_test_failed"
+            raise NextcloudTalkStaffCommandError(
+                code=f"{OWNER}.{error_code}",
+                message=error_code,
+            )
+        return result
+
+    return execute_owner_command(
+        db,
+        definition=_TEST_CONNECTION_COMMAND,
+        context=command.context,
+        operation=operation,
     )
 
 

@@ -1977,17 +1977,26 @@ def user_nextcloud_talk_mapping_save(
 ):
     _require_system_user_principal(request)
     try:
-        nextcloud_talk_staff_service.set_staff_account_mapping(
+        nextcloud_talk_staff_service.execute_set_staff_account_mapping(
             db,
-            system_user_id=coerce_uuid(user_id),
-            integration_installation_id=installation_id,
-            nextcloud_username=nextcloud_username,
-            actor=f"system_user:{_system_actor_id(request) or 'unknown'}",
+            nextcloud_talk_staff_service.SetStaffAccountMappingCommand(
+                context=_system_command_context(
+                    request,
+                    scope=nextcloud_talk_staff_service.COMMAND_SCOPE,
+                    reason="Administrative Nextcloud Talk staff mapping update",
+                    idempotency_key=(
+                        f"nextcloud-talk-mapping:{user_id}:{installation_id}:"
+                        f"{nextcloud_username.strip().casefold()}"
+                    ),
+                ),
+                system_user_id=coerce_uuid(user_id),
+                integration_installation_id=installation_id,
+                nextcloud_username=nextcloud_username,
+            ),
         )
-        db.commit()
-    except (ValueError, IntegrityError) as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (DomainError, ValueError, IntegrityError) as exc:
+        detail = exc.message if isinstance(exc, DomainError) else str(exc)
+        raise HTTPException(status_code=409, detail=detail) from exc
     return RedirectResponse(
         f"/admin/system/users/{user_id}?talk_mapping_saved=1",
         status_code=303,
@@ -2005,13 +2014,25 @@ def user_nextcloud_talk_mapping_disable(
     db: Session = Depends(get_db),
 ):
     _require_system_user_principal(request)
-    nextcloud_talk_staff_service.disable_staff_account_mapping(
-        db,
-        system_user_id=coerce_uuid(user_id),
-        integration_installation_id=installation_id,
-        actor=f"system_user:{_system_actor_id(request) or 'unknown'}",
-    )
-    db.commit()
+    try:
+        nextcloud_talk_staff_service.execute_disable_staff_account_mapping(
+            db,
+            nextcloud_talk_staff_service.DisableStaffAccountMappingCommand(
+                context=_system_command_context(
+                    request,
+                    scope=nextcloud_talk_staff_service.COMMAND_SCOPE,
+                    reason="Administrative Nextcloud Talk staff mapping disable",
+                    idempotency_key=(
+                        f"nextcloud-talk-mapping-disable:{user_id}:{installation_id}"
+                    ),
+                ),
+                system_user_id=coerce_uuid(user_id),
+                integration_installation_id=installation_id,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        detail = exc.message if isinstance(exc, DomainError) else str(exc)
+        raise HTTPException(status_code=409, detail=detail) from exc
     return RedirectResponse(
         f"/admin/system/users/{user_id}?talk_mapping_disabled=1",
         status_code=303,
@@ -2029,18 +2050,24 @@ def user_nextcloud_talk_mapping_test(
     db: Session = Depends(get_db),
 ):
     _require_system_user_principal(request)
-    result = nextcloud_talk_staff_service.test_staff_talk_connection(
-        db,
-        system_user_id=coerce_uuid(user_id),
-        integration_installation_id=installation_id,
-    )
-    if not result.succeeded:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail=result.error_code or "Nextcloud Talk connection test failed",
+    try:
+        nextcloud_talk_staff_service.execute_test_staff_talk_connection(
+            db,
+            nextcloud_talk_staff_service.TestStaffTalkConnectionCommand(
+                context=_system_command_context(
+                    request,
+                    scope=nextcloud_talk_staff_service.COMMAND_SCOPE,
+                    reason="Administrative Nextcloud Talk connection test",
+                    idempotency_key=(
+                        f"nextcloud-talk-test:{user_id}:{installation_id}:{uuid4()}"
+                    ),
+                ),
+                system_user_id=coerce_uuid(user_id),
+                integration_installation_id=installation_id,
+            ),
         )
-    db.commit()
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
     return RedirectResponse(
         f"/admin/system/users/{user_id}?talk_test_sent=1",
         status_code=303,
