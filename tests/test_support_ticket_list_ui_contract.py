@@ -380,7 +380,9 @@ def test_ticket_full_and_htmx_views_share_canonical_accessible_partials():
     assert "@click.outside" not in list_partial
     assert "outsideClickListener" in page
     assert "window.addEventListener('click', this.outsideClickListener, true)" in page
-    assert "window.removeEventListener('click', this.outsideClickListener, true)" in page
+    assert (
+        "window.removeEventListener('click', this.outsideClickListener, true)" in page
+    )
     assert 'name="region" data-auto-submit' in list_partial
     assert "All Regions" in list_partial
     assert "{% for option in region_options %}" in list_partial
