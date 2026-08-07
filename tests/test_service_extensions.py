@@ -98,6 +98,7 @@ def _create(db_session, **values):
             str(item) for item in db_session.scalars(select(Subscriber.id)).all()
         ]
         values["subscriber_ids_resolved"] = True
+        db_session.commit()
     outcome = svc.create_service_extension(
         db_session,
         svc.CreateServiceExtensionCommand(
@@ -297,6 +298,7 @@ def test_new_network_scope_is_absent_and_rejected_without_evidence(
     assert (
         ServiceExtensionScope.network not in svc.scope_options(db_session).scope_types
     )
+    db_session.commit()
     command = svc.CreateServiceExtensionCommand(
         context=_command_context(svc.CREATE_SCOPE),
         reason="Retired broad grant",

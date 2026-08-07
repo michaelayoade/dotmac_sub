@@ -209,7 +209,9 @@ def test_activity_order_is_deterministic_for_equal_timestamps(db_session):
     ]
 
 
-def test_actor_label_snapshot_survives_staff_rename_and_deletion(db_session):
+def test_actor_label_snapshot_survives_staff_rename_and_deletion(
+    db_session, subscriber
+):
     actor_id = uuid4()
     actor = SystemUser(
         id=actor_id,
@@ -233,7 +235,9 @@ def test_actor_label_snapshot_survives_staff_rename_and_deletion(db_session):
             window_start=_NOW - timedelta(hours=2),
             window_end=_NOW - timedelta(hours=1),
             days=1,
-            scope_type=ServiceExtensionScope.network,
+            scope_type=ServiceExtensionScope.subscribers,
+            subscriber_identifiers=(str(subscriber.id),),
+            subscriber_ids_resolved=True,
         ),
     )
     actor.display_name = "Renamed Operator"
