@@ -1161,6 +1161,27 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.nextcloud_talk_staff",
+            module="app.services.nextcloud_talk_staff",
+            owns=(
+                "staff-to-Nextcloud username mapping",
+                "staff direct-room token projection",
+                "Nextcloud Talk staff delivery admission and idempotency",
+                "Nextcloud Talk staff delivery retry and reconciliation policy",
+            ),
+            depends_on=(
+                "communications.notification_service",
+                "integration.installations",
+                "integration.runtime",
+            ),
+            notes=(
+                "Ticket and project owners stage a notification row in their "
+                "own transaction. This owner resolves the explicit staff mapping "
+                "and calls only the version-pinned collaboration capability from "
+                "the asynchronous notification worker."
+            ),
+        ),
+        SOTService(
             name="communications.campaigns",
             module="app.services.comms_campaigns",
             owns=(

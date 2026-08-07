@@ -3105,6 +3105,18 @@ in forms, or rotate key material directly.
    when it verifies or rejects the proof. Opening an inbox item is scoped to its
    assigned system user; the target action performs its own domain permission
    check again.
+10. `communications.nextcloud_talk_staff` owns the explicit mapping from a
+   `SystemUser` to a Nextcloud username, the reusable direct-room projection,
+   and Talk-specific delivery idempotency, retry, and reconciliation policy.
+   Ticket and project owners stage a `nextcloud_talk` notification row in the
+   same transaction as the assignment or explicit mention. The notification
+   worker later invokes the enabled, version-pinned `nextcloud.talk` capability;
+   it never performs Nextcloud HTTP inside a ticket or project transaction.
+   The ordinary setting
+   `notification.nextcloud_talk_staff_notifications_enabled` gates new staging
+   and worker delivery and defaults to `false`. URL, notifier identity, timeout,
+   and app-password reference remain installation configuration, not settings
+   or notification metadata.
 9. `communications.customer_read_state` owns customer notification read/unread
    state and unread counts across the web portal and mobile app. Subscriber
    metadata is its bounded persistence mechanism; `/me/notifications` projects

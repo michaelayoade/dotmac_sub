@@ -47,6 +47,7 @@ from app.services import email as email_service
 from app.services import file_upload as file_upload_service
 from app.services import import_runs as import_runs_service
 from app.services import module_manager as module_manager_service
+from app.services import nextcloud_talk_staff as nextcloud_talk_staff_service
 from app.services import radius_reject as radius_reject_service
 from app.services import rbac_catalog, settings_spec
 from app.services import (
@@ -1950,11 +1951,99 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
             "credential": detail_data["credential"],
             "mfa_methods": detail_data["mfa_methods"],
             "audit_items": _system_user_audit_items(db, user_id),
+            "nextcloud_talk_accounts": (
+                nextcloud_talk_staff_service.staff_account_mapping_rows(
+                    db, system_user_id=coerce_uuid(user_id)
+                )
+            ),
             "active_page": "users",
             "active_menu": "system",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
+    )
+
+
+@router.post(
+    "/users/{user_id}/nextcloud-talk",
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
+def user_nextcloud_talk_mapping_save(
+    request: Request,
+    user_id: str,
+    installation_id: UUID = Form(...),
+    nextcloud_username: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _require_system_user_principal(request)
+    try:
+        nextcloud_talk_staff_service.set_staff_account_mapping(
+            db,
+            system_user_id=coerce_uuid(user_id),
+            integration_installation_id=installation_id,
+            nextcloud_username=nextcloud_username,
+            actor=f"system_user:{_system_actor_id(request) or 'unknown'}",
+        )
+        db.commit()
+    except (ValueError, IntegrityError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return RedirectResponse(
+        f"/admin/system/users/{user_id}?talk_mapping_saved=1",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/users/{user_id}/nextcloud-talk/{installation_id}/disable",
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
+def user_nextcloud_talk_mapping_disable(
+    request: Request,
+    user_id: str,
+    installation_id: UUID,
+    db: Session = Depends(get_db),
+):
+    _require_system_user_principal(request)
+    nextcloud_talk_staff_service.disable_staff_account_mapping(
+        db,
+        system_user_id=coerce_uuid(user_id),
+        integration_installation_id=installation_id,
+        actor=f"system_user:{_system_actor_id(request) or 'unknown'}",
+    )
+    db.commit()
+    return RedirectResponse(
+        f"/admin/system/users/{user_id}?talk_mapping_disabled=1",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/users/{user_id}/nextcloud-talk/{installation_id}/test",
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
+def user_nextcloud_talk_mapping_test(
+    request: Request,
+    user_id: str,
+    installation_id: UUID,
+    db: Session = Depends(get_db),
+):
+    _require_system_user_principal(request)
+    result = nextcloud_talk_staff_service.test_staff_talk_connection(
+        db,
+        system_user_id=coerce_uuid(user_id),
+        integration_installation_id=installation_id,
+    )
+    if not result.succeeded:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=result.error_code or "Nextcloud Talk connection test failed",
+        )
+    db.commit()
+    return RedirectResponse(
+        f"/admin/system/users/{user_id}?talk_test_sent=1",
+        status_code=303,
     )
 
 
