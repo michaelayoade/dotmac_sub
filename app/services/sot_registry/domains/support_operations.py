@@ -903,7 +903,8 @@ DOMAIN = DomainSOT(
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "distinct non-empty Region values on current active Ticket rows"
+                            "distinct normalized non-empty Region values on current "
+                            "active Ticket rows"
                         ),
                     ),
                 ),
