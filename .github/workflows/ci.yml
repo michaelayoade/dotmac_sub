@@ -297,9 +297,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-ci-python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+      # The gate is pure stdlib, so it needs neither the project virtualenv nor
+      # the shared python-environment artifact — depending on either only adds
+      # a failure mode unrelated to what it checks.
 
       # Shadow phase per docs/adr/0008-migration-sequence-ownership.md: report
       # findings without failing the build, so we can measure how many pull
@@ -307,7 +307,7 @@ jobs:
       - name: Check migration chains onto the base head
         run: |
           git fetch origin "${{ github.base_ref || 'dev' }}" --depth=0 || true
-          python scripts/architecture/migration_sequence_gate.py \
+          python3 scripts/architecture/migration_sequence_gate.py \
             --base "origin/${{ github.base_ref || 'dev' }}" --report-only
 
   architecture:
