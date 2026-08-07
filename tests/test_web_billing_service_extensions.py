@@ -413,3 +413,13 @@ def test_create_form_preserves_server_idempotency_key_and_submit_lock():
     assert ':disabled="submitting"' in form
     assert "_form_context(" in route
     assert "idempotency_key=idempotency_key" in route
+
+
+def test_create_form_scope_contract_omits_network(db_session):
+    options = service_extensions.scope_options(db_session)
+
+    assert options.scope_types == (
+        ServiceExtensionScope.pop_site,
+        ServiceExtensionScope.nas_device,
+        ServiceExtensionScope.subscribers,
+    )
