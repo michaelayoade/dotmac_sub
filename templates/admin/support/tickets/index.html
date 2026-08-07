@@ -349,7 +349,15 @@ function ticketFilterBuilder() {
 function ticketColumnPicker() {
     return {
         open: false,
+        outsideClickListener: null,
         init() {
+            this.outsideClickListener = (event) => {
+                if (!this.$refs.ticketColumnPicker?.contains(event.target)) {
+                    this.open = false;
+                }
+            };
+            window.addEventListener('click', this.outsideClickListener, true);
+
             const apply = () => {
                 const checked = Array.from(document.querySelectorAll('.ticket-col-toggle:checked')).map((el) => el.dataset.columnKey);
                 document.querySelectorAll('[data-column]').forEach((el) => {
@@ -362,6 +370,9 @@ function ticketColumnPicker() {
                 el.addEventListener('change', apply);
             });
             apply();
+        },
+        destroy() {
+            window.removeEventListener('click', this.outsideClickListener, true);
         }
     };
 }
