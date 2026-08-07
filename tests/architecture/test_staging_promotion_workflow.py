@@ -75,10 +75,7 @@ def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
     assert 'test -e "$STAGING_DEPLOY_DIR/.git"' in workflow
     assert "rev-parse --is-inside-work-tree" in workflow
     assert "Check out exact candidate without moving deployment branches" in workflow
-    assert (
-        'git -C "$STAGING_DEPLOY_DIR" checkout --detach "$CANDIDATE_SHA"'
-        in workflow
-    )
+    assert 'git -C "$STAGING_DEPLOY_DIR" checkout --detach "$CANDIDATE_SHA"' in workflow
     assert 'git -C "$STAGING_DEPLOY_DIR" symbolic-ref -q HEAD' in workflow
     for forbidden_branch_mutation in (
         'git -C "$STAGING_DEPLOY_DIR" checkout dev',
