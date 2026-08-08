@@ -179,6 +179,11 @@ def test_the_enum_becomes_open_text_and_keeps_every_row(
     config = _alembic_config()
 
     command.upgrade(config, REVISION_501)
+
+    # 001 restores the retired enum precisely so the chain up to 501 replays
+    # against the shape it was authored for. Asserting it here is also the
+    # regression test for that restoration: without it the chain dies at 144
+    # with `type "settingdomain" does not exist`.
     assert _enum_exists(database_url), "predecessor must still carry the enum type"
     assert _column_type(database_url) == "USER-DEFINED"
 

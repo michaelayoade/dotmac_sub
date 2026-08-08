@@ -18,7 +18,9 @@ regression would silently pass:
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from sqlalchemy import CheckConstraint
@@ -207,3 +209,28 @@ def test_the_registry_is_derived_from_the_sot_registry() -> None:
         for setting_domain in sot.setting_domains
     }
     assert dict(SETTING_DOMAIN_OWNERS) == from_sot
+
+
+def _revision_module(revision: str) -> ModuleType:
+    path = REPO_ROOT / "alembic" / "versions" / f"{revision}.py"
+    spec = importlib.util.spec_from_file_location(revision, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_two_legacy_enum_lists_agree() -> None:
+    """001 rebuilds the retired type; 502 rebuilds it on downgrade.
+
+    They describe the same historical fact from opposite directions, and a
+    mismatch would only surface as a failed cast on a real database — 001
+    building a type that 502's downgrade cannot restore, or vice versa. Both
+    lists are frozen history and neither should ever change again.
+    """
+
+    base = _revision_module("001_squashed_initial_schema")
+    retirement = _revision_module("502_open_setting_domain_vocabulary")
+    assert tuple(base._LEGACY_SETTING_DOMAIN_MEMBERS) == tuple(
+        retirement.LEGACY_MEMBERS
+    )

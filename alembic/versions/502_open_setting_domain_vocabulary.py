@@ -40,6 +40,12 @@ ENUM_NAME = "settingdomain"
 
 #: The members the enum carried at the time of this migration. Only used to
 #: rebuild the type on downgrade — the upgrade path never enumerates domains.
+#:
+#: This is the DEPLOYED type's membership, which is not the same as the model's
+#: accessors: `vas` was added by `144_vas_wallets` and later dropped from the
+#: model without being removed from the type (PostgreSQL cannot remove an enum
+#: member without rebuilding). Omitting it here would make a downgrade fail on
+#: any surviving `vas` row.
 LEGACY_MEMBERS: tuple[str, ...] = (
     "auth",
     "audit",
@@ -69,6 +75,7 @@ LEGACY_MEMBERS: tuple[str, ...] = (
     "scheduler",
     "field",
     "integration",
+    "vas",
 )
 
 
