@@ -1279,14 +1279,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
-        key="refresh_minutes",
-        env_var="CELERY_BEAT_REFRESH_MINUTES",
-        value_type=SettingValueType.integer,
-        default=5,
-        min_value=1,
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
         key="event_dispatch_interval_seconds",
         env_var="EVENT_DISPATCH_INTERVAL_SECONDS",
         value_type=SettingValueType.integer,
@@ -4457,6 +4449,53 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=True,
         label="Cross-application drift detection",
+    ),
+    # The request-audit middleware's five controls. They were writable through
+    # `settings_api_custom` with NO spec at all — the custom handler validates
+    # against its own `_AUDIT_SETTING_*` sets, so nothing required a
+    # declaration. Declared here at their EXACT current shape (seed:
+    # `seed_audit_settings`; runtime defaults: `app.main._default_audit_settings`)
+    # so the two agree before the handler is routed through the spec.
+    # `tests/architecture/test_audit_setting_defaults.py` pins that agreement.
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="enabled",
+        env_var=None,
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Request audit logging",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="methods",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default=["POST", "PUT", "PATCH", "DELETE"],
+        label="Audited HTTP methods",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="skip_paths",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default=["/static", "/web", "/health"],
+        label="Path prefixes excluded from audit logging",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="read_trigger_header",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="x-audit-read",
+        label="Header that opts a read request into audit logging",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="read_trigger_query",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="audit",
+        label="Query parameter that opts a read request into audit logging",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
