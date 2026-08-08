@@ -188,7 +188,7 @@ def test_production_promotion_reuses_the_staged_digest_without_a_build() -> None
     assert "git merge-base --is-ancestor" in workflow
     assert "authorize-production" in workflow
     assert (
-        'const expectedRepository = `${context.repo.owner}/${context.repo.repo}`;'
+        "const expectedRepository = `${context.repo.owner}/${context.repo.repo}`;"
         in workflow
     )
     assert '[stagingId, "Deploy dev to staging", "main", "workflow_run"]' in workflow
@@ -215,7 +215,7 @@ def test_production_deploy_requires_authorization_and_runs_no_test_suite() -> No
     assert "environment: production" in workflow
     assert "verify-production" in workflow
     assert (
-        'const expectedRepository = `${context.repo.owner}/${context.repo.repo}`;'
+        "const expectedRepository = `${context.repo.owner}/${context.repo.repo}`;"
         in workflow
     )
     assert "run.head_repository?.full_name !== expectedRepository" in workflow
