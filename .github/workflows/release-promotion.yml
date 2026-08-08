@@ -92,7 +92,8 @@ jobs:
               if (run.name !== expected[1] || run.head_branch !== expected[2] ||
                   run.event !== expected[3] || run.status !== "completed" ||
                   run.conclusion !== "success" ||
-                  run.head_repository.full_name !== context.repo.repo) {
+                  run.head_repository.full_name !==
+                  `${context.repo.owner}/${context.repo.repo}`) {
                 core.setFailed(`Run ${expected[0]} is not accepted ${expected[1]} evidence.`);
                 return;
               }
