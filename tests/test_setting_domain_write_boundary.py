@@ -13,6 +13,7 @@ its rows; it must not make them unreadable.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text
@@ -85,11 +86,18 @@ def test_an_undeclared_domain_is_rejected_on_update(db_session) -> None:
 def test_rows_under_an_undeclared_domain_still_read(db_session) -> None:
     """The migration preserves every value, including retired ones."""
 
+    # Raw SQL on purpose — the point is to plant a row the ORM listener would
+    # now refuse, the way the migration leaves one behind. `created_at` and
+    # `updated_at` are NOT NULL with PYTHON-side defaults, so bypassing the ORM
+    # means supplying them here.
+    now = datetime.now(UTC)
     db_session.execute(
         text(
             "INSERT INTO domain_settings "
-            "(id, domain, key, value_type, value_text, is_secret, is_active) "
-            "VALUES (:id, :domain, :key, :value_type, :value_text, :secret, :active)"
+            "(id, domain, key, value_type, value_text, is_secret, is_active, "
+            "created_at, updated_at) "
+            "VALUES (:id, :domain, :key, :value_type, :value_text, :secret, "
+            ":active, :created_at, :updated_at)"
         ),
         {
             "id": str(uuid.uuid4()),
@@ -99,6 +107,8 @@ def test_rows_under_an_undeclared_domain_still_read(db_session) -> None:
             "value_text": "kept",
             "secret": False,
             "active": True,
+            "created_at": now,
+            "updated_at": now,
         },
     )
     db_session.commit()
