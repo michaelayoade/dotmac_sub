@@ -54,6 +54,7 @@ class UsageAllowanceRead(BaseModel):
     included_gb: int | None = None
     overage_rate: Decimal | None = None
     overage_cap_gb: int | None = None
+    throttle_rate_mbps: int | None = None
     is_active: bool
 
 
@@ -62,6 +63,7 @@ class UsageAllowanceCreate(BaseModel):
     included_gb: int | None = Field(default=None, ge=0)
     overage_rate: Decimal | None = Field(default=None, ge=0)
     overage_cap_gb: int | None = Field(default=None, ge=0)
+    throttle_rate_mbps: int | None = Field(default=None, ge=1)
     is_active: bool = True
 
 
@@ -70,6 +72,7 @@ class UsageAllowanceUpdate(BaseModel):
     included_gb: int | None = Field(default=None, ge=0)
     overage_rate: Decimal | None = Field(default=None, ge=0)
     overage_cap_gb: int | None = Field(default=None, ge=0)
+    throttle_rate_mbps: int | None = Field(default=None, ge=1)
     is_active: bool | None = None
 
 
