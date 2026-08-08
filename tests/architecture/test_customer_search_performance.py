@@ -3,7 +3,7 @@
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = PROJECT_ROOT / "alembic/versions/503_customer_search_trigram_indexes.py"
+MIGRATION = PROJECT_ROOT / "alembic/versions/504_customer_search_trigram_indexes.py"
 
 
 def test_customer_search_indexes_every_previously_unindexed_or_branch() -> None:
