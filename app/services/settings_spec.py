@@ -1,3 +1,4 @@
+import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -5342,6 +5343,28 @@ def coerce_value(spec: SettingSpec, raw: object) -> tuple[object | None, str | N
         if isinstance(raw, str):
             return raw, None
         return str(raw), None
+    if spec.value_type == SettingValueType.json:
+        # A JSON setting reached through the settings form arrives as text. An
+        # object or array is parsed; anything else is read as a comma-separated
+        # list, which is the only established convention for these — the audit
+        # `methods`/`skip_paths` handler did exactly this before the shape moved
+        # to its owner. Without it, "POST, GET" would store as that string.
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                return [], None
+            if text.startswith(("[", "{")):
+                try:
+                    return json.loads(text), None
+                except ValueError:
+                    return None, "Value must be valid JSON"
+            return [item.strip() for item in text.split(",") if item.strip()], None
+        if isinstance(raw, list):
+            return [
+                item.strip() if isinstance(item, str) else item
+                for item in raw
+                if not isinstance(item, str) or item.strip()
+            ], None
     return raw, None
 
 
@@ -5349,8 +5372,12 @@ def normalize_for_db(
     spec: SettingSpec, value: object
 ) -> tuple[str | None, object | None]:
     if spec.value_type == SettingValueType.boolean:
+        # Both columns, deliberately. The seed writes both, the retired
+        # per-domain handlers wrote both, and `_to_bool` in app.main reads
+        # `value_json` first — leaving it NULL made a boolean row's shape depend
+        # on which writer produced it.
         bool_value = bool(value)
-        return ("true" if bool_value else "false"), None
+        return ("true" if bool_value else "false"), bool_value
     if spec.value_type == SettingValueType.integer:
         parsed = _coerce_int_value(value)
         if parsed is None:
