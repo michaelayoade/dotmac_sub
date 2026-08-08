@@ -1,9 +1,8 @@
 import json
 import logging
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
-
-from fastapi import HTTPException
 
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
@@ -27,6 +26,13 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+class SettingStringNormalization(str, Enum):
+    """Canonical normalization applied to a declared string setting."""
+
+    NONE = "none"
+    LOWERCASE = "lowercase"
 
 
 def _coerce_int_value(value: object) -> int | None:
@@ -67,6 +73,7 @@ class SettingSpec(ListResponseMixin):
     min_value: int | None = None
     max_value: int | None = None
     is_secret: bool = False
+    string_normalization: SettingStringNormalization = SettingStringNormalization.NONE
 
 
 SCHEDULER_BOOLEAN_SETTING_KEYS = frozenset(
@@ -278,6 +285,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="lax",
         allowed={"lax", "strict", "none"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
     ),
     SettingSpec(
         domain=SettingDomain.auth,
@@ -5138,12 +5146,9 @@ def resolve_value(db, domain: SettingDomain, key: str) -> Any:
 
     # 2. Query database
     service = DOMAIN_SETTINGS_SERVICE.get(domain)
-    setting = None
-    if service:
-        try:
-            setting = service.get_by_key(db, key)
-        except HTTPException:
-            setting = None
+    setting = (
+        service.get_optional_by_key(db, key, active_only=True) if service else None
+    )
     raw = extract_db_value(setting)
     if raw is None:
         raw = spec.default
@@ -5341,8 +5346,12 @@ def coerce_value(spec: SettingSpec, raw: object) -> tuple[object | None, str | N
         return None, "Value must be an integer"
     if spec.value_type == SettingValueType.string:
         if isinstance(raw, str):
-            return raw, None
-        return str(raw), None
+            value = raw
+        else:
+            value = str(raw)
+        if spec.string_normalization is SettingStringNormalization.LOWERCASE:
+            value = value.lower()
+        return value, None
     if spec.value_type == SettingValueType.json:
         # A JSON setting reached through the settings form arrives as text. An
         # object or array is parsed; anything else is read as a comma-separated
