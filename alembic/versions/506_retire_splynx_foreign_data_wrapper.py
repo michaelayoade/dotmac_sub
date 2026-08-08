@@ -20,8 +20,8 @@ a host that no longer exists.
 Downgrade deliberately does not recreate any of this. Restoring a connection to
 a decommissioned system is not a migration concern, and the remote is gone.
 
-Revision ID: 505_retire_splynx_foreign_data_wrapper
-Revises: 504_customer_search_trigram_indexes
+Revision ID: 506_retire_splynx_foreign_data_wrapper
+Revises: 505_retire_scheduler_refresh_minutes
 Create Date: 2026-08-08
 """
 
@@ -31,8 +31,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "505_retire_splynx_foreign_data_wrapper"
-down_revision: str | None = "504_customer_search_trigram_indexes"
+revision: str = "506_retire_splynx_foreign_data_wrapper"
+down_revision: str | None = "505_retire_scheduler_refresh_minutes"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
