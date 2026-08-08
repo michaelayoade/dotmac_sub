@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import psycopg
@@ -119,16 +120,22 @@ def _enum_exists(database_url: URL) -> bool:
 # Two whole literal statements rather than one interpolated: the only
 # difference is whether the domain is cast through the enum, and splicing that
 # in would be a string-built query for no gain.
+#
+# `created_at`/`updated_at` are NOT NULL with PYTHON-side defaults, so a
+# statement that goes round the ORM — which every insert here does, on purpose,
+# to write exactly what the schema of the moment allows — has to supply them.
 _INSERT_AS_ENUM = (
     "INSERT INTO domain_settings "
-    "(id, domain, key, value_type, value_text, is_secret, is_active) "
+    "(id, domain, key, value_type, value_text, is_secret, is_active, "
+    "created_at, updated_at) "
     "VALUES (:id, CAST(:domain AS settingdomain), :key, 'string', :value, "
-    "false, true)"
+    "false, true, :now, :now)"
 )
 _INSERT_AS_TEXT = (
     "INSERT INTO domain_settings "
-    "(id, domain, key, value_type, value_text, is_secret, is_active) "
-    "VALUES (:id, :domain, :key, 'string', :value, false, true)"
+    "(id, domain, key, value_type, value_text, is_secret, is_active, "
+    "created_at, updated_at) "
+    "VALUES (:id, :domain, :key, 'string', :value, false, true, :now, :now)"
 )
 
 
@@ -144,6 +151,7 @@ def _insert(database_url: URL, domain: str, key: str, *, cast_enum: bool) -> Non
                     "domain": domain,
                     "key": key,
                     "value": f"value-for-{key}",
+                    "now": datetime.now(UTC),
                 },
             )
     finally:
