@@ -10,8 +10,8 @@ The spec and seed are gone; this deletes the stored row so an operator cannot
 edit a control that changes nothing. `scheduler.beat_refresh_seconds` is the
 live control and is untouched.
 
-Revision ID: 503_retire_scheduler_refresh_minutes
-Revises: 502_open_setting_domain_vocabulary
+Revision ID: 505_retire_scheduler_refresh_minutes
+Revises: 504_customer_search_trigram_indexes
 Create Date: 2026-08-08
 """
 
@@ -23,8 +23,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "503_retire_scheduler_refresh_minutes"
-down_revision: str | None = "502_open_setting_domain_vocabulary"
+revision: str = "505_retire_scheduler_refresh_minutes"
+down_revision: str | None = "504_customer_search_trigram_indexes"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
