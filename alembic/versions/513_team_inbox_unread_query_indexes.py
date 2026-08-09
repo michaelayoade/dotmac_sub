@@ -5,8 +5,8 @@ operator's monotonic conversation cursor. PostgreSQL builds both indexes
 concurrently so the message chronology remains writable during the expand
 step. The set-based query is compatible before, during, and after either build.
 
-Revision ID: 507_team_inbox_unread_query_indexes
-Revises: 506_retire_splynx_foreign_data_wrapper
+Revision ID: 513_team_inbox_unread_query_indexes
+Revises: 512_open_setting_value_type_vocabulary
 Create Date: 2026-08-09
 """
 
@@ -16,8 +16,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "507_team_inbox_unread_query_indexes"
-down_revision: str | None = "506_retire_splynx_foreign_data_wrapper"
+revision: str = "513_team_inbox_unread_query_indexes"
+down_revision: str | None = "512_open_setting_value_type_vocabulary"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
