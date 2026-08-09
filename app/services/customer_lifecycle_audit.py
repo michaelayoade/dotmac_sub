@@ -28,6 +28,7 @@ from app.models.sales import (
     LeadSourcePlatform,
     Quote,
     SalesOrder,
+    SalesOrderInvoiceLink,
 )
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
@@ -63,6 +64,14 @@ _REQUIRED_COLUMNS = {
     "quotes": {"id", "lead_id", "subscriber_id"},
     "sales_orders": {"id", "quote_id", "subscriber_id"},
     "projects": {"id", "quote_id", "sales_order_id", "subscriber_id", "status"},
+    "sales_order_invoice_links": {
+        "id",
+        "sales_order_id",
+        "invoice_id",
+        "account_id",
+        "purpose",
+        "origin",
+    },
     "installation_projects": {"id", "project_id", "subscriber_id", "status"},
     "service_orders": {
         "id",
@@ -616,6 +625,57 @@ def _sales_order_counts(
     return {key: int(counts[key]) for key in keys}
 
 
+def _sales_order_invoice_link_counts(
+    projects: list[Project],
+    links: list[SalesOrderInvoiceLink],
+) -> dict[str, int]:
+    """Convergence of the structural sale-to-money link against the metadata join.
+
+    Sale-to-money was joined through ``Project.metadata_`` — a JSON string
+    comparison with no foreign key, uniqueness or referential integrity.
+    ``sales_order_invoice_links`` now records the same fact structurally and
+    both are written, so this reports whether the structural form has caught
+    up with what the metadata already asserts.
+
+    ``metadata_without_link`` is the cutover gate. While it is non-zero, moving
+    reads onto the link would silently drop the invoice association for those
+    orders — they would simply look like orders that were never invoiced.
+    Counts only; no identifiers, and no repair.
+    """
+    linked_invoice_ids = {link.invoice_id for link in links}
+    counts = Counter(
+        structural_links=len(links),
+        native_links=sum(1 for link in links if link.origin == "native"),
+        backfilled_links=sum(1 for link in links if link.origin == "backfill"),
+    )
+    for project in projects:
+        metadata = project.metadata_ if isinstance(project.metadata_, dict) else {}
+        order_id = str(metadata.get("sales_order_id") or "").strip()
+        invoice_id = str(metadata.get("selfcare_installation_invoice_id") or "").strip()
+        if not order_id or not invoice_id:
+            continue
+        counts["metadata_joins"] += 1
+        try:
+            parsed_invoice = UUID(invoice_id)
+        except (TypeError, ValueError):
+            counts["metadata_unparseable"] += 1
+            continue
+        if parsed_invoice in linked_invoice_ids:
+            counts["converged"] += 1
+        else:
+            counts["metadata_without_link"] += 1
+    keys = (
+        "metadata_joins",
+        "structural_links",
+        "native_links",
+        "backfilled_links",
+        "converged",
+        "metadata_without_link",
+        "metadata_unparseable",
+    )
+    return {key: int(counts[key]) for key in keys}
+
+
 def _subscriber_sales_order_counts(
     subscriber_rows: list[Subscriber],
     *,
@@ -878,6 +938,7 @@ def build_customer_lifecycle_audit(db: Session) -> dict[str, Any]:
     installation_rows = db.query(InstallationProject).all()
     service_order_rows = db.query(ServiceOrder).all()
     handoff_rows = db.query(CustomerExperienceHandoff).all()
+    sales_order_invoice_link_rows = db.query(SalesOrderInvoiceLink).all()
     referral_rows = db.query(Referral).filter(Referral.is_active.is_(True)).all()
     parties = {row.id: _value(row.status) for row in party_rows}
     subscribers = {row.id: row.party_id for row in subscriber_rows}
@@ -929,6 +990,9 @@ def build_customer_lifecycle_audit(db: Session) -> dict[str, Any]:
         ),
         "subscriber_sales_order_links": _subscriber_sales_order_counts(
             subscriber_rows, orders=orders
+        ),
+        "sales_order_invoice_links": _sales_order_invoice_link_counts(
+            project_rows, sales_order_invoice_link_rows
         ),
         "subscriptions": _subscription_counts(
             subscription_rows, subscribers=subscribers

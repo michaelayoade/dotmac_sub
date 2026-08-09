@@ -111,16 +111,16 @@ def upgrade() -> None:
                 now()
             FROM projects p
             JOIN sales_orders so
-              ON so.id = (p.metadata_ ->> 'sales_order_id')::uuid
+              ON so.id = (p."metadata" ->> 'sales_order_id')::uuid
             JOIN invoices i
-              ON i.id = (p.metadata_ ->> 'selfcare_installation_invoice_id')::uuid
+              ON i.id = (p."metadata" ->> 'selfcare_installation_invoice_id')::uuid
             JOIN subscribers s
               ON s.id = so.subscriber_id
-            WHERE p.metadata_ ->> 'sales_order_id' IS NOT NULL
-              AND p.metadata_ ->> 'selfcare_installation_invoice_id' IS NOT NULL
-              AND p.metadata_ ->> 'sales_order_id' ~
+            WHERE p."metadata" ->> 'sales_order_id' IS NOT NULL
+              AND p."metadata" ->> 'selfcare_installation_invoice_id' IS NOT NULL
+              AND p."metadata" ->> 'sales_order_id' ~
                   '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-              AND p.metadata_ ->> 'selfcare_installation_invoice_id' ~
+              AND p."metadata" ->> 'selfcare_installation_invoice_id' ~
                   '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
             ORDER BY i.id, p.created_at DESC
             ON CONFLICT ON CONSTRAINT uq_sales_order_invoice_links_invoice_id
