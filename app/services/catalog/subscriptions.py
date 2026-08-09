@@ -24,7 +24,6 @@ from app.models.catalog import (
     OfferPrice,
     OfferRadiusProfile,
     OfferVersionPrice,
-    PriceBasis,
     PriceType,
     RadiusProfile,
     Subscription,
@@ -47,7 +46,6 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.crud import CRUDManager
-from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.query_builders import apply_optional_equals
@@ -496,62 +494,33 @@ def _billing_cycle_start(next_billing_at: datetime, cycle: BillingCycle) -> date
     return _add_months(next_billing_at, -1)
 
 
-class OfferPricingNotConfigured(DomainError):
-    """An offer a subscription is being written against carries no price."""
-
-
 def contracted_amount_for_offer(
     db: Session, offer_id, *, offer_version_id=None
 ) -> Decimal | None:
     """The recurring amount a new subscription snapshots from its offer.
 
     Public because ``Subscriptions.create`` is not the only writer that
-    persists a ``Subscription``: bulk activation builds one directly, and a
-    subscription created without this amount is blocked from birth — prepaid
-    enforcement fails closed with
-    ``contracted_prepaid_renewal_terms_unavailable`` when ``unit_price`` is
-    NULL or <= 0, and no threshold can be computed without it.
+    persists a ``Subscription``: bulk activation builds one directly, and it
+    must snapshot the same amount rather than deriving its own. One definition
+    of what a subscription is contracted at.
 
-    Exposed rather than reimplemented so there is one definition of what a
-    subscription is contracted at. Callers must not derive it themselves.
+    Returns ``None`` when no active recurring price exists, and never zero.
+    A zero is indistinguishable downstream from a real contracted amount and
+    renders as a genuine price in billing summaries, while prepaid enforcement
+    treats ``unit_price`` NULL *or <= 0* alike — so the zero blocked the
+    account exactly as an absence would, and hid why. ``None`` is honestly
+    absent; zero is a claim.
 
-    Three outcomes, deliberately distinct:
-
-    - an amount, when an active recurring price exists;
-    - ``None`` for a ``usage``-billed offer with no recurring price, which is
-      a legitimate shape — such an offer is charged on consumption and has no
-      recurring contract amount to snapshot;
-    - ``OfferPricingNotConfigured`` for any other basis, where a recurring
-      price is definitionally expected and its absence is misconfiguration.
-
-    It never returns zero. A zero is indistinguishable downstream from a real
-    contracted amount, renders as a genuine price in billing summaries, and
-    still blocks enforcement — so it hides a misconfigured offer rather than
-    surfacing it. ``None`` is honestly absent; zero is a claim.
+    It does not refuse an unpriced offer. A subscription without a price is a
+    state this system models deliberately: the invoice cycle skips it
+    (``test_skips_subscription_without_price``), the price resolver returns
+    nothing (``test_no_price_found``), and plan-family edits preserve a null
+    price on a live subscription. Raising here would contradict that contract.
+    Where a missing amount does matter — prepaid enforcement — it already fails
+    closed, and the gap is reported by the ``unbilled_active_subscriptions``
+    health signal and its alert.
     """
-    amount = _recurring_price_amount(db, offer_id, offer_version_id=offer_version_id)
-    if amount is not None:
-        return amount
-    offer = db.get(CatalogOffer, offer_id)
-    if offer is not None and offer.price_basis == PriceBasis.usage:
-        return None
-    raise OfferPricingNotConfigured(
-        code="catalog.offer.recurring_price_required",
-        message=(
-            "The offer has no active recurring price, so a subscription "
-            "cannot be contracted against it. Add a recurring price to the "
-            "offer (or its pinned version) and retry."
-        ),
-        details={
-            "offer_id": str(offer_id),
-            "offer_version_id": (str(offer_version_id) if offer_version_id else None),
-            "price_basis": (
-                offer.price_basis.value
-                if offer is not None and offer.price_basis is not None
-                else None
-            ),
-        },
-    )
+    return _recurring_price_amount(db, offer_id, offer_version_id=offer_version_id)
 
 
 def _recurring_price_amount(db: Session, offer_id, *, offer_version_id=None):
