@@ -38,6 +38,12 @@ class AiIntakeConfig(Base):
     allow_followup_questions: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
+    auto_reply_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    auto_handoff_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     max_clarification_turns: Mapped[int] = mapped_column(
         Integer, default=1, nullable=False
     )
@@ -51,6 +57,14 @@ class AiIntakeConfig(Base):
     instructions: Mapped[str | None] = mapped_column(Text)
     department_mappings: Mapped[list | None] = mapped_column(
         MutableList.as_mutable(JSON())
+    )
+    workflow_steps: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON()))
+    context_sources: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON()))
+    handoff_policy: Mapped[str] = mapped_column(
+        String(40), default="manual_review", nullable=False
+    )
+    assignment_strategy: Mapped[str] = mapped_column(
+        String(40), default="available_round_robin", nullable=False
     )
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())

@@ -76,6 +76,7 @@ class InboundMessageObservation:
     contact_name: str | None = None
     subject: str | None = None
     external_thread_id: str | None = None
+    external_account_id: str | None = None
     subscriber_id: UUID | None = None
     fallback_service_team_id: UUID | None = None
     to_addresses: tuple[str, ...] = ()

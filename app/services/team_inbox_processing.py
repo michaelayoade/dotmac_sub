@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from app.models.team_inbox import (
     InboxProviderObservation,
 )
 from app.services import (
+    team_inbox_ai_automation,
     team_inbox_channel_receive,
     team_inbox_delivery_receipts,
     team_inbox_media,
@@ -26,9 +28,11 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+    execute_owner_savepoint,
 )
 
 OWNER = "communications.team_inbox_processing"
+logger = logging.getLogger(__name__)
 _PROCESS_OBSERVATION = OwnerCommandDefinition(
     owner=OWNER,
     concern="provider observation consequence coordination",
@@ -49,6 +53,11 @@ def _message_payload(
         subject=str(data["subject"]) if data.get("subject") else None,
         external_thread_id=(
             str(data["external_thread_id"]) if data.get("external_thread_id") else None
+        ),
+        external_account_id=(
+            str(data["external_account_id"])
+            if data.get("external_account_id")
+            else None
         ),
         subscriber_id=UUID(str(data["subscriber_id"]))
         if data.get("subscriber_id")
@@ -178,6 +187,7 @@ def process_provider_observation(
                         contact_name=payload.contact_name,
                         external_message_id=row.external_message_id,
                         external_thread_id=payload.external_thread_id,
+                        external_account_id=payload.external_account_id,
                         subject=payload.subject,
                         received_at=observed_at,
                         subscriber_id=payload.subscriber_id,
@@ -233,6 +243,27 @@ def process_provider_observation(
         row.processed_at = datetime.now(UTC)
         row.error_code = None
         db.flush()
+        if (
+            row.observation_kind == InboxObservationKind.message.value
+            and consequence_kind == "received"
+            and row.conversation_id is not None
+            and row.message_id is not None
+        ):
+            try:
+                execute_owner_savepoint(
+                    db,
+                    lambda: team_inbox_ai_automation.apply_inbound_ai_intake(
+                        db,
+                        conversation_id=row.conversation_id,
+                        message_id=row.message_id,
+                        observation_id=row.id,
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Team Inbox AI intake optional consequence failed observation_id=%s",
+                    row.id,
+                )
         return team_inbox_observations.ProviderObservationOutcome(
             observation_id=row.id,
             outcome=team_inbox_observations.ObservationProcessingOutcome.processed,

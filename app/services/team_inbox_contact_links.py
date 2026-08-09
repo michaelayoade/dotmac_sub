@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.models.organization import Organization
 from app.models.party import (
     Party,
     PartyContactPoint,
@@ -108,15 +109,23 @@ def _reseller_label(row: Reseller) -> str:
     return f"{row.name} ({suffix})" if suffix else row.name
 
 
+def _organization_label(row: Organization) -> str:
+    extras = [row.domain, row.email, row.phone, row.account_type]
+    suffix = " Â· ".join(str(item) for item in extras if item)
+    return f"{row.name} ({suffix})" if suffix else row.name
+
+
 def contact_link_candidates(
     db: Session,
     terms: list[str],
 ) -> dict[str, list[dict[str, str]]]:
     subscribers: list[Subscriber] = []
     resellers: list[Reseller] = []
+    organizations: list[Organization] = []
     if terms:
         subscriber_filters = []
         reseller_filters = []
+        organization_filters = []
         for term in terms:
             like = f"%{term}%"
             subscriber_filters.extend(
@@ -139,11 +148,28 @@ def contact_link_candidates(
                     Reseller.contact_phone.ilike(like),
                 ]
             )
+            organization_filters.extend(
+                [
+                    Organization.name.ilike(like),
+                    Organization.legal_name.ilike(like),
+                    Organization.domain.ilike(like),
+                    Organization.email.ilike(like),
+                    Organization.phone.ilike(like),
+                ]
+            )
         subscribers = (
             db.query(Subscriber)
             .filter(Subscriber.is_active.is_(True))
             .filter(or_(*subscriber_filters))
             .order_by(Subscriber.updated_at.desc().nullslast())
+            .limit(8)
+            .all()
+        )
+        organizations = (
+            db.query(Organization)
+            .filter(Organization.is_active.is_(True))
+            .filter(or_(*organization_filters))
+            .order_by(Organization.updated_at.desc().nullslast())
             .limit(8)
             .all()
         )
@@ -171,12 +197,24 @@ def contact_link_candidates(
             .limit(8)
             .all()
         )
+    if not organizations:
+        organizations = (
+            db.query(Organization)
+            .filter(Organization.is_active.is_(True))
+            .order_by(Organization.updated_at.desc().nullslast())
+            .limit(8)
+            .all()
+        )
     return {
         "subscribers": [
             {"id": str(row.id), "label": _subscriber_label(row)} for row in subscribers
         ],
         "resellers": [
             {"id": str(row.id), "label": _reseller_label(row)} for row in resellers
+        ],
+        "organizations": [
+            {"id": str(row.id), "label": _organization_label(row)}
+            for row in organizations
         ],
     }
 

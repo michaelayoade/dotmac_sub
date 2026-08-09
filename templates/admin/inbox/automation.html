@@ -1,0 +1,179 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}AI Inbox Automation - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/inbox" class="hover:text-primary-600">Inbox</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">AI automation</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">AI Inbox Automation</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure intake classification, prompts, workflow order, context sources, customer replies, and handoff behavior.</p>
+        </div>
+        <a href="/admin/system/settings?domain=integration" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700">Provider Settings</a>
+    </div>
+
+    {% if request.query_params.get('saved') == '1' %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        AI inbox automation policy saved.
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <section class="grid gap-4 md:grid-cols-5">
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Provider</p>
+            <p class="mt-2 text-lg font-semibold {% if effective.provider_enabled %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-900 dark:text-white{% endif %}">{{ "Enabled" if effective.provider_enabled else "Disabled" }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Generation Control</p>
+            <p class="mt-2 text-lg font-semibold {% if effective.generation_control_enabled %}text-emerald-700 dark:text-emerald-300{% else %}text-amber-700 dark:text-amber-300{% endif %}">{{ "Enabled" if effective.generation_control_enabled else "Off" }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Intake Policy</p>
+            <p class="mt-2 text-lg font-semibold {% if effective.intake_enabled %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-900 dark:text-white{% endif %}">{{ "Enabled" if effective.intake_enabled else "Off" }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Replies</p>
+            <p class="mt-2 text-lg font-semibold {% if effective.may_send_customer_reply %}text-red-700 dark:text-red-300{% else %}text-slate-900 dark:text-white{% endif %}">{{ "Enabled" if effective.may_send_customer_reply else "Off" }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Auto Handoff</p>
+            <p class="mt-2 text-lg font-semibold {% if effective.may_handoff %}text-red-700 dark:text-red-300{% else %}text-slate-900 dark:text-white{% endif %}">{{ "Enabled" if effective.may_handoff else "Off" }}</p>
+        </div>
+    </section>
+
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+        {{ effective.reason }}
+    </div>
+
+    <form method="post" action="/admin/inbox/automation" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Policy</h2>
+            <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Scope</label>
+                    <input name="scope_key" value="{{ form.scope_key }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label>
+                    <select name="channel_type" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for option in channel_options %}
+                        <option value="{{ option }}" {% if form.channel_type == option %}selected{% endif %}>{{ option.replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Confidence Threshold</label>
+                    <input name="confidence_threshold" type="number" min="0" max="1" step="0.01" value="{{ form.confidence_threshold }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Fallback Team</label>
+                    <select name="fallback_team_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">No fallback team</option>
+                        {% for team in service_team_options %}
+                        <option value="{{ team.id }}" {% if form.fallback_team_id == team.id %}selected{% endif %}>{{ team.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                    <input type="checkbox" name="is_enabled" value="true" {% if form.is_enabled %}checked{% endif %} class="mt-1 rounded border-slate-300">
+                    <span><span class="block font-medium text-slate-900 dark:text-white">Enable intake policy</span><span class="text-slate-500 dark:text-slate-400">Allows classification only when global AI gates are also enabled.</span></span>
+                </label>
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                    <input type="checkbox" name="auto_reply_enabled" value="true" {% if form.auto_reply_enabled %}checked{% endif %} class="mt-1 rounded border-slate-300">
+                    <span><span class="block font-medium text-slate-900 dark:text-white">Allow customer replies</span><span class="text-slate-500 dark:text-slate-400">Default off. Sends clarification or answer replies through Inbox outbound owners.</span></span>
+                </label>
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                    <input type="checkbox" name="auto_handoff_enabled" value="true" {% if form.auto_handoff_enabled %}checked{% endif %} class="mt-1 rounded border-slate-300">
+                    <span><span class="block font-medium text-slate-900 dark:text-white">Allow auto handoff</span><span class="text-slate-500 dark:text-slate-400">Default off. Assigns or queues to the mapped service team.</span></span>
+                </label>
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+                    <input type="checkbox" name="allow_followup_questions" value="true" {% if form.allow_followup_questions %}checked{% endif %} class="mt-1 rounded border-slate-300">
+                    <span><span class="block font-medium text-slate-900 dark:text-white">Follow-up questions</span><span class="text-slate-500 dark:text-slate-400">Permit clarification before handoff.</span></span>
+                </label>
+            </div>
+
+            <div class="mt-5 grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Handoff Policy</label>
+                    <select name="handoff_policy" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for option in handoff_policy_options %}
+                        <option value="{{ option }}" {% if form.handoff_policy == option %}selected{% endif %}>{{ option.replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Assignment Strategy</label>
+                    <select name="assignment_strategy" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for option in assignment_strategy_options %}
+                        <option value="{{ option }}" {% if form.assignment_strategy == option %}selected{% endif %}>{{ option.replace("_", " ") | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Max Clarification Turns</label>
+                    <input name="max_clarification_turns" type="number" min="0" max="5" value="{{ form.max_clarification_turns }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Escalate After Minutes</label>
+                    <input name="escalate_after_minutes" type="number" min="1" max="240" value="{{ form.escalate_after_minutes }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+        </section>
+
+        <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Context Sources</h2>
+            <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {% for source in context_source_options %}
+                <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                    <input type="checkbox" name="context_sources" value="{{ source.key.value }}" {% if source.key.value in form.context_sources %}checked{% endif %} class="mt-1 rounded border-slate-300">
+                    <span>
+                        <span class="block text-sm font-medium text-slate-900 dark:text-white">{{ source.label }}</span>
+                        <span class="block text-xs text-slate-500 dark:text-slate-400">{{ source.owner }}</span>
+                        <span class="mt-1 block text-sm text-slate-600 dark:text-slate-300">{{ source.description }}</span>
+                    </span>
+                </label>
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Instructions And Workflow</h2>
+            <div class="mt-4">
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">System Instructions</label>
+                <textarea name="instructions" rows="5" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.instructions }}</textarea>
+            </div>
+            <div class="mt-4 grid gap-4 lg:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Department Mappings (JSON array)</label>
+                    <textarea name="department_mappings_json" rows="12" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.department_mappings_json }}</textarea>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Workflow Steps (JSON array)</label>
+                    <textarea name="workflow_steps_json" rows="12" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.workflow_steps_json }}</textarea>
+                </div>
+            </div>
+        </section>
+
+        <div class="flex justify-end gap-2">
+            <a href="/admin/inbox" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700">Back to Inbox</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Policy</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

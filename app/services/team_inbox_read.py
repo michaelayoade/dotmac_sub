@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.service_team import ServiceTeam
+from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxComment,
     InboxConversation,
@@ -47,6 +48,9 @@ class InboxTimelineMessage:
     id: str
     channel_type: str
     direction: str
+    author_person_id: str | None
+    author_display_name: str | None
+    author_initials: str | None
     subject: str | None
     body: str | None
     from_address: str | None
@@ -226,6 +230,7 @@ def _message_attachments(message: InboxMessage) -> list[dict]:
 
 
 def _asset_attachment(asset: InboxMediaAsset) -> dict:
+    url = team_inbox_media.media_content_url(asset.id)
     return {
         "id": str(asset.id),
         "type": asset.asset_type,
@@ -234,15 +239,40 @@ def _asset_attachment(asset: InboxMediaAsset) -> dict:
         "mime_type": asset.mime_type,
         "file_size": asset.file_size,
         "caption": asset.caption,
-        "url": asset.storage_url or asset.source_url,
+        "url": url,
         "source_url": asset.source_url,
-        "storage_url": asset.storage_url,
+        "storage_url": asset.storage_url or url,
         "provider": asset.provider,
         "provider_media_id": asset.provider_media_id,
         "download_status": asset.download_status,
         "download_error": asset.download_error,
         "metadata": asset.metadata_,
     }
+
+
+def _system_user_display_name(user: SystemUser) -> str:
+    return (
+        user.display_name
+        or f"{user.first_name} {user.last_name}".strip()
+        or user.email
+        or "Support agent"
+    )
+
+
+def _system_user_initials(user: SystemUser) -> str:
+    words = _system_user_display_name(user).split()
+    return "".join(word[0] for word in words[:2] if word).upper() or "AG"
+
+
+def _sent_by_person_id(message: InboxMessage) -> UUID | None:
+    metadata = message.metadata_ or {}
+    raw_value = metadata.get("sent_by_person_id")
+    if raw_value is None:
+        return None
+    try:
+        return UUID(str(raw_value))
+    except (TypeError, ValueError):
+        return None
 
 
 def list_conversations(
@@ -545,15 +575,34 @@ def get_conversation_timeline(
         db.query(InboxMessage)
         .filter(InboxMessage.conversation_id == conversation.id)
         .order_by(
+            func.coalesce(
+                InboxMessage.received_at,
+                InboxMessage.sent_at,
+                InboxMessage.created_at,
+            ).asc(),
             InboxMessage.created_at.asc(),
-            InboxMessage.received_at.asc(),
-            InboxMessage.sent_at.asc(),
+            InboxMessage.id.asc(),
         )
         .all()
     )
     assets_by_message = team_inbox_media.assets_for_messages(
         db,
         [message.id for message in messages],
+    )
+    author_ids = {
+        author_id
+        for message in messages
+        if message.direction == InboxMessageDirection.outbound.value
+        for author_id in (_sent_by_person_id(message),)
+        if author_id is not None
+    }
+    authors_by_id = (
+        {
+            user.id: user
+            for user in db.query(SystemUser).filter(SystemUser.id.in_(author_ids)).all()
+        }
+        if author_ids
+        else {}
     )
     comments = (
         db.query(InboxComment)
@@ -612,6 +661,23 @@ def get_conversation_timeline(
                 id=str(message.id),
                 channel_type=message.channel_type,
                 direction=message.direction,
+                author_person_id=(
+                    str(author_id)
+                    if (author_id := _sent_by_person_id(message))
+                    else None
+                ),
+                author_display_name=(
+                    _system_user_display_name(author)
+                    if (author := authors_by_id.get(_sent_by_person_id(message)))
+                    is not None
+                    else None
+                ),
+                author_initials=(
+                    _system_user_initials(author)
+                    if (author := authors_by_id.get(_sent_by_person_id(message)))
+                    is not None
+                    else None
+                ),
                 subject=message.subject,
                 body=message.body,
                 from_address=message.from_address,

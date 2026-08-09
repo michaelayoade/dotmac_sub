@@ -5,8 +5,13 @@ from __future__ import annotations
 from urllib.parse import quote_plus
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -14,10 +19,14 @@ from app.db import finish_read_transaction, get_db
 from app.services import (
     team_inbox_commands,
     team_inbox_contact_links,
+    team_inbox_manager_ai_chat,
+    team_inbox_media,
     team_inbox_operations,
     team_inbox_projection,
     team_inbox_read_state,
+    web_ai_inbox_automation,
 )
+from app.services.ai.client import AIClientError
 from app.services.auth_dependencies import require_permission
 from app.services.owner_commands import CommandContext
 
@@ -147,6 +156,7 @@ def team_inbox_queue(
             "unread": projection.unread,
             "service_team_options": projection.service_team_options,
             "agent_options": projection.agent_options,
+            "agent_presence": projection.agent_presence,
             "assignment_counts": projection.assignment_counts,
             "status_options": projection.status_options,
             "channel_options": projection.channel_options,
@@ -177,6 +187,130 @@ def team_inbox_queue(
     if getattr(request, "headers", {}).get("hx-target") == "inbox-sidebar-content":
         return templates.TemplateResponse("admin/inbox/_sidebar.html", context)
     return templates.TemplateResponse("admin/inbox/index.html", context)
+
+
+@router.get(
+    "/manager-ai",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission(team_inbox_manager_ai_chat.MANAGER_AI_PERMISSION))
+    ],
+)
+def team_inbox_manager_ai_chat_page(
+    request: Request,
+    conversation_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    context = _ctx(request, db)
+    context["state"] = team_inbox_manager_ai_chat.build_page_state(
+        db, conversation_id=conversation_id
+    )
+    return templates.TemplateResponse("admin/inbox/manager_ai.html", context)
+
+
+@router.post(
+    "/manager-ai",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission(team_inbox_manager_ai_chat.MANAGER_AI_PERMISSION))
+    ],
+)
+def team_inbox_manager_ai_chat_ask(
+    request: Request,
+    conversation_id: str | None = Form(None),
+    question: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    answer: str | None = None
+    error: str | None = None
+    try:
+        answer = team_inbox_manager_ai_chat.answer_manager_question(
+            db, question=question, conversation_id=conversation_id
+        )
+    except (AIClientError, ValueError) as exc:
+        error = str(exc)
+    context = _ctx(request, db)
+    context["state"] = team_inbox_manager_ai_chat.build_page_state(
+        db,
+        conversation_id=conversation_id,
+        question=question,
+        answer=answer,
+        error=error,
+    )
+    return templates.TemplateResponse("admin/inbox/manager_ai.html", context)
+
+
+@router.get(
+    "/automation",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def team_inbox_automation_config(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    context = _ctx(request, db)
+    context.update(web_ai_inbox_automation.build_config_state(db))
+    return templates.TemplateResponse("admin/inbox/automation.html", context)
+
+
+@router.post(
+    "/automation",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def team_inbox_automation_save(
+    request: Request,
+    scope_key: str = Form("inbox:default"),
+    channel_type: str = Form("chat_widget"),
+    is_enabled: bool = Form(False),
+    auto_reply_enabled: bool = Form(False),
+    auto_handoff_enabled: bool = Form(False),
+    confidence_threshold: str = Form("0.75"),
+    allow_followup_questions: bool = Form(False),
+    max_clarification_turns: str = Form("1"),
+    escalate_after_minutes: str = Form("5"),
+    fallback_team_id: str | None = Form(None),
+    handoff_policy: str = Form("manual_review"),
+    assignment_strategy: str = Form("available_round_robin"),
+    instructions: str | None = Form(None),
+    context_sources: list[str] = Form(default=[]),
+    department_mappings_json: str | None = Form(None),
+    workflow_steps_json: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        _prepare_mutation(db)
+        web_ai_inbox_automation.save_config(
+            db,
+            scope_key=scope_key,
+            channel_type=channel_type,
+            is_enabled=is_enabled,
+            auto_reply_enabled=auto_reply_enabled,
+            auto_handoff_enabled=auto_handoff_enabled,
+            confidence_threshold=confidence_threshold,
+            allow_followup_questions=allow_followup_questions,
+            max_clarification_turns=max_clarification_turns,
+            escalate_after_minutes=escalate_after_minutes,
+            fallback_team_id=fallback_team_id,
+            handoff_policy=handoff_policy,
+            assignment_strategy=assignment_strategy,
+            instructions=instructions,
+            context_sources=context_sources,
+            department_mappings_json=department_mappings_json,
+            workflow_steps_json=workflow_steps_json,
+        )
+    except Exception as exc:
+        context = _ctx(request, db)
+        context.update(web_ai_inbox_automation.build_config_state(db))
+        context["error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/inbox/automation.html", context, status_code=400
+        )
+    return RedirectResponse(
+        url="/admin/inbox/automation?saved=1",
+        status_code=303,
+    )
 
 
 def _detail_redirect(
@@ -294,6 +428,64 @@ def _actor_uuid_from_request(request: Request) -> UUID | None:
         return None
 
 
+@router.get(
+    "/media/{asset_id}/content",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_media_content(asset_id: UUID, db: Session = Depends(get_db)):
+    try:
+        stream = team_inbox_media.stream_asset_content(db, asset_id=asset_id)
+    except team_inbox_media.MediaContentError:
+        return JSONResponse({"detail": "Attachment not found"}, status_code=404)
+    headers: dict[str, str] = {}
+    if stream.content_length is not None:
+        headers["Content-Length"] = str(stream.content_length)
+    return StreamingResponse(
+        stream.chunks,
+        media_type=stream.content_type or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@router.post(
+    "/{conversation_id}/attachments",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+async def team_inbox_stage_attachments(
+    conversation_id: UUID,
+    request: Request,
+    files: list[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        staged_files = [
+            team_inbox_media.StagedAttachmentInput(
+                file_name=file.filename or "attachment",
+                content_type=file.content_type,
+                data=await file.read(),
+                uploaded_by=_actor_id_from_request(request),
+            )
+            for file in files
+        ]
+        outcome = team_inbox_commands.stage_attachments(
+            db,
+            conversation_id=conversation_id,
+            files=staged_files,
+        )
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_media.MediaUploadError,
+    ) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return JSONResponse(
+        {
+            "conversation_id": outcome.conversation_id,
+            "attachment_ids": list(outcome.attachment_ids),
+        }
+    )
+
+
 @router.post(
     "/{conversation_id}/read",
     dependencies=[Depends(require_permission("support:ticket:update"))],
@@ -350,9 +542,14 @@ def team_inbox_reply(
     template_id: str | None = Form(default=None),
     idempotency_key: str | None = Form(default=None),
     reply_to_message_id: str | None = Form(default=None),
+    attachment_ids: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
+    raw_attachment_ids = attachment_ids if isinstance(attachment_ids, str) else ""
+    clean_attachment_ids = [
+        item.strip() for item in raw_attachment_ids.split(",") if item.strip()
+    ]
     try:
         outcome = team_inbox_commands.reply(
             db,
@@ -362,6 +559,7 @@ def team_inbox_reply(
             template_id=template_id,
             idempotency_key=_query_text(idempotency_key),
             reply_to_message_id=_query_text(reply_to_message_id),
+            attachment_ids=clean_attachment_ids,
             actor_person_id=_actor_id_from_request(request),
         )
     except team_inbox_commands.ConversationNotFoundError:
@@ -790,6 +988,38 @@ def team_inbox_bulk_action(
 
 
 @router.post(
+    "/presence",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_presence_action(
+    request: Request,
+    status_value: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        outcome = team_inbox_commands.set_agent_presence(
+            db,
+            actor_person_id=_actor_id_from_request(request),
+            status=status_value,
+        )
+    except team_inbox_commands.InboxCommandError as exc:
+        return RedirectResponse(
+            url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    message = (
+        f"You were already {outcome.status}."
+        if outcome.already_set
+        else f"Availability set to {outcome.status}."
+    )
+    return RedirectResponse(
+        url=f"/admin/inbox?status=success&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
     "/{conversation_id}/contact-link",
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
@@ -833,6 +1063,135 @@ def team_inbox_contact_link(
         message=(
             f"Linked {outcome.channel_type.replace('_', ' ')} contact to "
             f"{outcome.target}."
+        ),
+    )
+
+
+@router.post(
+    "/{conversation_id}/lead",
+    dependencies=[Depends(require_permission("crm:lead:write"))],
+)
+def team_inbox_create_lead(
+    conversation_id: UUID,
+    request: Request,
+    title: str | None = Form(default=None),
+    note: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        outcome = team_inbox_commands.create_lead_from_conversation(
+            db,
+            conversation_id=conversation_id,
+            actor_person_id=_actor_id_from_request(request),
+            title=title,
+            note=note,
+        )
+    except team_inbox_commands.ConversationNotFoundError:
+        return RedirectResponse(
+            url="/admin/inbox?status=error&message=Conversation%20not%20found",
+            status_code=303,
+        )
+    except team_inbox_commands.InboxCommandError as exc:
+        return _detail_redirect(conversation_id, status="error", message=str(exc))
+    message = (
+        "Lead already exists for this conversation."
+        if outcome.replayed
+        else "Lead created from conversation."
+    )
+    return RedirectResponse(
+        url=(
+            f"/admin/sales/leads/{outcome.lead_id}?status=success"
+            f"&message={quote_plus(message)}"
+        ),
+        status_code=303,
+    )
+
+
+@router.post(
+    "/{conversation_id}/merge-contact",
+    dependencies=[Depends(require_permission("crm:lead:write"))],
+)
+def team_inbox_merge_contact(
+    conversation_id: UUID,
+    request: Request,
+    target_type: str = Form(...),
+    target_query: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        outcome = team_inbox_commands.merge_contact(
+            db,
+            conversation_id=conversation_id,
+            target_type=target_type,
+            target_query=target_query,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.ConversationNotFoundError:
+        return RedirectResponse(
+            url="/admin/inbox?status=error&message=Conversation%20not%20found",
+            status_code=303,
+        )
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_contact_links.ContactLinkError,
+    ) as exc:
+        return _detail_redirect(conversation_id, status="error", message=str(exc))
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message=(
+            "Contact captured as a lead."
+            if outcome.target_type == "lead"
+            else f"Contact merged to {outcome.target_type.replace('_', ' ')}."
+        ),
+    )
+
+
+@router.post(
+    "/{conversation_id}/lead/merge",
+    dependencies=[Depends(require_permission("crm:lead:write"))],
+)
+def team_inbox_merge_lead(
+    conversation_id: UUID,
+    request: Request,
+    target_type: str = Form(...),
+    subscriber_id: str | None = Form(default=None),
+    reseller_id: str | None = Form(default=None),
+    organization_id: str | None = Form(default=None),
+    subscriber_id_manual: str | None = Form(default=None),
+    reseller_id_manual: str | None = Form(default=None),
+    organization_id_manual: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    try:
+        outcome = team_inbox_commands.merge_conversation_lead(
+            db,
+            conversation_id=conversation_id,
+            target_type=target_type,
+            subscriber_id=subscriber_id_manual or subscriber_id,
+            reseller_id=reseller_id_manual or reseller_id,
+            organization_id=organization_id_manual or organization_id,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.ConversationNotFoundError:
+        return RedirectResponse(
+            url="/admin/inbox?status=error&message=Conversation%20not%20found",
+            status_code=303,
+        )
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_contact_links.ContactLinkError,
+    ) as exc:
+        return _detail_redirect(conversation_id, status="error", message=str(exc))
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message=(
+            f"Lead merged to {outcome.target_type.replace('_', ' ')} "
+            f"{outcome.target_id}."
         ),
     )
 

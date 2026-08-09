@@ -1,10 +1,10 @@
 # AI under the source-of-truth standard
 
-Status: proposed, 2026-07-16.
+Status: adopted in slices; inbox automation is wired but disabled by default.
 
 ## Finding
 
-Sub has the AI **store** and none of the **generation**. `AIInsight`
+Sub originally had the AI **store** and none of the **generation**. `AIInsight`
 (`app/models/ai_insight.py`) is a complete insight row — persona, domain,
 severity, entity link, structured output, confidence, context quality, and
 full LLM telemetry (provider/model/tokens/endpoint) — and
@@ -25,6 +25,16 @@ ISP-operational personas (`dispatch_planner`, `ticket_analyst`,
 `inbox_analyst`, `project_advisor`, `vendor_analyst`, `performance_coach`)
 alongside CRM-marketing ones (`campaign_optimizer`, `customer_success`).
 CRM leaves the operation; the ISP personas must not leave with it.
+
+## Current implementation note
+
+Sub now includes the OpenAI-compatible provider gateway, DeepSeek/vLLM settings,
+provider-health telemetry, and a report-advisory generation path. The first
+active advisor is `ticket_sla_advisor`, called on demand from the admin reports
+surface and persisted only through `ai_operations.create_insight`. Team Inbox
+also exposes a manager-only chat page that asks the configured AI provider for
+read-only conversation insight; it does not persist chat transcripts or perform
+Inbox actions.
 
 ## Decision — the ownership shape
 
@@ -52,6 +62,11 @@ facts → derived → consequences separation:
    to escalate to a human. This is the "should we act" decision, and it is
    AI's *only* decision.
 
+For Team Inbox adoption, `ai.intake` also includes whether customer-visible
+replies are allowed, which bounded context sources may be read, which ordered
+workflow steps are eligible, and which handoff policy applies. The inbound
+consumer is gated off by default and may act only through Team Inbox owners.
+
 ## The consequence rule (the load-bearing invariant)
 
 **An insight never mutates domain state.** Acting on a recommendation means
@@ -68,6 +83,43 @@ authority leak, and the exact "parallel decision path" the standard forbids.
 
 CRM's `action_insight` route is the pattern to **translate, not copy**: its
 actions become owner calls.
+
+## Inbox automation adoption flow
+
+The Team Inbox assistant is implemented as a default-off policy and optional
+inbound consequence. `/admin/inbox/automation` writes the `inbox:default`
+`AiIntakeConfig` policy with provider and generation gates shown separately
+from the intake gate, an `auto_reply_enabled` customer-visible reply gate, an
+`auto_handoff_enabled` assignment gate, ordered workflow steps, allowed context
+sources, department/team mappings, fallback team, handoff policy, and assignment
+strategy.
+
+When a new inbound provider observation is processed, Team Inbox calls the
+automation inside an owner savepoint. If the intake gate, provider gate, or
+generation gate is off, nothing calls the LLM. If classification is enabled,
+`ai.intake` calls `ai.gateway` for a strict JSON decision and Team Inbox
+requests consequences only through existing owners:
+
+- `communications.team_inbox_commands` for replies, notes, status, labels,
+  assignment, or handoff;
+- `customer.identity_scope` or profile owners for customer validation or
+  profile-completion transitions;
+- financial owners for balance, invoice, or prepaid-funding reads and actions;
+- `portal.account_health` and network owners for service-health and outage
+  context;
+- support owners for ticket lifecycle actions.
+
+Customer replies and live handoff remain independently off until their action
+gates are enabled.
+
+## Manager inbox chat
+
+`/admin/inbox/manager-ai` is guarded by `support:inbox_ai:read`. It lets a
+permissioned manager ask questions about a selected conversation or recent
+inbox activity. Team Inbox assembles the bounded read projection, `ai.gateway`
+provides transport, and the answer is returned to the page only. The chat does
+not write `AIInsight`, reply to customers, assign conversations, update
+profiles, or transition statuses.
 
 ## Port plan
 

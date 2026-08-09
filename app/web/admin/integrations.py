@@ -10,6 +10,9 @@ from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import web_integration_syncs as web_integration_syncs_service
 from app.services import web_integrations as web_integrations_service
+from app.services import (
+    web_integrations_meta_social as web_integrations_meta_social_service,
+)
 from app.services import web_integrations_webhooks as webhooks_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
@@ -930,6 +933,77 @@ def webhook_detail(request: Request, endpoint_id: str, db: Session = Depends(get
     context.update(state)
     return templates.TemplateResponse(
         "admin/integrations/webhooks/detail.html", context
+    )
+
+
+# ==================== Meta Social ====================
+
+
+@router.get(
+    "/meta-social/config",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def meta_social_config(request: Request, db: Session = Depends(get_db)):
+    context = _base_context(request, db, active_page="meta-social")
+    context.update(
+        web_integrations_meta_social_service.build_config_state(
+            db,
+            base_url=str(request.base_url).rstrip("/"),
+        )
+    )
+    context["recent_activities"] = recent_activity_for_paths(
+        db, ["/admin/integrations/meta-social/config"]
+    )
+    return templates.TemplateResponse(
+        "admin/integrations/meta_social/config.html", context
+    )
+
+
+@router.post(
+    "/meta-social/config",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def meta_social_config_save(
+    request: Request,
+    auth_mode: str = Form("oauth"),
+    meta_app_id: str = Form(""),
+    meta_app_secret: str = Form(""),
+    meta_webhook_verify_token: str = Form(""),
+    meta_graph_api_version: str = Form("v21.0"),
+    meta_facebook_access_token_override: str = Form(""),
+    meta_instagram_access_token_override: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_integrations_meta_social_service.save_config(
+            db,
+            auth_mode=auth_mode,
+            meta_app_id=meta_app_id,
+            meta_app_secret=meta_app_secret,
+            meta_webhook_verify_token=meta_webhook_verify_token,
+            meta_graph_api_version=meta_graph_api_version,
+            meta_facebook_access_token_override=meta_facebook_access_token_override,
+            meta_instagram_access_token_override=meta_instagram_access_token_override,
+        )
+    except Exception as exc:
+        context = _base_context(request, db, active_page="meta-social")
+        context.update(
+            web_integrations_meta_social_service.build_config_state(
+                db,
+                base_url=str(request.base_url).rstrip("/"),
+            )
+        )
+        context["error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/integrations/meta_social/config.html",
+            context,
+            status_code=400,
+        )
+    return RedirectResponse(
+        url="/admin/integrations/meta-social/config?saved=1",
+        status_code=303,
     )
 
 

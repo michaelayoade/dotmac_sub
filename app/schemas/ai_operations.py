@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -56,12 +57,22 @@ class AiIntakeConfigUpsert(BaseModel):
     is_enabled: bool = False
     confidence_threshold: float = 0.75
     allow_followup_questions: bool = True
+    auto_reply_enabled: bool = False
+    auto_handoff_enabled: bool = False
     max_clarification_turns: int = 1
     escalate_after_minutes: int = 5
     exclude_campaign_attribution: bool = True
     fallback_team_id: UUID | None = None
     instructions: str | None = None
     department_mappings: list | None = None
+    workflow_steps: list | None = None
+    context_sources: list | None = None
+    handoff_policy: Literal["manual_review", "live_agent", "close_only"] = (
+        "manual_review"
+    )
+    assignment_strategy: Literal["available_round_robin", "queue_only"] = (
+        "available_round_robin"
+    )
     metadata: dict | None = None
 
 

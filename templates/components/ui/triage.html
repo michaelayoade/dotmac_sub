@@ -75,10 +75,11 @@
 {% macro conversation_list_item(row, active_id="", agent_options=()) %}
 {% set is_active = (row.id | string) == (active_id | string) %}
 {% set contact_name = row.contact_address or "(unknown contact)" %}
-{% set assignee = namespace(initials="") %}
+{% set assignee = namespace(name="", initials="") %}
 {% if row.active_assigned_person_id %}
     {% for agent in agent_options %}
         {% if (agent.id | string) == (row.active_assigned_person_id | string) %}
+            {% set assignee.name = agent.name %}
             {% set assignee.initials = agent.initials %}
         {% endif %}
     {% endfor %}
@@ -139,7 +140,7 @@
                 {% if row.latest_delivery_status == 'failed' %}{{ status_badge("Send failed", "negative", size="sm") }}{% endif %}
                 {% if row.is_snoozed %}{{ status_badge("Snoozed", "neutral", size="sm", show_icon=False) }}{% endif %}
                 {% if row.is_muted %}<span title="Muted" aria-label="Muted">🔕</span>{% endif %}
-                {% if row.is_unread %}<span class="ml-auto inline-flex min-w-5 items-center justify-center rounded-lg bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white" aria-label="Unread conversation">1</span>{% elif row.active_assigned_person_id %}<span class="ml-auto flex h-5 min-w-5 items-center justify-center rounded-lg bg-slate-200 px-1 text-[9px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-200" title="Assigned agent">{{ assignee.initials or "AG" }}</span>{% endif %}
+                {% if row.is_unread %}<span class="ml-auto inline-flex min-w-5 items-center justify-center rounded-lg bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white" aria-label="Unread conversation">1</span>{% elif row.active_assigned_person_id %}<span class="ml-auto flex h-5 min-w-5 items-center justify-center rounded-lg bg-slate-200 px-1 text-[9px] font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-200" title="{{ assignee.name or 'Assigned agent' }}" aria-label="{{ assignee.name or 'Assigned agent' }}">{{ assignee.initials or "AG" }}</span>{% endif %}
             </div>
             {% if row.labels %}
             <div class="mt-1 flex min-w-0 items-center gap-1">
@@ -185,11 +186,13 @@
 </div>
 {% else %}
 {% set outbound = dir == 'outbound' %}
+{% set author_name = message.author_display_name or ("Support agent" if outbound else (message.from_address or "Customer")) %}
+{% set author_initials = message.author_initials or ("AG" if outbound else (message.from_address or "CU")[:2] | upper) %}
 <div class="flex items-end gap-2 {% if outbound %}justify-end{% endif %}">
     {% if not outbound %}<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-200 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-200">{{ (message.from_address or 'CU')[:2] | upper }}</div>{% endif %}
     <div class="max-w-[80%] min-w-0">
         <div class="mb-1 flex items-center gap-2 {% if outbound %}justify-end{% endif %}">
-            <span class="text-[11px] font-medium text-slate-500 dark:text-slate-400">{{ "Support agent" if outbound else (message.from_address or "Customer") }}</span>
+            <span class="text-[11px] font-medium text-slate-500 dark:text-slate-400">{{ author_name }}</span>
             <time class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ ts(message.sent_at or message.received_at or message.created_at) }}</time>
         </div>
         <div class="rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed
@@ -227,7 +230,7 @@
             <span class="text-[10px] font-medium {% if delivery == 'failed' %}text-rose-600{% else %}text-slate-400{% endif %}">{{ delivery | title }}{% if metadata.get('read_at') %} · Read{% endif %}</span>
             {% endif %}
             <button type="button"
-                    @click='$dispatch("inbox-quote", {{ {"id": message.id, "author": ("Support agent" if outbound else (message.from_address or "Customer")), "excerpt": (message.body or "")[:120]} | tojson }})'
+                    @click='$dispatch("inbox-quote", {{ {"id": message.id, "author": author_name, "excerpt": (message.body or "")[:120]} | tojson }})'
                     class="min-h-8 rounded-md px-2 text-[10px] font-semibold text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:bg-slate-800 dark:hover:text-slate-200">Quote</button>
         </div>
         {% if metadata.get('delivery_status') == 'failed' %}
@@ -240,7 +243,7 @@
         </div>
         {% endif %}
     </div>
-    {% if outbound %}<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-[10px] font-bold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">AG</div>{% endif %}
+    {% if outbound %}<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-[10px] font-bold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title="{{ author_name }}" aria-label="{{ author_name }}">{{ author_initials }}</div>{% endif %}
 </div>
 {% endif %}
 {% endmacro %}

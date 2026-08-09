@@ -4,11 +4,16 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.api import support as support_api
-from app.models.notification import CommunicationIntentRecord, Notification
+from app.models.notification import (
+    CommunicationIntentRecord,
+    Notification,
+    NotificationChannel,
+)
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.subscription_engine import SettingValueType
 from app.models.team_inbox import (
+    InboxChannelType,
     InboxConversation,
     InboxConversationStatus,
     InboxConversationTeam,
@@ -90,6 +95,32 @@ def _whatsapp_conversation(db_session) -> InboxConversation:
         status=InboxConversationStatus.open.value,
         first_message_at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
         last_message_at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    return conversation
+
+
+def _meta_conversation(
+    db_session,
+    *,
+    channel_type: str,
+    contact_address: str,
+    account_id: str | None = None,
+) -> InboxConversation:
+    metadata = {"external_account_id": account_id} if account_id else {}
+    if account_id and channel_type == InboxChannelType.facebook_messenger.value:
+        metadata["page_id"] = account_id
+    if account_id and channel_type == InboxChannelType.instagram_dm.value:
+        metadata["instagram_account_id"] = account_id
+    conversation = InboxConversation(
+        channel_type=channel_type,
+        subject="Meta support",
+        contact_address=contact_address,
+        status=InboxConversationStatus.open.value,
+        first_message_at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+        last_message_at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+        metadata_=metadata,
     )
     db_session.add(conversation)
     db_session.flush()
@@ -284,6 +315,96 @@ def test_send_inbox_reply_requires_whatsapp_recipient(db_session):
 
     assert result.kind == "missing_recipient"
     assert result.reason == "Conversation has no WhatsApp reply recipient"
+
+
+def test_send_inbox_reply_queues_facebook_messenger(db_session, monkeypatch):
+    conversation = _meta_conversation(
+        db_session,
+        channel_type=InboxChannelType.facebook_messenger.value,
+        contact_address="psid-123",
+        account_id="page-1",
+    )
+    monkeypatch.setattr(
+        team_inbox_outbound.team_inbox_realtime,
+        "publish_conversation_event",
+        lambda *args, **kwargs: None,
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking this.</p>",
+            sent_by_person_id=uuid4(),
+        ),
+        now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    message = db_session.query(InboxMessage).one()
+    notification = db_session.query(Notification).one()
+    assert result.kind == "queued"
+    assert notification.channel == NotificationChannel.facebook_messenger
+    assert notification.recipient == "psid-123"
+    assert notification.metadata_["external_account_id"] == "page-1"
+    assert message.channel_type == InboxChannelType.facebook_messenger.value
+    assert message.notification_id == notification.id
+    assert message.to_addresses == ["psid-123"]
+    assert message.metadata_["delivery_status"] == "queued"
+    assert message.metadata_["page_id"] == "page-1"
+
+
+def test_send_inbox_reply_queues_instagram_dm_with_inbound_account_id(db_session):
+    conversation = _meta_conversation(
+        db_session,
+        channel_type=InboxChannelType.instagram_dm.value,
+        contact_address="igid-123",
+    )
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type=InboxChannelType.instagram_dm.value,
+            direction=InboxMessageDirection.inbound.value,
+            body="Hello",
+            metadata_={"instagram_account_id": "ig-1"},
+            received_at=datetime(2026, 7, 10, 8, 1, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(body_html="<p>Reply.</p>"),
+        now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
+    )
+
+    notification = db_session.query(Notification).one()
+    assert result.kind == "queued"
+    assert notification.channel == NotificationChannel.instagram_dm
+    assert notification.recipient == "igid-123"
+    assert notification.metadata_["external_account_id"] == "ig-1"
+
+
+def test_send_inbox_reply_requires_meta_social_recipient(db_session):
+    conversation = _meta_conversation(
+        db_session,
+        channel_type=InboxChannelType.facebook_messenger.value,
+        contact_address="",
+        account_id="page-1",
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(body_html="<p>Reply.</p>"),
+    )
+
+    assert result.kind == "missing_recipient"
+    assert db_session.query(InboxMessage).count() == 0
+    assert db_session.query(Notification).count() == 0
 
 
 def test_linked_disabled_subscriber_reply_is_suppressed(db_session):

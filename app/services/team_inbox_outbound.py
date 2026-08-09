@@ -20,7 +20,11 @@ from app.models.team_inbox import (
     InboxMessageDirection,
     InboxTeamRole,
 )
-from app.services import team_inbox_realtime, team_inbox_routing, team_outbound
+from app.services import (
+    team_inbox_realtime,
+    team_inbox_routing,
+    team_outbound,
+)
 from app.services.communication_intents import (
     CommunicationClass,
     CommunicationIntent,
@@ -193,7 +197,12 @@ def _queue_outbox_reply(
         direction=InboxMessageDirection.outbound.value,
         subject=subject,
         body=body
-        if channel == NotificationChannel.whatsapp
+        if channel
+        in {
+            NotificationChannel.whatsapp,
+            NotificationChannel.facebook_messenger,
+            NotificationChannel.instagram_dm,
+        }
         else payload.body_html or body,
         external_thread_id=conversation.external_thread_id,
         from_address=from_address,
@@ -247,7 +256,10 @@ def _send_whatsapp_reply(
             reason="Conversation has no WhatsApp reply recipient",
         )
     body_text = _plain_text_reply(payload)
-    if not body_text:
+    payload_metadata = dict(payload.metadata or {})
+    raw_attachment_ids = payload_metadata.get("inbox_attachment_ids")
+    has_attachments = isinstance(raw_attachment_ids, list) and bool(raw_attachment_ids)
+    if not body_text and not has_attachments:
         return InboxReplyResult(
             kind="empty_body",
             conversation_id=str(conversation.id),
@@ -278,6 +290,98 @@ def _send_whatsapp_reply(
     )
 
 
+def _latest_meta_account_id(db: Session, conversation: InboxConversation) -> str | None:
+    for metadata in (conversation.metadata_,):
+        if isinstance(metadata, dict):
+            for key in ("page_id", "instagram_account_id", "external_account_id"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    message = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.channel_type == conversation.channel_type)
+        .filter(InboxMessage.direction == InboxMessageDirection.inbound.value)
+        .filter(InboxMessage.metadata_.isnot(None))
+        .order_by(
+            InboxMessage.received_at.desc().nullslast(), InboxMessage.created_at.desc()
+        )
+        .first()
+    )
+    metadata = message.metadata_ if message is not None else None
+    if isinstance(metadata, dict):
+        for key in (
+            "page_id",
+            "instagram_account_id",
+            "external_account_id",
+            "page_or_account_id",
+        ):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _send_meta_social_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    now: datetime | None,
+    record_failure: bool = False,
+) -> InboxReplyResult:
+    recipient = (conversation.contact_address or "").strip()
+    if not recipient:
+        return InboxReplyResult(
+            kind="missing_recipient",
+            conversation_id=str(conversation.id),
+            reason="Conversation has no Meta social reply recipient",
+        )
+    body_text = _plain_text_reply(payload)
+    if not body_text:
+        return InboxReplyResult(
+            kind="empty_body",
+            conversation_id=str(conversation.id),
+            reason="Reply body is required",
+        )
+
+    channel_type = conversation.channel_type
+    account_id = _latest_meta_account_id(db, conversation)
+    channel = (
+        NotificationChannel.facebook_messenger
+        if channel_type == InboxChannelType.facebook_messenger.value
+        else NotificationChannel.instagram_dm
+    )
+    metadata: dict[str, Any] = {
+        "channel_type": channel_type,
+        "message_kind": "direct_message",
+        "provider": "meta_social",
+        "external_account_id": account_id,
+    }
+    if channel_type == InboxChannelType.facebook_messenger.value and account_id:
+        metadata["page_id"] = account_id
+    if channel_type == InboxChannelType.instagram_dm.value and account_id:
+        metadata["instagram_account_id"] = account_id
+    result = _queue_outbox_reply(
+        db,
+        conversation=conversation,
+        payload=payload,
+        channel=channel,
+        recipient=recipient,
+        subject=None,
+        body=body_text,
+        now=now,
+        metadata=metadata,
+    )
+    return InboxReplyResult(
+        kind=result.kind,
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        to_email=result.to_email,
+        reason=result.reason,
+    )
+
+
 def send_inbox_reply(
     db: Session,
     *,
@@ -301,6 +405,17 @@ def send_inbox_reply(
 
     if conversation.channel_type == InboxChannelType.whatsapp.value:
         return _send_whatsapp_reply(
+            db,
+            conversation=conversation,
+            payload=payload,
+            now=now,
+            record_failure=record_failure,
+        )
+    if conversation.channel_type in {
+        InboxChannelType.facebook_messenger.value,
+        InboxChannelType.instagram_dm.value,
+    }:
+        return _send_meta_social_reply(
             db,
             conversation=conversation,
             payload=payload,

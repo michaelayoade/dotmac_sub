@@ -17,7 +17,7 @@ from app.models.notification import (
     NotificationDelivery,
     NotificationStatus,
 )
-from app.services import communication_eligibility
+from app.services import communication_eligibility, meta_social, team_inbox_media
 from app.services import email as email_service
 from app.services import push as push_service
 from app.services import sms as sms_service
@@ -132,6 +132,20 @@ def _retry_backoff_minutes(db, retry_count: int) -> int:
     return steps[index]
 
 
+def _meta_attachment_type(item: dict[str, object]) -> str:
+    raw_type = str(item.get("type") or "").strip().lower()
+    mime_type = str(item.get("mime_type") or "").strip().lower()
+    if raw_type in {"image", "audio", "video", "file"}:
+        return raw_type
+    if mime_type.startswith("image/"):
+        return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
+    return "file"
+
+
 def _expire_stale_notifications(db, now) -> int:
     """Cancel undelivered notifications that have sat in the queue too long."""
     max_age_hours = _max_queue_age_hours(db)
@@ -188,6 +202,8 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     NotificationChannel.email,
                     NotificationChannel.sms,
                     NotificationChannel.whatsapp,
+                    NotificationChannel.facebook_messenger,
+                    NotificationChannel.instagram_dm,
                     NotificationChannel.push,
                 ]
             )
@@ -440,6 +456,69 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     notification.last_error = str(
                         result.get("response") or "whatsapp_send_failed"
                     )
+            elif notification.channel in {
+                NotificationChannel.facebook_messenger,
+                NotificationChannel.instagram_dm,
+            }:
+                channel_type = notification.channel.value
+                raw_attachment_ids = delivery_metadata.get("inbox_attachment_ids")
+                attachment_ids = (
+                    raw_attachment_ids if isinstance(raw_attachment_ids, list) else []
+                )
+                attachments = team_inbox_media.resolve_delivery_attachments(
+                    db,
+                    asset_ids=[
+                        str(item)
+                        for item in attachment_ids
+                        if isinstance(item, (str, int))
+                    ],
+                )
+                if attachments:
+                    public_attachments = [
+                        item
+                        for item in attachments
+                        if str(item.get("source_url") or "").startswith(
+                            ("http://", "https://")
+                        )
+                    ]
+                    if len(public_attachments) != len(attachments):
+                        raise ValueError(
+                            "meta_media_public_url_required: upload must be reachable by Meta"
+                        )
+                    meta_attachments = tuple(
+                        meta_social.MetaSocialAttachment(
+                            type=_meta_attachment_type(item),
+                            url=str(item.get("source_url")),
+                        )
+                        for item in public_attachments
+                    )
+                else:
+                    meta_attachments = ()
+                result = meta_social.send_message(
+                    db,
+                    channel_type=channel_type,
+                    recipient_id=notification.recipient,
+                    message_text=body,
+                    account_id=str(
+                        delivery_metadata.get("external_account_id")
+                        or delivery_metadata.get("page_id")
+                        or delivery_metadata.get("instagram_account_id")
+                        or ""
+                    )
+                    or None,
+                    attachments=meta_attachments,
+                )
+                success = True
+                db.add(
+                    NotificationDelivery(
+                        notification_id=notification.id,
+                        provider="meta_social",
+                        provider_message_id=result.provider_message_id,
+                        status=DeliveryStatus.delivered,
+                        response_code=None,
+                        response_body=json.dumps(result.response)[:2000],
+                    )
+                )
             elif notification.channel == NotificationChannel.push:
                 success = push_service.send_push(
                     db=db,

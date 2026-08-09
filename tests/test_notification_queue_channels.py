@@ -95,6 +95,55 @@ def test_inbound_smtp_probe_respects_all_scope_suppression(db_session, monkeypat
     )
 
 
+def test_notification_queue_delivers_facebook_messenger(db_session, monkeypatch):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.tasks.notifications.communication_eligibility.may_send",
+        lambda *_args, **_kwargs: True,
+    )
+
+    def _fake_send_message(*_args, **kwargs):
+        calls.append(kwargs)
+        from app.services.meta_social import MetaSocialSendResult
+
+        return MetaSocialSendResult(
+            provider_message_id="mid.fb.1",
+            recipient_id="psid-1",
+            response={"message_id": "mid.fb.1"},
+        )
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.meta_social.send_message",
+        _fake_send_message,
+    )
+    notification = _queued_notification(
+        channel=NotificationChannel.facebook_messenger,
+        recipient="psid-1",
+        body="Reply from support",
+    )
+    notification.metadata_ = {
+        "external_account_id": "page-1",
+        "inbox_attachment_ids": [],
+    }
+    db_session.add(notification)
+    db_session.commit()
+
+    delivered = _deliver_notification_queue(db_session)
+
+    db_session.refresh(notification)
+    assert delivered == 1
+    assert notification.status == NotificationStatus.delivered
+    assert calls == [
+        {
+            "channel_type": "facebook_messenger",
+            "recipient_id": "psid-1",
+            "message_text": "Reply from support",
+            "account_id": "page-1",
+            "attachments": (),
+        }
+    ]
+
+
 def test_deliver_notification_queue_handles_sms_and_whatsapp(db_session, monkeypatch):
     sms = _queued_notification(
         channel=NotificationChannel.sms,

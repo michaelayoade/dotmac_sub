@@ -53,6 +53,36 @@ def test_subscriber_detail_includes_billing_config_snapshot(db_session, subscrib
     assert "next_block_label" not in cfg
 
 
+def test_subscriber_detail_marks_paused_billing_notifications(db_session, subscriber):
+    metadata = dict(subscriber.metadata_ or {})
+    metadata["send_billing_notifications"] = False
+    subscriber_service.subscribers.update(
+        db_session,
+        subscriber_id=str(subscriber.id),
+        payload=SubscriberUpdate(metadata_=metadata),
+    )
+
+    context = build_subscriber_detail_page_context(db_session, str(subscriber.id))
+
+    assert context["billing_config"]["send_billing_notifications"] is False
+
+
+def test_billing_notification_preference_updates_customer_metadata(
+    db_session, subscriber
+):
+    before, after = web_customer_actions_service.update_billing_notification_preference(
+        db_session,
+        str(subscriber.id),
+        send_billing_notifications=False,
+    )
+
+    assert (before.metadata_ or {}).get("send_billing_notifications") is None
+    assert (after.metadata_ or {}).get("send_billing_notifications") is False
+    assert (after.metadata_ or {}).get(
+        "subscriber_category"
+    ) == subscriber.category.value
+
+
 def test_generic_account_update_rejects_mode_change_with_collectible_service(
     db_session, subscriber_account, subscription
 ):

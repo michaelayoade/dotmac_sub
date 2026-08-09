@@ -47,6 +47,7 @@ class InboundChannelPayload:
     contact_name: str | None = None
     external_message_id: str | None = None
     external_thread_id: str | None = None
+    external_account_id: str | None = None
     subject: str | None = None
     received_at: datetime | None = None
     subscriber_id: str | UUID | None = None
@@ -402,6 +403,12 @@ def receive_inbound_channel(
     )
 
     metadata = dict(payload.metadata or {})
+    if payload.external_account_id:
+        metadata["external_account_id"] = payload.external_account_id
+        if payload.channel_type == InboxChannelType.facebook_messenger.value:
+            metadata.setdefault("page_id", payload.external_account_id)
+        elif payload.channel_type == InboxChannelType.instagram_dm.value:
+            metadata.setdefault("instagram_account_id", payload.external_account_id)
     metadata["contact_resolution"] = resolution.as_metadata()
     message = InboxMessage(
         conversation_id=conversation.id,
@@ -740,6 +747,7 @@ def receive_inbound_channel_batch_committed(
         provider = team_inbox_observations.InboxProvider(provider_value)
         provider_scope = str(
             metadata.get("page_or_account_id")
+            or metadata.get("external_account_id")
             or metadata.get("account_scope")
             or "default"
         )
@@ -765,6 +773,14 @@ def receive_inbound_channel_batch_committed(
                     contact_name=payload.contact_name,
                     subject=payload.subject,
                     external_thread_id=payload.external_thread_id,
+                    external_account_id=(
+                        str(
+                            metadata.get("page_or_account_id")
+                            or metadata.get("external_account_id")
+                            or ""
+                        ).strip()
+                        or None
+                    ),
                     subscriber_id=coerce_uuid(payload.subscriber_id),
                     fallback_service_team_id=coerce_uuid(
                         payload.fallback_service_team_id

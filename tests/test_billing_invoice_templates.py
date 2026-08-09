@@ -8,6 +8,17 @@ def test_invoice_detail_consumes_server_owned_status_presentation():
     assert "status_variant_map" not in template
 
 
+def test_invoice_detail_shows_authoritative_paid_date_only_when_available():
+    template = Path("templates/admin/billing/invoice_detail.html").read_text()
+
+    assert "{% if invoice.paid_at %}" in template
+    assert "Paid:" in template
+    assert (
+        "invoice.paid_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False)"
+        in template
+    )
+
+
 def test_invoice_edit_form_locks_currency_while_submitting_existing_value():
     template = Path("templates/admin/billing/invoice_form.html").read_text()
 

@@ -241,6 +241,8 @@ class Templates(ListResponseMixin):
             "sms": totals.get(NotificationChannel.sms, 0),
             "push": totals.get(NotificationChannel.push, 0),
             "whatsapp": totals.get(NotificationChannel.whatsapp, 0),
+            "facebook_messenger": totals.get(NotificationChannel.facebook_messenger, 0),
+            "instagram_dm": totals.get(NotificationChannel.instagram_dm, 0),
             "webhook": totals.get(NotificationChannel.webhook, 0),
         }
 

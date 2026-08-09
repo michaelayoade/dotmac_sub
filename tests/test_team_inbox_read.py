@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.api import support as support_api
 from app.models.notification import Notification
 from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
@@ -420,6 +421,41 @@ def test_conversation_timeline_returns_teams_assignments_and_messages(db_session
         InboxMessageDirection.inbound.value,
         InboxMessageDirection.outbound.value,
     ]
+
+
+def test_conversation_timeline_projects_outbound_agent_identity(db_session):
+    team = _team(db_session, "Support")
+    agent = SystemUser(
+        first_name="Adekunle",
+        last_name="Gold",
+        display_name="Adekunle Gold",
+        email="adekunle@example.test",
+    )
+    db_session.add(agent)
+    db_session.flush()
+    conversation = _conversation(db_session, team, subject="Need help")
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="email",
+            direction=InboxMessageDirection.outbound.value,
+            subject="Re: Need help",
+            body="Checking.",
+            from_address="support@dotmac.io",
+            to_addresses=["customer@example.com"],
+            sent_at=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
+            metadata_={"sent_by_person_id": str(agent.id)},
+        )
+    )
+    db_session.commit()
+
+    timeline = team_inbox_read.get_conversation_timeline(db_session, conversation.id)
+
+    assert timeline is not None
+    message = timeline.messages[0]
+    assert message.author_person_id == str(agent.id)
+    assert message.author_display_name == "Adekunle Gold"
+    assert message.author_initials == "AG"
 
 
 def test_conversation_timeline_api_returns_404_for_inactive_conversation(db_session):

@@ -9161,6 +9161,47 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="communications.team_inbox_manager_ai_chat",
+                module="app.services.team_inbox_manager_ai_chat",
+                owns=("manager-only AI inbox insight read projection",),
+                depends_on=(
+                    "communications.team_inbox_projection",
+                    "ai.gateway",
+                    "ai.generation",
+                ),
+                contract=_team_inbox_contract(
+                    service_name="communications.team_inbox_manager_ai_chat",
+                    concerns=(
+                        (
+                            "manager-only AI inbox insight read projection",
+                            OwnerRole.RESOLVER,
+                        ),
+                    ),
+                    inputs=(
+                        AuthorityInput(
+                            name="manager permission",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="support:inbox_ai:read route guard.",
+                        ),
+                        AuthorityInput(
+                            name="current Inbox projection",
+                            owner="communications.team_inbox_projection",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="Selected conversation or recent queue snapshot.",
+                        ),
+                        AuthorityInput(
+                            name="AI transport",
+                            owner="ai.gateway",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="Configured provider response used only for advisory text.",
+                        ),
+                    ),
+                    transaction_mode=TransactionMode.READ_ONLY,
+                    projections=("manager AI answer returned to the web page",),
+                ),
+            ),
+            SOTService(
                 name="communications.team_inbox_maintenance",
                 module="app.services.team_inbox_maintenance",
                 owns=("scheduled Inbox projection maintenance and repair",),
@@ -10924,7 +10965,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "AI insight rows",
                     "insight lifecycle: create, acknowledge, expire",
-                    "per-scope AI intake configuration",
+                    "per-scope AI intake configuration storage",
                 ),
                 notes=(
                     "The canonical writer of AIInsight. Generated insights "
@@ -10952,11 +10993,37 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "report surface (app.web.admin.reports)."
                 ),
             ),
+            SOTService(
+                name="ai.intake",
+                module="app.services.ai_inbox_automation",
+                owns=(
+                    "Team Inbox AI intake policy evaluation",
+                    "workflow step normalization",
+                    "bounded read-only inbox automation context",
+                ),
+                depends_on=(
+                    "ai.insights",
+                    "ai.generation",
+                    "communications.team_inbox_projection",
+                    "portal.account_health",
+                ),
+                notes=(
+                    "The customer-facing assistant is off by default. "
+                    "This owner decides whether an intake policy may classify "
+                    "or send a customer-visible reply, and assembles only "
+                    "approved read-owner context. It may call the configured "
+                    "LLM for a structured intake decision, but it does not "
+                    "write Inbox rows, assign conversations, update customer "
+                    "profiles, or close tickets. Team Inbox owns all "
+                    "customer-visible consequences."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.ai_operations",
             "app.tasks.ai_operations",
             "app.web.admin.reports",
+            "app.web.admin.inbox",
         ),
         rule=(
             "AI observes, derives, and recommends; it never decides domain "

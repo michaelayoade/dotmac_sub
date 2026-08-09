@@ -671,7 +671,6 @@ def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntr
     from app.services.network.olt_ssh import (
         _open_shell,
         _read_until_prompt,
-        _run_huawei_cmd,
         _run_huawei_paged_cmd,
     )
 

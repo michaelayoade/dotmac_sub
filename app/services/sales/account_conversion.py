@@ -78,6 +78,7 @@ def convert_lead_account(
     actor_id: str,
     subscriber_id: UUID | None = None,
     new_account: SubscriberCreate | None = None,
+    commit: bool = True,
 ) -> LeadAccountConversionResult:
     actor = str(actor_id or "").strip()
     if not actor:
@@ -169,15 +170,18 @@ def convert_lead_account(
             actor=actor,
             subscriber_id=subscriber.id,
         )
-        db.commit()
-        return LeadAccountConversionResult(
+        result = LeadAccountConversionResult(
             lead_id=lead.id,
             party_id=party_id,
             subscriber_id=subscriber.id,
             outcome=outcome,
         )
+        if commit:
+            db.commit()
+        return result
     except (party_service.PartyInvariantError, lifecycle.LeadLifecycleError) as exc:
-        db.rollback()
+        if commit:
+            db.rollback()
         raise LeadAccountConversionError(
             "conversion_rejected", str(exc), kind="invalid"
         ) from exc

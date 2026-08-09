@@ -11,7 +11,13 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api import meta_inbox_webhooks
-from app.models.team_inbox import InboxChannelType, InboxConversation, InboxMessage
+from app.models.team_inbox import (
+    InboxChannelType,
+    InboxConversation,
+    InboxMediaAsset,
+    InboxMessage,
+)
+from app.services import team_inbox_read
 
 META_TEST_SECRET = "meta-secret"  # pragma: allowlist secret
 
@@ -59,7 +65,11 @@ def _sign(body: bytes, secret: str = META_TEST_SECRET) -> str:
 
 
 def test_meta_inbox_webhook_verify_returns_challenge(db_session, monkeypatch):
-    monkeypatch.setattr(meta_inbox_webhooks, "_verify_token", lambda db: "verify-token")
+    monkeypatch.setattr(
+        meta_inbox_webhooks.meta_social,
+        "webhook_verify_token",
+        lambda db: "verify-token",
+    )
 
     response = meta_inbox_webhooks.verify_meta_inbox_webhook(
         mode="subscribe",
@@ -76,11 +86,9 @@ def test_meta_inbox_webhook_rejects_bad_signature(db_session, monkeypatch):
     request = _request(body, {"X-Hub-Signature-256": "sha256=bad"})
 
     monkeypatch.setattr(
-        meta_inbox_webhooks,
-        "_verify_meta_signature",
-        lambda db, body, sig: (_ for _ in ()).throw(
-            HTTPException(status_code=401, detail="bad")
-        ),
+        meta_inbox_webhooks.meta_social,
+        "webhook_signing_secret",
+        lambda db: META_TEST_SECRET,
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -89,9 +97,37 @@ def test_meta_inbox_webhook_rejects_bad_signature(db_session, monkeypatch):
     assert exc.value.status_code == 401
 
 
+def test_meta_inbox_webhook_accepts_whatsapp_secret_signature_fallback(
+    db_session,
+    monkeypatch,
+):
+    body = b'{"entry":[]}'
+    request = _request(body, {"X-Hub-Signature-256": _sign(body, "whatsapp-secret")})
+
+    monkeypatch.setattr(
+        meta_inbox_webhooks.meta_social,
+        "webhook_signing_secret",
+        lambda db: META_TEST_SECRET,
+    )
+    monkeypatch.setattr(
+        meta_inbox_webhooks,
+        "_whatsapp_app_secret",
+        lambda db: "whatsapp-secret",
+    )
+
+    response = _run_async(
+        meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    )
+
+    assert response["status"] == "ok"
+    assert response["processed"] == 0
+
+
 def test_meta_inbox_webhook_creates_facebook_messenger_message(db_session, monkeypatch):
     monkeypatch.setattr(
-        meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
+        meta_inbox_webhooks.meta_social,
+        "webhook_signing_secret",
+        lambda db: META_TEST_SECRET,
     )
     payload = {
         "object": "page",
@@ -131,12 +167,16 @@ def test_meta_inbox_webhook_creates_facebook_messenger_message(db_session, monke
     assert message.from_address == "123456789012345"
     assert message.body == "Hello support"
     assert message.metadata_["provider"] == "meta_social"
+    assert message.metadata_["page_id"] == "page-1"
+    assert message.metadata_["external_account_id"] == "page-1"
     assert "platform" not in message.metadata_
 
 
 def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monkeypatch):
     monkeypatch.setattr(
-        meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
+        meta_inbox_webhooks.meta_social,
+        "webhook_signing_secret",
+        lambda db: META_TEST_SECRET,
     )
     payload = {
         "object": "instagram",
@@ -172,11 +212,15 @@ def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monkeypatch
     assert conversation.external_thread_id == "instagram_dm:17841400000000000"
     assert message.external_message_id == "m_ig_1"
     assert message.body == "Please check my account"
+    assert message.metadata_["instagram_account_id"] == "ig-1"
+    assert message.metadata_["external_account_id"] == "ig-1"
 
 
 def test_meta_inbox_webhook_deduplicates_external_message_id(db_session, monkeypatch):
     monkeypatch.setattr(
-        meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
+        meta_inbox_webhooks.meta_social,
+        "webhook_signing_secret",
+        lambda db: META_TEST_SECRET,
     )
     payload = {
         "object": "page",
@@ -212,7 +256,9 @@ def test_meta_inbox_webhook_deduplicates_external_message_id(db_session, monkeyp
 
 def test_meta_inbox_webhook_preserves_attachment_messages(db_session, monkeypatch):
     monkeypatch.setattr(
-        meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
+        meta_inbox_webhooks.meta_social,
+        "webhook_signing_secret",
+        lambda db: META_TEST_SECRET,
     )
     payload = {
         "object": "page",
@@ -245,8 +291,16 @@ def test_meta_inbox_webhook_preserves_attachment_messages(db_session, monkeypatc
     )
 
     message = db_session.query(InboxMessage).one()
+    asset = db_session.query(InboxMediaAsset).one()
+    timeline = team_inbox_read.get_conversation_timeline(
+        db_session,
+        conversation_id=asset.conversation_id,
+    )
     assert response["processed"] == 1
     assert message.body == "[image]"
     assert message.metadata_["attachments"][0]["type"] == "image"
     assert message.metadata_["attachments"][0]["url"] == "https://example.test/i.jpg"
+    assert asset.asset_type == "image"
+    assert asset.source_url == "https://example.test/i.jpg"
+    assert timeline.messages[0].attachments[0]["url"].startswith("/admin/inbox/media/")
     assert "raw" not in message.metadata_

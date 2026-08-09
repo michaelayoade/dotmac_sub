@@ -1,4 +1,4 @@
-{% from "components/ui/triage.html" import message_bubble %}
+{% from "components/ui/triage.html" import message_bubble with context %}
 {% from "components/ui/macros.html" import status_badge %}
 {% set active_assignments = timeline.assignments | selectattr('is_active') | list %}
 
@@ -153,6 +153,7 @@
         <form method="post" action="/admin/inbox/{{ timeline.id }}/reply" x-show="mode === 'reply'" @submit="prepareSend($event)" class="space-y-2" data-reply-form>
             <input type="hidden" name="idempotency_key" :value="idempotencyKey">
             <input type="hidden" name="reply_to_message_id" :value="replyTo ? replyTo.id : ''">
+            <input type="hidden" name="attachment_ids" :value="attachmentIds.join(',')">
             <div class="relative rounded-xl border border-slate-300 bg-white focus-within:border-amber-500 focus-within:ring-2 focus-within:ring-amber-500/20 dark:border-slate-700 dark:bg-slate-950">
                 <textarea x-ref="textarea" name="body_text" x-model="draft" @input="onInput()" @keydown.meta.enter.prevent="submitFromKeyboard($event)" @keydown.ctrl.enter.prevent="submitFromKeyboard($event)" rows="3" placeholder="Reply to this conversation…  Type / to search responses" class="max-h-48 min-h-[88px] w-full resize-none border-0 bg-transparent px-3 py-3 text-sm focus:ring-0 dark:text-white"></textarea>
                 <div class="flex flex-wrap items-center gap-1.5 border-t border-slate-100 px-2 py-1.5 dark:border-slate-800">
@@ -187,3 +188,94 @@
         </form>
     </div>
 </section>
+
+<script>
+window.inboxComposer = window.inboxComposer || function inboxComposer(conversationId) {
+    return {
+        mode: 'reply',
+        draft: '',
+        files: [],
+        attachmentIds: [],
+        sending: false,
+        scheduled: false,
+        scheduledAt: '',
+        replyTo: null,
+        idempotencyKey: '',
+        get uploading() {
+            return this.files.some((file) => file.uploading);
+        },
+        init() {
+            this.idempotencyKey = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+        },
+        onInput() {},
+        insertQuickResponse(text) {
+            this.draft = [this.draft, text].filter(Boolean).join(this.draft ? '\n' : '');
+        },
+        insertIntroduction() {
+            this.insertQuickResponse('Hello, thanks for reaching out.');
+        },
+        insertTemplate(event) {
+            const option = event.target.options[event.target.selectedIndex];
+            if (option && option.dataset.body) this.insertQuickResponse(option.dataset.body);
+            event.target.value = '';
+        },
+        draftWithAI() {
+            if (typeof showDemoNotice === 'function') showDemoNotice('AI draft');
+        },
+        toggleSchedule() {
+            this.scheduled = !this.scheduled;
+        },
+        setReply(value) {
+            this.replyTo = value;
+        },
+        clearReply() {
+            this.replyTo = null;
+        },
+        submitFromKeyboard(event) {
+            const form = event.target.closest('form');
+            if (form) form.requestSubmit();
+        },
+        prepareSend() {
+            this.sending = true;
+        },
+        async stageFiles(event) {
+            const selected = Array.from(event.target.files || []);
+            event.target.value = '';
+            for (const file of selected) {
+                const entry = {
+                    key: `${file.name}:${file.size}:${Date.now()}`,
+                    name: file.name,
+                    uploading: true,
+                    error: '',
+                    id: '',
+                };
+                this.files.push(entry);
+                const body = new FormData();
+                body.append('files', file);
+                try {
+                    const response = await fetch(`/admin/inbox/${conversationId}/attachments`, {
+                        method: 'POST',
+                        body,
+                        credentials: 'same-origin',
+                    });
+                    const payload = await response.json();
+                    if (!response.ok) throw new Error(payload.detail || 'Upload failed');
+                    const ids = payload.attachment_ids || [];
+                    entry.id = ids[0] || '';
+                    for (const id of ids) this.attachmentIds.push(id);
+                    entry.uploading = false;
+                } catch (error) {
+                    entry.uploading = false;
+                    entry.error = error && error.message ? error.message : 'Upload failed';
+                }
+            }
+        },
+        removeFile(index) {
+            const removed = this.files.splice(index, 1)[0];
+            if (removed && removed.id) {
+                this.attachmentIds = this.attachmentIds.filter((id) => id !== removed.id);
+            }
+        },
+    };
+};
+</script>

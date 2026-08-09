@@ -1,0 +1,108 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Meta Social Config - Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/integrations/connectors" class="hover:text-primary-600">Integrations</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Meta Social Config</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Meta Social Configuration</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure Facebook Messenger and Instagram DM webhook auth and reply credentials.</p>
+        </div>
+    </div>
+
+    {% if request.query_params.get('saved') == '1' %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">
+        Meta social configuration saved.
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Webhook Callback URL</label>
+                <input value="{{ callback_url }}" readonly class="block w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
+            </div>
+        </div>
+    </div>
+
+    <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="post" action="/admin/integrations/meta-social/config" class="space-y-5">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Mode</label>
+                    <select name="auth_mode" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in auth_mode_options %}
+                        <option value="{{ item.id }}" {% if form.auth_mode == item.id %}selected{% endif %}>{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Graph API Version</label>
+                    <input name="meta_graph_api_version" value="{{ form.meta_graph_api_version }}" placeholder="v21.0" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Meta App ID</label>
+                <input name="meta_app_id" value="{{ form.meta_app_id }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Meta App Secret</label>
+                    <input name="meta_app_secret" value="" placeholder="Leave blank to keep current" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% if form.meta_app_secret_masked %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored: {{ form.meta_app_secret_masked }}</p>
+                    {% endif %}
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Webhook Verify Token</label>
+                    <input name="meta_webhook_verify_token" value="" placeholder="Leave blank to keep current" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% if form.meta_webhook_verify_token_masked %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored: {{ form.meta_webhook_verify_token_masked }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Facebook Override Token</label>
+                    <textarea name="meta_facebook_access_token_override" rows="3" placeholder="Leave blank to keep current" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    {% if form.meta_facebook_access_token_override_masked %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored: {{ form.meta_facebook_access_token_override_masked }}</p>
+                    {% endif %}
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Instagram Override Token</label>
+                    <textarea name="meta_instagram_access_token_override" rows="3" placeholder="Leave blank to keep current" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    {% if form.meta_instagram_access_token_override_masked %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored: {{ form.meta_instagram_access_token_override_masked }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2">
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Configuration</button>
+            </div>
+        </form>
+    </div>
+
+    {% set activity_title = "Meta Social Config Activity" %}
+    {% set activity_link = "/admin/system/audit" %}
+    {% include "components/data/recent_activity_panel.html" %}
+</div>
+{% endblock %}

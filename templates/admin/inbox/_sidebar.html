@@ -18,6 +18,19 @@
                     <span class="h-2 w-2 rounded-full" :class="realtimeConnected ? 'bg-emerald-500' : 'bg-slate-400'"></span>
                     <span x-text="realtimeConnected ? 'Live updates' : 'Offline · polling'">Offline · polling</span>
                 </p>
+                {% if actor_person_id %}
+                {% set availability_status = agent_presence.status if agent_presence else 'offline' %}
+                <form method="post" action="/admin/inbox/presence" class="mt-2 flex flex-wrap gap-1" aria-label="Inbox availability">
+                    {% for option in ['online', 'away', 'offline'] %}
+                    <button type="submit" name="status_value" value="{{ option }}"
+                            class="min-h-8 rounded-lg border px-2 text-[10px] font-bold uppercase tracking-wide {% if availability_status == option %}border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-200{% else %}border-slate-200 text-slate-500 hover:border-amber-200 hover:bg-amber-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}"
+                            aria-pressed="{{ 'true' if availability_status == option else 'false' }}">
+                        {{ option }}
+                    </button>
+                    {% endfor %}
+                </form>
+                <p class="mt-1 text-[10px] text-slate-400">Only online agents receive auto-assigned inbox conversations.</p>
+                {% endif %}
             </div>
             <button type="button" @click="openNewConversation()" class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500 text-white hover:bg-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2" aria-label="Start new conversation" title="New conversation">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
@@ -26,7 +39,12 @@
                 <svg x-show="soundEnabled" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5L6 9H3v6h3l5 4V5zm4.5 4.5a4 4 0 010 5m2.5-8a8 8 0 010 11"/></svg>
                 <svg x-show="!soundEnabled" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5L6 9H3v6h3l5 4V5zm5 5l4 4m0-4l-4 4"/></svg>
             </button>
-            <a href="/admin/settings" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" aria-label="Inbox settings" title="Settings">
+            {% if can(request, "support:inbox_ai:read") %}
+            <a href="/admin/inbox/manager-ai{% if selected %}?conversation_id={{ selected.id }}{% endif %}" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" aria-label="Manager AI" title="Manager AI">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3a4 4 0 014 4v1h1a4 4 0 014 4 4 4 0 01-4 4h-1v1a4 4 0 01-8 0v-1H7a4 4 0 01-4-4 4 4 0 014-4h1V7a4 4 0 014-4zm0 5v8m-4-4h8"/></svg>
+            </a>
+            {% endif %}
+            <a href="/admin/inbox/automation" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" aria-label="Inbox automation settings" title="Automation settings">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.3 2.8l.5 1.7a7.8 7.8 0 012.4 0l.5-1.7 2.1.9-.8 1.6a8 8 0 011.7 1.7l1.6-.8.9 2.1-1.7.5a7.8 7.8 0 010 2.4l1.7.5-.9 2.1-1.6-.8a8 8 0 01-1.7 1.7l.8 1.6-2.1.9-.5-1.7a7.8 7.8 0 01-2.4 0l-.5 1.7-2.1-.9.8-1.6A8 8 0 017.3 13l-1.6.8-.9-2.1 1.7-.5a7.8 7.8 0 010-2.4l-1.7-.5.9-2.1 1.6.8A8 8 0 019 5.3l-.8-1.6 2.1-.9zM12 9a3 3 0 100 6 3 3 0 000-6z"/></svg>
             </a>
         </div>

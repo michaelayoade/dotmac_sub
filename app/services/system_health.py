@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
-import resource
 import shutil
 from datetime import UTC, datetime
 from typing import Any
+
+try:
+    import resource
+except ModuleNotFoundError:  # pragma: no cover - Windows compatibility
+    resource = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +95,11 @@ def get_system_health() -> dict[str, Any]:
         load_avg = None
 
     process_rss_kb = None
-    try:
-        process_rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    except (ValueError, OSError):
-        process_rss_kb = None
+    if resource is not None:
+        try:
+            process_rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        except (ValueError, OSError):
+            process_rss_kb = None
 
     return {
         "generated_at": now,

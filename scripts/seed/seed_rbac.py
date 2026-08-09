@@ -226,6 +226,7 @@ DEFAULT_PERMISSIONS = [
     ("support:ticket:update", "Update tickets"),
     ("support:ticket:delete", "Delete tickets"),
     ("support:ticket:assign", "Assign tickets"),
+    ("support:inbox_ai:read", "Use manager AI insight for inbox conversations"),
     ("support:automation:read", "View ticket automation rules"),
     ("support:automation:write", "Manage ticket automation rules"),
     # CRM
@@ -422,6 +423,7 @@ ROLE_PERMISSIONS = {
         "support:ticket:read",
         "support:ticket:create",
         "support:ticket:update",
+        "support:inbox_ai:read",
         "support:automation:read",
         "support:automation:write",
         "crm:contact:read",

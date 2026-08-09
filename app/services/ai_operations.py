@@ -253,12 +253,18 @@ def upsert_intake_config(db: Session, payload) -> AiIntakeConfig:
     config.is_enabled = payload.is_enabled
     config.confidence_threshold = payload.confidence_threshold
     config.allow_followup_questions = payload.allow_followup_questions
+    config.auto_reply_enabled = payload.auto_reply_enabled
+    config.auto_handoff_enabled = payload.auto_handoff_enabled
     config.max_clarification_turns = payload.max_clarification_turns
     config.escalate_after_minutes = payload.escalate_after_minutes
     config.exclude_campaign_attribution = payload.exclude_campaign_attribution
     config.fallback_team_id = payload.fallback_team_id
     config.instructions = payload.instructions
     config.department_mappings = payload.department_mappings
+    config.workflow_steps = payload.workflow_steps
+    config.context_sources = payload.context_sources
+    config.handoff_policy = payload.handoff_policy
+    config.assignment_strategy = payload.assignment_strategy
     config.metadata_ = payload.metadata or {}
     db.flush()
     return config

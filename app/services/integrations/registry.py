@@ -238,6 +238,52 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         health=HealthManifest(operation="connection.validate.v1"),
     ),
     ConnectorManifest(
+        key="meta_social",
+        name="Meta Social",
+        version="1.0.0",
+        connector_type="messaging",
+        description="Facebook Messenger and Instagram DM inbox connector.",
+        catalogue_visible=False,
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.meta_social",
+        ),
+        capabilities=(
+            CapabilityManifest(
+                id="messaging.send.v1",
+                modes=(CapabilityMode.interactive, CapabilityMode.event),
+            ),
+            CapabilityManifest(
+                id="messaging.receive.v1",
+                modes=(CapabilityMode.inbound,),
+            ),
+        ),
+        config_schema={
+            "type": "object",
+            "properties": {
+                "auth_mode": {"type": "string", "enum": ["oauth", "override"]},
+                "app_id": {"type": "string"},
+                "graph_version": {"type": "string"},
+                "webhook_url": {"type": "string"},
+            },
+            "required": ["auth_mode"],
+            "additionalProperties": False,
+        },
+        secrets=(
+            SecretBindingManifest(name="app_secret", required=False),
+            SecretBindingManifest(name="webhook_verify_token", required=False),
+            SecretBindingManifest(name="facebook_access_token", required=False),
+            SecretBindingManifest(name="instagram_access_token", required=False),
+        ),
+        data_access=DataAccessManifest(
+            reads=("communications.outbound_message",),
+            emits=("communications.inbound_message_observation",),
+            classifications=("customer_contact", "message_content"),
+        ),
+        egress=EgressManifest(hosts=("graph.facebook.com", "graph.instagram.com")),
+        health=HealthManifest(operation="connection.validate.v1"),
+    ),
+    ConnectorManifest(
         key="dotmac.erp",
         name="DotMac ERP",
         version="1.0.0",

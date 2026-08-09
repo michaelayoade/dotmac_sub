@@ -3136,14 +3136,21 @@ state (`docs/designs/AI_SOT.md`).
 3. `ai.insights` (`app.services.ai_operations`) is the canonical writer of
    `AIInsight` rows and owns insight lifecycle — create, acknowledge,
    expire. Generated insights land here and nowhere else.
-4. `ai.intake` (`AiIntakeConfig`) owns the per-scope, per-channel decision to
-   run AI at all: enablement, confidence threshold, clarification limits,
-   and escalation timing. This is AI's only decision.
+4. `ai.intake` (`AiIntakeConfig`, `app.services.ai_inbox_automation`) owns the
+   per-scope, per-channel decision to run AI at all: enablement, confidence
+   threshold, clarification limits, context-source allow-list, workflow step
+   order, customer-visible reply gate, handoff policy, and escalation timing.
+   This is AI's only decision. Team Inbox consumes it only from the optional
+   inbound automation savepoint, and the behavior remains off until the intake
+   gate and action gates are enabled.
 5. `ai.generation` (`app.services.ai.engine`) owns the bounded on-demand report
    advisory path: advisor lookup, prompt assembly, and token budget. It accepts
    a caller-owned report projection, does not query domain models, and persists
    only by delegating to `ai.insights`. The default-off `ai.generation` control
    gates the admin report surface.
+6. `communications.team_inbox_manager_ai_chat` owns the manager-only inbox chat
+   read projection. It may call `ai.gateway` for an answer, but it writes no
+   `AIInsight`, no Inbox rows, and no domain state.
 
 Rule: an insight never mutates domain state. Acting on a recommendation means
 calling the domain's declared owner (`support.ticket_lifecycle`,
