@@ -49,6 +49,7 @@ from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser, SystemUserType
 from app.services.credential_crypto import encrypt_credential
 from app.services.web_customer_details import (
+    CustomerDetailNetworkQuery,
     build_business_detail_snapshot,
     build_customer_detail_snapshot,
     build_person_detail_snapshot,
@@ -729,6 +730,7 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
         "customerType": "person",
         "notificationChannels": [],
         "notificationTemplates": [],
+        "networkPanelUrl": "/admin/customers/person/cust-123?panel=network",
     }
     json.dumps(captured["context"]["detail_config"])
 
@@ -868,3 +870,40 @@ def test_customer_detail_snapshot_pending_location_request_none_when_absent(
     context = build_customer_detail_snapshot(db_session, str(subscriber.id))
 
     assert context["pending_location_request"] is None
+
+
+def test_customer_detail_snapshot_defers_network_panel(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import web_customer_details
+
+    subscriber.user_type = UserType.customer
+    db_session.commit()
+
+    def unexpected_network_read(*_args, **_kwargs):
+        raise AssertionError("initial customer detail must not resolve network facts")
+
+    monkeypatch.setattr(
+        web_customer_details,
+        "build_portal_account_health",
+        unexpected_network_read,
+    )
+    monkeypatch.setattr(
+        web_customer_details,
+        "_build_network_connection_snapshot",
+        unexpected_network_read,
+    )
+    monkeypatch.setattr(
+        web_customer_details,
+        "_build_access_endpoint_projection",
+        unexpected_network_read,
+    )
+
+    context = build_customer_detail_snapshot(
+        db_session,
+        str(subscriber.id),
+        network_query=CustomerDetailNetworkQuery(include=False),
+    )
+
+    assert context["network_panel_loaded"] is False
+    assert context["network_access_cards"] == []
