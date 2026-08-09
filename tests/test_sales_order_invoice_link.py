@@ -35,7 +35,7 @@ def _order(db_session, subscriber) -> SalesOrder:
 
 def _invoice(db_session, subscriber) -> Invoice:
     invoice = Invoice(
-        subscriber_id=subscriber.id,
+        account_id=subscriber.id,
         invoice_number=f"INV-TEST-{uuid4().hex[:8]}",
         status=InvoiceStatus.draft,
         subtotal=Decimal("10000.00"),
