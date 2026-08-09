@@ -155,6 +155,16 @@ first merge revision is the point of no easy return.
 
 Nothing here touches applied migrations or production data.
 
+## Operational repair history
+
+- 2026-08-09: `508_inbox_manager_ai_permission` and
+  `509_backfill_operator_tenant_scope` reached `dev` as parallel descendants
+  of `507_domain_settings_scope_columns`. Revision
+  `510_merge_inbox_ai_and_operator_tenant_heads` joins the two already-merged
+  histories with a no-op merge so CI and promotion again have one upgrade
+  target. This repair does not authorize future forks or choose Option B; the
+  admission-control decision above remains separate.
+
 ## Review and retirement
 
 - Review date: 2026-09-07, or on the next collision after cutover, whichever is
