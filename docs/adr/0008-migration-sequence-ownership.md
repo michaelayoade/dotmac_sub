@@ -157,13 +157,13 @@ Nothing here touches applied migrations or production data.
 
 ## Operational repair history
 
-- 2026-08-09: `508_inbox_manager_ai_permission` and
-  `509_backfill_operator_tenant_scope` reached `dev` as parallel descendants
-  of `507_domain_settings_scope_columns`. Revision
-  `510_merge_inbox_ai_and_operator_tenant_heads` joins the two already-merged
-  histories with a no-op merge so CI and promotion again have one upgrade
-  target. This repair does not authorize future forks or choose Option B; the
-  admission-control decision above remains separate.
+- 2026-08-09: the Inbox AI permission and operator-tenant migrations reached
+  `dev` as parallel descendants of `507_domain_settings_scope_columns`, both
+  using numeric prefix `508`. Before either revision was deployed, the newer
+  Inbox migration was renumbered to `510_inbox_manager_ai_permission` and
+  re-parented on `509_backfill_operator_tenant_scope`. This restores one linear
+  upgrade target without accepting the prefix collision into the historical
+  baseline.
 
 ## Review and retirement
 

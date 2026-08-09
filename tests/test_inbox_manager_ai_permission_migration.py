@@ -5,9 +5,7 @@ from pathlib import Path
 from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MIGRATION_PATH = (
-    REPO_ROOT / "alembic/versions/510_merge_inbox_ai_and_operator_tenant_heads.py"
-)
+MIGRATION_PATH = REPO_ROOT / "alembic/versions/510_inbox_manager_ai_permission.py"
 
 
 def _load_migration() -> ModuleType:
@@ -18,11 +16,8 @@ def _load_migration() -> ModuleType:
     return module
 
 
-def test_merge_revision_joins_both_dev_migration_heads() -> None:
+def test_inbox_ai_permission_follows_operator_tenant_migrations() -> None:
     migration = _load_migration()
 
-    assert migration.revision == "510_merge_inbox_ai_and_operator_tenant_heads"
-    assert set(migration.down_revision) == {
-        "508_inbox_manager_ai_permission",
-        "509_backfill_operator_tenant_scope",
-    }
+    assert migration.revision == "510_inbox_manager_ai_permission"
+    assert migration.down_revision == "509_backfill_operator_tenant_scope"
