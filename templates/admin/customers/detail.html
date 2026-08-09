@@ -1501,9 +1501,11 @@
                                 {% endif %}
                                 {% if show_service_assignments %}
                                 {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
+                                {% if sub_conn %}
                                 <div class="w-24 text-center">
                                     {{ status_presentation_badge(sub_conn.status_presentation, size="sm") }}
                                 </div>
+                                {% endif %}
                                 {% endif %}
                             </div>
                         </div>

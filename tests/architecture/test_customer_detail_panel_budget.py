@@ -21,6 +21,7 @@ def test_network_panel_is_lazy_and_selects_only_its_fragment() -> None:
     assert 'hx-trigger="revealed"' in template
     assert 'hx-select="#customer-network-panel"' in template
     assert "network_access_is_bounded" in template
+    assert "{% if sub_conn %}" in template
 
 
 def test_financial_balance_projection_uses_cohort_owner() -> None:
