@@ -19,6 +19,8 @@ Revises: 510_inbox_manager_ai_permission
 
 from __future__ import annotations
 
+import logging
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -91,11 +93,15 @@ def upgrade() -> None:
         # metadata lane has no rows to recover.
         return
 
-    # Recover what the metadata join already asserts. Only rows whose invoice,
-    # sales order and account all still resolve are linked — a dangling id is
-    # left for review rather than forced through a RESTRICT foreign key.
-    # DISTINCT ON keeps one row per invoice, honouring the unique constraint
-    # when two projects name the same invoice.
+    # The order side comes from ``projects.sales_order_id`` — a real FK with a
+    # unique constraint. Only the invoice id has no structural column yet, so
+    # it is the one value recovered from metadata, which is what this migration
+    # exists to replace.
+    #
+    # Only rows whose invoice, sales order and account all still resolve are
+    # linked; a dangling id is left for review rather than forced through a
+    # RESTRICT foreign key. DISTINCT ON keeps one row per invoice, honouring
+    # the unique constraint when two projects name the same invoice.
     op.execute(
         sa.text(
             """
@@ -111,15 +117,13 @@ def upgrade() -> None:
                 now()
             FROM projects p
             JOIN sales_orders so
-              ON so.id = (p."metadata" ->> 'sales_order_id')::uuid
+              ON so.id = p.sales_order_id
             JOIN invoices i
               ON i.id = (p."metadata" ->> 'selfcare_installation_invoice_id')::uuid
             JOIN subscribers s
               ON s.id = so.subscriber_id
-            WHERE p."metadata" ->> 'sales_order_id' IS NOT NULL
+            WHERE p.sales_order_id IS NOT NULL
               AND p."metadata" ->> 'selfcare_installation_invoice_id' IS NOT NULL
-              AND p."metadata" ->> 'sales_order_id' ~
-                  '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
               AND p."metadata" ->> 'selfcare_installation_invoice_id' ~
                   '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
             ORDER BY i.id, p.created_at DESC
@@ -127,6 +131,45 @@ def upgrade() -> None:
             DO NOTHING
             """
         )
+    )
+
+    # Cutover gate. `metadata_without_link` is what a read cutover would lose:
+    # while it is non-zero, moving reads onto the link drops the invoice
+    # association for those orders and they read as never invoiced.
+    #
+    # Reported here rather than from a service because ADR 0007 makes metadata
+    # provenance only — a permanent reader comparing the two would be a new
+    # metadata financial-identity read, which `test_billing_target_architecture`
+    # rightly refuses. Parity is migration-time evidence, so it belongs to the
+    # migration that creates it.
+    parity = bind.execute(
+        sa.text(
+            """
+            WITH joined AS (
+                SELECT (p."metadata" ->> 'selfcare_installation_invoice_id')::uuid
+                           AS invoice_id
+                FROM projects p
+                WHERE p.sales_order_id IS NOT NULL
+                  AND p."metadata" ->> 'selfcare_installation_invoice_id' IS NOT NULL
+                  AND p."metadata" ->> 'selfcare_installation_invoice_id' ~
+                      '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+            )
+            SELECT
+                (SELECT count(*) FROM joined) AS metadata_joins,
+                (SELECT count(*) FROM sales_order_invoice_links) AS links,
+                (SELECT count(*) FROM joined j
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM sales_order_invoice_links l
+                      WHERE l.invoice_id = j.invoice_id)) AS metadata_without_link
+            """
+        )
+    ).one()
+    logging.getLogger("alembic.runtime.migration").warning(
+        "sales_order_invoice_link_backfill_parity: metadata_joins=%s links=%s "
+        "metadata_without_link=%s (read cutover is gated on the last being 0)",
+        parity.metadata_joins,
+        parity.links,
+        parity.metadata_without_link,
     )
 
 

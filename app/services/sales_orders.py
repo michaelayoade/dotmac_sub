@@ -470,10 +470,13 @@ def _store_invoice_metadata(
     metadata.pop("selfcare_installation_invoice_error", None)
     project.metadata_ = metadata
 
-    sales_order_id = str(metadata.get("sales_order_id") or "").strip()
-    if sales_order_id:
+    # The order comes from ``projects.sales_order_id`` — a real FK with a
+    # unique constraint — not from the metadata key beside it. ADR 0007 makes
+    # metadata provenance only, and reading the identity out of it here would
+    # build the structural link on exactly the join it exists to replace.
+    if project.sales_order_id is not None:
         link_sales_order_invoice(
-            db, sales_order_id=sales_order_id, invoice_id=invoice_id
+            db, sales_order_id=project.sales_order_id, invoice_id=invoice_id
         )
 
 
