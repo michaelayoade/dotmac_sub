@@ -165,8 +165,16 @@ def _query_optional_bool(value: object) -> bool | None:
 
 
 def _is_htmx_request(request: Request) -> bool:
-    headers = getattr(request, "headers", {})
-    return str(headers.get("HX-Request", "")).lower() == "true"
+    # Direct route tests construct the smallest valid-enough Request scope and
+    # may omit ASGI headers entirely. Reading ``request.headers`` would ask
+    # Starlette to normalize that incomplete scope and raise ``KeyError``.
+    # Inspect the transport facts directly so an absent header means the
+    # progressive-enhancement fallback, just as it does for a normal request.
+    raw_headers = getattr(request, "scope", {}).get("headers", ())
+    return any(
+        name.lower() == b"hx-request" and value.lower() == b"true"
+        for name, value in raw_headers
+    )
 
 
 def _query_int(value: object, *, default: int | None = None) -> int | None:
