@@ -604,6 +604,22 @@ def catalog_offer(db_session):
             price_basis=PriceBasis.flat,
         ),
     )
+    # A flat offer carries a recurring price. Subscription creation now refuses
+    # a flat offer that has none rather than snapshotting a zero, so a fixture
+    # without one would build subscriptions no real catalog could produce.
+    from decimal import Decimal
+
+    from app.models.catalog import OfferPrice, PriceType
+
+    db_session.add(
+        OfferPrice(
+            offer_id=offer.id,
+            price_type=PriceType.recurring,
+            amount=Decimal("10000.00"),
+            is_active=True,
+        )
+    )
+    db_session.flush()
     return offer
 
 
