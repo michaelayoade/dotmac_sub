@@ -13,8 +13,8 @@ Expand only. The historical metadata keys are left in place and are still the
 read path; this migration backfills what they already assert so a parity check
 can compare the two before any read cutover.
 
-Revision ID: 510_sales_order_invoice_links
-Revises: 509_backfill_operator_tenant_scope
+Revision ID: 511_sales_order_invoice_links
+Revises: 510_inbox_manager_ai_permission
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "510_sales_order_invoice_links"
-down_revision = "509_backfill_operator_tenant_scope"
+revision = "511_sales_order_invoice_links"
+down_revision = "510_inbox_manager_ai_permission"
 branch_labels = None
 depends_on = None
 
