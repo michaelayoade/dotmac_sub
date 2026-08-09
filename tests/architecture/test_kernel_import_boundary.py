@@ -195,10 +195,14 @@ def test_guard_fails_on_forbidden_kernel_imports(tmp_path: Path) -> None:
     ):
         assert needle in flagged, f"checker missed {needle!r}: {violations}"
     assert "dotmac_kernel.money" not in flagged, violations
-    # The two admitted names must NOT be flagged — otherwise the narrowing is
-    # indistinguishable from the module still being off the allowlist.
-    assert "Tenant" not in flagged, violations
-    assert "TenantDomain" not in flagged, violations
+    # The admitted import must NOT be flagged — otherwise the narrowing is
+    # indistinguishable from the module still being off the allowlist. Asserted
+    # by LINE rather than by substring: the rejection message for a bare
+    # `import dotmac_kernel.models` legitimately names Tenant and TenantDomain
+    # as the permitted imports, so a substring check matches the guidance and
+    # not the subject.
+    admitted_line = "offender.py:9:"
+    assert not [v for v in violations if v.startswith(admitted_line)], violations
 
 
 def test_allowlist_matches_the_ledger() -> None:
