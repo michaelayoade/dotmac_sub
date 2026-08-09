@@ -98,7 +98,7 @@ def test_operator_unread_projection_is_set_based_and_indexed() -> None:
     owner = (ROOT / "app/services/team_inbox_read_state.py").read_text(encoding="utf-8")
     model = (ROOT / "app/models/team_inbox.py").read_text(encoding="utf-8")
     migration = (
-        ROOT / "alembic/versions/507_team_inbox_unread_query_indexes.py"
+        ROOT / "alembic/versions/513_team_inbox_unread_query_indexes.py"
     ).read_text(encoding="utf-8")
 
     assert "def unread_conversation_clause" not in owner
@@ -108,7 +108,7 @@ def test_operator_unread_projection_is_set_based_and_indexed() -> None:
     assert "ix_inbox_read_states_person_conversation" in model
     assert "CREATE INDEX CONCURRENTLY" in migration
     assert (
-        'down_revision: str | None = "506_retire_splynx_foreign_data_wrapper"'
+        'down_revision: str | None = "512_open_setting_value_type_vocabulary"'
         in migration
     )
 
