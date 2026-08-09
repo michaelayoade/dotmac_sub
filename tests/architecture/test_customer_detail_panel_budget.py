@@ -26,6 +26,7 @@ def test_network_panel_is_lazy_and_selects_only_its_fragment() -> None:
 def test_financial_balance_projection_uses_cohort_owner() -> None:
     service = _source("app/services/web_customer_details.py")
 
-    assert "prepaid_available_balances(db, account_ids)" in service
+    assert "profiles = resolve_billing_profiles(db, accounts)" in service
+    assert "prepaid_available_balances(db, prepaid_account_ids)" in service
     assert "get_available_balance" not in service
     assert "if include_network and map_data and primary_address:" in service

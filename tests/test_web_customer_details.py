@@ -31,6 +31,7 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
     AccessCredential,
+    BillingMode,
     ConnectionType,
     Subscription,
     SubscriptionStatus,
@@ -907,3 +908,23 @@ def test_customer_detail_snapshot_defers_network_panel(
 
     assert context["network_panel_loaded"] is False
     assert context["network_access_cards"] == []
+
+
+def test_customer_financial_batch_excludes_postpaid_accounts(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import web_customer_details
+
+    subscriber.billing_mode = BillingMode.postpaid
+    db_session.commit()
+    calls: list[list[object]] = []
+
+    def balances(_db, account_ids):
+        calls.append(list(account_ids))
+        return {}
+
+    monkeypatch.setattr(web_customer_details, "prepaid_available_balances", balances)
+
+    web_customer_details._build_common_financials(db_session, [subscriber])
+
+    assert calls == []

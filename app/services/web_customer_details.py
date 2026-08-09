@@ -29,6 +29,7 @@ from app.models.billing import (
 from app.models.catalog import (
     AccessCredential,
     AddOn,
+    BillingMode,
     ConnectionType,
     Subscription,
     SubscriptionAddOn,
@@ -76,6 +77,7 @@ from app.services import subscriber as subscriber_service
 from app.services import subscriber_summary as subscriber_summary_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.access_resolution import resolve_customer_access
+from app.services.billing_profile import resolve_billing_profiles
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
 from app.services.customer_financial_position import prepaid_available_balances
@@ -419,7 +421,8 @@ def get_customer_audit_activity_items(
     )
 
 
-def _build_common_financials(db: Session, account_ids):
+def _build_common_financials(db: Session, accounts: Sequence[Subscriber]):
+    account_ids = [account.id for account in accounts]
     invoices = []
     payments = []
     if account_ids:
@@ -445,10 +448,17 @@ def _build_common_financials(db: Session, account_ids):
     current_balance = Decimal("0.00")
     if account_ids:
         try:
-            current_balance = sum(
-                prepaid_available_balances(db, account_ids).values(),
-                start=Decimal("0.00"),
-            )
+            profiles = resolve_billing_profiles(db, accounts)
+            prepaid_account_ids = [
+                account_id
+                for account_id, profile in profiles.items()
+                if profile.effective_mode == BillingMode.prepaid
+            ]
+            if prepaid_account_ids:
+                current_balance = sum(
+                    prepaid_available_balances(db, prepaid_account_ids).values(),
+                    start=Decimal("0.00"),
+                )
         except Exception:
             logger.warning(
                 "Failed to resolve current balances for customer accounts",
@@ -1751,7 +1761,7 @@ def build_customer_detail_snapshot(
     account_ids = [account.id for account in accounts]
 
     # Financials & relationships
-    finance_data = _build_common_financials(db, account_ids)
+    finance_data = _build_common_financials(db, accounts)
     invoices = finance_data["invoices"]
     payments = finance_data["payments"]
     invoice_status_presentations = finance_data["invoice_status_presentations"]
