@@ -218,13 +218,19 @@ class TestIdempotentTaskDecorator:
 
     def test_stale_running_task_retries(self, db_session):
         """Should allow retry if running task is stale."""
-        # Create a stale running execution
+        # Create a stale running execution. BOTH timestamps are old: staleness
+        # is measured from `updated_at` (when the current attempt was last known
+        # alive), and a row whose `updated_at` is fresh means something touched
+        # it a moment ago — which is exactly NOT stale. Leaving `updated_at` to
+        # its `datetime.now` default here would build a row that cannot occur:
+        # nothing writes to a `running` row between claim and completion.
         stale_time = datetime.now(UTC) - timedelta(hours=2)
         execution = TaskExecution(
             idempotency_key="test_task:test:stale",
             task_name="test_task",
             status=TaskExecutionStatus.running,
             created_at=stale_time,
+            updated_at=stale_time,
         )
         db_session.add(execution)
         db_session.commit()
