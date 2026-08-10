@@ -516,14 +516,12 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=24,
         label="Hours after which provisioning runtime state is stale",
     ),
-    SettingSpec(
-        domain=SettingDomain.provisioning,
-        key="olt_write_mode_enabled",
-        env_var=None,
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Allow OMCI writes to the OLT",
-    ),
+    # `olt_write_mode_enabled` is NOT declared here. It already exists in
+    # `app/services/settings_specs/provisioning.py`, with an `env_var` this one
+    # would have dropped. I missed it because that package builds specs through
+    # a `setting_spec` CALLABLE rather than a literal `SettingSpec(...)`, so the
+    # sweep that told me "none of these sixteen is registered" was reading one
+    # file instead of the spec system. Fifteen here, one there.
     SettingSpec(
         domain=SettingDomain.provisioning,
         key="pppoe_provisioning_method",

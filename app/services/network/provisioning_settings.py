@@ -60,6 +60,14 @@ SETTING_KEYS: tuple[str, ...] = (
 )
 
 
+def _spec(key: str) -> Any:
+    """The registered spec for one of this module's keys, or None."""
+
+    from app.services import settings_spec
+
+    return settings_spec.get_spec(SettingDomain.provisioning, key)
+
+
 def get_setting(db: Session | None, key: str, default: Any = None) -> Any:
     """One provisioning setting, through the one resolver.
 
@@ -101,8 +109,13 @@ def get_int_setting(db: Session | None, key: str, default: int | None = None) ->
     try:
         return int(value)
     except (TypeError, ValueError):
-        fallback = SETTING_KEYS.get(key, 0)
-        return default if default is not None else int(str(fallback))
+        # The spec's default, not a second copy of it. `SETTING_KEYS` is a
+        # tuple of names now — it stopped being a defaults map when the specs
+        # took that job.
+        if default is not None:
+            return default
+        spec = _spec(key)
+        return int(str(spec.default)) if spec is not None else 0
 
 
 def get_float_setting(
@@ -113,8 +126,10 @@ def get_float_setting(
     try:
         return float(value)
     except (TypeError, ValueError):
-        fallback = SETTING_KEYS.get(key, 0.0)
-        return default if default is not None else float(str(fallback))
+        if default is not None:
+            return default
+        spec = _spec(key)
+        return float(str(spec.default)) if spec is not None else 0.0
 
 
 def get_bool_setting(db: Session | None, key: str, default: bool | None = None) -> bool:

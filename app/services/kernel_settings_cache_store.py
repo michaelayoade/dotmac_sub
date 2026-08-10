@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 import redis
 
@@ -78,7 +78,9 @@ class RedisSettingsCacheStore:
         if raw is None:
             return None
         try:
-            loaded: Any = json.loads(raw)
+            # `cast`: the shared client is typed as possibly-async, and this
+            # module is the sync path.
+            loaded: Any = json.loads(cast("str | bytes", raw))
         except ValueError:
             # An entry written by an older encoding, or a corrupted one. Treat
             # it as a miss: resolution rebuilds it, and the write below
@@ -123,10 +125,10 @@ class RedisSettingsCacheStore:
             for found in client.scan_iter(match=f"{prefix}*", count=_SCAN_BATCH):
                 batch.append(found)
                 if len(batch) >= _SCAN_BATCH:
-                    deleted += client.delete(*batch)
+                    deleted += cast("int", client.delete(*batch))
                     batch = []
             if batch:
-                deleted += client.delete(*batch)
+                deleted += cast("int", client.delete(*batch))
         except redis.RedisError as exc:
             logger.debug("settings cache invalidation failed: %s", exc)
             return deleted
