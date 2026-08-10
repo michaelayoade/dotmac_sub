@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
+from dotmac_kernel.settings_resolver import resolve_value as kernel_resolve_value
+
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import domain_settings as settings_service
@@ -15,6 +17,7 @@ from app.services.brand_theme import (
 from app.services.channel_health_contracts import (
     DEFAULT_CHANNEL_HEALTH_CONTRACTS,
 )
+from app.services.operator_tenant import operator_tenant_id
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
 from app.services.settings_specs.integration import build_integration_specs
@@ -412,7 +415,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         domain=SettingDomain.imports,
         key="import_history_log",
         env_var=None,
-        value_type=SettingValueType.json,
+        value_type=SettingValueType.list,
         default=[],
     ),
     SettingSpec(
@@ -437,7 +440,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         domain=SettingDomain.imports,
         key="import_jobs_log",
         env_var=None,
-        value_type=SettingValueType.json,
+        value_type=SettingValueType.list,
         default=[],
     ),
     SettingSpec(
@@ -4549,7 +4552,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         domain=SettingDomain.audit,
         key="methods",
         env_var=None,
-        value_type=SettingValueType.json,
+        value_type=SettingValueType.list,
         default=["POST", "PUT", "PATCH", "DELETE"],
         label="Audited HTTP methods",
     ),
@@ -4557,7 +4560,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         domain=SettingDomain.audit,
         key="skip_paths",
         env_var=None,
-        value_type=SettingValueType.json,
+        value_type=SettingValueType.list,
         default=["/static", "/web", "/health"],
         label="Path prefixes excluded from audit logging",
     ),
@@ -5200,57 +5203,27 @@ def list_specs(domain: SettingDomain) -> list[SettingSpec]:
 
 
 def resolve_value(db, domain: SettingDomain, key: str) -> Any:
-    """Resolve a database-authoritative setting value with Redis caching.
+    """Resolve a database-authoritative setting value.
 
-    Resolution order is Redis cache, active database row, then the registered
-    default. Environment inputs are materialized by bootstrap/sync and are not
-    consulted here.
+    Delegates to `dotmac_kernel.settings_resolver`. Sub keeps this signature so
+    that the 109 call sites do not change and this remains the one seam; what
+    moved is WHO decides, not who is asked.
+
+    Resolution is the kernel's: the operator tenant's row, then the platform
+    row, then the spec default. Environment inputs are materialised into rows
+    by the seed and are never consulted here — that is Sub's approved rule and
+    the kernel's own (starter ADR-0011: settings resolution reads rows and
+    defaults, never the environment).
+
+    Sub's `SettingsCache` is deliberately NOT consulted. Two caches over one
+    read is a second answer waiting to be stale, and the kernel's own cache is
+    inert until a store is installed. Whether to install it is a separate
+    decision with its own evidence — see the cutover PR.
     """
-    spec = get_spec(domain, key)
-    if not spec:
+
+    if get_spec(domain, key) is None:
         return None
-
-    # 1. Check cache first
-    cached = SettingsCache.get(domain.value, key)
-    if cached is not None:
-        return cast(object, cached)
-
-    # 2. Query database
-    service = DOMAIN_SETTINGS_SERVICE.get(domain)
-    setting = (
-        service.get_optional_by_key(db, key, active_only=True) if service else None
-    )
-    raw = extract_db_value(setting)
-    if raw is None:
-        raw = spec.default
-    value, error = coerce_value(spec, raw)
-    if error:
-        value = spec.default
-    if spec.allowed and value is not None and value not in spec.allowed:
-        value = spec.default
-    if spec.value_type == SettingValueType.integer and value is not None:
-        parsed = _coerce_int_value(value)
-        if parsed is None:
-            parsed = spec.default if isinstance(spec.default, int) else None
-        if (
-            spec.min_value is not None
-            and parsed is not None
-            and parsed < spec.min_value
-        ):
-            parsed = spec.default if isinstance(spec.default, int) else None
-        if (
-            spec.max_value is not None
-            and parsed is not None
-            and parsed > spec.max_value
-        ):
-            parsed = spec.default if isinstance(spec.default, int) else None
-        value = parsed
-
-    # 3. Cache the result (only non-None values)
-    if value is not None:
-        SettingsCache.set(domain.value, key, value)
-
-    return value
+    return kernel_resolve_value(db, str(domain), key, tenant_id=operator_tenant_id())
 
 
 def resolve_boolean(db, domain: SettingDomain, key: str) -> bool:
@@ -5423,28 +5396,54 @@ def coerce_value(spec: SettingSpec, raw: object) -> tuple[object | None, str | N
         if spec.string_normalization is SettingStringNormalization.LOWERCASE:
             value = value.lower()
         return value, None
-    if spec.value_type == SettingValueType.json:
-        # A JSON setting reached through the settings form arrives as text. An
-        # object or array is parsed; anything else is read as a comma-separated
-        # list, which is the only established convention for these — the audit
+    if spec.value_type == SettingValueType.list:
+        # A list setting reached through the settings form arrives as text. A
+        # JSON array is parsed; anything else is read as a comma-separated
+        # list, which is the established convention for these — the audit
         # `methods`/`skip_paths` handler did exactly this before the shape moved
         # to its owner. Without it, "POST, GET" would store as that string.
         if isinstance(raw, str):
             text = raw.strip()
             if not text:
                 return [], None
-            if text.startswith(("[", "{")):
+            if text.startswith("["):
                 try:
-                    return json.loads(text), None
+                    parsed = json.loads(text)
                 except ValueError:
                     return None, "Value must be valid JSON"
-            return [item.strip() for item in text.split(",") if item.strip()], None
+                if not isinstance(parsed, list):
+                    return None, "Value must be a JSON array"
+                raw = parsed
+            else:
+                return [item.strip() for item in text.split(",") if item.strip()], None
+        if isinstance(raw, tuple):
+            raw = list(raw)
         if isinstance(raw, list):
             return [
                 item.strip() if isinstance(item, str) else item
                 for item in raw
                 if not isinstance(item, str) or item.strip()
             ], None
+        return None, "Value must be a list"
+    if spec.value_type == SettingValueType.json:
+        # An OBJECT, and only an object. The kernel's `json` type rejects
+        # anything else, and a reader that cannot tell whether to expect
+        # `.get(...)` or `[0]` is the ambiguity a value type exists to remove.
+        # Sequences belong to `list` above.
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                return {}, None
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return None, "Value must be valid JSON"
+            if not isinstance(parsed, dict):
+                return None, "Value must be a JSON object"
+            return parsed, None
+        if isinstance(raw, dict):
+            return raw, None
+        return None, "Value must be a JSON object"
     return raw, None
 
 
@@ -5467,3 +5466,15 @@ def normalize_for_db(
     if spec.value_type == SettingValueType.string:
         return str(value), None
     return None, value
+
+
+# Register Sub's specs with the kernel registry at import time: a kernel read
+# must never precede the declaration it depends on, and `resolve_value` above
+# delegates to it. Imported HERE rather than at module top because the bridge
+# reads `SETTINGS_SPECS` from this module — a top-level import would be a
+# cycle, and by this line the specs exist.
+from app.services.settings_kernel_bridge import (  # noqa: E402
+    register_with_kernel,
+)
+
+register_with_kernel()

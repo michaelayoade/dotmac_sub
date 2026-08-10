@@ -1,27 +1,33 @@
-"""The pinned dotmac-kernel wheel is pure-contract compatible with Sub (S2).
+"""The pinned dotmac-kernel wheel is compatible with Sub, and stays contained.
 
 Slice S2 of the selective kernel-adoption plan
-(docs/PLATFORM_ADOPTION_LEDGER.md): the released ``dotmac-kernel==0.1.0a8``
-wheel is an installed dependency, but Sub's runtime is UNCHANGED — no kernel
-import exists under ``app/`` (enforced by
-``tests/architecture/test_kernel_import_boundary.py``), no kernel route or
-middleware is mounted, no kernel engine or migration runs. What this file
-proves, with zero skips:
+(docs/PLATFORM_ADOPTION_LEDGER.md) pinned the wheel while Sub's runtime stayed
+UNCHANGED. That is no longer the state and this file says so rather than
+asserting a claim it has outgrown: the settings cutover made
+``app/services/settings_spec.py`` register Sub's specs with
+``dotmac_kernel.settings_resolver`` and resolve through it, so Sub now CONSUMES
+the kernel rather than merely depending on it.
+
+What this file proves, with zero skips:
 
 - every ledger-allowlisted pure surface (and the tests/-only test kit) imports
-  in a subprocess with ``DATABASE_URL`` and all DB-ish env stripped — the a8
+  in a subprocess with ``DATABASE_URL`` and all DB-ish env stripped — the
   "testing is DB-free" claim is exercised, not assumed;
-- the installed distribution is exactly the reviewed pin (``0.1.0a8``) and
-  ships ``py.typed``;
+- the installed distribution is exactly the reviewed pin and ships ``py.typed``;
 - ``pyproject.toml`` pins the kernel EXACTLY (no ``^``/``~``/``>=``/``*``
   range) from the named private index — an unreviewed range upgrade is a CI
   failure, not a lockfile surprise;
 - the pure value contracts behave (exact ``Decimal`` money, float rejection,
   provisioning protocol/result types, assembly/feature/capability/profile
   specs, the reusable provider contract check);
-- the unchanged Sub app builds with the kernel installed and no
-  ``dotmac_kernel`` module reaches its import graph, middleware stack, route
-  endpoints, or top-level route prefixes.
+- the Sub app builds with the kernel installed, and every ``dotmac_kernel``
+  module in its import graph is one the ledger allowlist admits — no kernel
+  middleware is mounted, no kernel route endpoint is served, and the top-level
+  route prefix set is exactly the reviewed pin.
+
+The containment that matters is unchanged: ``dotmac_kernel.deps``,
+``.middleware``, ``.audit`` and the rest stay out of ``app/`` entirely, and a
+side-door import of one fails here even though the AST guard cannot see it.
 
 ``dotmac_kernel.testing`` usage stays confined to ``tests/`` per the ledger;
 this file is itself test-side and imports kernel modules freely (the S1 guard
@@ -38,6 +44,10 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+
+# The one allowlist, imported rather than restated: two copies would drift,
+# and the ledger already keeps THAT module's copy in byte-for-byte sync.
+from tests.architecture.test_kernel_import_boundary import ALLOWED_KERNEL_MODULES
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
@@ -277,20 +287,46 @@ def test_fake_licence_signer_works_with_subs_cryptography_pin() -> None:
     assert signer.keyring().get(signer.key_id) is not None
 
 
-def test_app_import_graph_is_kernel_free() -> None:
-    """Importing all of ``app.main`` must pull zero dotmac_kernel modules.
+def test_app_import_graph_holds_only_allowlisted_kernel_modules() -> None:
+    """The runtime graph agrees with the allowlist — no side-door import.
 
-    The AST guard proves no source-level import exists; this proves the
-    runtime graph agrees (no plugin/entry-point/side-door import either).
+    This test asserted ZERO kernel modules until the settings cutover, and the
+    change is deliberate rather than a relaxation to make a build pass.
+    ``app/services/settings_spec.py`` now registers Sub's 560 specs with
+    ``dotmac_kernel.settings_resolver`` at import time and resolves through it,
+    so the count cannot be zero and Sub is no longer merely PINNED to the
+    kernel — it consumes it. The ledger records the same fact.
+
+    What the guard still proves is the thing that mattered all along: the AST
+    check (``test_kernel_import_boundary``) proves no source-level import
+    outside the allowlist exists, and this proves the RUNTIME graph agrees —
+    an entry point, plugin, or transitive side door that dragged in
+    ``dotmac_kernel.deps``, ``.middleware`` or ``.audit`` would still fail
+    here, because those are what a "kernel-free Sub app" was ever about.
+
+    Submodules of an allowlisted package are permitted: importing
+    ``settings_resolver`` legitimately pulls ``dotmac_kernel.settings_models``
+    and the value-type registry it validates against.
     """
+    allowed = repr(sorted(ALLOWED_KERNEL_MODULES))
     result = subprocess.run(  # noqa: S603 — fixed argv, our own interpreter
         [
             sys.executable,
             "-c",
             (
-                "import sys; import app.main; "
-                "bad = sorted(m for m in sys.modules if m.startswith('dotmac_kernel')); "
-                "sys.exit('kernel modules in app import graph: %s' % bad if bad else 0)"
+                "import sys\n"
+                f"allowed = set({allowed})\n"
+                "import app.main\n"
+                "loaded = {m for m in sys.modules if m.startswith('dotmac_kernel')}\n"
+                "bad = sorted(\n"
+                "    m for m in loaded\n"
+                "    if m != 'dotmac_kernel'\n"
+                "    and not any(m == a or m.startswith(a + '.') for a in allowed)\n"
+                ")\n"
+                "sys.exit(\n"
+                "    'kernel modules in the app import graph that the ledger "
+                "allowlist does not admit: %s' % bad if bad else 0\n"
+                ")"
             ),
         ],
         cwd=PROJECT_ROOT,
