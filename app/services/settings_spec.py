@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
+from dotmac_kernel.settings_models import SettingDomain as KernelSettingDomain
 from dotmac_kernel.settings_resolver import resolve_value as kernel_resolve_value
 
 from app.models.domain_settings import SettingDomain
@@ -653,6 +654,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=30,
         min_value=1,
+        # The ceiling is recovered from the duplicate declaration this spec
+        # absorbed; the floor is not. A timeout is passed straight to the HTTP
+        # client in `sms.py`, so above a minute it stops being a timeout and
+        # starts being a blocked worker. The duplicate's `min_value=5` is NOT
+        # adopted: 1s is aggressive but legitimate against a fast gateway, and
+        # raising a floor is the change most likely to reject a value some
+        # deployment already stores.
+        max_value=60,
         label="SMS provider request timeout (seconds)",
     ),
     SettingSpec(
@@ -661,7 +670,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="SMS_MAX_LENGTH",
         value_type=SettingValueType.integer,
         default=160,
+        # `0` is load-bearing, not a lower bound nobody thought about:
+        # `sms.py` reads `if max_length > 0 and len(body) > max_length`, so 0
+        # is how truncation is DISABLED. The duplicate declaration this spec
+        # absorbed had `min_value=1`, which would have made the documented
+        # disable value unstorable — the concrete harm in letting a dead
+        # second declaration look authoritative.
         min_value=0,
+        # 918 = 6 concatenated GSM-7 segments x 153 characters, the practical
+        # limit of a multipart SMS. Recovered from that duplicate: it is a
+        # property of the transport rather than a preference.
+        max_value=918,
         label="SMS body truncation length (0 disables truncation)",
     ),
     SettingSpec(
@@ -5173,11 +5192,42 @@ DOMAIN_SETTINGS_SERVICE = {
 }
 
 
+#: Every spec by ``(domain, key)``. Built once, and construction is where a
+#: duplicate declaration now DIES rather than hiding.
+#:
+#: `get_spec` used to linear-scan and return the FIRST match while `list_specs`
+#: returned every match. Those two answers only agree while no key is declared
+#: twice, and nothing checked — so when `notification.sms_max_length` was
+#: declared twice, every resolver silently used the first spec, the admin
+#: settings screen rendered the key twice, and the second declaration's bounds
+#: read as authoritative while being dead. It took the kernel's registry, which
+#: is a dict and therefore keeps the LAST, to make the disagreement visible.
+#:
+#: A dict removes the disagreement by construction: there is one answer, and a
+#: second declaration cannot quietly become it.
+_SPECS_BY_KEY: dict[tuple[str, str], SettingSpec] = {}
+for _spec in SETTINGS_SPECS:
+    _existing = _SPECS_BY_KEY.get((str(_spec.domain), _spec.key))
+    if _existing is not None and _existing != _spec:
+        raise RuntimeError(
+            f"setting {_spec.domain}.{_spec.key} is declared twice with "
+            "different definitions — the effective spec would depend on "
+            "declaration order. Delete the dead declaration; do not merge "
+            "them silently (tests/test_settings_kernel_parity.py"
+            "::test_no_setting_is_declared_twice)"
+        )
+    _SPECS_BY_KEY[(str(_spec.domain), _spec.key)] = _spec
+del _spec
+
+
 def get_spec(domain: SettingDomain, key: str) -> SettingSpec | None:
-    for spec in SETTINGS_SPECS:
-        if spec.domain == domain and spec.key == key:
-            return spec
-    return None
+    """The one spec for a key.
+
+    A dict lookup rather than a scan over 574 specs, which also matters because
+    this sits under every `resolve_value` call.
+    """
+
+    return _SPECS_BY_KEY.get((str(domain), key))
 
 
 def list_specs(domain: SettingDomain) -> list[SettingSpec]:
@@ -5205,14 +5255,22 @@ def resolve_value(db, domain: SettingDomain, key: str) -> Any:
 
     if get_spec(domain, key) is None:
         return None
-    return kernel_resolve_value(db, str(domain), key, tenant_id=operator_tenant_id())
+    # The kernel's own member type, not a bare `str`: its signature asks for
+    # one and its validation reads `.value`. Same conversion the bridge
+    # makes for a spec's domain.
+    return kernel_resolve_value(
+        db,
+        KernelSettingDomain(str(domain)),
+        key,
+        tenant_id=operator_tenant_id(),
+    )
 
 
 def resolve_boolean(db, domain: SettingDomain, key: str) -> bool:
     """Resolve a registered boolean without call-site fallback semantics."""
 
     spec = get_spec(domain, key)
-    if spec is None or spec.value_type is not SettingValueType.boolean:
+    if spec is None or spec.value_type != SettingValueType.boolean:
         raise RuntimeError(f"Boolean setting must be registered: {domain.value}.{key}")
     value = resolve_value(db, domain, key)
     if not isinstance(value, bool):
@@ -5226,7 +5284,7 @@ def resolve_integer(db, domain: SettingDomain, key: str) -> int:
     """Resolve a registered integer without call-site fallback semantics."""
 
     spec = get_spec(domain, key)
-    if spec is None or spec.value_type is not SettingValueType.integer:
+    if spec is None or spec.value_type != SettingValueType.integer:
         raise RuntimeError(f"Integer setting must be registered: {domain.value}.{key}")
     value = resolve_value(db, domain, key)
     if not isinstance(value, int) or isinstance(value, bool):
@@ -5240,7 +5298,7 @@ def resolve_string(db, domain: SettingDomain, key: str) -> str:
     """Resolve a required registered string without call-site fallback semantics."""
 
     spec = get_spec(domain, key)
-    if spec is None or spec.value_type is not SettingValueType.string:
+    if spec is None or spec.value_type != SettingValueType.string:
         raise RuntimeError(f"String setting must be registered: {domain.value}.{key}")
     value = resolve_value(db, domain, key)
     if not isinstance(value, str):
