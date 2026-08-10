@@ -68,6 +68,18 @@ def _spec(key: str) -> Any:
     return settings_spec.get_spec(SettingDomain.provisioning, key)
 
 
+def default_for(key: str) -> Any:
+    """The registered default for one of this module's keys.
+
+    The replacement for `DEFAULTS.<name>`. That was a frozen dataclass holding a
+    second copy of every default; this reads the one the spec declares, so there
+    is nothing to keep in sync.
+    """
+
+    spec = _spec(key)
+    return spec.default if spec is not None else None
+
+
 def get_setting(db: Session | None, key: str, default: Any = None) -> Any:
     """One provisioning setting, through the one resolver.
 
