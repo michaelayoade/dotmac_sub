@@ -16,7 +16,6 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
-from app.services.settings_cache import SettingsCache
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +90,22 @@ SETTING_KEYS = {
 
 
 def _get_setting_from_cache(key: str) -> Any | None:
-    """Try to get a setting from Redis cache first."""
-    return SettingsCache.get(SettingDomain.provisioning.value, key)
+    """No cache. Kept as a seam so callers below read unchanged.
+
+    This used to read `settings:{domain}:{key}` — the unscoped keyspace that
+    served one tenant another's value in `dotmac_erp`. Sub has one tenant, so
+    it was dormant rather than harmless.
+
+    It is removed rather than given a scope segment because a scoped key built
+    HERE would be a second key model beside the kernel's, which is the shape
+    this slice exists to end. The right home is `resolve_value`, whose cache is
+    the kernel's — and this module cannot use it yet: none of its sixteen keys
+    is a registered `SettingSpec`, so `resolve_value` would return None for all
+    of them. Registering them is the follow-up; caching them wrongly in the
+    meantime is not.
+    """
+
+    return None
 
 
 def _get_setting_from_db(db: Session, key: str) -> Any | None:
@@ -118,8 +131,6 @@ def _get_setting_from_db(db: Session, key: str) -> Any | None:
     else:
         value = setting.value_text
 
-    # Cache for future lookups
-    SettingsCache.set(SettingDomain.provisioning.value, key, value)
     return value
 
 

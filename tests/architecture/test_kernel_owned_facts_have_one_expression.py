@@ -184,27 +184,21 @@ def test_the_restatement_baseline_only_shrinks() -> None:
 
 # ── The settings cache: key, TTL and invalidation belong to the kernel ───────
 
-#: Modules that may still touch `SettingsCache`, and why. NOT the settings
-#: RESOLUTION path — that moved to `dotmac_kernel.settings_cache`, whose store
-#: is `app/services/kernel_settings_cache_store.py`.
+#: Modules under `app/` that may touch `SettingsCache`: NONE.
 #:
-#: These three keep a private cache of their own under the same Redis keyspace.
-#: They are a smaller instance of the defect this slice closed — a second cache
-#: over settings values, with its own TTL and, for two of them, no invalidation
-#: at all — and they are recorded rather than migrated because each needs its
-#: own answer: `module_manager` caches a derived feature-state map, and the
-#: other two cache resolved values that the kernel cache now also holds.
+#: It began as three — `module_manager`, `smart_defaults` and
+#: `network/provisioning_settings` — recorded as a baseline while the
+#: resolution path moved. Reviewing that record is what showed they were not
+#: private caches at all: each queried `DomainSetting` directly, picked a column
+#: by hand, applied none of the spec's coercion or bounds, filtered by no
+#: tenant, and cached the result under the unscoped `settings:{domain}:{key}`.
+#: Three more parallel readers, not three cache users.
 #:
-#: SHRINK-ONLY. A new module reaching for `SettingsCache` is reintroducing a
-#: parallel settings cache, which is what `settings:{domain}:{key}` — no scope
-#: segment, the ERP cross-tenant leak — was.
-PRIVATE_SETTINGS_CACHE_USERS = frozenset(
-    {
-        "app/services/module_manager.py",
-        "app/services/smart_defaults.py",
-        "app/services/network/provisioning_settings.py",
-    }
-)
+#: Leaving them would have meant fixing the key model on the resolution path
+#: and leaving the defect it exists to prevent live in three modules. So the
+#: baseline is empty, and this constant stays as the place a future entry would
+#: have to be argued for.
+PRIVATE_SETTINGS_CACHE_USERS: frozenset[str] = frozenset()
 
 #: The transport, and the only module that installs a store.
 CACHE_STORE_ADAPTER = "app/services/kernel_settings_cache_store.py"
