@@ -444,6 +444,155 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.list,
         default=[],
     ),
+    # ── Provisioning behaviour (OLT/ONT) ────────────────────────────────────
+    #
+    # Registered here rather than in `app/services/network/provisioning_settings.py`,
+    # which held them as a frozen `ProvisioningDefaults` dataclass beside its own
+    # `DomainSetting` query and its own cache — a parallel settings subsystem with
+    # a second source of defaults, reading without a tenant filter and caching
+    # under an unscoped key.
+    #
+    # Defaults are copied EXACTLY from that dataclass, and no `min_value` or
+    # `max_value` is added. The module enforced no bounds, so inventing one here
+    # would silently degrade any deployment already storing a value outside it —
+    # the failure mode this repository has already paid for once. Bounds are a
+    # separate, evidenced change.
+    #
+    # `env_var` is None throughout: these were never environment-seeded, and
+    # giving them one would make the seed write rows that do not exist today.
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="tr069_bootstrap_timeout_sec",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=120,
+        label="TR-069 bootstrap timeout (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="tr069_bootstrap_poll_interval_sec",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=10,
+        label="TR-069 bootstrap poll interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="tr069_task_ready_timeout_sec",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=45,
+        label="TR-069 task-ready timeout (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="tr069_task_ready_poll_interval_sec",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=5,
+        label="TR-069 task-ready poll interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="pppoe_push_max_attempts",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=3,
+        label="PPPoE push attempts before giving up",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="pppoe_push_retry_delay_sec",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=10,
+        label="PPPoE push retry delay (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="stale_runtime_hours",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=24,
+        label="Hours after which provisioning runtime state is stale",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="olt_write_mode_enabled",
+        env_var=None,
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Allow OMCI writes to the OLT",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="pppoe_provisioning_method",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="auto",
+        # `get_pppoe_provisioning_method` already normalises and falls back to
+        # "auto" for anything else, so declaring the set changes no outcome —
+        # it moves the knowledge to where the admin screen can render it.
+        allowed={"auto", "omci", "tr069"},
+        label="PPPoE provisioning method (auto | omci | tr069)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="verification_interval_sec",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=300,
+        label="Async provisioning verification interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="verification_staleness_minutes",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=15,
+        label="Minutes before a verification result is stale",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="drift_handling_mode",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="alert_only",
+        allowed={"alert_only", "auto_repair"},
+        label="Provisioning drift handling (alert_only | auto_repair)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="circuit_breaker_failure_threshold",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=3,
+        label="Provisioning circuit-breaker failure threshold",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="circuit_breaker_backoff_sec",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=30,
+        label="Provisioning circuit-breaker backoff (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="service_port_pool_min_index",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=0,
+        label="Service-port pool minimum index",
+    ),
+    SettingSpec(
+        domain=SettingDomain.provisioning,
+        key="service_port_pool_max_index",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=65535,
+        label="Service-port pool maximum index",
+    ),
     SettingSpec(
         domain=SettingDomain.gis,
         key="sync_enabled",
