@@ -59,6 +59,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.setting_scopes",
         "dotmac_kernel.setting_value_types",
         "dotmac_kernel.settings_cache",
+        "dotmac_kernel.settings_crypto",
         "dotmac_kernel.settings_models",
         "dotmac_kernel.settings_resolver",
     }

@@ -221,6 +221,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.setting_scopes`
 - `dotmac_kernel.setting_value_types`
 - `dotmac_kernel.settings_cache`
+- `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
 
@@ -294,6 +295,25 @@ on `DomainSetting`, which needs `SettingScope` to say whether a write was
 tenant- or platform-scoped. The cache this replaced keyed on
 `settings:{domain}:{key}` with NO scope segment — the cross-tenant leak
 `dotmac_kernel.settings_cache` cites `dotmac_erp` for.
+
+`dotmac_kernel.settings_crypto` was added 2026-08-10, the seam before the
+schema. It encrypts a secret setting's value at rest; the kernel reads the
+environment by default and ships no secret-store client, so a product whose
+keys live in a store supplies a `KeyProvider`. Sub's is
+`app/services/kernel_key_provider.py`, the exact sibling of
+`kernel_secret_source`: loaded once at boot, held in memory, rotation an
+explicit `refresh_keys()`.
+
+It is NOT part of `SECRET_REFS`, whose load is all-or-nothing. A deployment
+that has not created a keyring yet must still boot — every secret setting Sub
+holds today is a `bao://` reference, so encryption becomes possible before it
+becomes used. The provider therefore distinguishes a missing path (nothing
+configured; returns nothing) from any other failure (raises, and the boot
+fails), which is the distinction the kernel requires of a provider.
+
+Nothing is encrypted by this alone. The write path, the conversion of existing
+reference rows, and the readers that must move onto the kernel resolver are the
+next slice.
 
 Rules the guard enforces beyond the module list:
 
