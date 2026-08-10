@@ -180,3 +180,92 @@ def test_the_restatement_baseline_only_shrinks() -> None:
     assert len(KNOWN_RESTATEMENTS) <= 2, (
         f"the baseline grew to {len(KNOWN_RESTATEMENTS)}; it is shrink-only"
     )
+
+
+# ── The settings cache: key, TTL and invalidation belong to the kernel ───────
+
+#: Modules that may still touch `SettingsCache`, and why. NOT the settings
+#: RESOLUTION path — that moved to `dotmac_kernel.settings_cache`, whose store
+#: is `app/services/kernel_settings_cache_store.py`.
+#:
+#: These three keep a private cache of their own under the same Redis keyspace.
+#: They are a smaller instance of the defect this slice closed — a second cache
+#: over settings values, with its own TTL and, for two of them, no invalidation
+#: at all — and they are recorded rather than migrated because each needs its
+#: own answer: `module_manager` caches a derived feature-state map, and the
+#: other two cache resolved values that the kernel cache now also holds.
+#:
+#: SHRINK-ONLY. A new module reaching for `SettingsCache` is reintroducing a
+#: parallel settings cache, which is what `settings:{domain}:{key}` — no scope
+#: segment, the ERP cross-tenant leak — was.
+PRIVATE_SETTINGS_CACHE_USERS = frozenset(
+    {
+        "app/services/module_manager.py",
+        "app/services/smart_defaults.py",
+        "app/services/network/provisioning_settings.py",
+    }
+)
+
+#: The transport, and the only module that installs a store.
+CACHE_STORE_ADAPTER = "app/services/kernel_settings_cache_store.py"
+
+
+def test_settings_resolution_does_not_carry_its_own_cache() -> None:
+    """`SettingsCache` is off the resolution path, and stays off.
+
+    Before this, ten invalidation call sites across six modules each remembered
+    to drop an entry, and the key they dropped had no scope segment. The
+    kernel owns key, TTL, what is never cached, and what a write invalidates;
+    Sub owns a Redis transport and one invalidation listener on the model.
+    """
+
+    offenders: list[str] = []
+    for path in sorted(APP.rglob("*.py")):
+        rel = path.relative_to(APP.parent).as_posix()
+        if rel in PRIVATE_SETTINGS_CACHE_USERS or rel.endswith(
+            ("services/settings_cache.py", "kernel_settings_cache_store.py")
+        ):
+            continue
+        if "SettingsCache" in path.read_text(encoding="utf-8"):
+            offenders.append(rel)
+
+    assert not offenders, (
+        "these reach for Sub's `SettingsCache`, which is no longer the settings "
+        "cache — `dotmac_kernel.settings_cache` is, and it is consulted by the "
+        f"resolver itself: {offenders}"
+    )
+
+
+def test_only_the_adapter_installs_a_settings_cache_store() -> None:
+    """One installer, so "which store is active" has one answer."""
+
+    # By IMPORT, not by substring: `settings_spec` imports the adapter's own
+    # `install` under an alias containing the same characters, and a substring
+    # match would call that a second installer.
+    installers = []
+    for path in sorted(APP.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "dotmac_kernel.settings_cache"
+                and any(a.name == "install_settings_cache" for a in node.names)
+            ):
+                installers.append(path.relative_to(APP.parent).as_posix())
+    assert installers == [CACHE_STORE_ADAPTER], installers
+
+
+def test_the_cache_store_builds_no_keys() -> None:
+    """The transport must not know the key model.
+
+    `CacheStore` is key-agnostic on purpose: a store that cannot construct a
+    key cannot drop a scope segment from one, which is exactly how ERP served
+    one organization's settings to every other.
+    """
+
+    source = (APP.parent / CACHE_STORE_ADAPTER).read_text(encoding="utf-8")
+    for forbidden in ("setting_cache_key", "setting_key_prefix", "cache_key("):
+        assert forbidden not in source, (
+            f"{CACHE_STORE_ADAPTER} references {forbidden!r} — the store is a "
+            "transport and must never build or parse a key"
+        )
