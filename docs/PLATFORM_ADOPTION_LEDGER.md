@@ -175,6 +175,7 @@ kernel-private and forbidden outright.
 | `dotmac_kernel.features` | adapt | S3 | `FeatureManifest`/`NavItem` as declaration metadata only. `mount_features` is app-factory machinery and stays forbidden (no remount) |
 | `dotmac_kernel.providers` / `.providers.provisioning` | adapt | S4 | `ProvisioningProvider` protocol/result types behind a thin adapter over the existing `access.radius_projection` owner. The adapter gets no owner row; vendor/OLT/ONT semantics stay product-owned |
 | `dotmac_kernel.messaging` (+ `.envelope`, `.inbox`, `.models`, `.outbox`, `.platform`, `.platform_relay`, `.platform_worker`, `.relay`, `.worker`) | defer-db | S7+ | Defines `inbox_records`, `outbox_events`, `platform_inbox_records`, `platform_outbox_events` tables and relay workers. Never added beside `events.store` and `integration.*` during pure-contract phases; semantics may be used as conformance criteria only |
+| `dotmac_kernel.idempotency` (+ `.idempotency_models`) | defer-db | S7+ | Kernel `0.1.0a31` (ADR-0014) makes at-most-once execution one owner and renames the ledgers to `idempotency_records` / `platform_idempotency_records`. `idempotency_records.tenant_id` is NOT NULL with an FK to kernel `tenants`, which Sub does not have and does not migrate — so this is gated on S7 exactly like `messaging`. Sub's `IdempotencyKey` (`idempotency_keys`, `(scope, key)`) and `TaskExecution` remain the owners until then; the kernel contract is conformance criteria only |
 | `dotmac_kernel.entitlements` | defer-db | S8 | `tenant_entitlement_grants` table. Only after the operator-tenant bridge (S7) and capability catalogue (S3) are proven. Commercial product/module availability only — never subscriber financial-access, service-readiness, or RBAC |
 | `dotmac_kernel.licensing` | defer-db | S8 | The verifier itself is DB-free, but adoption is gated on entitlements persistence and the S7 ADR; a Sub-owned WS8 receiver comes after both |
 | `dotmac_kernel.db` | defer-db | S7 | Importing constructs the SQLAlchemy engine from `DATABASE_URL`. `app/db.py` remains Sub's session/transaction authority; any kernel engine use requires the S7 ADR |
@@ -237,6 +238,43 @@ OpenBao client and performs no I/O. Sub's implementation is
 `app/services/kernel_secret_source.py`, over the client in
 `app/services/secrets.py`. ADR-0009 (`dotmac_starter_mt`): a secret is held,
 never dereferenced, so nothing on a settings read path reaches OpenBao.
+
+**Wired 2026-08-10.** The source had no caller for a day: it was declared,
+tested and installed by nothing, so every reader still went to the database for
+a `bao://` reference and dereferenced it mid-request. Two entry points install
+it — `app.main._startup_preflight` for the API, and `app.celery_app`'s
+`worker_process_init` for each prefork worker child, which runs no lifespan and
+whose tasks decrypt device credentials — and the five readers take the held
+value:
+
+| secret | reader |
+|---|---|
+| `credential_encryption_key` | `app/services/credential_crypto.py::get_encryption_key` |
+| `totp_encryption_key` | `app/services/auth_flow.py::_mfa_key` |
+| `wireguard_key_encryption_key` | `app/services/wireguard_crypto.py::get_encryption_key` |
+| `jwt_secret` | `app/services/auth_flow.py::_jwt_secret` |
+| `radius_auth_shared_secret` | `app/services/radius_auth.py::authenticate` |
+
+Three consequences worth stating, because each is a behaviour change:
+
+- **A configured-but-unreachable OpenBao now fails the boot.** The install is
+  gated on configuration (`is_openbao_configured`, no I/O), never on
+  reachability — a reachability probe would skip the install during an outage
+  and hand every reader a `None` that reads as "not configured", which for
+  `credential_encryption_key` means storing device credentials in the clear
+  behind a warning line. A deployment that configures no OpenBao holds nothing
+  and keeps using its environment variables.
+- **Precedence is environment, then held**, for all five. That preserves what
+  four of them already did; `wireguard_key_encryption_key` had the settings row
+  win over its variable, and both named the same OpenBao field.
+- **Rotation refreshes the held set.** `credential_rotation_schedule` writes the
+  new key into OpenBao, so it now calls `refresh_secrets()` — the kernel reloads
+  on an explicit act and never on a timer.
+
+The five SPECS still exist in `app/services/settings_spec.py` and their rows are
+still seeded and editable, while nothing reads them. Retiring them — the specs,
+the seed entries, the admin surface and the rows — is a follow-up slice, not
+part of the read-path move.
 
 The three settings modules were added 2026-08-10 for the settings cutover:
 `settings_resolver` (resolution, and `register_specs` so Sub's 560 specs are
