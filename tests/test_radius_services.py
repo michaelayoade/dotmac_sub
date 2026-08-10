@@ -609,6 +609,30 @@ class TestRadiusAuthPickServer:
         assert "not configured" in exc_info.value.detail
 
 
+def _hold_shared_secret(monkeypatch, value: str = "secret123") -> None:
+    """Make the RADIUS shared secret available the way `authenticate` reads it.
+
+    These tests used to INSERT a `radius/auth_shared_secret` row. That setting
+    was retired: it was declared `is_secret=True`, so every write through
+    `DomainSettings` stored a `bao://…` REFERENCE rather than the secret, and
+    `authenticate` passed the column straight to the RADIUS client. The secret
+    is now held from OpenBao at boot (`app/services/kernel_secret_source.py`)
+    and read from there, so that is what the setup has to provide.
+    """
+
+    from dotmac_kernel.secret_sources import (
+        clear_secret_source,
+        install_secret_source,
+    )
+
+    class _Held:
+        def load(self) -> dict[str, str]:
+            return {"radius_auth_shared_secret": value}
+
+    install_secret_source(_Held())
+    monkeypatch.addfinalizer(clear_secret_source)
+
+
 class TestRadiusAuthenticate:
     """Tests for authenticate function."""
 
@@ -620,17 +644,9 @@ class TestRadiusAuthenticate:
         assert exc_info.value.status_code == 400
         assert "secret not configured" in exc_info.value.detail
 
-    def test_raises_on_dictionary_error(self, db_session, radius_server):
+    def test_raises_on_dictionary_error(self, db_session, radius_server, monkeypatch):
         """Test raises when dictionary file not available."""
-        secret = DomainSetting(
-            domain=SettingDomain.radius,
-            key="auth_shared_secret",
-            value_type=SettingValueType.string,
-            value_text="secret123",
-            is_active=True,
-        )
-        db_session.add(secret)
-        db_session.commit()
+        _hold_shared_secret(monkeypatch)
 
         with pytest.raises(HTTPException) as exc_info:
             radius_auth.authenticate(db_session, "user", "pass", str(radius_server.id))
@@ -638,17 +654,9 @@ class TestRadiusAuthenticate:
         assert exc_info.value.status_code == 500
         assert "dictionary" in exc_info.value.detail.lower()
 
-    def test_raises_on_timeout(self, db_session, radius_server):
+    def test_raises_on_timeout(self, db_session, radius_server, monkeypatch):
         """Test raises on RADIUS timeout."""
-        secret = DomainSetting(
-            domain=SettingDomain.radius,
-            key="auth_shared_secret",
-            value_type=SettingValueType.string,
-            value_text="secret123",
-            is_active=True,
-        )
-        db_session.add(secret)
-        db_session.commit()
+        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()
@@ -664,17 +672,9 @@ class TestRadiusAuthenticate:
                 assert exc_info.value.status_code == 502
                 assert "timeout" in exc_info.value.detail.lower()
 
-    def test_raises_on_send_error(self, db_session, radius_server):
+    def test_raises_on_send_error(self, db_session, radius_server, monkeypatch):
         """Test raises on RADIUS send error."""
-        secret = DomainSetting(
-            domain=SettingDomain.radius,
-            key="auth_shared_secret",
-            value_type=SettingValueType.string,
-            value_text="secret123",
-            is_active=True,
-        )
-        db_session.add(secret)
-        db_session.commit()
+        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()
@@ -690,17 +690,9 @@ class TestRadiusAuthenticate:
                 assert exc_info.value.status_code == 502
                 assert "failed" in exc_info.value.detail.lower()
 
-    def test_raises_on_access_reject(self, db_session, radius_server):
+    def test_raises_on_access_reject(self, db_session, radius_server, monkeypatch):
         """Test raises on access reject."""
-        secret = DomainSetting(
-            domain=SettingDomain.radius,
-            key="auth_shared_secret",
-            value_type=SettingValueType.string,
-            value_text="secret123",
-            is_active=True,
-        )
-        db_session.add(secret)
-        db_session.commit()
+        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()
@@ -719,17 +711,9 @@ class TestRadiusAuthenticate:
                 assert exc_info.value.status_code == 401
                 assert "credentials" in exc_info.value.detail.lower()
 
-    def test_success_on_access_accept(self, db_session, radius_server):
+    def test_success_on_access_accept(self, db_session, radius_server, monkeypatch):
         """Test success on access accept."""
-        secret = DomainSetting(
-            domain=SettingDomain.radius,
-            key="auth_shared_secret",
-            value_type=SettingValueType.string,
-            value_text="secret123",
-            is_active=True,
-        )
-        db_session.add(secret)
-        db_session.commit()
+        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()

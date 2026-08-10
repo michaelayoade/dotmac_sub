@@ -49,6 +49,13 @@ def held(monkeypatch: pytest.MonkeyPatch):
             "holding them is that nothing on a request path does this"
         )
 
+    # `_fetch_secret_data` is `lru_cache`-wrapped and `secrets.clear_cache()`
+    # calls `.cache_clear()` on it. A bare function has no such attribute, so
+    # the stub carries one — otherwise any code path that clears the cache
+    # (rotation does, and so does a session-scoped fixture) fails with an
+    # AttributeError that says nothing about what this test is checking.
+    _no_network.cache_clear = lambda: None  # type: ignore[attr-defined]
+
     from app.services import secrets as secrets_module
 
     monkeypatch.setattr(secrets_module, "resolve_openbao_ref", _no_network)
@@ -132,15 +139,22 @@ def test_radius_uses_the_held_secret_not_the_stored_reference(
 ) -> None:
     """The bug this closes, pinned.
 
-    `radius/auth_shared_secret` is declared `is_secret=True`, so every write
-    through `DomainSettings` stores a `bao://…` REFERENCE in `value_text`. The
-    old code read that column and passed it to `secret.encode("utf-8")`, which
-    handed the RADIUS client the literal string `bao://…` as the shared secret.
+    `radius/auth_shared_secret` WAS a setting declared `is_secret=True`, so
+    every write through `DomainSettings` stored a `bao://…` REFERENCE in
+    `value_text`. The old code read that column and passed it to
+    `secret.encode("utf-8")`, handing the RADIUS client the literal string
+    `bao://…` as the shared secret.
+
+    The spec is retired now — it had no reader left, which
+    `tests/architecture/test_no_orphan_settings.py` refuses — so this asserts
+    the positive half: the secret comes from the held set, and no environment
+    read stands in for it (`test_decision_input_ownership` rejects one here,
+    since a business caller may not read the environment at runtime).
     """
 
     from app.services import radius_auth
 
-    monkeypatch.delenv("RADIUS_AUTH_SHARED_SECRET", raising=False)
+    monkeypatch.setenv("RADIUS_AUTH_SHARED_SECRET", "must-not-be-used")
 
     class _Stop(Exception):
         """Ends `authenticate` once the client has been built with the secret."""
