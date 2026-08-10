@@ -29,17 +29,23 @@ def test_load_module_states_always_rebuilds_from_the_resolver(monkeypatch):
     """
 
     reads: list[str] = []
+    # The SETTING key, from the map, not a guess at it: modules are named
+    # "network" and their settings "module_network_enabled", and my first
+    # version of this test compared against the wrong one and passed vacuously
+    # on the default.
+    network_key = module_manager.MODULE_KEY_MAP["network"]
 
     def _flag(_db, key, default=True):
         reads.append(key)
-        return key != "network_enabled"
+        return key != network_key
 
     monkeypatch.setattr(module_manager, "_resolve_module_flag", _flag)
 
     states = module_manager.load_module_states(db=object(), force_refresh=False)
 
-    assert reads, "no flag was read — a cache crept back in"
+    assert network_key in reads, "the flag was not read — a cache crept back in"
     assert states["network"] is False
+    assert states["gis"] is True
 
 
 def test_update_module_flags_upserts(monkeypatch):
