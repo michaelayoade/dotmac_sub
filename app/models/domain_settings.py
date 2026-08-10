@@ -292,17 +292,16 @@ class DomainSetting(Base):
     # `get_optional_by_key`, which filters on neither scope column, picks
     # between arbitrarily.
     #
-    # CONSEQUENCE, because it will surprise someone: SQLAlchemy applies a
-    # column default whenever the attribute is `None` at flush and cannot tell
-    # "not set" from "explicitly set to None". So
-    # `DomainSetting(tenant_id=None, scope_kind="platform")` still gets the
-    # operator tenant, and the ORM cannot write a platform row at all. That is
-    # the ADR-0009 invariant rather than an accident — an application write IS
-    # the operator's setting — and raw SQL, which is what migrations use,
-    # remains the only way to produce one. Pinned by
-    # `tests/test_domain_settings_scope.py`.
+    # The tenant is filled by `_default_tenant_to_the_operator` below rather
+    # than by a column `default=`. A column default fires whenever the attribute
+    # is `None` at flush and cannot see `scope_kind`, so it filled the operator
+    # tenant into an explicitly PLATFORM row and produced the one shape the
+    # CHECK forbids — turning "I asked for a platform row" into an opaque
+    # constraint violation. Deriving one column from the other is the same move
+    # the kernel makes in the opposite direction (`_default_scope_kind` reads
+    # `tenant_id`), and it makes the pair coherent by construction.
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, default=_operator_tenant_id
+        UUID(as_uuid=True), nullable=True
     )
     # The ORM default and the SERVER default deliberately differ, and the CHECK
     # above is what keeps both honest.
@@ -390,7 +389,45 @@ def _reject_undeclared_value_type(
     active_setting_value_types().require(str(target.value_type))
 
 
+def _default_tenant_to_the_operator(
+    mapper: object, connection: object, target: DomainSetting
+) -> None:
+    """Give a tenant-scoped row the operator tenant when it names none.
+
+    ADR-0009: Sub provisions exactly one tenant and its settings belong to it,
+    so an application write with no scope stated is the operator's setting.
+
+    A LISTENER rather than a column `default=`, because the default cannot see
+    the other column. It fires whenever `tenant_id` is `None` at flush —
+    including when a caller explicitly asked for a PLATFORM row, which has no
+    tenant by definition — and so produced `platform` + a tenant, the one shape
+    `ck_domain_settings_scope_alignment` forbids. Asking for a platform row
+    would have failed with an opaque constraint violation.
+
+    Reading `scope_kind` makes the pair coherent by construction instead. It is
+    the same derivation the kernel does in the opposite direction:
+    `dotmac_kernel.settings_models._default_scope_kind` picks the KIND from the
+    tenant, because there a row's tenancy is what the caller states first.
+
+    INSERT only. On an insert this is choosing a default the caller did not
+    state; on an update the caller has named both columns and the CHECK is the
+    right arbiter — silently rewriting a stated `tenant_id` there would be the
+    model overruling a writer rather than defaulting for one.
+    """
+
+    # `scope_kind` is still `None` here when the caller did not set it: column
+    # defaults are applied while the INSERT is compiled, which is AFTER this
+    # event. Unset therefore falls through and gets the tenant, which is what
+    # the column default (`TENANT_SCOPE`) is about to say anyway. Only an
+    # EXPLICIT platform row returns early.
+    if target.scope_kind == PLATFORM_SCOPE:
+        return
+    if target.tenant_id is None:
+        target.tenant_id = _operator_tenant_id()
+
+
 event.listen(DomainSetting, "before_insert", _reject_undeclared_domain)
 event.listen(DomainSetting, "before_update", _reject_undeclared_domain)
 event.listen(DomainSetting, "before_insert", _reject_undeclared_value_type)
 event.listen(DomainSetting, "before_update", _reject_undeclared_value_type)
+event.listen(DomainSetting, "before_insert", _default_tenant_to_the_operator)

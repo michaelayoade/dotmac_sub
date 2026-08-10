@@ -120,19 +120,18 @@ def test_the_kernel_resolves_a_row_written_at_that_scope(db_session):
     assert resolve_value(db_session, SettingDomain.gis, "sync_interval_minutes") == 47
 
 
-def test_the_orm_cannot_write_a_platform_row_at_all(db_session):
-    """A consequence of the column default, stated rather than discovered.
+def test_an_explicit_platform_row_keeps_its_missing_tenant(db_session):
+    """Defaulting reads the scope, so asking for a platform row gets one.
 
-    SQLAlchemy applies a column default whenever the attribute is `None` at
-    flush, and cannot distinguish "not set" from "explicitly set to None". So
-    `DomainSetting(tenant_id=None, scope_kind="platform")` still gets the
-    operator tenant, and no application writer can produce a platform row.
+    A column `default=` could not do this: it fires whenever `tenant_id` is
+    `None` at flush and cannot see `scope_kind`, so it filled the operator
+    tenant into an explicitly platform row and produced exactly the shape
+    `ck_domain_settings_scope_alignment` forbids — "I asked for a platform row"
+    surfacing as an opaque constraint violation.
 
-    That is the intended invariant under ADR-0009 — a Sub settings write is the
-    operator's setting — but it is surprising enough to pin: an author reading
-    the model might reasonably expect the explicit `None` to win, and every
-    "create a platform row" test below therefore has to use raw SQL, which is
-    what migrations use and the only thing that produces one.
+    Pinned because the fix is a listener reading the other column, and a later
+    simplification back to a column default would look tidier and reintroduce
+    it.
     """
 
     row = DomainSetting(
@@ -141,12 +140,12 @@ def test_the_orm_cannot_write_a_platform_row_at_all(db_session):
         value_type=SettingValueType.string,
         value_text="x",
         scope_kind=PLATFORM_SCOPE,
-        tenant_id=None,
     )
     db_session.add(row)
     db_session.flush()
 
-    assert row.tenant_id == OPERATOR_TENANT_ID
+    assert row.scope_kind == PLATFORM_SCOPE
+    assert row.tenant_id is None
 
 
 def test_a_tenant_scoped_row_without_a_tenant_is_refused(db_session):
@@ -155,9 +154,10 @@ def test_a_tenant_scoped_row_without_a_tenant_is_refused(db_session):
     A `tenant` row with a NULL tenant is invisible to the resolver, which
     filters on BOTH columns — a setting that exists and can never be read.
 
-    Raw SQL, because the ORM cannot express this shape: its default would
-    supply the tenant and produce a valid row. The writers that CAN produce it
-    are migrations, which is exactly who this CHECK is for.
+    Raw SQL, because the ORM cannot express this shape:
+    `_default_tenant_to_the_operator` fills the tenant for any non-platform
+    row, so the model produces a valid one. The writers that CAN produce it are
+    migrations, which is exactly who this CHECK is for.
     """
 
     with pytest.raises((IntegrityError, StatementError)):
@@ -204,21 +204,16 @@ def test_one_key_may_hold_a_row_at_each_scope(db_session):
     have concluded, wrongly, that the old constraint was still the contract.
     """
 
-    # The platform half through raw SQL — see
-    # `test_the_orm_cannot_write_a_platform_row_at_all`.
-    db_session.execute(
-        text(
-            "INSERT INTO domain_settings "
-            "(id, tenant_id, scope_kind, domain, key, value_type, "
-            " value_text, is_secret, is_active, created_at, updated_at) "
-            "VALUES (:id, :tenant_id, :kind, :domain, :key, :value_type, "
-            " :value_text, :secret, :active, :now, :now)"
-        ),
-        _raw_row(
-            scope_kind=PLATFORM_SCOPE,
+    # Both halves through the ORM: an explicit `platform` keeps its missing
+    # tenant, so the model can express the pair this index exists to allow.
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.gis,
             key="scope_probe_two_levels",
+            value_type=SettingValueType.string,
             value_text="platform-level",
-        ),
+            scope_kind=PLATFORM_SCOPE,
+        )
     )
     db_session.add(
         DomainSetting(
