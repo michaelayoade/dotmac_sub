@@ -161,3 +161,33 @@ def test_the_parity_sweep_is_not_vacuous(count: int) -> None:
 
     assert count > 500, f"only {count} specs swept; the registry looks truncated"
     assert len(kernel_specs()) == count
+
+
+def test_no_setting_is_declared_twice() -> None:
+    """A (domain, key) has ONE declaration, and Sub could not see otherwise.
+
+    `get_spec` linear-scans and returns the FIRST match; `list_specs` returns
+    every match. So a duplicate was invisible to every reader and visible to
+    the admin settings screen, which rendered the key twice — and the second
+    declaration's bounds were dead code that looked authoritative.
+
+    Two such pairs existed (`notification.sms_api_timeout_seconds` and
+    `notification.sms_max_length`, both from the SMS config split in #2193) and
+    survived until the kernel's registry — a dict, so LAST wins — refused them
+    outright rather than flipping the effective spec on import order. That flip
+    would have tightened `sms_max_length` to `min_value=1`, silently forbidding
+    the documented `0` that disables truncation.
+
+    This guard is the cheap half of that lesson: it does not need the kernel,
+    so it fails in a unit shard rather than at cutover.
+    """
+
+    from collections import Counter
+
+    counts = Counter((str(spec.domain), spec.key) for spec in SETTINGS_SPECS)
+    duplicated = sorted(pair for pair, n in counts.items() if n > 1)
+
+    assert not duplicated, (
+        "these settings are declared more than once; the first declaration is "
+        f"what `get_spec` returns and the rest are dead: {duplicated}"
+    )
