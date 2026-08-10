@@ -14,18 +14,24 @@ scope columns, so one `(domain, key)` may now legitimately hold two rows, and
 `DomainSettings.get_optional_by_key` — which filters on neither scope column —
 picks between them by whichever the database returns first.
 
-Three changes, and the last is the one that closes the class rather than this
+Two changes, and the second is the one that closes the class rather than this
 instance:
 
 1. Any row still at `platform` scope moves to the operator tenant — 509's
    statement, re-run, because the rows it is now catching were written after it
    ran.
-2. The server default becomes `tenant`, matching the model and 509's data.
-3. A CHECK ties the two columns together: `platform` has no tenant, every finer
+2. A CHECK ties the two columns together: `platform` has no tenant, every finer
    kind has one. That is
    `dotmac_kernel.setting_scopes.SettingScope.__post_init__` — the kernel's own
    invariant — enforced in the schema, where every writer passes rather than
    only the callers that build a `SettingScope`.
+
+The COLUMN DEFAULT deliberately stays `platform`. The fix for new rows belongs
+in the model, where an application write knows it means the operator's setting;
+a raw `INSERT` that names no scope is almost always a migration running before
+the operator tenant exists (`tenants` arrives in 508, its row in 509), and a
+`tenant` default would have every one of those produce a `tenant` row with a
+NULL tenant — a violation of the CHECK this same migration adds.
 
 Without (2), fixing the default alone would trade one inconsistent shape for
 another: a raw INSERT omitting `tenant_id` would produce `scope_kind='tenant'`
@@ -92,16 +98,13 @@ def upgrade() -> None:
     )
 
     op.execute(
-        sa.text(f"ALTER TABLE {TABLE} ALTER COLUMN scope_kind SET DEFAULT 'tenant'")
-    )
-    op.execute(
         sa.text(f"ALTER TABLE {TABLE} DROP CONSTRAINT IF EXISTS {SCOPE_CONSTRAINT}")
     )
     op.create_check_constraint(SCOPE_CONSTRAINT, TABLE, SCOPE_ALIGNMENT)
 
 
 def downgrade() -> None:
-    """Restores 507's default and drops the invariant.
+    """Drops the invariant.
 
     Deliberately does NOT move rows back to platform scope: that is migration
     509's decision to reverse, and doing it here would silently re-scope
@@ -113,7 +116,4 @@ def downgrade() -> None:
 
     op.execute(
         sa.text(f"ALTER TABLE {TABLE} DROP CONSTRAINT IF EXISTS {SCOPE_CONSTRAINT}")
-    )
-    op.execute(
-        sa.text(f"ALTER TABLE {TABLE} ALTER COLUMN scope_kind SET DEFAULT 'platform'")
     )

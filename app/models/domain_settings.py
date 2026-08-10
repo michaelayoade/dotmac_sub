@@ -294,11 +294,22 @@ class DomainSetting(Base):
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, default=_operator_tenant_id
     )
+    # The ORM default and the SERVER default deliberately differ, and the CHECK
+    # above is what keeps both honest.
+    #
+    # An application write means "the operator's setting", so the ORM default is
+    # the tenant. A raw `INSERT` naming no scope is almost always a MIGRATION,
+    # running at a point in the chain where the operator tenant does not exist
+    # yet — `tenants` arrives in 508 and the row in 509 — so those rows must
+    # land at `platform`, which references no tenant and which 509 and 514 then
+    # move. A `tenant` server default would make every such insert produce a
+    # `tenant` row with a NULL tenant: a CHECK violation, and before that a row
+    # the resolver can never match, since it filters on both columns.
     scope_kind: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
         default=TENANT_SCOPE,
-        server_default=TENANT_SCOPE,
+        server_default=PLATFORM_SCOPE,
     )
     scope_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
