@@ -34,17 +34,46 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Index,
     String,
     Text,
     TypeDecorator,
-    UniqueConstraint,
     event,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.subscription_engine import SettingValueType, SettingValueTypeType
+
+#: The scope kind every Sub settings row lives at. ADR-0009: Sub provisions
+#: exactly one tenant, the ISP operator, and its settings belong to it —
+#: `platform` is the deployment-wide level BENEATH tenant in the kernel's
+#: model, not a synonym for "this deployment". Migration 509 moved every row
+#: here; this is what keeps new rows arriving in the same place.
+TENANT_SCOPE = "tenant"
+PLATFORM_SCOPE = "platform"
+
+#: The sentinel standing in for NULL inside the uniqueness index, matching
+#: migration 507. A real UUID so the COALESCE is type-correct, and one no
+#: generator produces.
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def _operator_tenant_id() -> uuid.UUID:
+    """The tenant a new settings row belongs to.
+
+    Imported inside the callable to keep `app.models` free of a service-layer
+    dependency at import time, exactly as `_reject_undeclared_domain` does.
+    `OPERATOR_TENANT_ID` is a module constant, so this reads nothing and
+    touches no session.
+    """
+
+    from app.services.operator_tenant import OPERATOR_TENANT_ID
+
+    return OPERATOR_TENANT_ID
+
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pydantic import GetCoreSchemaHandler
@@ -194,7 +223,39 @@ class SettingDomainType(TypeDecorator):
 class DomainSetting(Base):
     __tablename__ = "domain_settings"
     __table_args__ = (
-        UniqueConstraint("domain", "key", name="uq_domain_settings_domain_key"),
+        # Mirrors migration 507 — name, columns and order. `(domain, key)`
+        # alone was DROPPED there and this declaration outlived it: once a row
+        # can exist at more than one scope that pair is not unique, so the
+        # metadata-built lanes were constructing a schema the migration chain
+        # does not have, and constraining writes Postgres allows.
+        #
+        # `COALESCE` removes the NULL rather than tolerating it. Postgres
+        # treats every NULL inside a unique index as distinct from every other,
+        # so a nullable scope column in a plain composite admits exactly the
+        # duplicate rows the index exists to prevent.
+        Index(
+            "uq_domain_settings_scope_domain_key",
+            "domain",
+            "key",
+            text(f"COALESCE(tenant_id, '{_NIL_UUID}')"),
+            "scope_kind",
+            text(f"COALESCE(scope_id, '{_NIL_UUID}')"),
+            unique=True,
+        ),
+        # A scope kind and a tenant say the same thing and must not disagree.
+        # `platform` is the deployment-wide level and has no tenant; every
+        # finer kind names one. Without this the two columns drift into shapes
+        # no reader can match — a row marked `tenant` with a NULL tenant is
+        # invisible to the resolver's own lookup, which filters on both.
+        #
+        # This is `dotmac_kernel.setting_scopes.SettingScope.__post_init__`,
+        # enforced where every writer passes rather than only where a caller
+        # remembered to build a `SettingScope`.
+        CheckConstraint(
+            "(scope_kind = 'platform' AND tenant_id IS NULL) "
+            "OR (scope_kind <> 'platform' AND tenant_id IS NOT NULL)",
+            name="ck_domain_settings_scope_alignment",
+        ),
         # A row carries a value in at least one column. The old form named the
         # type (`value_type = 'json'`), which is the same closed list migration
         # 512 removed from the column itself — a second JSON-stored type such
@@ -215,18 +276,29 @@ class DomainSetting(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # Scope columns, declared so metadata matches the migrated schema and so
-    # `dotmac_kernel.settings_models.DomainSetting` can read this table at all.
-    # Sub reads none of them: it is a single-operator deployment, so every row
-    # is platform scope. `scope_kind` defaults to "platform" rather than the
-    # kernel's "tenant" — a Sub row has no tenant, and inheriting that default
-    # would make every row claim a scope its own `tenant_id` contradicts.
-    # See migration 507_domain_settings_scope_columns.
+    # Scope columns. Sub reads them through the kernel resolver, which since
+    # the settings cutover asks for the OPERATOR TENANT's rows and falls back
+    # to platform ones — so which scope a row lands at is not cosmetic.
+    #
+    # These defaulted to `platform`/NULL, which was true when migration 507
+    # added them and stopped being true when 509 moved every existing row to
+    # the operator tenant (ADR-0009: the ISP operator IS the one tenant, and
+    # `platform` is the level beneath it, not a synonym for this deployment).
+    # The defaults outlived that migration, so every setting created AFTER it
+    # arrived at a different scope from every setting created before — a split
+    # estate that resolution papers over, because a platform row is exactly
+    # what a tenant read falls back to. It surfaces later and worse: as two
+    # rows for one key that the uniqueness index permits and
+    # `get_optional_by_key`, which filters on neither scope column, picks
+    # between arbitrarily.
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
+        UUID(as_uuid=True), nullable=True, default=_operator_tenant_id
     )
     scope_kind: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="platform", server_default="platform"
+        String(20),
+        nullable=False,
+        default=TENANT_SCOPE,
+        server_default=TENANT_SCOPE,
     )
     scope_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
