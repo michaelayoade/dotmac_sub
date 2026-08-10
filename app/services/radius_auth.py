@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 
+# `held_secret`, not `get_secret`: `app.services.secrets.get_secret` talks to
+# OpenBao, and this one is a dict lookup over material loaded at boot.
+from dotmac_kernel.secret_sources import get_secret as held_secret
 from fastapi import HTTPException
 from pyrad.client import Client
 from pyrad.dictionary import Dictionary
@@ -47,7 +51,26 @@ def authenticate(
     db: Session, username: str, password: str, server_id: str | None = None
 ) -> None:
     server = _pick_radius_server(db, server_id)
-    secret = _setting_value(db, "auth_shared_secret")
+    # The environment, then what was held at boot — not the
+    # `radius/auth_shared_secret` row.
+    #
+    # That row does not contain the secret. `auth_shared_secret` is declared
+    # `is_secret=True`, and every write of a secret setting goes through
+    # `DomainSettings._write_secret_ref`, which puts the value in OpenBao and
+    # stores a `bao://secret/settings/radius#auth_shared_secret` REFERENCE in
+    # the column. This call site never dereferenced it: it took
+    # `setting.value_text` and passed it to `secret.encode("utf-8")`, so
+    # wherever the secret was configured through the settings path the RADIUS
+    # client was handed the literal string `bao://...` as the shared secret.
+    #
+    # Reading the held value fixes that without adding the dereference the
+    # obvious fix would have put on a request path (starter ADR-0009: a secret
+    # is held, never dereferenced). The environment variable is read directly
+    # rather than through the row the seed used to materialise it into, which
+    # is the same precedence the other four held secrets have.
+    secret = os.getenv("RADIUS_AUTH_SHARED_SECRET") or held_secret(
+        "radius_auth_shared_secret"
+    )
     if not secret:
         raise HTTPException(status_code=400, detail="Radius auth secret not configured")
     dict_path = _setting_value(db, "auth_dictionary_path") or "/etc/raddb/dictionary"
