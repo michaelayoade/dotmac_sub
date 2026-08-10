@@ -18,7 +18,6 @@ import json
 
 import pytest
 from dotmac_kernel.settings_crypto import KeyStatus
-from fastapi import HTTPException
 
 from app.services import kernel_key_provider as provider
 
@@ -41,7 +40,7 @@ def test_it_satisfies_the_kernel_protocol() -> None:
 
 def test_a_stored_keyring_loads_with_its_statuses(monkeypatch) -> None:
     monkeypatch.setattr(
-        provider, "resolve_openbao_ref", lambda _ref: json.dumps(KEYRING)
+        provider, "resolve_openbao_ref_optional", lambda _ref: json.dumps(KEYRING)
     )
 
     keys = list(provider.OpenBaoKeyProvider().load_keys())
@@ -62,10 +61,7 @@ def test_a_missing_path_means_no_keyring_yet(monkeypatch) -> None:
     keyring exists.
     """
 
-    def _absent(_ref: str) -> str:
-        raise HTTPException(status_code=404, detail="OpenBao secret not found")
-
-    monkeypatch.setattr(provider, "resolve_openbao_ref", _absent)
+    monkeypatch.setattr(provider, "resolve_openbao_ref_optional", lambda _ref: None)
 
     assert list(provider.OpenBaoKeyProvider().load_keys()) == []
 
@@ -78,12 +74,15 @@ def test_an_unreachable_store_raises(monkeypatch) -> None:
     at the boot that could not reach the store.
     """
 
+    class _Unreachable(RuntimeError):
+        pass
+
     def _unreachable(_ref: str) -> str:
-        raise HTTPException(status_code=500, detail="OpenBao request failed")
+        raise _Unreachable("openbao request failed")
 
-    monkeypatch.setattr(provider, "resolve_openbao_ref", _unreachable)
+    monkeypatch.setattr(provider, "resolve_openbao_ref_optional", _unreachable)
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(_Unreachable):
         provider.OpenBaoKeyProvider().load_keys()
 
 
@@ -100,7 +99,7 @@ def test_an_unreachable_store_raises(monkeypatch) -> None:
 def test_a_malformed_keyring_is_named_not_guessed(monkeypatch, raw) -> None:
     from dotmac_kernel.settings_crypto import KeyringError
 
-    monkeypatch.setattr(provider, "resolve_openbao_ref", lambda _ref: raw)
+    monkeypatch.setattr(provider, "resolve_openbao_ref_optional", lambda _ref: raw)
 
     with pytest.raises(KeyringError):
         provider.OpenBaoKeyProvider().load_keys()
@@ -114,7 +113,7 @@ def test_no_material_reaches_an_error_message(monkeypatch) -> None:
     material = "AAAA-actual-key-material-AAAA"
     monkeypatch.setattr(
         provider,
-        "resolve_openbao_ref",
+        "resolve_openbao_ref_optional",
         lambda _ref: json.dumps([{"key_id": "k1", "key": material, "status": "?"}]),
     )
 
@@ -129,7 +128,7 @@ def test_no_material_is_logged(monkeypatch, caplog) -> None:
     material = "BBBB-actual-key-material-BBBB"
     monkeypatch.setattr(
         provider,
-        "resolve_openbao_ref",
+        "resolve_openbao_ref_optional",
         lambda _ref: json.dumps([{"key_id": "k1", "key": material}]),
     )
 
@@ -149,7 +148,7 @@ def test_install_is_skipped_when_no_openbao_is_configured(monkeypatch) -> None:
     monkeypatch.setattr(secrets_module, "is_openbao_configured", lambda: False)
     monkeypatch.setattr(
         provider,
-        "resolve_openbao_ref",
+        "resolve_openbao_ref_optional",
         lambda _ref: pytest.fail("must not reach OpenBao"),
     )
 
@@ -163,7 +162,7 @@ def test_install_returns_ids_only(monkeypatch) -> None:
 
     monkeypatch.setattr(secrets_module, "is_openbao_configured", lambda: True)
     monkeypatch.setattr(
-        provider, "resolve_openbao_ref", lambda _ref: json.dumps(KEYRING)
+        provider, "resolve_openbao_ref_optional", lambda _ref: json.dumps(KEYRING)
     )
 
     try:

@@ -56,9 +56,8 @@ import logging
 from collections.abc import Iterable
 
 from dotmac_kernel.settings_crypto import EncryptionKey, KeyringError, KeyStatus
-from fastapi import HTTPException
 
-from app.services.secrets import resolve_openbao_ref
+from app.services.secrets import resolve_openbao_ref_optional
 
 logger = logging.getLogger(__name__)
 
@@ -122,18 +121,18 @@ class OpenBaoKeyProvider:
     def load_keys(self) -> Iterable[EncryptionKey]:
         """Every key this deployment decrypts with, retired ones included."""
 
-        try:
-            raw = resolve_openbao_ref(self._reference)
-        except HTTPException as exc:
-            if exc.status_code == 404:
-                # Not provisioned. Distinct from unreachable, and the only
-                # reason an empty result is honest — see the module docstring.
-                logger.info(
-                    "No settings-encryption keyring in OpenBao; secret settings "
-                    "cannot be written until one is created"
-                )
-                return ()
-            raise
+        # `_optional` returns None only for a path that does not exist. Every
+        # other failure propagates — see the module docstring on why those two
+        # must not collapse into one answer. The status-code check lives with
+        # the client in `app.services.secrets`, so this module needs no FastAPI
+        # type to make the distinction.
+        raw = resolve_openbao_ref_optional(self._reference)
+        if raw is None:
+            logger.info(
+                "No settings-encryption keyring in OpenBao; secret settings "
+                "cannot be written until one is created"
+            )
+            return ()
         keys = _parse(raw)
         logger.info(
             "Loaded settings-encryption keyring: %s",
