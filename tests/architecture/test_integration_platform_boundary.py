@@ -151,7 +151,7 @@ def test_connector_versions_are_immutable_reviewed_manifest_pins() -> None:
         ): {
             "53791d3e2e06fe1ca128a0e3e8ced86549392af7b6131f61bd21044d71aafc6e",
             "9f1e314860294696c825d8d49d300df903ced6c319b406f295047d25585e836c",
-        }
+        },
     }
 
 
