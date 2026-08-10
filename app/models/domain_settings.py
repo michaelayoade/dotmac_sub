@@ -291,6 +291,16 @@ class DomainSetting(Base):
     # rows for one key that the uniqueness index permits and
     # `get_optional_by_key`, which filters on neither scope column, picks
     # between arbitrarily.
+    #
+    # CONSEQUENCE, because it will surprise someone: SQLAlchemy applies a
+    # column default whenever the attribute is `None` at flush and cannot tell
+    # "not set" from "explicitly set to None". So
+    # `DomainSetting(tenant_id=None, scope_kind="platform")` still gets the
+    # operator tenant, and the ORM cannot write a platform row at all. That is
+    # the ADR-0009 invariant rather than an accident — an application write IS
+    # the operator's setting — and raw SQL, which is what migrations use,
+    # remains the only way to produce one. Pinned by
+    # `tests/test_domain_settings_scope.py`.
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, default=_operator_tenant_id
     )
