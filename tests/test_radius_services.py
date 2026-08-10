@@ -609,7 +609,8 @@ class TestRadiusAuthPickServer:
         assert "not configured" in exc_info.value.detail
 
 
-def _hold_shared_secret(monkeypatch, value: str = "secret123") -> None:
+@pytest.fixture
+def held_shared_secret():
     """Make the RADIUS shared secret available the way `authenticate` reads it.
 
     These tests used to INSERT a `radius/auth_shared_secret` row. That setting
@@ -627,10 +628,11 @@ def _hold_shared_secret(monkeypatch, value: str = "secret123") -> None:
 
     class _Held:
         def load(self) -> dict[str, str]:
-            return {"radius_auth_shared_secret": value}
+            return {"radius_auth_shared_secret": "secret123"}
 
     install_secret_source(_Held())
-    monkeypatch.addfinalizer(clear_secret_source)
+    yield
+    clear_secret_source()
 
 
 class TestRadiusAuthenticate:
@@ -644,9 +646,10 @@ class TestRadiusAuthenticate:
         assert exc_info.value.status_code == 400
         assert "secret not configured" in exc_info.value.detail
 
-    def test_raises_on_dictionary_error(self, db_session, radius_server, monkeypatch):
+    def test_raises_on_dictionary_error(
+        self, db_session, radius_server, held_shared_secret
+    ):
         """Test raises when dictionary file not available."""
-        _hold_shared_secret(monkeypatch)
 
         with pytest.raises(HTTPException) as exc_info:
             radius_auth.authenticate(db_session, "user", "pass", str(radius_server.id))
@@ -654,9 +657,8 @@ class TestRadiusAuthenticate:
         assert exc_info.value.status_code == 500
         assert "dictionary" in exc_info.value.detail.lower()
 
-    def test_raises_on_timeout(self, db_session, radius_server, monkeypatch):
+    def test_raises_on_timeout(self, db_session, radius_server, held_shared_secret):
         """Test raises on RADIUS timeout."""
-        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()
@@ -672,9 +674,8 @@ class TestRadiusAuthenticate:
                 assert exc_info.value.status_code == 502
                 assert "timeout" in exc_info.value.detail.lower()
 
-    def test_raises_on_send_error(self, db_session, radius_server, monkeypatch):
+    def test_raises_on_send_error(self, db_session, radius_server, held_shared_secret):
         """Test raises on RADIUS send error."""
-        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()
@@ -690,9 +691,10 @@ class TestRadiusAuthenticate:
                 assert exc_info.value.status_code == 502
                 assert "failed" in exc_info.value.detail.lower()
 
-    def test_raises_on_access_reject(self, db_session, radius_server, monkeypatch):
+    def test_raises_on_access_reject(
+        self, db_session, radius_server, held_shared_secret
+    ):
         """Test raises on access reject."""
-        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()
@@ -711,9 +713,10 @@ class TestRadiusAuthenticate:
                 assert exc_info.value.status_code == 401
                 assert "credentials" in exc_info.value.detail.lower()
 
-    def test_success_on_access_accept(self, db_session, radius_server, monkeypatch):
+    def test_success_on_access_accept(
+        self, db_session, radius_server, held_shared_secret
+    ):
         """Test success on access accept."""
-        _hold_shared_secret(monkeypatch)
 
         mock_dict = MagicMock()
         mock_client = MagicMock()

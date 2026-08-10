@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from dotmac_kernel.secret_sources import clear_secret_source, install_secret_source
 
 from app.services import credential_rotation_schedule as rotation
 
 
-def _managed_key(monkeypatch) -> None:
+@pytest.fixture
+def managed_key():
     """The active key is one OpenBao owns — said the way the code now reads it.
 
     This used to INSERT a `bao://secret/settings/auth#credential_encryption_key`
@@ -29,7 +31,8 @@ def _managed_key(monkeypatch) -> None:
             return {rotation._CURRENT_FIELD: "current-key"}
 
     install_secret_source(_Held())
-    monkeypatch.addfinalizer(clear_secret_source)
+    yield
+    clear_secret_source()
 
 
 def _patch_settings(monkeypatch, *, auto_apply: bool = True) -> None:
@@ -59,8 +62,9 @@ def test_static_environment_key_blocks_scheduled_rotation(db_session, monkeypatc
     }
 
 
-def test_first_managed_run_initializes_rotation_clock(db_session, monkeypatch):
-    _managed_key(monkeypatch)
+def test_first_managed_run_initializes_rotation_clock(
+    db_session, monkeypatch, managed_key
+):
     _patch_settings(monkeypatch)
     now = datetime(2026, 7, 12, tzinfo=UTC)
     monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
@@ -84,8 +88,9 @@ def test_first_managed_run_initializes_rotation_clock(db_session, monkeypatch):
     assert writes[0][rotation._ROTATED_AT_FIELD] == now.isoformat()
 
 
-def test_due_rotation_stages_dual_key_before_reencrypting(db_session, monkeypatch):
-    _managed_key(monkeypatch)
+def test_due_rotation_stages_dual_key_before_reencrypting(
+    db_session, monkeypatch, managed_key
+):
     _patch_settings(monkeypatch)
     now = datetime(2026, 7, 12, tzinfo=UTC)
     monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
@@ -129,8 +134,9 @@ def test_due_rotation_stages_dual_key_before_reencrypting(db_session, monkeypatc
     assert staged[0][rotation._CURRENT_FIELD] == "new-key"
 
 
-def test_grace_period_converges_before_previous_key_retirement(db_session, monkeypatch):
-    _managed_key(monkeypatch)
+def test_grace_period_converges_before_previous_key_retirement(
+    db_session, monkeypatch, managed_key
+):
     _patch_settings(monkeypatch)
     now = datetime(2026, 7, 12, tzinfo=UTC)
     monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
