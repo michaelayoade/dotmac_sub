@@ -5247,23 +5247,56 @@ def resolve_value(db, domain: SettingDomain, key: str) -> Any:
     the kernel's own (starter ADR-0011: settings resolution reads rows and
     defaults, never the environment).
 
-    Sub's `SettingsCache` is deliberately NOT consulted. Two caches over one
-    read is a second answer waiting to be stale, and the kernel's own cache is
-    inert until a store is installed. Whether to install it is a separate
-    decision with its own evidence — see the cutover PR.
+    `SettingsCache` stays IN FRONT, and an earlier draft of this function that
+    dropped it was wrong. Resolution was Redis-cached before the cutover, so
+    removing the cache turned every settings read into a query — two query-
+    budget tests caught it immediately (`test_prepaid_threshold_resolver`
+    issuing 18 statements against a budget of 15, and D12's batch scaling with
+    account count). A settings read sits under per-account loops all over this
+    codebase; it cannot be a database round trip.
+
+    This is ONE cache, not two: the kernel's own `settings_cache` is inert
+    until a store is installed, and Sub does not install one. The cache holds
+    the RESOLVED value, so what it fronts is the whole chain — tenant row,
+    platform row, default — and the existing invalidation calls still address
+    the only cache there is.
+
+    A SECRET is never cached, which the pre-cutover code did not honour. The
+    kernel states it as a property of its own cache; the same rule has to hold
+    for a cache placed in front of it, or the guarantee is only true where the
+    kernel enforces it.
+
+    The proper end state is Sub providing a `CacheStore` over this same Redis
+    and letting the kernel own the caching policy — build once, ADR-0006. That
+    is a bigger change than a cutover should carry: it moves invalidation
+    ownership, and the key here is `domain:key` with no tenant segment, which
+    is correct for one tenant and wrong for two.
     """
 
-    if get_spec(domain, key) is None:
+    spec = get_spec(domain, key)
+    if spec is None:
         return None
+
+    if not spec.is_secret:
+        cached = SettingsCache.get(str(domain), key)
+        if cached is not None:
+            return cast(object, cached)
+
     # The kernel's own member type, not a bare `str`: its signature asks for
     # one and its validation reads `.value`. Same conversion the bridge
     # makes for a spec's domain.
-    return kernel_resolve_value(
+    value = kernel_resolve_value(
         db,
         KernelSettingDomain(str(domain)),
         key,
         tenant_id=operator_tenant_id(),
     )
+
+    # `None` is not cached: it means the key resolved to nothing, and caching
+    # it would be indistinguishable from a cache miss on the next read anyway.
+    if not spec.is_secret and value is not None:
+        SettingsCache.set(str(domain), key, value)
+    return value
 
 
 def resolve_boolean(db, domain: SettingDomain, key: str) -> bool:
