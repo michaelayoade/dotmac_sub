@@ -111,8 +111,9 @@ DOMAIN = DomainSOT(
                         owner="service_intent.plan_family_catalogues",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "PDF-only content-addressed StoredFile staged by the owner "
-                            "through the private object-storage participant."
+                            "PDF-only object uploaded before the owner's first database "
+                            "operation; immutable StoredFile metadata is staged by the "
+                            "owner through the private object-storage participant."
                         ),
                     ),
                     AuthorityInput(
@@ -128,9 +129,10 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
-                        "publish_catalogue enters one root owner transaction; file "
-                        "metadata, prior-version supersession, audit, and event are staged "
-                        "before the boundary commits."
+                        "publish_catalogue enters one root owner transaction; external "
+                        "object upload completes before its first database operation, then "
+                        "file metadata, prior-version supersession, audit, and event are "
+                        "staged before the boundary commits."
                     ),
                     locking=(
                         "Publication locks every existing version for the selected family; "
