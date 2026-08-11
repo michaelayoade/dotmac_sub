@@ -86,7 +86,7 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             f"ALTER TABLE {TABLE} DROP CONSTRAINT IF EXISTS {SCOPE_CONSTRAINT}"
-        )
+        ),
     )
 
     op.alter_column(
@@ -129,6 +129,6 @@ def downgrade() -> None:
         sa.text(
             f"UPDATE {TABLE} SET scope_kind = 'platform' "
             "WHERE scope_kind = 'tenant' AND tenant_id IS NULL"
-        )
+        ),
     )
     op.create_check_constraint(SCOPE_CONSTRAINT, TABLE, SUB_SCOPE_ALIGNMENT)
