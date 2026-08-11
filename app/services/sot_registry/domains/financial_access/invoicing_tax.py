@@ -811,8 +811,22 @@ SERVICES: tuple[SOTService, ...] = (
             "funded credit-note application consumption evidence",
             "credit-note ledger-posting requests",
             "referral reward account credits",
+            "automatic application of an issued note to the invoice it names",
         ),
         depends_on=("financial.ledger", "financial.invoices"),
+        notes=(
+            "Issuing a note that names an invoice applies it in the same "
+            "transaction. A credit note reduces the receivable rather than "
+            "holding a customer balance, so an issued note left unapplied "
+            "overstates AR and keeps ageing and dunning a balance that is no "
+            "longer owed. Manual application and application-on-issue share "
+            "one flush-only staging participant so their evidence cannot "
+            "drift, and the application key is derived from the issue command "
+            "so replaying the issue replays the same application. A named "
+            "invoice that cannot absorb credit — proforma, void, paid, zero "
+            "balance — is an ordinary state: the note still issues and the "
+            "credit stays on the account."
+        ),
     ),
     SOTService(
         name="financial.tax_configuration",

@@ -172,6 +172,13 @@ class CreditIssuePreview:
     ledger_amount: Decimal
     access_consequence: str
     fingerprint: str
+    # What issuing this note will immediately do to the named invoice. An
+    # issued credit reduces the receivable as a matter of fact, so a preview
+    # that showed the receivable unchanged was describing a state that only
+    # existed until somebody remembered to apply it by hand.
+    application_amount: Decimal = Decimal("0.00")
+    residual_credit: Decimal = Decimal("0.00")
+    settles_invoice: bool = False
 
 
 @dataclass(frozen=True)
@@ -180,6 +187,10 @@ class CreditIssueResult:
     funding_ledger_entry: LedgerEntry
     preview: CreditIssuePreview | None
     idempotent_replay: bool = False
+    # The application staged in the same transaction when the note named an
+    # invoice that could absorb it. None means the credit stayed on the
+    # account — no invoice named, or the named one cannot take credit.
+    application: CreditApplicationResult | None = None
 
     def audit_metadata(self) -> dict[str, object]:
         return {
@@ -393,6 +404,153 @@ def _normalize_idempotency_key(value: str) -> str:
     return key
 
 
+def _invoice_can_take_credit(invoice: Invoice) -> bool:
+    """Whether this invoice is in a state that can absorb credit right now.
+
+    Not every named invoice can: a proforma is not a receivable, a void or paid
+    invoice has nothing to reduce, and a zero balance leaves nothing to apply.
+    Those are ordinary states, not errors, so issuing still succeeds and the
+    credit stays on the account. Mismatches that mean the caller asked for
+    something incoherent — wrong account, wrong currency — are left to
+    ``_build_application_preview`` to reject.
+    """
+    if invoice.is_proforma:
+        return False
+    if invoice.status not in _CREDIT_APPLICABLE_INVOICE_STATUSES:
+        return False
+    return round_money(to_decimal(invoice.balance_due or 0)) > Decimal("0.00")
+
+
+def _issue_application_key(issue_key: str) -> str:
+    """The application key implied by an issue command.
+
+    Derived, not generated: the automatic application is part of the issue, so
+    replaying the issue must replay the same application rather than reserve a
+    second one. Hashed so the result stays inside the key format regardless of
+    how long the issue key was.
+    """
+    digest = hashlib.sha256(f"credit_note_issue_application:{issue_key}".encode())
+    return f"cn-issue-apply-{digest.hexdigest()[:40]}"
+
+
+def _stage_application_with_evidence(
+    db: Session,
+    *,
+    credit_note: CreditNote,
+    invoice: Invoice,
+    preview: CreditApplicationPreview,
+    reservation: IdempotencyKey,
+    memo: str | None,
+    stage_audit: bool,
+) -> CreditApplicationResult:
+    """Stage one credit-note application and all of its evidence. No commit.
+
+    The transactional participant behind every application. It flushes so the
+    caller can read what it wrote, and leaves the boundary to the caller: manual
+    application commits immediately, while application-on-issue joins the issue's
+    transaction so the note, its funding, this application, the consumption
+    evidence, the invoice recalculation, the audit trail, and the settlement
+    consequence all land or all roll back.
+
+    Callers must have taken the account -> credit note -> invoice locks and
+    verified ``preview`` against the confirmed fingerprint already; this stages
+    the decision, it does not re-make it.
+    """
+    consumption_entry = None
+    if credit_note.funding_ledger_entry_id:
+        available_funding = _funded_credit_available(db, credit_note)
+        if available_funding < preview.apply_amount:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Exact credit-note funding is below the confirmed "
+                    "application amount"
+                ),
+            )
+        consumption_entry = LedgerEntries.create(
+            db,
+            LedgerEntryCreate(
+                account_id=credit_note.account_id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.credit_note,
+                amount=preview.apply_amount,
+                currency=credit_note.currency,
+                memo=(
+                    "Credit note application funding transfer: "
+                    f"{credit_note.id} -> {invoice.id}"
+                ),
+            ),
+            commit=False,
+        )
+    entry = LedgerEntries.create(
+        db,
+        LedgerEntryCreate(
+            account_id=invoice.account_id,
+            invoice_id=invoice.id,
+            entry_type=preview.ledger_entry_type,
+            source=preview.ledger_source,
+            amount=preview.apply_amount,
+            currency=preview.currency,
+            memo=memo
+            or f"Credit note {credit_note.credit_number or credit_note.id} applied",
+        ),
+        commit=False,
+    )
+    application = CreditNoteApplication(
+        credit_note_id=credit_note.id,
+        invoice_id=invoice.id,
+        ledger_entry_id=entry.id,
+        consumption_ledger_entry_id=(
+            consumption_entry.id if consumption_entry else None
+        ),
+        preview_fingerprint=preview.fingerprint,
+        amount=preview.apply_amount,
+        memo=memo,
+    )
+    db.add(application)
+    db.flush()
+    reservation.ref_id = str(application.id)
+    _recalculate_invoice_totals(db, invoice)
+    _recalculate_credit_note_totals(db, credit_note)
+    db.flush()
+
+    # Financial settlement and service access remain separate states. The
+    # invoice owner hands the consequence to the access/lifecycle owners; this
+    # action never promises restoration from the credit.
+    from app.services.billing.invoices import (
+        reconcile_service_after_invoice_settlement,
+    )
+
+    if preview.settles_invoice:
+        reconcile_service_after_invoice_settlement(db, invoice.account_id, invoice.id)
+    if stage_audit:
+        _stage_credit_audit(
+            db,
+            action="apply",
+            credit_note_id=credit_note.id,
+            metadata={
+                "application_id": str(application.id),
+                "invoice_id": str(invoice.id),
+                "ledger_entry_id": str(entry.id),
+                "consumption_ledger_entry_id": (
+                    str(consumption_entry.id) if consumption_entry else None
+                ),
+                "amount": str(preview.apply_amount),
+                "currency": preview.currency,
+                "preview_fingerprint": preview.fingerprint,
+                "invoice_receivable_before": str(preview.invoice_receivable_before),
+                "invoice_receivable_after": str(preview.invoice_receivable_after),
+                "access_consequence": preview.access_consequence,
+            },
+        )
+    return CreditApplicationResult(
+        application=application,
+        ledger_entry=entry,
+        consumption_ledger_entry=consumption_entry,
+        preview=preview,
+    )
+
+
 def _issue_preview_request(
     payload: CreditNoteIssueRequest,
 ) -> CreditNoteIssuePreviewRequest:
@@ -447,8 +605,23 @@ def _build_issue_preview(
         db, payload.account_id, currency=payload.currency
     )
     receivable = round_money(invoice.balance_due) if invoice else None
+    application_amount = (
+        round_money(min(total, receivable))
+        if invoice is not None
+        and receivable is not None
+        and _invoice_can_take_credit(invoice)
+        else Decimal("0.00")
+    )
+    receivable_after = (
+        round_money(receivable - application_amount) if receivable is not None else None
+    )
+    residual_credit = round_money(total - application_amount)
+    settles_invoice = receivable_after is not None and receivable_after <= Decimal(
+        "0.00"
+    )
     fingerprint = _stable_fingerprint(
         "credit_note_issue",
+        application_amount=application_amount,
         credit_note_id=credit_note_id,
         account_id=payload.account_id,
         invoice_id=payload.invoice_id,
@@ -472,14 +645,24 @@ def _build_issue_preview(
         currency=payload.currency,
         credit_total=total,
         prepaid_funding_before=wallet_before,
-        prepaid_funding_after=round_money(wallet_before + total),
+        # The funding entry adds the whole credit and the application consumes
+        # part of it in the same transaction, so what survives on the account is
+        # the residual, not the total.
+        prepaid_funding_after=round_money(wallet_before + residual_credit),
         invoice_receivable_before=receivable,
-        invoice_receivable_after=receivable,
+        invoice_receivable_after=receivable_after,
         ledger_entry_type=LedgerEntryType.credit,
         ledger_source=LedgerSource.credit_note,
         ledger_amount=total,
-        access_consequence="none_credit_note_only",
+        access_consequence=(
+            "invoice_settled_by_credit_note"
+            if settles_invoice
+            else "none_credit_note_only"
+        ),
         fingerprint=fingerprint,
+        application_amount=application_amount,
+        residual_credit=residual_credit,
+        settles_invoice=settles_invoice,
     )
 
 
@@ -869,6 +1052,17 @@ class CreditNotes(ListResponseMixin):
             credit_note.funding_ledger_entry_id = funding.id
             reservation.ref_id = str(credit_note.id)
             db.flush()
+            # An issued credit reduces the receivable it names, now, in this
+            # transaction. Leaving it for a manual step overstates AR for as
+            # long as nobody takes that step, and ages and duns a balance the
+            # customer no longer owes.
+            application = CreditNotes._stage_issue_application(
+                db,
+                credit_note=credit_note,
+                issue_key=key,
+                memo=payload.memo,
+                stage_audit=stage_audit,
+            )
             if stage_audit:
                 _stage_credit_audit(
                     db,
@@ -880,6 +1074,14 @@ class CreditNotes(ListResponseMixin):
                         "currency": preview.currency,
                         "preview_fingerprint": preview.fingerprint,
                         "access_consequence": preview.access_consequence,
+                        "application_id": (
+                            str(application.application.id) if application else None
+                        ),
+                        "application_amount": str(
+                            application.application.amount
+                            if application
+                            else Decimal("0.00")
+                        ),
                     },
                 )
             if commit:
@@ -894,6 +1096,55 @@ class CreditNotes(ListResponseMixin):
             credit_note=credit_note,
             funding_ledger_entry=funding,
             preview=preview,
+            application=application,
+        )
+
+    @staticmethod
+    def _stage_issue_application(
+        db: Session,
+        *,
+        credit_note: CreditNote,
+        issue_key: str,
+        memo: str | None,
+        stage_audit: bool,
+    ) -> CreditApplicationResult | None:
+        """Apply a freshly issued note to the invoice it names. No commit.
+
+        Joins the issue's transaction, so the note, its funding, this
+        application and every piece of its evidence land together or not at all.
+
+        Returns None when there is nothing to apply: the note names no invoice,
+        or the named invoice cannot absorb credit right now. Those are ordinary
+        states and the credit simply stays on the account.
+
+        The account lock is already held by the issue command; this adds the
+        invoice lock, preserving the account -> credit note -> invoice order
+        (the note is new in this transaction, so nothing else can hold it).
+        """
+        if credit_note.invoice_id is None:
+            return None
+        invoice = lock_for_update(db, Invoice, coerce_uuid(str(credit_note.invoice_id)))
+        if invoice is None:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if not _invoice_can_take_credit(invoice):
+            return None
+
+        preview = _build_application_preview(credit_note, invoice, None)
+        reservation = IdempotencyKey(
+            scope=_APPLICATION_IDEMPOTENCY_SCOPE,
+            key=_issue_application_key(issue_key),
+            account_id=invoice.account_id,
+        )
+        db.add(reservation)
+        db.flush()
+        return _stage_application_with_evidence(
+            db,
+            credit_note=credit_note,
+            invoice=invoice,
+            preview=preview,
+            reservation=reservation,
+            memo=memo,
+            stage_audit=stage_audit,
         )
 
     @staticmethod
@@ -1735,108 +1986,22 @@ class CreditNotes(ListResponseMixin):
             ) from exc
 
         try:
-            consumption_entry = None
-            if credit_note.funding_ledger_entry_id:
-                available_funding = _funded_credit_available(db, credit_note)
-                if available_funding < preview.apply_amount:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Exact credit-note funding is below the confirmed application amount",
-                    )
-                consumption_entry = LedgerEntries.create(
-                    db,
-                    LedgerEntryCreate(
-                        account_id=credit_note.account_id,
-                        entry_type=LedgerEntryType.debit,
-                        source=LedgerSource.credit_note,
-                        amount=preview.apply_amount,
-                        currency=credit_note.currency,
-                        memo=(
-                            "Credit note application funding transfer: "
-                            f"{credit_note.id} -> {invoice.id}"
-                        ),
-                    ),
-                    commit=False,
-                )
-            entry = LedgerEntries.create(
+            result = _stage_application_with_evidence(
                 db,
-                LedgerEntryCreate(
-                    account_id=invoice.account_id,
-                    invoice_id=invoice.id,
-                    entry_type=preview.ledger_entry_type,
-                    source=preview.ledger_source,
-                    amount=preview.apply_amount,
-                    currency=preview.currency,
-                    memo=payload.memo
-                    or f"Credit note {credit_note.credit_number or credit_note.id} applied",
-                ),
-                commit=False,
-            )
-            application = CreditNoteApplication(
-                credit_note_id=credit_note.id,
-                invoice_id=invoice.id,
-                ledger_entry_id=entry.id,
-                consumption_ledger_entry_id=(
-                    consumption_entry.id if consumption_entry else None
-                ),
-                preview_fingerprint=preview.fingerprint,
-                amount=preview.apply_amount,
+                credit_note=credit_note,
+                invoice=invoice,
+                preview=preview,
+                reservation=reservation,
                 memo=payload.memo,
+                stage_audit=stage_audit,
             )
-            db.add(application)
-            db.flush()
-            reservation.ref_id = str(application.id)
-            _recalculate_invoice_totals(db, invoice)
-            _recalculate_credit_note_totals(db, credit_note)
-            db.flush()
-
-            # Financial settlement and service access remain separate states.
-            # The invoice owner hands the consequence to the access/lifecycle
-            # owners; this action never promises restoration from the credit.
-            from app.services.billing.invoices import (
-                reconcile_service_after_invoice_settlement,
-            )
-
-            if preview.settles_invoice:
-                reconcile_service_after_invoice_settlement(
-                    db, invoice.account_id, invoice.id
-                )
-            if stage_audit:
-                _stage_credit_audit(
-                    db,
-                    action="apply",
-                    credit_note_id=credit_note.id,
-                    metadata={
-                        "application_id": str(application.id),
-                        "invoice_id": str(invoice.id),
-                        "ledger_entry_id": str(entry.id),
-                        "consumption_ledger_entry_id": (
-                            str(consumption_entry.id) if consumption_entry else None
-                        ),
-                        "amount": str(preview.apply_amount),
-                        "currency": preview.currency,
-                        "preview_fingerprint": preview.fingerprint,
-                        "invoice_receivable_before": str(
-                            preview.invoice_receivable_before
-                        ),
-                        "invoice_receivable_after": str(
-                            preview.invoice_receivable_after
-                        ),
-                        "access_consequence": preview.access_consequence,
-                    },
-                )
             db.commit()
         except Exception:
             db.rollback()
             raise
-        db.refresh(application)
-        db.refresh(entry)
-        return CreditApplicationResult(
-            application=application,
-            ledger_entry=entry,
-            consumption_ledger_entry=consumption_entry,
-            preview=preview,
-        )
+        db.refresh(result.application)
+        db.refresh(result.ledger_entry)
+        return result
 
     @staticmethod
     def apply(db: Session, credit_note_id: str, payload: CreditNoteApplyRequest):
