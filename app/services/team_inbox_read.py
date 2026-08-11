@@ -807,10 +807,13 @@ def _message_attachments(message: InboxMessage) -> list[dict[str, object]]:
 
 
 def _asset_attachment(asset: InboxMediaAsset) -> dict[str, object]:
-    url = (
-        team_inbox_media.media_content_url(asset.id)
-        if asset.download_status in {"stored", "metadata_only"}
-        else asset.storage_url or asset.source_url
+    can_stream = asset.download_status == "stored" or (
+        asset.channel_type == "whatsapp"
+        and asset.direction == "inbound"
+        and bool(asset.provider_media_id)
+    )
+    url = team_inbox_media.media_content_url(asset.id) if can_stream else (
+        asset.storage_url or asset.source_url
     )
     return {
         "id": str(asset.id),
@@ -827,6 +830,7 @@ def _asset_attachment(asset: InboxMediaAsset) -> dict[str, object]:
         "provider_media_id": asset.provider_media_id,
         "download_status": asset.download_status,
         "download_error": asset.download_error,
+        "content_available": bool(url),
         "metadata": asset.metadata_,
     }
 

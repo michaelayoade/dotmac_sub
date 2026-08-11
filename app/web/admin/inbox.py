@@ -328,6 +328,7 @@ def team_inbox_queue(
                 "action_eligibility": projection.selected.action_eligibility,
                 "is_unread": projection.selected.is_unread,
                 "priority_options": projection.selected.priority_options,
+                "activity_events": projection.selected.activity_events,
             }
         )
     if is_list_fragment_request:
@@ -386,7 +387,15 @@ def _detail_redirect(
     status: str,
     message: str,
     next_url: str | None = None,
-) -> RedirectResponse:
+    request: Request | None = None,
+    db: Session | None = None,
+) -> RedirectResponse | HTMLResponse:
+    if request is not None and db is not None and request.headers.get("hx-request"):
+        detail_response = team_inbox_detail(UUID(str(conversation_id)), request, db)
+        detail_response.headers["HX-Trigger"] = json.dumps(
+            {"dotmac:toast": {"message": message, "status": status}}
+        )
+        return detail_response
     target = str(next_url or "").strip()
     parsed = urlsplit(target)
     if (
@@ -429,19 +438,29 @@ def team_inbox_media_content(
     db: Session = Depends(get_db),
 ):
     try:
-        asset, stream = team_inbox_media.stream_asset_content(db, asset_id)
+        media_content = team_inbox_media.stream_asset_content(db, asset_id)
     except team_inbox_media.MediaContentError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
-    headers = {
-        "Content-Disposition": build_content_disposition(
-            asset.file_name or f"inbox-media-{asset.id}"
+    if isinstance(media_content, tuple):
+        asset, stream = media_content
+        file_name = asset.file_name or f"inbox-media-{asset.id}"
+        content_type = stream.content_type or asset.mime_type or "application/octet-stream"
+    else:
+        stream = media_content.stream
+        file_name = media_content.file_name or f"inbox-media-{media_content.asset_id}"
+        content_type = (
+            stream.content_type
+            or media_content.content_type
+            or "application/octet-stream"
         )
+    headers = {
+        "Content-Disposition": build_content_disposition(file_name)
     }
     if stream.content_length is not None:
         headers["Content-Length"] = str(stream.content_length)
     return StreamingResponse(
         stream.chunks,
-        media_type=stream.content_type or asset.mime_type or "application/octet-stream",
+        media_type=content_type,
         headers=headers,
     )
 
@@ -465,6 +484,7 @@ def team_inbox_detail(
         db,
         conversation_id=conversation_id,
         actor_person_id=actor_person_id,
+        include_contact_candidates=False,
     )
     view = (
         {
@@ -485,6 +505,7 @@ def team_inbox_detail(
                 else ""
             ),
             "priority_options": projection.priority_options,
+            "activity_events": projection.activity_events,
             "agent_options": team_inbox_projection.list_agent_options(db),
             "can_manage_leads": can(request, "crm:lead:write"),
         }
@@ -961,6 +982,8 @@ def team_inbox_reply(
             status="error",
             message=str(exc),
             next_url=next_url,
+            request=request,
+            db=db,
         )
     return _detail_redirect(
         conversation_id,
@@ -970,11 +993,17 @@ def team_inbox_reply(
             if outcome.replayed
             else "Reply scheduled."
             if outcome.kind == "scheduled"
-            else f"Reply queued from {outcome.sender}."
+            else f"Reply queued for delivery from {outcome.sender}. Watch the thread delivery status; mail rate limits can retry automatically."
             if outcome.kind == "queued"
+            else f"Reply delivery is retrying from {outcome.sender}. Watch the thread delivery status."
+            if outcome.kind == "retried"
+            else f"Reply could not be delivered from {outcome.sender}: {outcome.detail or 'provider rejected it'}."
+            if outcome.kind == "failed"
             else f"Reply sent from {outcome.sender}."
         ),
         next_url=next_url,
+        request=request,
+        db=db,
     )
 
 
