@@ -244,6 +244,10 @@ from app.models.dispatch import (  # noqa: F401
     TechnicianSkill,
     WorkOrderAssignmentQueue,
 )
+from app.models.domain_setting_history import (  # noqa: F401
+    DomainSettingHistory,
+    SettingChangeAction,
+)
 from app.models.domain_settings import (  # noqa: F401
     DomainSetting,
     SettingDomain,
@@ -280,6 +284,10 @@ from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequest,
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
+)
+from app.models.fiber_cost_item import (  # noqa: F401
+    FiberCostItem,
+    FiberCostUnit,
 )
 from app.models.fiber_physical import (  # noqa: F401
     FiberConnectorPort,

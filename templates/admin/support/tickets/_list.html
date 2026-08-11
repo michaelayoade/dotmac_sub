@@ -42,7 +42,7 @@
                     <option value="">All Statuses</option>
                     <option value="not_closed" {% if status == 'not_closed' %}selected{% endif %}>Not closed</option>
                     {% if unavailable_status_filter %}
-                    <option value="{{ unavailable_status_filter.value }}" selected hidden>{{ unavailable_status_filter.label }} (historical)</option>
+                    <option value="{{ unavailable_status_filter.value }}" selected hidden>{{ unavailable_status_filter.label }} (not selectable)</option>
                     {% endif %}
                     {% for s in all_statuses %}
                     <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>

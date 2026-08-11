@@ -121,6 +121,9 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "Only online agents receive auto-assigned inbox conversations." in sidebar
     assert "conversation_id" in sidebar
     assert "Advanced team conditions" in sidebar
+    assert "actor_service_team_options" in conversation
+    assert 'aria-label="Team for assignment to me"' in conversation
+    assert 'name="service_team_id" required' in conversation
     assert "inboxTeamFilterBuilder" in javascript
     assert 'filters: "filters"' in javascript
     assert 'name="priority_at_most"' in sidebar
@@ -138,6 +141,12 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert ">AG</div>" not in triage
     assert "dotmac.inbox.draft." in javascript
     assert "newMessagesAvailable" in javascript
+    assert "data.agent_name" in javascript
+    assert 'name: agentName || "Another agent"' in javascript
+    assert "${names[0]} is replying" in javascript
+    assert "expiresAt: Date.now() + 3500" in javascript
+    assert "clearTypingPresence()" in javascript
+    assert "scheduleTypingPrune()" in javascript
     assert "setInterval" in javascript
     assert "5000" in javascript
     assert "handleShortcut" in javascript
@@ -176,6 +185,15 @@ def test_projection_supplies_live_agent_and_assignment_options(db_session):
 
     assert projection.agent_options[0].name == "Ada Agent"
     assert projection.agent_options[0].initials == "AA"
+    assert projection.agent_options[0].presence_status == (
+        InboxAgentPresenceStatus.offline.value
+    )
+    assert projection.service_team_options[0].name == "Support"
+    assert projection.service_team_options[0].id == team.id
+    assert (
+        team_inbox_projection.list_actor_service_team_options(db_session, user.id)
+        == projection.service_team_options
+    )
     assert projection.agent_presence is not None
     assert projection.agent_presence.status == InboxAgentPresenceStatus.offline.value
     assert projection.assignment_counts.all == 1
@@ -210,6 +228,41 @@ def test_projection_reads_current_agent_presence(db_session):
 
     assert projection.agent_presence is not None
     assert projection.agent_presence.status == InboxAgentPresenceStatus.away.value
+
+
+def test_assignment_agent_options_show_team_and_presence_status(db_session):
+    user, person = add_bound_staff_user(
+        db_session,
+        email="online-agent@example.test",
+    )
+    user.first_name = "Online"
+    user.last_name = "Agent"
+    user.display_name = "Online Agent"
+    team = ServiceTeam(name="Support", team_type=ServiceTeamType.support.value)
+    db_session.add_all([user, team])
+    db_session.flush()
+    db_session.add(ServiceTeamMember(team_id=team.id, person_id=person.id))
+    db_session.add(
+        InboxAgentPresence(
+            person_id=user.id,
+            status=InboxAgentPresenceStatus.online.value,
+        )
+    )
+    db_session.commit()
+
+    projection = team_inbox_projection.build_queue_projection(
+        db_session,
+        team_inbox_projection.InboxQueueRequest(actor_person_id=user.id),
+    )
+
+    conversation_template = Path("templates/admin/inbox/_conversation.html").read_text()
+
+    assert projection.agent_options[0].presence_status == (
+        InboxAgentPresenceStatus.online.value
+    )
+    assert 'name="service_team_id"' in conversation_template
+    assert "service_team_options" in conversation_template
+    assert "agent.presence_status" in conversation_template
 
 
 def test_set_agent_presence_command_updates_current_operator(db_session):

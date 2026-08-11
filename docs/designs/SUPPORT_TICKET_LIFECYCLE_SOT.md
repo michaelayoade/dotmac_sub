@@ -34,6 +34,13 @@ commit lifecycle changes. Every public mutation enters
 terminal-state semantics consumed by both lifecycle and configuration. It is a
 pure value boundary and owns no Ticket or configuration rows.
 
+`closed` is the only Ticket status meaning that the reported issue has been
+resolved. The retired stored value `resolved` is accepted only as a legacy
+admission alias and is canonicalized to `closed` before any write or response.
+Migration 517 repairs matching Ticket rows plus exact status fields in operator
+configuration and automation JSON; it does not rewrite Ticket timestamps,
+timeline records, tags, comments, attachments, metadata, or audit history.
+
 `support.ticket_configuration` owns operator-managed status choices,
 priorities, types, routing inputs, service-team membership configuration, and
 priority/type SLA targets. It may only expose statuses from the ticket
@@ -42,18 +49,17 @@ current region choices from configured values and canonical Ticket observations.
 This separation prevents lifecycle and configuration from depending on each
 other while preserving the provenance of both inputs.
 
-`resolved` remains part of the closed lifecycle vocabulary for historical
-Tickets, integrations, reports, timestamps, and lifecycle reads, but it is not
-part of the operator-selectable status subset. The configuration owner removes
-it from stored/default option projections and rejects attempts to configure it.
-Admin selection crosses the typed `OperatorTicketStatusSelection` /
+The operator-selectable subset contains only canonical typed `TicketStatus`
+values. The configuration owner and admin adapters canonicalize legacy
+`resolved` input to `closed` before storage or response. Admin selection crosses
+the typed `OperatorTicketStatusSelection` /
 `OperatorTicketStatusSelectionOutcome` resolver owned by ticket configuration.
 Admin create, edit, quick-status, bulk-update, automation, list-filter, and
-advanced-filter controls consume that one subset. A historical Ticket already
-in `resolved` remains displayable and may preserve that unchanged value while
-another field is edited; the UI presents it as a non-selectable current value.
-The `not_closed` list scope remains a separate read contract that excludes only
-`closed`, so it continues to include historical `resolved` Tickets.
+advanced-filter controls consume that one subset. A Ticket whose canonical
+current status is later removed from the configured subset remains displayable
+and may preserve that unchanged value while another field is edited; the UI
+presents it as a non-selectable current value. The `not_closed` list scope
+remains a separate read contract that excludes canonical `closed`.
 
 Regional routing configuration is replaced through the typed
 `TicketConfigurationUpdate` command. Region keys are normalized to lowercase.
@@ -232,6 +238,10 @@ Repair reruns deterministic list/preview queries, SLA reconciliation, or the
 provenance verifier from canonical records. It never re-enables a legacy writer
 or infers lifecycle authority from CRM, tags, templates, cached UI state, or
 communication delivery.
+
+Migration 517 is also the idempotent drift repair for the retired `resolved`
+status: rerunning it updates only exact legacy status values that reappeared and
+leaves canonical `closed` rows untouched.
 
 ## Staff Talk consequences
 

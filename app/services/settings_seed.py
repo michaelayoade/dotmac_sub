@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingCreate
 from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
 from app.services.domain_settings import (
     DomainSettings,
@@ -2196,6 +2197,45 @@ def seed_projects_settings(db: Session) -> None:
     )
     projects_settings.ensure_by_key(
         db,
+        key="project_completion_finance_email_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=os.getenv("PROJECTS_COMPLETION_FINANCE_EMAIL_ENABLED", "true"),
+        value_json=(
+            os.getenv("PROJECTS_COMPLETION_FINANCE_EMAIL_ENABLED", "true")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        ),
+    )
+    recipients = [
+        item.strip()
+        for item in os.getenv("PROJECTS_COMPLETION_FINANCE_EMAIL_RECIPIENTS", "").split(
+            ","
+        )
+        if item.strip()
+    ]
+    if not projects_settings.get_optional_by_key(
+        db, "project_completion_finance_email_recipients"
+    ):
+        projects_settings.create(
+            db,
+            DomainSettingCreate(
+                domain=SettingDomain.projects,
+                key="project_completion_finance_email_recipients",
+                value_type=SettingValueType.list,
+                value_json=recipients,
+            ),
+        )
+    projects_settings.ensure_by_key(
+        db,
+        key="project_completion_finance_permission_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv(
+            "PROJECTS_COMPLETION_FINANCE_PERMISSION_KEY", "finance:ap:read"
+        ),
+    )
+    projects_settings.ensure_by_key(
+        db,
         key="default_labor_hourly_rate",
         value_type=SettingValueType.string,
         value_text=os.getenv("PROJECTS_DEFAULT_LABOR_HOURLY_RATE", "0.00"),
@@ -2286,31 +2326,11 @@ def seed_network_policy_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("NETWORK_DEFAULT_FIBER_STRAND_STATUS", "available"),
     )
-    # Fiber installation planning cost rates
-    network_settings.ensure_by_key(
-        db,
-        key="fiber_drop_cable_cost_per_meter",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("NETWORK_FIBER_DROP_CABLE_COST_PER_METER", "2.50"),
-    )
-    network_settings.ensure_by_key(
-        db,
-        key="fiber_labor_cost_per_meter",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("NETWORK_FIBER_LABOR_COST_PER_METER", "1.50"),
-    )
-    network_settings.ensure_by_key(
-        db,
-        key="fiber_ont_device_cost",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("NETWORK_FIBER_ONT_DEVICE_COST", "85.00"),
-    )
-    network_settings.ensure_by_key(
-        db,
-        key="fiber_installation_base_fee",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("NETWORK_FIBER_INSTALLATION_BASE_FEE", "50.00"),
-    )
+    # No fiber installation cost rates here. They are `fiber_cost_items` rows
+    # now — a component is data, so adding a splice closure or a permit fee no
+    # longer means editing a spec, a service and a template. Their defaults
+    # (2.50/m, 1.50/m, 85.00, 50.00) were USD-shaped values rendered as naira,
+    # which is why the seeded rows arrive unpriced: see migration 519.
 
 
 def seed_network_settings(db: Session) -> None:

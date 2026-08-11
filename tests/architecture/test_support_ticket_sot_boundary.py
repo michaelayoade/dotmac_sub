@@ -137,8 +137,10 @@ def test_operator_status_subset_is_owned_by_ticket_configuration() -> None:
     list_template = _source("templates/admin/support/tickets/_list.html")
     form_template = _source("templates/admin/support/tickets/new.html")
 
-    assert "ADMIN_NON_SELECTABLE_STATUSES" in configuration
-    assert "TicketStatus.resolved.value" in configuration
+    assert "DEFAULT_STATUS_OPTIONS = [status.value for status in TicketStatus]" in (
+        configuration
+    )
+    assert "parse_ticket_status(normalized).value" in configuration
     assert "class OperatorTicketStatusSelection" in configuration
     assert "class OperatorTicketStatusSelectionOutcome" in configuration
     assert "def resolve_operator_ticket_status_selection(" in configuration

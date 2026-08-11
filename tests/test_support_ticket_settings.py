@@ -38,10 +38,9 @@ def _native_team(db_session, *, name: str, team_id=None) -> ServiceTeam:
 
 
 def test_ticket_settings_defaults_loaded_without_db_rows(db_session):
-    status_options = support_ticket_settings_service.list_status_options(db_session)
-    assert status_options
-    assert TicketStatus.resolved.value not in status_options
-    assert TicketStatus.resolved.value == "resolved"
+    statuses = support_ticket_settings_service.list_status_options(db_session)
+    assert "closed" in statuses
+    assert "resolved" not in statuses
     assert support_ticket_settings_service.list_priority_options(db_session)
     assert support_ticket_settings_service.list_ticket_type_options(db_session)
     assert (
@@ -83,21 +82,14 @@ def test_ticket_settings_reject_statuses_outside_lifecycle_vocabulary(db_session
         )
 
 
-def test_ticket_settings_reject_resolved_from_operator_selectable_subset(db_session):
-    with pytest.raises(
-        support_ticket_settings_service.SupportTicketConfigurationError,
-        match="Unsupported ticket status: resolved",
-    ):
-        support_ticket_settings_service.update_ticket_configuration(
-            db_session,
-            _configuration_command(statuses=("open", "resolved")),
-        )
-
-
-def test_resolved_ticket_form_context_preserves_historical_display_only(db_session):
+def test_ticket_form_context_preserves_unconfigured_current_status(db_session):
+    support_ticket_settings_service.update_ticket_configuration(
+        db_session,
+        _configuration_command(statuses=("open", "closed")),
+    )
     ticket = Ticket(
-        title="Historical resolved ticket",
-        status=TicketStatus.resolved.value,
+        title="Pending ticket",
+        status=TicketStatus.pending.value,
         priority="normal",
         channel=TicketChannel.web,
         is_active=True,
@@ -109,41 +101,58 @@ def test_resolved_ticket_form_context_preserves_historical_display_only(db_sessi
         db_session, ticket=ticket
     )
 
-    assert TicketStatus.resolved.value not in context["all_statuses"]
-    assert context["prefill"]["status"] == TicketStatus.resolved.value
-    assert context["unavailable_status_presentation"].value == "resolved"
-    assert context["unavailable_status_presentation"].label == "Resolved"
+    assert TicketStatus.pending.value not in context["all_statuses"]
+    assert context["prefill"]["status"] == TicketStatus.pending.value
+    assert context["unavailable_status_presentation"].value == "pending"
+    assert context["unavailable_status_presentation"].label == "Pending"
 
 
-def test_new_ticket_form_ignores_non_selectable_resolved_prefill(db_session):
+def test_new_ticket_form_canonicalizes_legacy_resolved_prefill(db_session):
     context = web_support_tickets_service.build_ticket_form_context(
-        db_session, query_params={"status": TicketStatus.resolved.value}
+        db_session, query_params={"status": "resolved"}
     )
 
-    assert TicketStatus.resolved.value not in context["all_statuses"]
-    assert context["prefill"]["status"] in context["all_statuses"]
+    assert "resolved" not in context["all_statuses"]
+    assert context["prefill"]["status"] == TicketStatus.closed.value
     assert context["unavailable_status_presentation"] is None
 
 
-def test_admin_status_mutations_reject_new_resolved_selection(db_session):
+def test_admin_status_mutations_reject_unconfigured_status_but_preserve_current(
+    db_session,
+):
+    support_ticket_settings_service.update_ticket_configuration(
+        db_session,
+        _configuration_command(statuses=("open", "closed")),
+    )
     with pytest.raises(
         web_support_tickets_service.WebSupportTicketInputError,
         match="Select an available ticket status",
     ):
         web_support_tickets_service._admin_status_value(
             db_session,
-            TicketStatus.resolved.value,
+            TicketStatus.pending.value,
             surface=(support_ticket_settings_service.OperatorTicketStatusSurface.edit),
         )
 
     assert (
         web_support_tickets_service._admin_status_value(
             db_session,
-            TicketStatus.resolved.value,
+            TicketStatus.pending.value,
             surface=(support_ticket_settings_service.OperatorTicketStatusSurface.edit),
-            current_status=TicketStatus.resolved.value,
+            current_status=TicketStatus.pending.value,
         )
-        == TicketStatus.resolved.value
+        == TicketStatus.pending.value
+    )
+
+
+def test_admin_status_mutations_canonicalize_legacy_resolved_to_closed(db_session):
+    assert (
+        web_support_tickets_service._admin_status_value(
+            db_session,
+            "resolved",
+            surface=(support_ticket_settings_service.OperatorTicketStatusSurface.edit),
+        )
+        == TicketStatus.closed.value
     )
 
 
@@ -151,14 +160,30 @@ def test_configuration_owner_resolves_typed_operator_status_selection(db_session
     outcome = support_ticket_settings_service.resolve_operator_ticket_status_selection(
         db_session,
         support_ticket_settings_service.OperatorTicketStatusSelection(
-            requested_status=TicketStatus.resolved,
-            current_status=TicketStatus.resolved,
+            requested_status=TicketStatus.pending,
+            current_status=TicketStatus.pending,
             surface=support_ticket_settings_service.OperatorTicketStatusSurface.edit,
         ),
     )
 
-    assert outcome.status is TicketStatus.resolved
+    assert outcome.status is TicketStatus.pending
     assert outcome.preserved_current is True
+
+
+def test_ticket_settings_canonicalize_legacy_resolved_to_closed(db_session):
+    support_ticket_settings_service.update_ticket_configuration(
+        db_session,
+        _configuration_command(
+            statuses=("open", "resolved", "closed"),
+            priorities=("normal",),
+            ticket_types=("incident",),
+        ),
+    )
+
+    assert support_ticket_settings_service.list_status_options(db_session) == [
+        "open",
+        "closed",
+    ]
 
 
 def test_ticket_settings_persist_routing_and_sla(db_session):

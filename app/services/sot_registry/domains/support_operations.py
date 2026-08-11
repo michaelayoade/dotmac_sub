@@ -370,7 +370,8 @@ DOMAIN = DomainSOT(
                         owner="support.ticket_vocabulary",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "closed TicketStatus enum values and terminal-state semantics"
+                            "closed TicketStatus enum values, canonical closed completion "
+                            "status, and terminal-state semantics"
                         ),
                     ),
                 ),
@@ -757,9 +758,10 @@ DOMAIN = DomainSOT(
             ),
             notes=(
                 "Configured status choices are constrained to the lifecycle "
-                "vocabulary, with resolved retained as a historical lifecycle "
-                "value but excluded from the operator-selectable subset. Admin "
-                "selection uses the typed OperatorTicketStatusSelection resolver. "
+                "vocabulary, with legacy resolved input canonicalized to closed. "
+                "Admin selection uses the typed OperatorTicketStatusSelection "
+                "resolver and may preserve a current canonical status that was "
+                "later removed from the configured subset. "
                 "Status configuration does not own semantic colors or tones. Every "
                 "ticket SLA target is operator-managed in the ticket settings UI. "
                 "Customer-portal routing resolves current native Service Teams by "
