@@ -45,6 +45,8 @@ from uuid import uuid4
 import psycopg
 import pytest
 from alembic.config import Config
+from alembic.runtime.environment import EnvironmentContext
+from alembic.script import ScriptDirectory
 from psycopg import sql
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
@@ -152,6 +154,40 @@ def _kernel_config(database_url: URL) -> Config:
     return config
 
 
+def _run_kernel_lineage(database_url: URL) -> None:
+    """Run the independent kernel lineage without consuming Sub's head row.
+
+    Loading kernel revisions through Sub's ``env.py`` makes a kernel-only
+    revision map try to resolve Sub's own current revision row and also installs
+    Sub's idempotent schema wrappers. A distinct version table and a direct
+    Alembic environment preserve both owners' histories while exercising the
+    installed kernel migrations without changing their DDL semantics.
+    """
+    config = _kernel_config(database_url)
+    script = ScriptDirectory.from_config(config)
+
+    def upgrade(revision, _context):
+        return script._upgrade_revs("heads", revision)
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            with EnvironmentContext(
+                config,
+                script,
+                fn=upgrade,
+                destination_rev="heads",
+            ) as environment:
+                environment.configure(
+                    connection=connection,
+                    version_table="dotmac_kernel_alembic_version",
+                )
+                with environment.begin_transaction():
+                    environment.run_migrations()
+    finally:
+        engine.dispose()
+
+
 def _tables(database_url: URL) -> set[str]:
     engine = create_engine(database_url)
     try:
@@ -220,7 +256,7 @@ def test_the_kernel_lineage_fails_exactly_where_expected(
     command.upgrade(_sub_config(isolated_database), "heads")
 
     try:
-        command.upgrade(_kernel_config(isolated_database), "heads")
+        _run_kernel_lineage(isolated_database)
     except Exception as failure:  # noqa: BLE001 — any failure is the datum
         detail = str(failure)
         assert EXPECTED_FIRST_FAILURE in detail or "already exists" in detail, (
