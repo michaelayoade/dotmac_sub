@@ -1639,12 +1639,16 @@ Credit-note issuance and voiding are the next migrated financial-action contract
 - Application-on-issue boundary: direct and draft issuance use one typed owner
   decision and the same flush-only participant as manual application. An issued
   note naming an open receivable applies up to that receivable in the issue
-  transaction; only a paid, zero-balance invoice may intentionally retain the
-  value as account credit by lifecycle state. An owner workflow whose rollback
-  contract must void the exact note may explicitly retain an open-invoice credit;
-  the preview and fingerprint record `reversible_workflow_hold`. Unlinked notes
-  also retain account credit. Proforma, inactive, void, written-off, and
-  open-but-zero invoice evidence fails closed.
+  transaction. A named invoice with nothing left to reduce retains the value as
+  account credit rather than failing: `invoice_already_paid` by lifecycle state,
+  and `invoice_receivable_exhausted` for an invoice still open but already
+  covered or issued at zero. Refusing the latter would deny a cancellation its
+  credit for a bookkeeping state the customer did not cause, and the value is
+  still funded onto the account. An owner workflow whose rollback contract must
+  void the exact note may explicitly retain an open-invoice credit; the preview
+  and fingerprint record `reversible_workflow_hold`. Unlinked notes also retain
+  account credit. Proforma, inactive, void, and written-off invoice evidence
+  fails closed, as does a paid invoice carrying a non-zero receivable.
 - Replay and concurrency boundary: the application idempotency key is derived
   from the issue key. A retry that waited for the account lock reloads the
   completed note and its exact application evidence before testing the now-stale

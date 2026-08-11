@@ -323,6 +323,7 @@ class CreditNoteIssueApplicationReason(StrEnum):
 
     invoice_receivable_open = "invoice_receivable_open"
     invoice_already_paid = "invoice_already_paid"
+    invoice_receivable_exhausted = "invoice_receivable_exhausted"
     no_invoice_named = "no_invoice_named"
     reversible_workflow_hold = "reversible_workflow_hold"
 

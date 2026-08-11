@@ -484,9 +484,16 @@ def _decide_issue_application(
             detail=f"Cannot issue a credit note against a {invoice.status.value} invoice",
         )
     if receivable <= Decimal("0.00"):
-        raise HTTPException(
-            status_code=409,
-            detail="Open invoice has no positive receivable",
+        # An open invoice can legitimately have nothing left to reduce: covered
+        # by earlier credit or payment without having transitioned to paid, or
+        # issued at zero. Refusing here would deny a cancellation its credit for
+        # a bookkeeping state the customer did not cause, so the value is
+        # retained on the account exactly as it is for a paid invoice.
+        return _IssueApplicationDecision(
+            disposition=(CreditNoteIssueApplicationDisposition.retain_account_credit),
+            reason=CreditNoteIssueApplicationReason.invoice_receivable_exhausted,
+            receivable_before=receivable,
+            application_amount=Decimal("0.00"),
         )
     if not apply_on_issue:
         return _IssueApplicationDecision(
