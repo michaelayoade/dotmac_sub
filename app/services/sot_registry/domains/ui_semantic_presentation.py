@@ -723,9 +723,9 @@ DOMAIN = DomainSOT(
             name="ui.network_map_projection",
             module="app.services.network_map",
             owns=(
-                  "comprehensive network map typed projection",
-                  "dispatch plant-subset map projection",
-                  "customer access-session map presentation",
+                "comprehensive network map typed projection",
+                "dispatch plant-subset map projection",
+                "customer access-session map presentation",
                 "network map customer drill-down projection",
             ),
             depends_on=(
@@ -752,8 +752,8 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
-                      ConcernContract(
-                          name="comprehensive network map typed projection",
+                    ConcernContract(
+                        name="comprehensive network map typed projection",
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "canonical network inventory and geometry",
@@ -761,16 +761,16 @@ DOMAIN = DomainSOT(
                             "binary device operation verdict",
                             "canonical mapped customer addresses",
                             "map projection limit",
-                      ),
-                      ConcernContract(
-                          name="dispatch plant-subset map projection",
-                          role=OwnerRole.RESOLVER,
-                          input_names=(
-                              "canonical network inventory and geometry",
-                              "validated fiber route geometry",
-                              "binary device operation verdict",
-                          ),
-                      ),
+                        ),
+                    ),
+                    ConcernContract(
+                        name="dispatch plant-subset map projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical network inventory and geometry",
+                            "validated fiber route geometry",
+                            "binary device operation verdict",
+                        ),
                     ),
                     ConcernContract(
                         name="customer access-session map presentation",
