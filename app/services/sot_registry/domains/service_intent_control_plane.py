@@ -307,8 +307,9 @@ DOMAIN = DomainSOT(
                         owner="network.ip_assignment_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "active IpPool.nas_device_id, IPv4Address safety, and "
-                            "assignment availability evidence"
+                            "active legacy IpPool.nas_device_id or NAS radius_pool "
+                            "configuration, IPv4Address safety, and assignment "
+                            "availability evidence"
                         ),
                     ),
                     AuthorityInput(
