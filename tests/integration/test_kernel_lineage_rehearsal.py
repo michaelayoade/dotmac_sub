@@ -83,6 +83,14 @@ EXPECTED_COLLISIONS = {
 }
 
 
+class KernelLineageFailure(RuntimeError):
+    """A kernel migration failure annotated with its active revision."""
+
+    def __init__(self, revision: str, cause: Exception) -> None:
+        super().__init__(f"kernel revision {revision} failed: {cause}")
+        self.revision = revision
+
+
 def _render(url: URL) -> str:
     return url.render_as_string(hide_password=False)
 
@@ -165,9 +173,26 @@ def _run_kernel_lineage(database_url: URL) -> None:
     """
     config = _kernel_config(database_url)
     script = ScriptDirectory.from_config(config)
+    active_revision: str | None = None
 
     def upgrade(revision, _context):
-        return script._upgrade_revs("heads", revision)
+        steps = script._upgrade_revs("heads", revision)
+        for step in steps:
+            migration = step.migration_fn
+            migration_revision = step.revision.revision
+
+            def tracked_migration(
+                *args,
+                _migration=migration,
+                _revision=migration_revision,
+                **kwargs,
+            ):
+                nonlocal active_revision
+                active_revision = _revision
+                return _migration(*args, **kwargs)
+
+            step.migration_fn = tracked_migration
+        return steps
 
     engine = create_engine(database_url)
     try:
@@ -183,7 +208,15 @@ def _run_kernel_lineage(database_url: URL) -> None:
                     version_table="dotmac_kernel_alembic_version",
                 )
                 with environment.begin_transaction():
-                    environment.run_migrations()
+                    try:
+                        environment.run_migrations()
+                    except Exception as failure:
+                        if active_revision is None:
+                            raise
+                        raise KernelLineageFailure(
+                            active_revision,
+                            failure,
+                        ) from failure
     finally:
         engine.dispose()
 
@@ -255,21 +288,13 @@ def test_the_kernel_lineage_fails_exactly_where_expected(
     """
     command.upgrade(_sub_config(isolated_database), "heads")
 
-    try:
+    with pytest.raises(KernelLineageFailure) as captured:
         _run_kernel_lineage(isolated_database)
-    except Exception as failure:  # noqa: BLE001 — any failure is the datum
-        detail = str(failure)
-        assert EXPECTED_FIRST_FAILURE in detail or "already exists" in detail, (
-            "the kernel lineage failed, but not where expected "
-            f"({EXPECTED_FIRST_FAILURE}). This is progress or regression, not "
-            f"noise — read it and move EXPECTED_FIRST_FAILURE deliberately:\n{detail}"
-        )
-        return
 
-    pytest.fail(
-        "THE KERNEL LINEAGE APPLIED CLEANLY TO SUB'S SCHEMA. That is the "
-        "ADR-0017 gate closing, and it means this test's expectation is stale "
-        "rather than that something broke. Record the result, retire "
-        "EXPECTED_FIRST_FAILURE, and convert this into the standing assertion "
-        "that the lineage keeps applying."
+    failure = captured.value
+    assert failure.revision == EXPECTED_FIRST_FAILURE, (
+        "the kernel lineage failed, but not at the expected revision "
+        f"({EXPECTED_FIRST_FAILURE}). This is progress or regression, not "
+        "noise — read it and move EXPECTED_FIRST_FAILURE deliberately:\n"
+        f"{failure}"
     )
