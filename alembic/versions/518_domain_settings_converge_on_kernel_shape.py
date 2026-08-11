@@ -12,9 +12,10 @@ pointing at the single operator tenant, and **zero** rows are platform-scoped or
 carry a NULL `tenant_id`. The stamping in `app/models/domain_settings.py` has
 been doing this on every write.
 
-So this migration retires 507's two deviations and nothing else. Both changes
-make Sub's table match `dotmac_kernel.settings_models.DomainSetting` exactly,
-which is what the settings cutover needs; neither changes a single row.
+So this migration retires 507's two deviations and the Sub-only scope CHECK
+added by 514. All three changes make Sub's table match
+`dotmac_kernel.settings_models.DomainSetting` exactly, which is what the
+settings cutover needs; the upgrade changes no rows.
 
 **1. The server default.** Sub's is `'platform'`; the kernel's is `'tenant'`.
 The kernel also derives the value in Python when the caller does not say
@@ -30,10 +31,10 @@ the tenant they name. The column stays NULLABLE on purpose — in the kernel's
 model `tenant_id IS NULL` *is* the platform scope, so making it NOT NULL would
 diverge from the shape this migration exists to converge on.
 
-Deliberately NOT added: a CHECK tying `scope_kind` to `tenant_id`. The kernel has
-no such constraint — it derives the value at the write boundary instead — and
-inventing one here would be a Sub-only deviation reintroduced in the same change
-that removes two others.
+**3. The scope CHECK.** Migration 514 added a Sub-only CHECK tying `scope_kind`
+to `tenant_id`. The kernel has no such constraint — it derives the value at the
+write boundary instead — so retaining it would preserve a third schema
+deviation and make the kernel's tenant server default reject raw inserts.
 
 Revision ID: 518_domain_settings_converge_on_kernel_shape
 Revises: 517_close_legacy_resolved_tickets
@@ -55,8 +56,13 @@ depends_on: str | Sequence[str] | None = None
 
 TABLE = "domain_settings"
 FK_NAME = "fk_domain_settings_tenant"
+SCOPE_CONSTRAINT = "ck_domain_settings_scope_alignment"
 KERNEL_SCOPE_DEFAULT = "tenant"
 SUB_507_SCOPE_DEFAULT = "platform"
+SUB_SCOPE_ALIGNMENT = (
+    "(scope_kind = 'platform' AND tenant_id IS NULL) "
+    "OR (scope_kind <> 'platform' AND tenant_id IS NOT NULL)"
+)
 
 
 def _fk_exists(name: str) -> bool:
@@ -74,6 +80,15 @@ def _fk_exists(name: str) -> bool:
 
 
 def upgrade() -> None:
+    # 514's Sub-only CHECK is not part of the kernel table shape. Keeping it
+    # while adopting the kernel's tenant server default makes a raw insert
+    # produce tenant + NULL and fail immediately.
+    op.execute(
+        sa.text(
+            f"ALTER TABLE {TABLE} DROP CONSTRAINT IF EXISTS {SCOPE_CONSTRAINT}"
+        )
+    )
+
     op.alter_column(
         TABLE,
         "scope_kind",
@@ -106,3 +121,14 @@ def downgrade() -> None:
         existing_type=sa.String(length=40),
         existing_nullable=False,
     )
+
+    # Rows written through the kernel-shaped schema may have relied on its
+    # tenant default without supplying a tenant ID. Convert only that shape
+    # before restoring 514's stricter Sub invariant.
+    op.get_bind().execute(
+        sa.text(
+            f"UPDATE {TABLE} SET scope_kind = 'platform' "
+            "WHERE scope_kind = 'tenant' AND tenant_id IS NULL"
+        )
+    )
+    op.create_check_constraint(SCOPE_CONSTRAINT, TABLE, SUB_SCOPE_ALIGNMENT)
