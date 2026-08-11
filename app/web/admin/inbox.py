@@ -701,6 +701,7 @@ def team_inbox_detail(
         conversation_id=conversation_id,
         actor_person_id=actor_person_id,
         include_contact_candidates=False,
+        include_label_usage_counts=False,
     )
     view = (
         {
@@ -1224,22 +1225,15 @@ def team_inbox_reply(
         if outcome.replayed
         else "Reply scheduled."
         if outcome.kind == "scheduled"
-        else f"Reply queued for delivery from {outcome.sender}. Watch the thread delivery status; mail rate limits can retry automatically."
+        else f"Reply queued from {outcome.sender}."
         if outcome.kind == "queued"
-        else f"Reply delivery is retrying from {outcome.sender}. Watch the thread delivery status."
-        if outcome.kind == "retried"
-        else f"Reply could not be delivered from {outcome.sender}: {outcome.detail or 'provider rejected it'}."
-        if outcome.kind == "failed"
         else f"Reply sent from {outcome.sender}."
     )
     if _is_htmx_request(request):
-        return _detail_redirect(
+        return _reply_presentation_response(
             conversation_id,
             status="success",
             message=message,
-            next_url=next_url,
-            request=request,
-            db=db,
         )
     return _detail_redirect(
         conversation_id,

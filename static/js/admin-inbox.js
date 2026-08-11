@@ -601,12 +601,9 @@
         returnUrl.searchParams.set("c", id);
         window.__inboxReturnUrl = `${returnUrl.pathname}${returnUrl.search}`;
         this.selectedId = id;
-        this.mode = "detail";
+        this.conversationOpening = true;
         this.newMessagesAvailable = false;
         this.clearTypingPresence();
-        document
-          .querySelector("[data-triage-shell]")
-          ?.setAttribute("data-triage-mode", "detail");
         this.updateSelectedHighlight();
       },
 

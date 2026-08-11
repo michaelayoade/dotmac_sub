@@ -338,6 +338,24 @@ def test_sidebar_filters_replace_stale_requests_and_expose_busy_state():
     assert 'htmx_target == "inbox-conversation-queue"' in ROUTES
 
 
+def test_conversation_click_shows_loading_without_hiding_list_until_swap():
+    select_start = JAVASCRIPT.index("selectConversation(id) {")
+    select_end = JAVASCRIPT.index("updateSelectedHighlight()", select_start)
+    select_block = JAVASCRIPT[select_start:select_end]
+    assert "this.selectedId = id;" in select_block
+    assert "this.conversationOpening = true;" in select_block
+    assert 'setAttribute("data-triage-mode", "detail")' not in select_block
+
+    swap_start = JAVASCRIPT.index('if (target.id === "triage-detail")')
+    swap_end = JAVASCRIPT.index(
+        'if (\n            target.id === "inbox-sidebar-content"', swap_start
+    )
+    swap_block = JAVASCRIPT[swap_start:swap_end]
+    assert 'this.mode = "detail";' in swap_block
+    assert "this.conversationOpening = false;" in swap_block
+    assert 'setAttribute("data-triage-mode", "detail")' in swap_block
+
+
 def test_sidebar_resize_handle_has_exact_shape_states_and_tooltip():
     marker = INDEX.index('aria-label="Drag to resize inbox"')
     handle = INDEX[max(0, marker - 3000) : marker + 2500]
