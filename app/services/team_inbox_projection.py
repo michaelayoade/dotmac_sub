@@ -940,7 +940,7 @@ def get_conversation_projection(
         contact_link_candidates=(
             contact_link_candidates(db, timeline)
             if include_contact_candidates
-            else ContactLinkCandidateSet(subscribers=(), resellers=())
+            else ContactLinkCandidateSet(subscribers=(), resellers=(), organizations=())
         ),
         label_options=tuple(team_inbox_operations.list_labels(db)),
         conversation_labels=tuple(
