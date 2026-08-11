@@ -187,9 +187,7 @@ def list_labels(
             .group_by(InboxConversationLabel.label_id)
             .all()
         )
-        usage_by_label = {
-            row.label_id: int(row.usage_count or 0) for row in usage_rows
-        }
+        usage_by_label = {row.label_id: int(row.usage_count or 0) for row in usage_rows}
     return [
         LabelOption(
             id=str(label.id),

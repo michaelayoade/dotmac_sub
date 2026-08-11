@@ -86,7 +86,9 @@ def get_media_content_projection(
     media_content = team_inbox_media.stream_asset_content(db, asset_id)
     if isinstance(media_content, tuple):
         asset, stream = media_content
-        content_type = stream.content_type or asset.mime_type or "application/octet-stream"
+        content_type = (
+            stream.content_type or asset.mime_type or "application/octet-stream"
+        )
         file_name = asset.file_name or f"inbox-media-{asset.id}"
         content_length = stream.content_length
         chunks = stream.chunks

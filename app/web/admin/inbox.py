@@ -1228,7 +1228,7 @@ def team_inbox_reply(
         if outcome.kind == "queued"
         else f"Reply delivery is retrying from {outcome.sender}. Watch the thread delivery status."
         if outcome.kind == "retried"
-        else f"Reply could not be delivered from {outcome.sender}: {outcome.detail or 'provider rejected it'}."
+        else f"Reply could not be delivered from {outcome.sender}: provider rejected it."
         if outcome.kind == "failed"
         else f"Reply sent from {outcome.sender}."
     )
