@@ -335,6 +335,7 @@ def ticket_create(
     request: Request,
     title: str = Form(...),
     description: str = Form(""),
+    publish_description: bool = Form(False),
     subscriber_id: str | None = Form(default=None),
     customer_account_id: str | None = Form(default=None),
     customer_person_id: str | None = Form(default=None),
@@ -370,6 +371,7 @@ def ticket_create(
             duplicate_override=duplicate_confirmed,
             title=title,
             description=description,
+            publish_description=publish_description,
             subscriber_id=subscriber_id,
             customer_account_id=customer_account_id,
             customer_person_id=customer_person_id,
@@ -399,10 +401,14 @@ def ticket_create(
                 query_params={
                     "title": title,
                     "description": description,
+                    "publish_description": publish_description,
                     "subscriber_id": subscriber_id or "",
                     "customer_account_id": customer_account_id or "",
                     "customer_person_id": customer_person_id or "",
                     "region": region or "",
+                    "technician_person_id": technician_person_id or "",
+                    "ticket_manager_person_id": ticket_manager_person_id or "",
+                    "service_team_id": service_team_id or "",
                     "ticket_type": ticket_type or "",
                     "priority": priority,
                     "channel": channel,
@@ -434,7 +440,26 @@ def ticket_create(
         context = _ctx(request, db)
         context.update(
             support_web_service.build_ticket_form_context(
-                db, query_params=request.query_params
+                db,
+                query_params={
+                    "title": title,
+                    "description": description,
+                    "publish_description": publish_description,
+                    "subscriber_id": subscriber_id or "",
+                    "customer_account_id": customer_account_id or "",
+                    "customer_person_id": customer_person_id or "",
+                    "region": region or "",
+                    "technician_person_id": technician_person_id or "",
+                    "ticket_manager_person_id": ticket_manager_person_id or "",
+                    "service_team_id": service_team_id or "",
+                    "ticket_type": ticket_type or "",
+                    "priority": priority,
+                    "channel": channel,
+                    "status": status,
+                    "due_at": due_at or "",
+                    "tags": tags or "",
+                    "related_outage_ticket_id": related_outage_ticket_id or "",
+                },
             )
         )
         context.update(
@@ -447,6 +472,7 @@ def ticket_create(
                     **(context.get("prefill") or {}),
                     "title": title,
                     "description": description,
+                    "description_is_internal": not publish_description,
                 },
             }
         )
@@ -607,6 +633,7 @@ def ticket_edit(
     ticket_id: UUID,
     title: str = Form(...),
     description: str = Form(""),
+    publish_description: bool = Form(False),
     subscriber_id: str | None = Form(default=None),
     customer_account_id: str | None = Form(default=None),
     customer_person_id: str | None = Form(default=None),
@@ -631,6 +658,7 @@ def ticket_edit(
         actor_id=_actor_id(request),
         title=title,
         description=description,
+        publish_description=publish_description,
         subscriber_id=subscriber_id,
         customer_account_id=customer_account_id,
         customer_person_id=customer_person_id,

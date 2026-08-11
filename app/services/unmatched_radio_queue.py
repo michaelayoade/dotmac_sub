@@ -35,10 +35,13 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice, DeviceStatus, DeviceType
+from app.models.service_team import ServiceTeam
 from app.models.support import Ticket, TicketChannel, TicketStatus
 from app.schemas.support import TicketCreate
 from app.services import support as support_service
@@ -47,6 +50,11 @@ logger = logging.getLogger(__name__)
 
 TICKET_TYPE = "unmatched_radio"
 TAG = "unmatched-radio"
+NETWORK_SUPPORT_TEAM_NAME = "Network Support"
+NETWORK_SUPPORT_TEAM_NAME_ALIASES = (
+    NETWORK_SUPPORT_TEAM_NAME,
+    "Network Support Ticket",
+)
 
 REASON_CONFLICT = "mac_conflict"
 REASON_NOT_ADOPTED = "not_adopted_by_uisp"
@@ -59,7 +67,6 @@ REASON_AP_UNRESOLVED = "ap_unresolved"
 DEFAULT_GRACE_HOURS = 6
 
 _CLOSED_STATUSES = {
-    TicketStatus.resolved.value,
     TicketStatus.closed.value,
     TicketStatus.canceled.value,
     TicketStatus.merged.value,
@@ -99,6 +106,21 @@ def find_open_item(db: Session, mac_compact: str) -> Ticket | None:
         meta = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
         if meta.get("radio_mac") == mac_compact:
             return ticket
+    return None
+
+
+def _network_support_team_id(db: Session) -> UUID | None:
+    for team_name in NETWORK_SUPPORT_TEAM_NAME_ALIASES:
+        team = (
+            db.query(ServiceTeam.id)
+            .filter(
+                ServiceTeam.is_active.is_(True),
+                func.lower(ServiceTeam.name) == team_name.lower(),
+            )
+            .one_or_none()
+        )
+        if team is not None:
+            return team[0]
     return None
 
 
@@ -149,6 +171,7 @@ def open_item(
             "ticket_type": TICKET_TYPE,
             "tags": [TAG],
             "subscriber_id": subscriber_id,
+            "service_team_id": _network_support_team_id(db),
             "metadata": metadata,
         }
     )
@@ -168,8 +191,13 @@ def open_item(
 
 def close_item(db: Session, ticket: Ticket, resolution: str) -> None:
     now = _now()
-    ticket.status = TicketStatus.resolved.value
+    support_service.transition_ticket_status(
+        ticket,
+        TicketStatus.closed,
+        source="unmatched_radio_queue",
+    )
     ticket.resolved_at = now
+    ticket.closed_at = now
     meta = dict(ticket.metadata_ or {})
     meta["resolution"] = resolution
     meta["resolved_by"] = "unmatched_radio_queue"

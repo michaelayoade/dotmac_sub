@@ -14,6 +14,8 @@ The lifecycle owner controls, in one root owner command:
 - guarded status transitions and their resolved/closed timestamps;
 - team, technician, manager, coordinator, and additional-assignee state;
 - comments, explicit mentions, attachment metadata, and the official timeline;
+- explicit customer-publication decisions for descriptions, comments, and their
+  attachments;
 - links, duplicate evidence, merges, and merged-source immutability;
 - resolution requests, active confirmation capabilities, confirmation, disputes,
   and automatic confirmation after the configured grace period;
@@ -32,6 +34,13 @@ commit lifecycle changes. Every public mutation enters
 terminal-state semantics consumed by both lifecycle and configuration. It is a
 pure value boundary and owns no Ticket or configuration rows.
 
+`closed` is the only Ticket status meaning that the reported issue has been
+resolved. The retired stored value `resolved` is accepted only as a legacy
+admission alias and is canonicalized to `closed` before any write or response.
+Migration 515 repairs matching Ticket rows plus exact status fields in operator
+configuration and automation JSON; it does not rewrite Ticket timestamps,
+timeline records, tags, comments, attachments, metadata, or audit history.
+
 `support.ticket_configuration` owns operator-managed status choices,
 priorities, types, routing inputs, service-team membership configuration, and
 priority/type SLA targets. It may only expose statuses from the ticket
@@ -39,6 +48,16 @@ vocabulary owner. `support.ticket_region_projection` separately resolves the
 current region choices from configured values and canonical Ticket observations.
 This separation prevents lifecycle and configuration from depending on each
 other while preserving the provenance of both inputs.
+
+Regional routing configuration is replaced through the typed
+`TicketConfigurationUpdate` command. Region keys are normalized to lowercase.
+A completely blank routing row is ignored, but assignment data without a Region
+is rejected. The settings page keeps stale saved staff or team selections
+visible and labels them inactive or unavailable so an administrator can repair
+the rule. The new-ticket page receives only the current typed regional Manager
+projection and previews it when the Manager field is empty. That preview never
+overwrites a manual selection and is disabled in edit mode. The lifecycle owner
+re-resolves the rule and remains the only writer of final Ticket assignments.
 
 Assignment is split deliberately:
 
@@ -148,6 +167,27 @@ External CRM and communications products are observations, transports, or
 provenance. Imported identifiers do not own Ticket status, assignment,
 comments, resolution, or native Work-Order issuance.
 
+## Customer portal publication boundary
+
+Selfcare is the authoritative origin for new customer tickets and replies. A
+customer-authored Selfcare description or reply is customer-visible. Staff and
+system descriptions, comments, and their attachments are internal unless a
+staff command explicitly publishes them. Portal adapters consume these stored
+decisions; they never infer publication from subscriber linkage, CRM metadata,
+or the absence of an internal-note checkbox.
+
+CRM ticket import is retired as an authority. Any residual retry or historical
+observation is provenance-only and is forced internal; it cannot publish
+narrative into the customer portal.
+
+Legacy CRM-era narrative has no evidence of customer publication because the
+old system exposed no customer ticket timeline. Migration 503 therefore marks
+every description and comment already stored at cutover as internal. Ticket
+identity, number, status, priority, and dates remain available for customer
+reference. Operators may deliberately publish a reviewed description or post a
+new reviewed customer reply after the cutover through the normal Selfcare
+controls.
+
 ## List and bulk UI contracts
 
 `ui.support_ticket_list_projection` declares searchable fields, filters,
@@ -186,6 +226,10 @@ Repair reruns deterministic list/preview queries, SLA reconciliation, or the
 provenance verifier from canonical records. It never re-enables a legacy writer
 or infers lifecycle authority from CRM, tags, templates, cached UI state, or
 communication delivery.
+
+Migration 515 is also the idempotent drift repair for the retired `resolved`
+status: rerunning it updates only exact legacy status values that reappeared and
+leaves canonical `closed` rows untouched.
 
 ## Staff Talk consequences
 

@@ -21,6 +21,7 @@ from app.models.support import (
     TicketChannel,
     TicketCommentAuthorType,
     TicketStatus,
+    canonical_ticket_status_value,
 )
 from app.schemas.support import (
     AttachmentMeta,
@@ -96,7 +97,9 @@ def get_customer_visible_ticket_attachment_file(
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         return None
-    visible_attachment_lists = [ticket.attachments or []]
+    visible_attachment_lists = (
+        [] if ticket.description_is_internal else [ticket.attachments or []]
+    )
     visible_attachment_lists.extend(
         comment.attachments or []
         for comment in ticket.comments
@@ -214,7 +217,7 @@ _TICKET_STATUS_FILTERS = frozenset(
 
 
 def _ticket_status_scope(value: str | None) -> support_service.TicketStatusScope:
-    normalized = str(value or "").strip().lower()
+    normalized = canonical_ticket_status_value(str(value or "").strip().lower())
     if not normalized:
         return support_service.TicketStatusScope.all()
     if normalized == NOT_CLOSED_TICKET_STATUS_FILTER:
@@ -273,7 +276,9 @@ def build_ticket_list_query(
 ) -> ListQuery:
     """Normalize the admin support queue through its declared capabilities."""
 
-    normalized_status = str(status or "").strip().lower() or None
+    normalized_status = (
+        canonical_ticket_status_value(str(status or "").strip().lower()) or None
+    )
     if normalized_status and normalized_status not in _TICKET_STATUS_FILTERS:
         raise ValueError(f"Unsupported ticket status: {normalized_status}")
     return SUPPORT_TICKET_LIST_DEFINITION.build_query(
@@ -509,9 +514,15 @@ def build_ticket_form_context(
     ]
     assignment_ids = current_assignees + _non_empty_ids(
         [
-            ticket.technician_person_id if ticket else None,
-            ticket.ticket_manager_person_id if ticket else None,
-            ticket.site_coordinator_person_id if ticket else None,
+            ticket.technician_person_id
+            if ticket
+            else params.get("technician_person_id"),
+            ticket.ticket_manager_person_id
+            if ticket
+            else params.get("ticket_manager_person_id"),
+            ticket.site_coordinator_person_id
+            if ticket
+            else params.get("site_coordinator_person_id"),
         ]
     )
     staff = support_service.list_assignment_people(db, include_ids=assignment_ids)
@@ -520,6 +531,11 @@ def build_ticket_form_context(
         "description": ticket.description
         if ticket
         else str(params.get("description", "") or ""),
+        "description_is_internal": (
+            ticket.description_is_internal
+            if ticket
+            else not bool(params.get("publish_description", False))
+        ),
         "subscriber_id": str(ticket.subscriber_id)
         if ticket and ticket.subscriber_id
         else str(params.get("subscriber_id", "") or ""),
@@ -542,7 +558,7 @@ def build_ticket_form_context(
         "channel": ticket.channel.value
         if ticket
         else str(params.get("channel", TicketChannel.web.value) or ""),
-        "status": ticket.status
+        "status": canonical_ticket_status_value(ticket.status)
         if ticket
         else str(
             params.get("status", support_ticket_settings_service.default_status(db))
@@ -559,16 +575,16 @@ def build_ticket_form_context(
         ),
         "technician_person_id": str(ticket.technician_person_id)
         if ticket and ticket.technician_person_id
-        else "",
+        else str(params.get("technician_person_id", "") or ""),
         "ticket_manager_person_id": str(ticket.ticket_manager_person_id)
         if ticket and ticket.ticket_manager_person_id
-        else "",
+        else str(params.get("ticket_manager_person_id", "") or ""),
         "site_coordinator_person_id": str(ticket.site_coordinator_person_id)
         if ticket and ticket.site_coordinator_person_id
-        else "",
+        else str(params.get("site_coordinator_person_id", "") or ""),
         "service_team_id": str(ticket.service_team_id)
         if ticket and ticket.service_team_id
-        else "",
+        else str(params.get("service_team_id", "") or ""),
         "assignee_person_ids": current_assignees,
     }
     customer_person_id = str(prefill["customer_person_id"] or "")
@@ -591,6 +607,11 @@ def build_ticket_form_context(
     ticket_type_options = _append_missing_option(
         ticket_type_options, str(prefill["ticket_type"] or "")
     )
+    manager_routing_preview = {
+        rule.region: str(rule.ticket_manager_person_id)
+        for rule in support_ticket_settings_service.region_manager_routing_preview(db)
+        if rule.ticket_manager_person_id is not None
+    }
     return {
         "all_statuses": status_options,
         "all_priorities": priority_options,
@@ -598,6 +619,7 @@ def build_ticket_form_context(
         "region_options": support_service.regions(db),
         "ticket_type_options": ticket_type_options,
         "service_team_options": service_team_options(db),
+        "region_manager_routing": manager_routing_preview,
         "staff_options": staff,
         "subscriber_options": support_service.list_people(
             db,
@@ -634,6 +656,7 @@ def build_ticket_create_payload(**kwargs) -> TicketCreate:
     return TicketCreate(
         title=kwargs["title"],
         description=kwargs["description"] or None,
+        description_is_internal=not bool(kwargs.get("publish_description")),
         subscriber_id=parse_uuid_or_none(kwargs.get("subscriber_id")),
         customer_account_id=parse_uuid_or_none(kwargs.get("customer_account_id")),
         customer_person_id=parse_uuid_or_none(kwargs.get("customer_person_id")),
@@ -668,6 +691,7 @@ def build_ticket_update_payload(**kwargs) -> TicketUpdate:
     return TicketUpdate(
         title=kwargs["title"],
         description=kwargs["description"] or None,
+        description_is_internal=not bool(kwargs.get("publish_description")),
         subscriber_id=parse_uuid_or_none(kwargs.get("subscriber_id")),
         customer_account_id=parse_uuid_or_none(kwargs.get("customer_account_id")),
         customer_person_id=parse_uuid_or_none(kwargs.get("customer_person_id")),

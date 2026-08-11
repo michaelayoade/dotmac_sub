@@ -370,7 +370,8 @@ DOMAIN = DomainSOT(
                         owner="support.ticket_vocabulary",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "closed TicketStatus enum values and terminal-state semantics"
+                            "closed TicketStatus enum values, canonical closed completion "
+                            "status, and terminal-state semantics"
                         ),
                     ),
                 ),
@@ -428,6 +429,7 @@ DOMAIN = DomainSOT(
                 "ticket team and person assignment",
                 "ticket assignment and mention staff notification consequence",
                 "ticket comments mentions and attachments",
+                "ticket customer publication visibility",
                 "ticket links duplicates and merges",
                 "signed-link and authenticated resolution confirmation/dispute",
                 "ticket CSAT and satisfaction",
@@ -488,6 +490,7 @@ DOMAIN = DomainSOT(
                             "ticket lifecycle timestamps and consequences",
                             "ticket team and person assignment",
                             "ticket comments mentions and attachments",
+                            "ticket customer publication visibility",
                             "ticket links duplicates and merges",
                             "signed-link and authenticated resolution confirmation/dispute",
                             "ticket CSAT and satisfaction",
@@ -824,7 +827,8 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
-                        "update_options enters execute_owner_command once; all settings, "
+                        "update_ticket_configuration enters execute_owner_command once; "
+                        "all settings, "
                         "team, routing, and SLA writes flush in the same root transaction"
                     ),
                     locking=(

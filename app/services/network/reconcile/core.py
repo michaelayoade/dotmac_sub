@@ -44,7 +44,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntSyncStatus, OntUnit
@@ -80,6 +79,7 @@ from .state import (
     OltObservedFields,
     OntDesiredState,
     OntObservedState,
+    OntWanProposedChange,
     ReconcileFailure,
     ReconcileFailureReason,
     ReconcileMode,
@@ -108,30 +108,31 @@ def _widen_idle_in_transaction_timeout(db: Session, timeout_sec: int) -> None:
     and surfacing it as an opaque ``OperationalError``. The transaction must be
     allowed to live at least as long as the reconciler's own deadline.
 
-    ``SET LOCAL`` scopes this to the current transaction, so it reverts on
-    commit or rollback and never leaks to the next user of a pooled connection.
-    Postgres-only; other dialects (SQLite in tests) have no such setting.
+    ``set_config(..., true)`` scopes this to the current transaction, so it
+    reverts on commit or rollback and never leaks to the next user of a pooled
+    connection. It is also parameterizable; PostgreSQL does not accept a bound
+    parameter in ``SET LOCAL ... = :value``. A setup error must propagate so the
+    outer transaction handler can roll back immediately instead of continuing
+    with an aborted transaction. Postgres-only; other dialects (SQLite in
+    tests) have no such setting.
     """
     if db.bind is None or db.bind.dialect.name != "postgresql":
         return
     budget_ms = (timeout_sec + _IDLE_TIMEOUT_MARGIN_SEC) * 1000
-    try:
-        db.execute(
-            text("SET LOCAL idle_in_transaction_session_timeout = :ms"),
-            {"ms": budget_ms},
-        )
-    except SQLAlchemyError:  # pragma: no cover - defensive, never fail the pass
-        logger.warning(
-            "Could not widen idle_in_transaction_session_timeout for reconcile",
-            exc_info=True,
-        )
+    db.execute(
+        text(
+            "SELECT set_config("
+            "'idle_in_transaction_session_timeout', :timeout_value, true)"
+        ),
+        {"timeout_value": f"{budget_ms}ms"},
+    )
 
 
 def reconcile_ont(
     db: Session,
     ont_unit_id: str | uuid.UUID,
     *,
-    proposed_change: dict[str, Any] | None = None,
+    proposed_change: OntWanProposedChange | dict[str, Any] | None = None,
     timeout_sec: int = 60,
     mode: ReconcileMode = "sync",
     olt_adapter: Any = None,
@@ -147,10 +148,13 @@ def reconcile_ont(
             partial DB writes (status/last_error) persist — the reconciler
             does its writes inside the lock-held transaction.
         ont_unit_id: UUID or string id of the target ONT.
-        proposed_change: Optional dict of ``OntDesiredState`` field updates to
-            apply if the reconcile succeeds end-to-end. Validated before any
-            network call; rejected proposed_changes return ``INVALID_CHANGE``
-            with no side effects.
+        proposed_change: Optional ``OntDesiredState`` field updates. Legacy
+            mappings are persisted after successful reconciliation. A typed
+            ``OntWanProposedChange`` represents intent already persisted by
+            the admin action and scopes network delivery without writing the
+            effective values back as per-ONT overrides. Both forms are
+            validated before any network call; rejected changes return
+            ``INVALID_CHANGE`` with no network side effects.
         timeout_sec: Outer deadline for the whole reconcile (read + plan +
             apply + persist). Default 60s.
         mode: ``sync`` (operator-initiated; refuses ``out_of_sync``),
@@ -176,6 +180,12 @@ def reconcile_ont(
     deadline = started_at + timedelta(seconds=timeout_sec)
     if secret_resolver is None:
         secret_resolver = default_secret_resolver_from_env()
+    proposed_values = (
+        proposed_change.as_mapping()
+        if isinstance(proposed_change, OntWanProposedChange)
+        else proposed_change
+    )
+    persist_proposed_values = not isinstance(proposed_change, OntWanProposedChange)
 
     try:
         with acquire_reconcile_lock(db, ont_unit_id) as ont:
@@ -219,11 +229,11 @@ def reconcile_ont(
             # ── Resolve desired ─────────────────────────────────────────────
             desired_current = desired_from_ont_unit(db, ont)
             proposed_fields: frozenset[str] = frozenset()
-            if proposed_change:
+            if proposed_values:
                 # Filter the proposed_change to OntDesiredState fields only —
                 # callers may have copy-pasted extras.
                 allowed = {f for f in vars(desired_current)}
-                filtered = {k: v for k, v in proposed_change.items() if k in allowed}
+                filtered = {k: v for k, v in proposed_values.items() if k in allowed}
                 proposed_fields = frozenset(filtered)
                 target = replace(desired_current, **filtered)
                 # Validation runs only on actual mutations — the principle is
@@ -434,7 +444,7 @@ def reconcile_ont(
                         drift_before=plan.drifts,
                         drift_after=plan.drifts,
                     )
-                if proposed_change:
+                if proposed_values and persist_proposed_values:
                     apply_proposed_change(
                         ont,
                         target,
@@ -608,7 +618,7 @@ def reconcile_ont(
                     drift_after=plan.drifts,
                 )
 
-            if proposed_change:
+            if proposed_values and persist_proposed_values:
                 apply_proposed_change(
                     ont,
                     target,

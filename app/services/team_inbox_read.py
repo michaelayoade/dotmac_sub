@@ -807,13 +807,10 @@ def _message_attachments(message: InboxMessage) -> list[dict[str, object]]:
 
 
 def _asset_attachment(asset: InboxMediaAsset) -> dict[str, object]:
-    can_stream = asset.download_status == "stored" or (
-        asset.channel_type == "whatsapp"
-        and asset.direction == "inbound"
-        and bool(asset.provider_media_id)
-    )
-    url = team_inbox_media.media_content_url(asset.id) if can_stream else (
-        asset.storage_url or asset.source_url
+    url = (
+        team_inbox_media.media_content_url(asset.id)
+        if asset.download_status in {"stored", "remote_available", "metadata_only"}
+        else asset.storage_url or asset.source_url
     )
     return {
         "id": str(asset.id),
@@ -841,6 +838,7 @@ def list_conversations(
     search: str | None = None,
     status: str | None = None,
     channel_type: str | None = None,
+    channel_types: Sequence[str] | None = None,
     subscriber_id: str | UUID | None = None,
     service_team_id: str | UUID | None = None,
     service_team_ids: Sequence[str | UUID] | None = None,
@@ -926,8 +924,13 @@ def list_conversations(
         query = query.filter(InboxConversation.status == status)
     if open_only:
         query = query.filter(InboxConversation.status != "resolved")
+    clean_channel_types = tuple(
+        str(item).strip() for item in (channel_types or ()) if str(item).strip()
+    )
     if channel_type:
         query = query.filter(InboxConversation.channel_type == channel_type)
+    elif clean_channel_types:
+        query = query.filter(InboxConversation.channel_type.in_(clean_channel_types))
     if priority_at_most is not None:
         query = query.filter(InboxConversation.priority <= int(priority_at_most))
     if muted is not None:
@@ -1051,11 +1054,14 @@ def list_conversations(
             == contact_resolution_status
         )
     if unread_only:
-        # The unread rule stays with its owner; this only asks for it in SQL.
+        # The unread rule stays with its owner; this only asks for its grouped
+        # set selector. No correlated per-conversation probe is admitted here.
         # Without an operator nothing can be unread, and an empty page is the
         # honest answer rather than the whole queue.
         query = query.filter(
-            team_inbox_read_state.unread_conversation_clause(operator_person_id)
+            InboxConversation.id.in_(
+                team_inbox_read_state.unread_conversation_ids_select(operator_person_id)
+            )
             if operator_person_id is not None
             else false()
         )

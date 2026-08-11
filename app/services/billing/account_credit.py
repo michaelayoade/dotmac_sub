@@ -4,7 +4,14 @@ Account credit is not a wallet counter. It is the unconsumed portion of exact,
 succeeded payment settlements. This owner serializes one account, chooses
 eligible invoices and source payments deterministically, and composes the
 existing payment-allocation preview/confirmation owner for every transfer.
-It never creates payments or ledger entries directly and never commits.
+It never creates payments and never commits.
+
+It does create one thing: the unallocated credit ledger row itself, through
+``financial.ledger``, in ``record_credit``. That is deliberate. Before it, every
+caller that needed to mint credit went straight to the ledger writer and this
+owner never learned the credit existed, so "offer new credit to the account's
+open receivables" had nowhere to live except replicated at each call site — and
+was missed at all but one of them.
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -40,6 +48,7 @@ from app.models.integration_platform import (
 )
 from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
 from app.schemas.billing import (
+    LedgerEntryCreate,
     PaymentAllocationConfirm,
     PaymentAllocationPreviewRequest,
 )
@@ -79,6 +88,27 @@ class AccountCreditApplicationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountCreditRecordResult:
+    """Account credit came into existence, and whether an offer is still owed.
+
+    ``offer_pending`` is the load-bearing field. Credit minted and never offered
+    to the account's open receivables is exactly the state
+    ``eligible_invoice_with_unused_credit`` reports as a violation, so the
+    creation path says outright that the debt is outstanding rather than leaving
+    it to be discovered by a later scan. Payment-backed credit sets it; a credit
+    note or adjustment does not, because this owner has no instrument to offer
+    those with.
+    """
+
+    account_id: str
+    amount: Decimal
+    currency: str
+    source: LedgerSource
+    ledger_entry: LedgerEntry | None
+    offer_pending: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AccountCreditInvoiceFundingPreview:
     """Exact payment-backed funding available to one invoice."""
 
@@ -113,31 +143,33 @@ class AccountCreditInvariantViolation:
     detail: str
 
 
-# The legacy book was loaded into Sub in a single bulk import: 106,690 of the
-# 106,692 pre-import invoices share the 2026-03-15 14:00 UTC hour, and the first
-# natively authored invoice is 2026-03-16 06:45 UTC. Those imported rows arrived
-# already marked paid without their payment or allocation records, so 12.4% of
-# them can never satisfy the funding invariant — against 2.5% of the invoices
-# Sub itself settled. Counting them forever pins the gauge above zero and buries
-# the live defect underneath a backlog no reconciler can drain, so the invariant
-# measures what Sub is responsible for and reports the legacy book separately.
-LEGACY_INVOICE_IMPORT_BOUNDARY_AT = datetime(2026, 3, 16, tzinfo=UTC)
-
-
-def _count_underfunded_paid_invoices(db: Session, *, imported: bool) -> int:
+def _count_underfunded_paid_invoices(db: Session, *, opening_balance: bool) -> int:
     """Count paid invoices whose funding evidence falls short of their total.
 
-    One definition, two populations. `imported=False` is the live invariant:
-    invoices Sub itself authored and settled. `imported=True` is the legacy book
-    loaded on 2026-03-15, which arrived already paid without its payment records
-    and can never satisfy the check. Splitting here rather than duplicating the
-    query keeps the partial-refund proration and rounding identical for both.
+    One definition, two populations, split on provenance. An invoice carrying a
+    prior-system identity is opening balance: it was carried in already settled,
+    without the allocations that tie a payment to an invoice, so it can never
+    satisfy this check. Its balance due is zero and no reconciler can produce
+    evidence that was never carried in, so counting it forever would pin the
+    gauge above zero and bury the live defect underneath it. An invoice with no
+    prior-system identity is Sub's own work, and underfunding there is a real
+    defect.
+
+    Provenance, not creation date. The carried-in book was loaded in one bulk
+    write, which makes a timestamp look like a clean boundary — but backfill
+    continued for months afterwards, so 111 carried-in invoices were created
+    after any such instant and a date test reports them as live defects. By
+    identity the split is exact: 12.1% of the carried-in book is underfunded,
+    against 0.29% of the book Sub authored.
+
+    Splitting here rather than duplicating the query keeps the partial-refund
+    proration and rounding identical for both populations.
     """
     zero = Decimal("0.00")
-    boundary = (
-        Invoice.created_at < LEGACY_INVOICE_IMPORT_BOUNDARY_AT
-        if imported
-        else Invoice.created_at >= LEGACY_INVOICE_IMPORT_BOUNDARY_AT
+    carried_in = (
+        Invoice.splynx_invoice_id.is_not(None)
+        if opening_balance
+        else Invoice.splynx_invoice_id.is_(None)
     )
     effective_payment_amount = case(
         (
@@ -224,7 +256,7 @@ def _count_underfunded_paid_invoices(db: Session, *, imported: bool) -> int:
             .where(
                 Invoice.is_active.is_(True),
                 Invoice.status == InvoiceStatus.paid,
-                boundary,
+                carried_in,
                 funded_total < func.round(Invoice.total, 2),
             )
         ).scalar()
@@ -375,7 +407,7 @@ def _source_payments(
         .filter(Payment.account_id == coerce_uuid(account_id))
         .filter(Payment.is_active.is_(True))
         .filter(Payment.status == PaymentStatus.succeeded)
-        # Historical Splynx rows are migration evidence, not reusable cash.
+        # Historical carried-in rows are migration evidence, not reusable cash.
         .filter(Payment.splynx_payment_id.is_(None))
         .order_by(
             Payment.paid_at.asc().nulls_last(),
@@ -923,6 +955,125 @@ class AccountCreditApplications:
         return result
 
     @staticmethod
+    def record_credit(
+        db: Session,
+        account_id: str,
+        *,
+        amount: Decimal,
+        currency: str,
+        source: LedgerSource,
+        memo: str | None = None,
+        payment_id: UUID | None = None,
+    ) -> AccountCreditRecordResult:
+        """Bring unallocated account credit into existence, and offer it.
+
+        The owner had a consume half (:meth:`apply` and the per-invoice
+        variants) and a read half (the previews and invariant summaries), but no
+        creation half — so every caller that needed to mint credit reached past
+        this owner to the generic ledger writer and handed it an
+        ``entry_type=credit, invoice_id=NULL`` row. The owner never learned the
+        credit existed, which left "newly created credit is offered to the
+        account's open receivables" with nowhere to live except replicated at
+        each call site. Replicating it is how the rule gets missed: the next
+        caller simply does not know about it.
+
+        Minting happens here so there is one door. The offer does NOT, and the
+        reason is a real domain rule rather than a layering preference: credit
+        is spendable only once its settlement evidence exists.
+        ``PaymentAllocations.available_amount`` returns zero while
+        ``payment.settlement`` is None, so a payment's surplus is not yet
+        allocatable at the moment its ledger row is written — the settlement is
+        recorded a few statements later. Offering here would find nothing
+        backed and quietly apply nothing, which looks exactly like success.
+
+        Worse, it would look at ``payment.settlement`` before the row exists and
+        leave SQLAlchemy caching that ``None`` on the instance, so a later,
+        correctly-timed offer in the same transaction reads the stale value and
+        also applies nothing. That is not hypothetical; it broke the deposit
+        settlement path.
+
+        The offer is therefore :meth:`offer_available_credit`, called by the
+        settlement path once the evidence is in place. Minting still cannot
+        happen anywhere else — see
+        ``tests/architecture/test_account_credit_single_writer.py`` — so the
+        pairing is enforced at the one door rather than remembered at each.
+
+        Accounting reads the same way. Unallocated credit sitting against an
+        account that carries a payable invoice overstates the receivable — the
+        obligation has already been reduced, and offsetting a debit and credit
+        on one counterparty account is the standard treatment. Leaving it
+        unoffered means ageing and dunning a balance that is not owed.
+
+        Staged, never committed: the caller owns the transaction boundary so the
+        money and its consequence land or roll back together.
+        """
+        account_id = str(account_id)
+        amount = round_money(to_decimal(amount))
+        currency = (currency or "NGN").upper()
+        if amount <= Decimal("0.00"):
+            return AccountCreditRecordResult(
+                account_id=account_id,
+                amount=Decimal("0.00"),
+                currency=currency,
+                source=source,
+                ledger_entry=None,
+                offer_pending=False,
+            )
+
+        entry = LedgerEntries.create(
+            db,
+            LedgerEntryCreate(
+                account_id=coerce_uuid(account_id),
+                invoice_id=None,
+                payment_id=payment_id,
+                entry_type=LedgerEntryType.credit,
+                source=source,
+                amount=amount,
+                currency=currency,
+                memo=memo,
+            ),
+            commit=False,
+        )
+
+        return AccountCreditRecordResult(
+            account_id=account_id,
+            amount=amount,
+            currency=currency,
+            source=source,
+            ledger_entry=entry,
+            # Only payment-backed credit is ever offerable. `apply` settles by
+            # composing PaymentAllocations against succeeded payments, so credit
+            # from a credit note or an adjustment has no payment to allocate
+            # from — it is a different funding instrument with its own
+            # application record (CreditNoteApplication), owned elsewhere.
+            offer_pending=source is LedgerSource.payment,
+        )
+
+    @staticmethod
+    def offer_available_credit(
+        db: Session,
+        account_id: str,
+        *,
+        payments: Sequence[Payment] = (),
+    ) -> AccountCreditApplicationResult:
+        """Offer an account's now-spendable credit to its open receivables.
+
+        The other half of :meth:`record_credit`, split from it because credit
+        becomes spendable when its settlement evidence is written, not when its
+        ledger row is. Call this once that evidence exists.
+
+        ``payments`` names the payments whose settlement was just created in
+        this transaction. Their ``settlement`` relationship is expired first: if
+        anything read it while the row was still absent, SQLAlchemy is holding a
+        cached ``None`` and ``available_amount`` will report the credit unbacked
+        and silently apply nothing.
+        """
+        for payment in payments:
+            if payment in db:
+                db.expire(payment, ["settlement"])
+        return AccountCreditApplications.apply(db, str(account_id))
+
+    @staticmethod
     def preview_invoice_void_release(
         db: Session, invoice_id: UUID
     ) -> AccountCreditReleasePreview:
@@ -1323,7 +1474,9 @@ class AccountCreditApplications:
             ) > round_money(row.source_capacity):
                 negative_payment_credit_source_availability += 1
 
-        paid_invoice_underfunded = _count_underfunded_paid_invoices(db, imported=False)
+        paid_invoice_underfunded = _count_underfunded_paid_invoices(
+            db, opening_balance=False
+        )
 
         settled_deposit_without_exact_payment = int(
             db.execute(
@@ -1420,17 +1573,18 @@ class AccountCreditApplications:
         )
 
     @staticmethod
-    def count_imported_underfunded_invoices(db: Session) -> int:
-        """Count legacy-book paid invoices lacking complete funding evidence.
+    def count_opening_balance_underfunded_invoices(db: Session) -> int:
+        """Count opening-balance paid invoices lacking complete funding evidence.
 
         Deliberately not a field on `AccountCreditInvariantSummary`: that type is
         pinned one-field-per-forensic-violation-code, and this is an observation
-        rather than a live breach. The imported rows arrived already marked paid
-        without their payment records, so no reconciler can ever settle them —
-        they need a one-time accounting disposition. Reporting the figure keeps
-        the re-scoping from quietly losing it.
+        rather than a live breach. These invoices were settled before the
+        handoff and carried in already paid, so no reconciler can produce
+        allocations that were never carried in. Reporting the figure keeps the
+        invariant's boundary honest instead of quietly losing what sits behind
+        it.
         """
-        return _count_underfunded_paid_invoices(db, imported=True)
+        return _count_underfunded_paid_invoices(db, opening_balance=True)
 
 
 __all__ = [

@@ -32,6 +32,8 @@ from app.models.support import (
     TicketMerge,
     TicketSlaEvent,
     TicketStatus,
+    canonical_ticket_status_value,
+    parse_ticket_status,
 )
 from app.schemas.notification import NotificationCreate
 from app.schemas.support import (
@@ -212,7 +214,7 @@ def ticket_owner_command(name: str):
 
 
 # Ticket.status is a free-form string column; these guard every write at the
-# boundary (no schema migration). closed/canceled/merged are terminal — they
+# boundary. closed/canceled/merged are terminal — they
 # cannot be reopened except by an explicit admin action (allow_reopen=True),
 # which keeps CRM pull and automation from silently resurrecting a closed
 # ticket. Garbage values are rejected outright.
@@ -259,7 +261,6 @@ def active_ticket_status_values() -> tuple[str, ...]:
         for status in TicketStatus
         if status
         not in {
-            TicketStatus.resolved,
             TicketStatus.closed,
             TicketStatus.canceled,
             TicketStatus.merged,
@@ -282,16 +283,17 @@ def transition_ticket_status(
       automation rule cannot reopen a locally-closed ticket.
     - Audits every change (and every blocked reopen) via the log.
     """
-    raw = (
-        new_status.value
-        if isinstance(new_status, TicketStatus)
-        else str(new_status).strip()
-    )
-    if raw not in _VALID_TICKET_STATUSES:
+    try:
+        raw = parse_ticket_status(new_status).value
+    except ValueError:
         raise ValueError(f"Invalid ticket status: {new_status!r}")
-    current = ticket.status
+    stored = ticket.status
+    current = canonical_ticket_status_value(stored) if stored else stored
+    repaired_legacy_value = stored != current
+    if repaired_legacy_value:
+        ticket.status = current
     if current == raw:
-        return False
+        return repaired_legacy_value
     if current in _TICKET_TERMINAL_STATUSES and not allow_reopen:
         logger.info(
             "ticket_status_transition_blocked",
@@ -1032,9 +1034,6 @@ class Tickets:
     def _apply_status_timestamp_rules(
         ticket: Ticket, explicit_data: dict[str, Any]
     ) -> None:
-        if ticket.status == "resolved":
-            if explicit_data.get("resolved_at") is None and ticket.resolved_at is None:
-                ticket.resolved_at = _now()
         if ticket.status == "closed":
             if explicit_data.get("closed_at") is None and ticket.closed_at is None:
                 ticket.closed_at = _now()
@@ -1084,38 +1083,26 @@ class Tickets:
 
     @staticmethod
     def _apply_region_auto_assignment(ticket: Ticket, db: Session) -> dict[str, Any]:
-        rules = support_ticket_settings_service.region_assignment_rules(db)
         if not ticket.region:
             return {"matched": False, "reason": "region_missing"}
-        region_key = support_ticket_settings_service.normalize_system_value(
-            ticket.region
+        region_rule = support_ticket_settings_service.resolve_region_assignment_rule(
+            db, ticket.region
         )
-        region_rule = rules.get(region_key) if isinstance(rules, dict) else None
-        if not isinstance(region_rule, dict):
+        if region_rule is None:
             return {"matched": False, "reason": "no_rule"}
 
         changed: dict[str, Any] = {}
-        if not ticket.ticket_manager_person_id and region_rule.get(
-            "ticket_manager_person_id"
-        ):
-            ticket.ticket_manager_person_id = _coerce_uuid(
-                region_rule.get("ticket_manager_person_id")
-            )
+        if not ticket.ticket_manager_person_id and region_rule.ticket_manager_person_id:
+            ticket.ticket_manager_person_id = region_rule.ticket_manager_person_id
             changed["ticket_manager_person_id"] = str(ticket.ticket_manager_person_id)
-        if not ticket.technician_person_id and region_rule.get("technician_person_id"):
-            ticket.technician_person_id = _coerce_uuid(
-                region_rule.get("technician_person_id")
-            )
+        if not ticket.technician_person_id and region_rule.technician_person_id:
+            ticket.technician_person_id = region_rule.technician_person_id
             changed["technician_person_id"] = str(ticket.technician_person_id)
-        if not ticket.service_team_id and region_rule.get("service_team_id"):
-            ticket.service_team_id = _coerce_uuid(region_rule.get("service_team_id"))
+        if not ticket.service_team_id and region_rule.service_team_id:
+            ticket.service_team_id = region_rule.service_team_id
             changed["service_team_id"] = str(ticket.service_team_id)
 
-        assignee_ids = (
-            region_rule.get("assignee_person_ids")
-            if isinstance(region_rule.get("assignee_person_ids"), list)
-            else []
-        )
+        assignee_ids = [str(value) for value in region_rule.assignee_person_ids]
         if ticket.service_team_id:
             from app.services.ticket_assignment.selectors import (
                 list_team_candidate_person_ids,
@@ -1868,9 +1855,9 @@ class Tickets:
             )
         ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
-        data["status"] = data.get(
-            "status"
-        ) or support_ticket_settings_service.default_status(db)
+        data["status"] = parse_ticket_status(
+            data.get("status") or support_ticket_settings_service.default_status(db)
+        ).value
         data["priority"] = data.get(
             "priority"
         ) or support_ticket_settings_service.default_priority(db)
@@ -1945,6 +1932,7 @@ class Tickets:
 
         audit_metadata = {
             "number": ticket.number,
+            "description_is_internal": ticket.description_is_internal,
             "region": ticket.region,
             "service_team_id": (
                 str(ticket.service_team_id)
@@ -2138,17 +2126,11 @@ class Tickets:
     def set_satisfaction(
         db: Session, ticket: Ticket, *, rating: int, comment: str | None = None
     ) -> Ticket:
-        """Record a customer CSAT rating (1-5 + optional comment) on a resolved
-        or closed ticket, stored under ``metadata.csat``. Re-rating overwrites.
-        Rejects tickets that aren't resolved/closed so support is rated on the
-        outcome, not mid-flight."""
-        if ticket.status not in (
-            TicketStatus.resolved.value,
-            TicketStatus.closed.value,
-        ):
+        """Record customer CSAT on a closed ticket under ``metadata.csat``."""
+        if ticket.status != TicketStatus.closed.value:
             raise _ticket_error(
                 "satisfaction_not_eligible",
-                "You can rate support once the ticket is resolved.",
+                "You can rate support once the ticket is closed.",
             )
         meta = dict(ticket.metadata_ or {})
         meta["csat"] = {
@@ -2727,7 +2709,9 @@ class Tickets:
                     )
                 )
         elif status:
-            query = query.filter(Ticket.status == str(status).strip())
+            query = query.filter(
+                Ticket.status == canonical_ticket_status_value(str(status).strip())
+            )
         if ticket_type:
             query = query.filter(Ticket.ticket_type == ticket_type)
         if region:
@@ -2892,6 +2876,7 @@ class Tickets:
         before = {
             "status": ticket.status,
             "priority": ticket.priority,
+            "description_is_internal": ticket.description_is_internal,
             "assigned_to_person_id": str(ticket.assigned_to_person_id)
             if ticket.assigned_to_person_id
             else None,
@@ -2954,6 +2939,7 @@ class Tickets:
         after = {
             "status": ticket.status,
             "priority": ticket.priority,
+            "description_is_internal": ticket.description_is_internal,
             "assigned_to_person_id": str(ticket.assigned_to_person_id)
             if ticket.assigned_to_person_id
             else None,
@@ -3330,7 +3316,7 @@ class Tickets:
 
         db.query(TicketAssignee).filter(TicketAssignee.ticket_id == source.id).delete()
 
-        # Merge is an explicit admin action; a closed/resolved source can still
+        # Merge is an explicit admin action; a closed source can still
         # be merged (allow_reopen lets it leave a terminal state into merged).
         transition_ticket_status(
             source, TicketStatus.merged, source="merge", allow_reopen=True
@@ -3647,10 +3633,10 @@ def status_totals(db: Session) -> dict[str, int]:
         .all()
     )
     for status_value, count in rows:
-        key = str(status_value or "").strip()
+        key = canonical_ticket_status_value(str(status_value or "").strip())
         if not key:
             continue
-        counts[key] = int(count)
+        counts[key] = counts.get(key, 0) + int(count)
     return counts
 
 

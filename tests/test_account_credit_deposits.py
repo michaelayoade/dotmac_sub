@@ -54,10 +54,7 @@ from app.services.account_credit_deposits import (
     SettleAccountCreditDepositCommand,
 )
 from app.services.billing._common import get_account_credit_balance
-from app.services.billing.account_credit import (
-    LEGACY_INVOICE_IMPORT_BOUNDARY_AT,
-    AccountCreditApplications,
-)
+from app.services.billing.account_credit import AccountCreditApplications
 from app.services.billing.invoices import Invoices
 from app.services.billing_health import (
     billing_health_observations,
@@ -1342,13 +1339,11 @@ def test_invariant_summary_query_count_is_bounded(db_session, subscriber):
     assert len(statements) <= 8
 
 
-def test_imported_underfunded_invoice_is_reported_but_not_a_live_violation(
-    db_session, subscriber
-):
-    """The legacy book arrived already paid, without its payment records.
+def test_carried_in_underfunded_invoice_is_not_a_live_violation(db_session, subscriber):
+    """The opening balance was carried in already settled, without allocations.
 
-    Counting it as a live invariant breach pins the gauge above zero forever and
-    buries the defects Sub can actually act on, so it is observed separately.
+    Counting it as a live breach pins the gauge above zero forever and buries
+    the defects Sub can actually act on.
     """
     db_session.add(
         Invoice(
@@ -1357,7 +1352,7 @@ def test_imported_underfunded_invoice_is_reported_but_not_a_live_violation(
             currency="NGN",
             total=Decimal("5000.00"),
             balance_due=Decimal("0.00"),
-            created_at=LEGACY_INVOICE_IMPORT_BOUNDARY_AT - timedelta(seconds=1),
+            splynx_invoice_id=4242,
         )
     )
     db_session.commit()
@@ -1365,7 +1360,8 @@ def test_imported_underfunded_invoice_is_reported_but_not_a_live_violation(
     summary = AccountCreditApplications.summarize_invariants(db_session)
 
     assert (
-        AccountCreditApplications.count_imported_underfunded_invoices(db_session) == 1
+        AccountCreditApplications.count_opening_balance_underfunded_invoices(db_session)
+        == 1
     )
     assert summary.paid_invoice_underfunded == 0
     assert summary.total == 0
@@ -1381,7 +1377,7 @@ def test_natively_authored_underfunded_invoice_is_a_live_violation(
             currency="NGN",
             total=Decimal("5000.00"),
             balance_due=Decimal("0.00"),
-            created_at=LEGACY_INVOICE_IMPORT_BOUNDARY_AT,
+            splynx_invoice_id=None,
         )
     )
     db_session.commit()
@@ -1390,18 +1386,43 @@ def test_natively_authored_underfunded_invoice_is_a_live_violation(
 
     assert summary.paid_invoice_underfunded == 1
     assert (
-        AccountCreditApplications.count_imported_underfunded_invoices(db_session) == 0
+        AccountCreditApplications.count_opening_balance_underfunded_invoices(db_session)
+        == 0
     )
     assert summary.total == 1
 
 
-def test_underfunded_invoices_split_on_the_import_boundary(db_session, subscriber):
-    for created_at in (
-        LEGACY_INVOICE_IMPORT_BOUNDARY_AT - timedelta(days=400),
-        LEGACY_INVOICE_IMPORT_BOUNDARY_AT - timedelta(days=1),
-        LEGACY_INVOICE_IMPORT_BOUNDARY_AT,
-        LEGACY_INVOICE_IMPORT_BOUNDARY_AT + timedelta(days=90),
-    ):
+def test_a_late_created_carried_in_invoice_is_still_opening_balance(
+    db_session, subscriber
+):
+    """Backfill kept creating carried-in invoices long after the bulk write.
+
+    A creation-date boundary calls these live defects; provenance does not.
+    """
+    db_session.add(
+        Invoice(
+            account_id=subscriber.id,
+            status=InvoiceStatus.paid,
+            currency="NGN",
+            total=Decimal("5000.00"),
+            balance_due=Decimal("0.00"),
+            splynx_invoice_id=9931,
+            created_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    summary = AccountCreditApplications.summarize_invariants(db_session)
+
+    assert summary.paid_invoice_underfunded == 0
+    assert (
+        AccountCreditApplications.count_opening_balance_underfunded_invoices(db_session)
+        == 1
+    )
+
+
+def test_underfunded_invoices_split_on_provenance(db_session, subscriber):
+    for legacy_id in (7001, 7002, None, None):
         db_session.add(
             Invoice(
                 account_id=subscriber.id,
@@ -1409,7 +1430,7 @@ def test_underfunded_invoices_split_on_the_import_boundary(db_session, subscribe
                 currency="NGN",
                 total=Decimal("1000.00"),
                 balance_due=Decimal("0.00"),
-                created_at=created_at,
+                splynx_invoice_id=legacy_id,
             )
         )
     db_session.commit()
@@ -1418,15 +1439,16 @@ def test_underfunded_invoices_split_on_the_import_boundary(db_session, subscribe
 
     assert summary.paid_invoice_underfunded == 2
     assert (
-        AccountCreditApplications.count_imported_underfunded_invoices(db_session) == 2
+        AccountCreditApplications.count_opening_balance_underfunded_invoices(db_session)
+        == 2
     )
     assert summary.total == 2
 
 
-def test_billing_health_reports_the_legacy_book_without_raising_an_anomaly(
+def test_billing_health_reports_the_opening_balance_without_an_anomaly(
     db_session, subscriber
 ):
-    """The legacy figure stays visible for the accounting disposition."""
+    """The opening-balance figure stays visible without flagging a defect."""
     db_session.add(
         Invoice(
             account_id=subscriber.id,
@@ -1434,14 +1456,14 @@ def test_billing_health_reports_the_legacy_book_without_raising_an_anomaly(
             currency="NGN",
             total=Decimal("5000.00"),
             balance_due=Decimal("0.00"),
-            created_at=LEGACY_INVOICE_IMPORT_BOUNDARY_AT - timedelta(days=30),
+            splynx_invoice_id=5150,
         )
     )
     db_session.commit()
 
     snapshot = billing_health_snapshot(db_session)
 
-    assert snapshot.account_credit_invariant_imported_count == 1
+    assert snapshot.account_credit_invariant_opening_balance_count == 1
     assert snapshot.account_credit_invariant_count == 0
     assert "account_credit_invariant_violations" not in snapshot.anomalies
 
@@ -1449,5 +1471,5 @@ def test_billing_health_reports_the_legacy_book_without_raising_an_anomaly(
         (item.signal, item.scope): item.value
         for item in billing_health_observations(snapshot)
     }
-    assert observed[("account_credit_invariant_violations", "legacy_import")] == 1
+    assert observed[("account_credit_invariant_violations", "opening_balance")] == 1
     assert observed[("account_credit_invariant_violations", "all")] == 0
