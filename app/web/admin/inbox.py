@@ -444,7 +444,7 @@ def team_inbox_social_comments(
 @router.get(
     "/manager-dashboard",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[Depends(require_permission("support:ticket:read"))],
 )
 def team_inbox_manager_dashboard(
     request: Request,
@@ -464,15 +464,6 @@ def team_inbox_manager_dashboard(
         }
     )
     return templates.TemplateResponse("admin/inbox/_manager_dashboard.html", context)
-
-
-@router.get(
-    "/counts/needs-attention",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("support:ticket:read"))],
-)
-def team_inbox_needs_attention_count(db: Session = Depends(get_db)):
-    return HTMLResponse(str(team_inbox_read.needs_attention_conversation_count(db)))
 
 
 @router.get(
@@ -526,15 +517,7 @@ def _detail_redirect(
     status: str,
     message: str,
     next_url: str | None = None,
-    request: Request | None = None,
-    db: Session | None = None,
-) -> RedirectResponse | HTMLResponse:
-    if request is not None and db is not None and request.headers.get("hx-request"):
-        detail_response = team_inbox_detail(UUID(str(conversation_id)), request, db)
-        detail_response.headers["HX-Trigger"] = json.dumps(
-            {"dotmac:toast": {"message": message, "status": status}}
-        )
-        return detail_response
+) -> RedirectResponse:
     target = str(next_url or "").strip()
     parsed = urlsplit(target)
     if (
@@ -1217,8 +1200,6 @@ def team_inbox_reply(
             status="error",
             message=str(exc),
             next_url=next_url,
-            request=request,
-            db=db,
         )
     message = (
         "Reply already submitted."
@@ -1244,8 +1225,6 @@ def team_inbox_reply(
         status="success",
         message=message,
         next_url=next_url,
-        request=request,
-        db=db,
     )
 
 

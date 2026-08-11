@@ -759,7 +759,7 @@ def _assignment_counts(
         my_team_ids=my_team_ids,
         unassigned=queue_metrics.unassigned_open,
         unreplied=queue_metrics.needs_response,
-        needs_attention=0,
+        needs_attention=team_inbox_read.needs_attention_conversation_count(db),
     )
 
 

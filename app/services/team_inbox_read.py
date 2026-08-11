@@ -866,14 +866,9 @@ def _message_attachments(message: InboxMessage) -> list[dict[str, object]]:
 
 
 def _asset_attachment(asset: InboxMediaAsset) -> dict[str, object]:
-    can_stream = asset.download_status == "stored" or (
-        asset.channel_type == "whatsapp"
-        and asset.direction == "inbound"
-        and bool(asset.provider_media_id)
-    )
     url = (
         team_inbox_media.media_content_url(asset.id)
-        if can_stream
+        if asset.download_status in {"stored", "remote_available", "metadata_only"}
         else (asset.storage_url or asset.source_url)
     )
     return {

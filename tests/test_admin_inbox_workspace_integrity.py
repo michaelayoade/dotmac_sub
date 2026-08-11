@@ -151,7 +151,7 @@ def test_reply_submission_refreshes_inbox_fragments_without_page_navigation():
     assert 'workspace?.refreshConversationList?.("reply")' in JAVASCRIPT
     assert 'this.draft = ""' in JAVASCRIPT
     assert "window.location.reload" not in JAVASCRIPT
-    assert "admin-inbox.js?v=20260809a" in INDEX
+    assert "admin-inbox.js?v=20260811a" in INDEX
 
 
 def test_macro_menu_dispatches_identity_not_just_text():
@@ -334,7 +334,9 @@ def test_sidebar_filters_replace_stale_requests_and_expose_busy_state():
     assert "if (this.filterLoading) return" in JAVASCRIPT
     assert 'document.body.addEventListener("htmx:sendAbort", release)' in JAVASCRIPT
     assert "InboxQueueComposition.sidebar" in ROUTES
-    assert "if can_manage_inbox and not is_list_fragment_request" in ROUTES
+    assert "manager_dashboard = None" in ROUTES
+    assert 'hx-get="/admin/inbox/manager-dashboard"' in SIDEBAR
+    assert "def team_inbox_manager_dashboard(" in ROUTES
     assert 'htmx_target == "inbox-conversation-queue"' in ROUTES
 
 
