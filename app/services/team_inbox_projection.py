@@ -844,12 +844,13 @@ def _conversation_activity(
     )
     for event, actor in status_rows:
         actor_name, actor_email = _actor_label(actor)
+        status = getattr(event.status, "value", None) or str(event.status or "")
         label = (
             "Resolved"
-            if event.status == InboxConversationStatus.resolved
+            if status == InboxConversationStatus.resolved.value
             else "Reopened"
-            if event.status == InboxConversationStatus.open
-            else f"Status changed to {event.status.value}"
+            if status == InboxConversationStatus.open.value
+            else f"Status changed to {status or 'unknown'}"
         )
         events.append(
             InboxLifecycleEvent(
@@ -930,6 +931,8 @@ def get_conversation_projection(
     conversation_id: UUID,
     actor_person_id: UUID | None,
     include_contact_candidates: bool = True,
+    include_catalogue_options: bool = True,
+    include_label_usage_counts: bool = False,
 ) -> InboxConversationProjection | None:
     timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
     if timeline is None:
@@ -946,7 +949,11 @@ def get_conversation_projection(
             if include_contact_candidates
             else ContactLinkCandidateSet(subscribers=(), resellers=(), organizations=())
         ),
-        label_options=tuple(team_inbox_operations.list_labels(db)),
+        label_options=tuple(
+            team_inbox_operations.list_labels(
+                db, include_usage_counts=include_label_usage_counts
+            )
+        ),
         conversation_labels=tuple(
             team_inbox_operations.conversation_labels(db, conversation_id)
         ),
@@ -956,7 +963,11 @@ def get_conversation_projection(
         template_options=tuple(
             team_inbox_operations.list_templates(db, channel_type=timeline.channel_type)
         ),
-        catalogue_options=plan_family_catalogues.list_catalogue_options(db),
+        catalogue_options=(
+            plan_family_catalogues.list_catalogue_options(db)
+            if include_catalogue_options
+            else ()
+        ),
         action_eligibility=InboxActionEligibility(
             can_reply=not is_resolved and not outbound_unsupported,
             can_resolve=not is_resolved,

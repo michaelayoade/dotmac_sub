@@ -167,20 +167,29 @@ def _label_color(value: str | None) -> str:
     return color if color in _ALLOWED_LABEL_COLORS else "slate"
 
 
-def list_labels(db: Session, *, active_only: bool = True) -> list[LabelOption]:
+def list_labels(
+    db: Session,
+    *,
+    active_only: bool = True,
+    include_usage_counts: bool = True,
+) -> list[LabelOption]:
     query = db.query(InboxLabel)
     if active_only:
         query = query.filter(InboxLabel.is_active.is_(True))
-    usage_rows = (
-        db.query(
-            InboxConversationLabel.label_id,
-            func.count(InboxConversationLabel.id).label("usage_count"),
+    usage_by_label = {}
+    if include_usage_counts:
+        usage_rows = (
+            db.query(
+                InboxConversationLabel.label_id,
+                func.count(InboxConversationLabel.id).label("usage_count"),
+            )
+            .filter(InboxConversationLabel.is_active.is_(True))
+            .group_by(InboxConversationLabel.label_id)
+            .all()
         )
-        .filter(InboxConversationLabel.is_active.is_(True))
-        .group_by(InboxConversationLabel.label_id)
-        .all()
-    )
-    usage_by_label = {row.label_id: int(row.usage_count or 0) for row in usage_rows}
+        usage_by_label = {
+            row.label_id: int(row.usage_count or 0) for row in usage_rows
+        }
     return [
         LabelOption(
             id=str(label.id),
