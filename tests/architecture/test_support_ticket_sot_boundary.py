@@ -139,6 +139,9 @@ def test_operator_status_subset_is_owned_by_ticket_configuration() -> None:
 
     assert "ADMIN_NON_SELECTABLE_STATUSES" in configuration
     assert "TicketStatus.resolved.value" in configuration
+    assert "class OperatorTicketStatusSelection" in configuration
+    assert "class OperatorTicketStatusSelectionOutcome" in configuration
+    assert "def resolve_operator_ticket_status_selection(" in configuration
     assert "list_status_options(db)" in web_projection
     assert "support_ticket_status_not_selectable" in web_projection
     assert "WebSupportTicketInputError" in admin_adapter

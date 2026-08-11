@@ -375,21 +375,35 @@ def _unavailable_status_presentation(
 
 
 def _admin_status_value(
-    db: Session, value: object, *, current_status: str | None = None
+    db: Session,
+    value: str,
+    *,
+    surface: support_ticket_settings_service.OperatorTicketStatusSurface,
+    current_status: str | None = None,
 ) -> str:
-    normalized = support_ticket_settings_service.normalize_system_value(
-        str(value or "")
-    )
-    if normalized and normalized == str(current_status or "").strip():
-        return normalized
-    if normalized not in set(support_ticket_settings_service.list_status_options(db)):
+    normalized = support_ticket_settings_service.normalize_system_value(value)
+    try:
+        selection = support_ticket_settings_service.OperatorTicketStatusSelection(
+            requested_status=TicketStatus(normalized),
+            current_status=(TicketStatus(current_status) if current_status else None),
+            surface=surface,
+        )
+        outcome = (
+            support_ticket_settings_service.resolve_operator_ticket_status_selection(
+                db, selection
+            )
+        )
+    except (
+        ValueError,
+        support_ticket_settings_service.SupportTicketConfigurationError,
+    ):
         db_session_adapter.release_read_transaction(db)
         raise WebSupportTicketInputError(
             code="support_ticket_status_not_selectable",
             message="Select an available ticket status",
-            details={"status": normalized},
-        )
-    return normalized
+            details={"status": normalized, "surface": surface.value},
+        ) from None
+    return outcome.status.value
 
 
 def _ticket_sla_state(
@@ -804,7 +818,11 @@ def create_ticket_from_form(
     server-side on submit; without the operator's ``duplicate_override``
     confirmation a warning is raised so the route can re-render the form.
     """
-    form["status"] = _admin_status_value(db, form.get("status"))
+    form["status"] = _admin_status_value(
+        db,
+        str(form.get("status") or ""),
+        surface=support_ticket_settings_service.OperatorTicketStatusSurface.create,
+    )
     payload = build_ticket_create_payload(actor_id=actor_id, **form)
     duplicate_result = ticket_validation.find_duplicate_ticket_candidates(
         db, _duplicate_input_from_payload(payload)
@@ -857,7 +875,10 @@ def update_ticket_from_form(
 ):
     ticket = support_service.tickets.get(db, ticket_id)
     form["status"] = _admin_status_value(
-        db, form.get("status"), current_status=ticket.status
+        db,
+        str(form.get("status") or ""),
+        surface=support_ticket_settings_service.OperatorTicketStatusSurface.edit,
+        current_status=ticket.status,
     )
     payload = build_ticket_update_payload(**form)
     db_session_adapter.release_read_transaction(db)
@@ -907,7 +928,12 @@ def quick_update_ticket(
                 ) from exc
         elif key == "status":
             payload_data[key] = _admin_status_value(
-                db, value, current_status=ticket.status
+                db,
+                str(value),
+                surface=(
+                    support_ticket_settings_service.OperatorTicketStatusSurface.quick_status
+                ),
+                current_status=ticket.status,
             )
         elif key == "priority":
             payload_data[key] = str(value).strip()

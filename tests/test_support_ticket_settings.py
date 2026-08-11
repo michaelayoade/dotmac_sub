@@ -131,17 +131,34 @@ def test_admin_status_mutations_reject_new_resolved_selection(db_session):
         match="Select an available ticket status",
     ):
         web_support_tickets_service._admin_status_value(
-            db_session, TicketStatus.resolved.value
+            db_session,
+            TicketStatus.resolved.value,
+            surface=(support_ticket_settings_service.OperatorTicketStatusSurface.edit),
         )
 
     assert (
         web_support_tickets_service._admin_status_value(
             db_session,
             TicketStatus.resolved.value,
+            surface=(support_ticket_settings_service.OperatorTicketStatusSurface.edit),
             current_status=TicketStatus.resolved.value,
         )
         == TicketStatus.resolved.value
     )
+
+
+def test_configuration_owner_resolves_typed_operator_status_selection(db_session):
+    outcome = support_ticket_settings_service.resolve_operator_ticket_status_selection(
+        db_session,
+        support_ticket_settings_service.OperatorTicketStatusSelection(
+            requested_status=TicketStatus.resolved,
+            current_status=TicketStatus.resolved,
+            surface=support_ticket_settings_service.OperatorTicketStatusSurface.edit,
+        ),
+    )
+
+    assert outcome.status is TicketStatus.resolved
+    assert outcome.preserved_current is True
 
 
 def test_ticket_settings_persist_routing_and_sla(db_session):

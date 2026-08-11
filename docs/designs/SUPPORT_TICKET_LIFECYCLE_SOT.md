@@ -46,6 +46,8 @@ other while preserving the provenance of both inputs.
 Tickets, integrations, reports, timestamps, and lifecycle reads, but it is not
 part of the operator-selectable status subset. The configuration owner removes
 it from stored/default option projections and rejects attempts to configure it.
+Admin selection crosses the typed `OperatorTicketStatusSelection` /
+`OperatorTicketStatusSelectionOutcome` resolver owned by ticket configuration.
 Admin create, edit, quick-status, bulk-update, automation, list-filter, and
 advanced-filter controls consume that one subset. A historical Ticket already
 in `resolved` remains displayable and may preserve that unchanged value while
