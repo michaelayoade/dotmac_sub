@@ -1632,6 +1632,21 @@ Credit-note issuance and voiding are the next migrated financial-action contract
   historical account-credit pool drift cannot block or fund the application.
   Historical notes without reviewed funding evidence retain their legacy
   application behavior.
+- Application-on-issue boundary: direct and draft issuance use one typed owner
+  decision and the same flush-only participant as manual application. An issued
+  note naming an open receivable applies up to that receivable in the issue
+  transaction; only a paid, zero-balance invoice may intentionally retain the
+  value as account credit by lifecycle state. An owner workflow whose rollback
+  contract must void the exact note may explicitly retain an open-invoice credit;
+  the preview and fingerprint record `reversible_workflow_hold`. Unlinked notes
+  also retain account credit. Proforma, inactive, void, written-off, and
+  open-but-zero invoice evidence fails closed.
+- Replay and concurrency boundary: the application idempotency key is derived
+  from the issue key. A retry that waited for the account lock reloads the
+  completed note and its exact application evidence before testing the now-stale
+  preview, while a distinct confirmation against the consumed receivable is
+  rejected. Funding, application, consumption, invoice recalculation, audit,
+  and access-reconciliation request commit or roll back together.
 - Verification phase: direct writers have migrated to the owner and architecture
   tests reject new document, line, or status writers outside the owner package.
 - Cutover gate: issue/void preview fingerprints, idempotent replay, actor audit,

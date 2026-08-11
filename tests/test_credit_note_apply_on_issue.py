@@ -31,6 +31,12 @@ from app.models.billing import (
 )
 from app.models.idempotency import IdempotencyKey
 from app.schemas.billing import (
+    CreditNoteApplicationPreviewRequest,
+    CreditNoteApplyRequest,
+    CreditNoteCreate,
+    CreditNoteIssueApplicationDisposition,
+    CreditNoteIssueApplicationReason,
+    CreditNoteIssueConfirmation,
     CreditNoteIssuePreviewRequest,
     CreditNoteIssueRequest,
 )
@@ -95,7 +101,13 @@ def test_exact_credit_settles_the_named_invoice_at_issue(
     assert preview.invoice_receivable_after == Decimal("0.00")
     assert preview.residual_credit == Decimal("0.00")
     assert preview.settles_invoice is True
-    assert preview.access_consequence == "invoice_settled_by_credit_note"
+    assert preview.application_disposition == (
+        CreditNoteIssueApplicationDisposition.apply_to_invoice
+    )
+    assert preview.application_reason == (
+        CreditNoteIssueApplicationReason.invoice_receivable_open
+    )
+    assert preview.access_consequence == "recheck_after_receivable_settlement"
 
     assert result.application is not None
     db_session.refresh(invoice)
@@ -159,6 +171,13 @@ def test_an_unlinked_note_names_no_invoice_and_applies_nothing(
 
     assert preview.application_amount == Decimal("0.00")
     assert preview.residual_credit == Decimal("50.00")
+    assert preview.application_disposition == (
+        CreditNoteIssueApplicationDisposition.retain_account_credit
+    )
+    assert preview.application_reason == (
+        CreditNoteIssueApplicationReason.no_invoice_named
+    )
+    assert preview.settles_invoice is False
     assert result.application is None
     assert _applications(db_session, result.credit_note.id) == []
     assert get_account_credit_balance(
@@ -166,26 +185,58 @@ def test_an_unlinked_note_names_no_invoice_and_applies_nothing(
     ) == before + Decimal("50.00")
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("status", InvoiceStatus.void),
-        ("balance_due", "0.00"),
-    ],
-)
-def test_an_invoice_that_cannot_absorb_credit_still_issues(
-    db_session, subscriber_account, field, value
+def test_a_paid_invoice_retains_the_credit_without_claiming_settlement(
+    db_session, subscriber_account
 ):
-    """Ordinary states, not errors — issuing succeeds and the credit is held."""
-    invoice = _invoice(db_session, subscriber_account.id, "40.00", **{field: value})
+    invoice = _invoice(
+        db_session,
+        subscriber_account.id,
+        "40.00",
+        status=InvoiceStatus.paid,
+        balance_due="0.00",
+    )
 
     preview, result = _issue(
         db_session, subscriber_account.id, "40.00", invoice_id=invoice.id
     )
 
     assert preview.application_amount == Decimal("0.00")
+    assert preview.invoice_receivable_after == Decimal("0.00")
+    assert preview.settles_invoice is False
+    assert preview.application_disposition == (
+        CreditNoteIssueApplicationDisposition.retain_account_credit
+    )
+    assert preview.application_reason == (
+        CreditNoteIssueApplicationReason.invoice_already_paid
+    )
     assert result.application is None
     assert result.credit_note.status == CreditNoteStatus.issued
+
+
+@pytest.mark.parametrize(
+    "invoice_kwargs",
+    [
+        {"status": InvoiceStatus.void},
+        {"status": InvoiceStatus.written_off},
+        {"is_proforma": True},
+        {"is_active": False},
+        {"balance_due": "0.00"},
+    ],
+)
+def test_incoherent_named_invoice_states_fail_issue_preview(
+    db_session, subscriber_account, invoice_kwargs
+):
+    invoice = _invoice(
+        db_session,
+        subscriber_account.id,
+        "40.00",
+        **invoice_kwargs,
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        _issue(db_session, subscriber_account.id, "40.00", invoice_id=invoice.id)
+
+    assert rejected.value.status_code in {400, 409}
 
 
 def test_replaying_the_issue_does_not_apply_twice(db_session, subscriber_account):
@@ -216,6 +267,10 @@ def test_replaying_the_issue_does_not_apply_twice(db_session, subscriber_account
 
     assert replay.idempotent_replay is True
     assert replay.credit_note.id == first.credit_note.id
+    assert replay.application is not None
+    assert first.application is not None
+    assert replay.application.idempotent_replay is True
+    assert replay.application.application.id == first.application.application.id
     assert len(_applications(db_session, first.credit_note.id)) == 1
     db_session.refresh(invoice)
     assert invoice.balance_due == Decimal("0.00")
@@ -226,6 +281,9 @@ def test_a_failure_after_staging_rolls_back_the_whole_issue(
 ):
     """Atomicity is the point: no orphan note, no orphan funding, no half-apply."""
     invoice = _invoice(db_session, subscriber_account.id, "45.00")
+    before_credit = get_account_credit_balance(
+        db_session, str(subscriber_account.id), currency="USD"
+    )
     notes_before = db_session.query(LedgerEntry).count()
     applications_before = db_session.query(CreditNoteApplication).count()
 
@@ -252,13 +310,29 @@ def test_a_failure_after_staging_rolls_back_the_whole_issue(
         ),
         pytest.raises(RuntimeError),
     ):
-        billing_service.credit_notes.issue_with_evidence(db_session, confirmation)
+        # The fixture itself owns an outer transaction. Exercise the staged
+        # participant inside an explicit test savepoint so rolling it back does
+        # not erase setup evidence committed only within that outer fixture.
+        with db_session.begin_nested():
+            billing_service.credit_notes.issue_with_evidence(
+                db_session,
+                confirmation,
+                commit=False,
+            )
 
-    # The owner's rollback unwinds the session, so read the surviving state
-    # fresh rather than through instances the rollback expired.
-    db_session.rollback()
+    db_session.refresh(invoice)
+    assert invoice.balance_due == Decimal("45.00")
+    assert invoice.status != InvoiceStatus.paid
     assert db_session.query(CreditNoteApplication).count() == applications_before
     assert db_session.query(LedgerEntry).count() == notes_before
+    assert (
+        get_account_credit_balance(
+            db_session,
+            str(subscriber_account.id),
+            currency="USD",
+        )
+        == before_credit
+    )
     assert (
         db_session.query(IdempotencyKey)
         .filter(IdempotencyKey.key == confirmation.idempotency_key)
@@ -271,13 +345,28 @@ def test_manual_application_still_works_through_the_same_participant(
     db_session, subscriber_account
 ):
     """Both paths share one staging participant, so evidence cannot drift."""
-    invoice = _invoice(db_session, subscriber_account.id, "80.00")
     target = _invoice(db_session, subscriber_account.id, "25.00")
 
-    _, result = _issue(
-        db_session, subscriber_account.id, "80.00", invoice_id=invoice.id
+    _, issue_result = _issue(db_session, subscriber_account.id, "80.00")
+    preview = billing_service.credit_notes.preview_application(
+        db_session,
+        str(issue_result.credit_note.id),
+        CreditNoteApplicationPreviewRequest(
+            invoice_id=target.id,
+            amount=Decimal("25.00"),
+        ),
     )
-    application = result.application.application
+    result = billing_service.credit_notes.apply_with_evidence(
+        db_session,
+        str(issue_result.credit_note.id),
+        CreditNoteApplyRequest(
+            invoice_id=target.id,
+            amount=preview.apply_amount,
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=uuid4().hex,
+        ),
+    )
+    application = result.application
 
     assert application.ledger_entry_id is not None
     assert application.consumption_ledger_entry_id is not None
@@ -286,8 +375,106 @@ def test_manual_application_still_works_through_the_same_participant(
     assert consumption.source == LedgerSource.credit_note
     assert consumption.invoice_id is None
     posting = db_session.get(LedgerEntry, application.ledger_entry_id)
-    assert posting.invoice_id == invoice.id
-    assert target.balance_due == Decimal("25.00")
+    assert posting.invoice_id == target.id
+    db_session.refresh(target)
+    assert target.balance_due == Decimal("0.00")
+
+
+def test_draft_issue_uses_the_same_application_participant_and_replays(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account.id, "55.00")
+    draft = billing_service.credit_notes.create(
+        db_session,
+        CreditNoteCreate(
+            account_id=subscriber_account.id,
+            invoice_id=invoice.id,
+            currency="USD",
+            subtotal=Decimal("55.00"),
+            total=Decimal("55.00"),
+        ),
+    )
+    preview = billing_service.credit_notes.preview_draft_issue(
+        db_session,
+        str(draft.id),
+    )
+    confirmation = CreditNoteIssueConfirmation(
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=uuid4().hex,
+    )
+
+    first = billing_service.credit_notes.issue_draft_with_evidence(
+        db_session,
+        str(draft.id),
+        confirmation,
+    )
+    replay = billing_service.credit_notes.issue_draft_with_evidence(
+        db_session,
+        str(draft.id),
+        confirmation,
+    )
+
+    assert first.application is not None
+    assert replay.application is not None
+    assert replay.idempotent_replay is True
+    assert replay.application.application.id == first.application.application.id
+    db_session.refresh(invoice)
+    assert invoice.balance_due == Decimal("0.00")
+    assert len(_applications(db_session, draft.id)) == 1
+
+
+def test_draft_issue_rolls_back_funding_and_application_together(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account.id, "32.00")
+    draft = billing_service.credit_notes.create(
+        db_session,
+        CreditNoteCreate(
+            account_id=subscriber_account.id,
+            invoice_id=invoice.id,
+            currency="USD",
+            subtotal=Decimal("32.00"),
+            total=Decimal("32.00"),
+        ),
+    )
+    preview = billing_service.credit_notes.preview_draft_issue(
+        db_session,
+        str(draft.id),
+    )
+    confirmation = CreditNoteIssueConfirmation(
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=uuid4().hex,
+    )
+    entries_before = db_session.query(LedgerEntry).count()
+
+    with (
+        patch(
+            "app.services.billing.credit_notes._stage_credit_audit",
+            side_effect=RuntimeError("audit exploded"),
+        ),
+        pytest.raises(RuntimeError),
+    ):
+        with db_session.begin_nested():
+            billing_service.credit_notes.issue_draft_with_evidence(
+                db_session,
+                str(draft.id),
+                confirmation,
+                commit=False,
+            )
+
+    db_session.refresh(draft)
+    db_session.refresh(invoice)
+    assert draft.status == CreditNoteStatus.draft
+    assert draft.funding_ledger_entry_id is None
+    assert invoice.balance_due == Decimal("32.00")
+    assert _applications(db_session, draft.id) == []
+    assert db_session.query(LedgerEntry).count() == entries_before
+    assert (
+        db_session.query(IdempotencyKey)
+        .filter(IdempotencyKey.key == confirmation.idempotency_key)
+        .count()
+        == 0
+    )
 
 
 def test_unrelated_negative_legacy_credit_history_does_not_leak_in(
@@ -336,8 +523,11 @@ def test_a_note_tied_to_another_invoice_is_refused_not_silently_held(
     )
     # Refused at preview, before any evidence exists — the currency mismatch is
     # incoherent whichever step notices it first.
-    with pytest.raises(HTTPException):
+    with pytest.raises(HTTPException) as rejected:
         billing_service.credit_notes.preview_issue(db_session, request)
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.detail == "Currency does not match invoice"
 
 
 def test_a_reversible_workflow_can_hold_its_credit(db_session, subscriber_account):
@@ -368,6 +558,13 @@ def test_a_reversible_workflow_can_hold_its_credit(db_session, subscriber_accoun
     assert result.application is None
     assert result.credit_note.applied_total == Decimal("0.00")
     assert result.preview.application_amount == Decimal("0.00")
+    assert result.preview.application_disposition == (
+        CreditNoteIssueApplicationDisposition.retain_account_credit
+    )
+    assert result.preview.application_reason == (
+        CreditNoteIssueApplicationReason.reversible_workflow_hold
+    )
+    assert result.preview.residual_credit == Decimal("45.00")
     # Still voidable, which is the whole reason for the hold.
     assert result.credit_note.status == CreditNoteStatus.issued
     db_session.refresh(invoice)

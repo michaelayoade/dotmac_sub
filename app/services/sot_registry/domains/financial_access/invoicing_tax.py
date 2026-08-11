@@ -811,7 +811,6 @@ SERVICES: tuple[SOTService, ...] = (
             "funded credit-note application consumption evidence",
             "credit-note ledger-posting requests",
             "referral reward account credits",
-            "automatic application of an issued note to the invoice it names",
         ),
         depends_on=("financial.ledger", "financial.invoices"),
         notes=(
@@ -823,9 +822,13 @@ SERVICES: tuple[SOTService, ...] = (
             "one flush-only staging participant so their evidence cannot "
             "drift, and the application key is derived from the issue command "
             "so replaying the issue replays the same application. A named "
-            "invoice that cannot absorb credit — proforma, void, paid, zero "
-            "balance — is an ordinary state: the note still issues and the "
-            "credit stays on the account."
+            "paid invoice with zero receivable retains the value as account "
+            "credit. An explicitly reversible owner workflow may also hold an "
+            "open-invoice credit so its exact note remains voidable; that hold "
+            "is fingerprinted as a typed disposition reason. Proforma, "
+            "inactive, void, written-off, and open invoices without a positive "
+            "receivable fail closed. Direct and draft issuance use the same "
+            "typed disposition and staged participant."
         ),
     ),
     SOTService(

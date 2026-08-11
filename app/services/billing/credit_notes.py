@@ -36,6 +36,8 @@ from app.schemas.billing import (
     CreditNoteApplicationPreviewRequest,
     CreditNoteApplyRequest,
     CreditNoteCreate,
+    CreditNoteIssueApplicationDisposition,
+    CreditNoteIssueApplicationReason,
     CreditNoteIssueConfirmation,
     CreditNoteIssuePreviewRequest,
     CreditNoteIssueRequest,
@@ -167,18 +169,16 @@ class CreditIssuePreview:
     prepaid_funding_after: Decimal
     invoice_receivable_before: Decimal | None
     invoice_receivable_after: Decimal | None
+    application_amount: Decimal
+    residual_credit: Decimal
+    settles_invoice: bool
+    application_disposition: CreditNoteIssueApplicationDisposition
+    application_reason: CreditNoteIssueApplicationReason
     ledger_entry_type: LedgerEntryType
     ledger_source: LedgerSource
     ledger_amount: Decimal
     access_consequence: str
     fingerprint: str
-    # What issuing this note will immediately do to the named invoice. An
-    # issued credit reduces the receivable as a matter of fact, so a preview
-    # that showed the receivable unchanged was describing a state that only
-    # existed until somebody remembered to apply it by hand.
-    application_amount: Decimal = Decimal("0.00")
-    residual_credit: Decimal = Decimal("0.00")
-    settles_invoice: bool = False
 
 
 @dataclass(frozen=True)
@@ -187,13 +187,14 @@ class CreditIssueResult:
     funding_ledger_entry: LedgerEntry
     preview: CreditIssuePreview | None
     idempotent_replay: bool = False
-    # The application staged in the same transaction when the note named an
-    # invoice that could absorb it. None means the credit stayed on the
-    # account — no invoice named, or the named one cannot take credit.
+    # The application staged in the same transaction when the note names an
+    # open receivable. None is expected for unlinked or already-paid invoices,
+    # explicit reversible-workflow holds, and legacy issue replays that predate
+    # issue-time application evidence.
     application: CreditApplicationResult | None = None
 
     def audit_metadata(self) -> dict[str, object]:
-        return {
+        metadata: dict[str, object] = {
             "credit_note_id": str(self.credit_note.id),
             "funding_ledger_entry_id": str(self.funding_ledger_entry.id),
             "amount": str(self.credit_note.total),
@@ -203,6 +204,28 @@ class CreditIssueResult:
                 self.preview.access_consequence if self.preview else "none"
             ),
         }
+        if self.preview is not None:
+            metadata.update(
+                {
+                    "application_disposition": self.preview.application_disposition,
+                    "application_reason": self.preview.application_reason,
+                    "application_amount": str(self.preview.application_amount),
+                    "residual_credit": str(self.preview.residual_credit),
+                    "invoice_receivable_before": (
+                        str(self.preview.invoice_receivable_before)
+                        if self.preview.invoice_receivable_before is not None
+                        else None
+                    ),
+                    "invoice_receivable_after": (
+                        str(self.preview.invoice_receivable_after)
+                        if self.preview.invoice_receivable_after is not None
+                        else None
+                    ),
+                }
+            )
+        if self.application is not None:
+            metadata["application_id"] = str(self.application.application.id)
+        return metadata
 
 
 class CreditNoteReferralRewardError(ValueError):
@@ -404,21 +427,80 @@ def _normalize_idempotency_key(value: str) -> str:
     return key
 
 
-def _invoice_can_take_credit(invoice: Invoice) -> bool:
-    """Whether this invoice is in a state that can absorb credit right now.
+@dataclass(frozen=True)
+class _IssueApplicationDecision:
+    disposition: CreditNoteIssueApplicationDisposition
+    reason: CreditNoteIssueApplicationReason
+    receivable_before: Decimal | None
+    application_amount: Decimal
 
-    Not every named invoice can: a proforma is not a receivable, a void or paid
-    invoice has nothing to reduce, and a zero balance leaves nothing to apply.
-    Those are ordinary states, not errors, so issuing still succeeds and the
-    credit stays on the account. Mismatches that mean the caller asked for
-    something incoherent — wrong account, wrong currency — are left to
-    ``_build_application_preview`` to reject.
-    """
+
+def _decide_issue_application(
+    invoice: Invoice | None,
+    *,
+    credit_total: Decimal,
+    apply_on_issue: bool,
+) -> _IssueApplicationDecision:
+    """Return the one typed policy decision used by preview and execution."""
+    if invoice is None:
+        return _IssueApplicationDecision(
+            disposition=(CreditNoteIssueApplicationDisposition.retain_account_credit),
+            reason=CreditNoteIssueApplicationReason.no_invoice_named,
+            receivable_before=None,
+            application_amount=Decimal("0.00"),
+        )
+
+    receivable = round_money(to_decimal(invoice.balance_due or 0))
+    if not invoice.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot issue a credit note against an inactive invoice",
+        )
     if invoice.is_proforma:
-        return False
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot issue a credit note against a proforma document",
+        )
+    if invoice.status == InvoiceStatus.paid:
+        if receivable != Decimal("0.00"):
+            raise HTTPException(
+                status_code=409,
+                detail="Paid invoice has a non-zero receivable",
+            )
+        return _IssueApplicationDecision(
+            disposition=(CreditNoteIssueApplicationDisposition.retain_account_credit),
+            reason=CreditNoteIssueApplicationReason.invoice_already_paid,
+            receivable_before=receivable,
+            application_amount=Decimal("0.00"),
+        )
+    if invoice.status in {InvoiceStatus.void, InvoiceStatus.written_off}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot issue a credit note against a {invoice.status.value} invoice",
+        )
     if invoice.status not in _CREDIT_APPLICABLE_INVOICE_STATUSES:
-        return False
-    return round_money(to_decimal(invoice.balance_due or 0)) > Decimal("0.00")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot issue a credit note against a {invoice.status.value} invoice",
+        )
+    if receivable <= Decimal("0.00"):
+        raise HTTPException(
+            status_code=409,
+            detail="Open invoice has no positive receivable",
+        )
+    if not apply_on_issue:
+        return _IssueApplicationDecision(
+            disposition=(CreditNoteIssueApplicationDisposition.retain_account_credit),
+            reason=CreditNoteIssueApplicationReason.reversible_workflow_hold,
+            receivable_before=receivable,
+            application_amount=Decimal("0.00"),
+        )
+    return _IssueApplicationDecision(
+        disposition=CreditNoteIssueApplicationDisposition.apply_to_invoice,
+        reason=CreditNoteIssueApplicationReason.invoice_receivable_open,
+        receivable_before=receivable,
+        application_amount=round_money(min(credit_total, receivable)),
+    )
 
 
 def _issue_application_key(issue_key: str) -> str:
@@ -602,29 +684,29 @@ def _build_issue_preview(
         invoice_id=payload.invoice_id,
         currency=payload.currency,
     )
+    decision = _decide_issue_application(
+        invoice,
+        credit_total=total,
+        apply_on_issue=apply_on_issue,
+    )
     wallet_before = calculate_customer_balance(
         db, payload.account_id, currency=payload.currency
     )
-    receivable = round_money(invoice.balance_due) if invoice else None
-    application_amount = (
-        round_money(min(total, receivable))
-        if apply_on_issue
-        and invoice is not None
-        and receivable is not None
-        and _invoice_can_take_credit(invoice)
-        else Decimal("0.00")
-    )
+    receivable = decision.receivable_before
+    application_amount = decision.application_amount
     receivable_after = (
         round_money(receivable - application_amount) if receivable is not None else None
     )
     residual_credit = round_money(total - application_amount)
-    settles_invoice = receivable_after is not None and receivable_after <= Decimal(
+    settles_invoice = application_amount > Decimal(
         "0.00"
-    )
+    ) and receivable_after == Decimal("0.00")
     fingerprint = _stable_fingerprint(
         "credit_note_issue",
         apply_on_issue=apply_on_issue,
         application_amount=application_amount,
+        application_disposition=decision.disposition,
+        application_reason=decision.reason,
         credit_note_id=credit_note_id,
         account_id=payload.account_id,
         invoice_id=payload.invoice_id,
@@ -654,18 +736,20 @@ def _build_issue_preview(
         prepaid_funding_after=round_money(wallet_before + residual_credit),
         invoice_receivable_before=receivable,
         invoice_receivable_after=receivable_after,
+        application_amount=application_amount,
+        residual_credit=residual_credit,
+        settles_invoice=settles_invoice,
+        application_disposition=decision.disposition,
+        application_reason=decision.reason,
         ledger_entry_type=LedgerEntryType.credit,
         ledger_source=LedgerSource.credit_note,
         ledger_amount=total,
         access_consequence=(
-            "invoice_settled_by_credit_note"
+            "recheck_after_receivable_settlement"
             if settles_invoice
             else "none_credit_note_only"
         ),
         fingerprint=fingerprint,
-        application_amount=application_amount,
-        residual_credit=residual_credit,
-        settles_invoice=settles_invoice,
     )
 
 
@@ -916,6 +1000,100 @@ class CreditNotes(ListResponseMixin):
         )
 
     @staticmethod
+    def _issue_application_replay(
+        db: Session,
+        *,
+        issue_key: str,
+        credit_note: CreditNote,
+    ) -> CreditApplicationResult | None:
+        """Hydrate application evidence owned by a replayed issue command."""
+        reservation = db.scalar(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _APPLICATION_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == _issue_application_key(issue_key),
+            )
+        )
+        if reservation is None:
+            # Unlinked, already-paid, and explicit reversible-hold issue
+            # commands do not create an application reservation. Older issue
+            # confirmations also predate issue-time application, so absence
+            # alone is not drift evidence.
+            return None
+        if not reservation.ref_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application is being processed",
+            )
+        if reservation.account_id != credit_note.account_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application belongs to another account",
+            )
+        application = get_by_id(db, CreditNoteApplication, reservation.ref_id)
+        if application is None or credit_note.invoice_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application evidence is incomplete",
+            )
+        if (
+            application.credit_note_id != credit_note.id
+            or application.invoice_id != credit_note.invoice_id
+            or application.preview_fingerprint is None
+            or round_money(application.amount) <= Decimal("0.00")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application evidence does not match the issue",
+            )
+        if application.ledger_entry_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application is missing ledger evidence",
+            )
+        posting = db.get(LedgerEntry, application.ledger_entry_id)
+        amount = round_money(application.amount)
+        if (
+            posting is None
+            or not posting.is_active
+            or posting.account_id != credit_note.account_id
+            or posting.invoice_id != credit_note.invoice_id
+            or posting.entry_type != LedgerEntryType.credit
+            or posting.source != LedgerSource.credit_note
+            or posting.currency != credit_note.currency
+            or round_money(posting.amount) != amount
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application ledger evidence is incomplete",
+            )
+        consumption = (
+            db.get(LedgerEntry, application.consumption_ledger_entry_id)
+            if application.consumption_ledger_entry_id
+            else None
+        )
+        if (
+            consumption is None
+            or not consumption.is_active
+            or consumption.account_id != credit_note.account_id
+            or consumption.invoice_id is not None
+            or consumption.entry_type != LedgerEntryType.debit
+            or consumption.source != LedgerSource.credit_note
+            or consumption.currency != credit_note.currency
+            or round_money(consumption.amount) != amount
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue consumption evidence is incomplete",
+            )
+        return CreditApplicationResult(
+            application=application,
+            ledger_entry=posting,
+            consumption_ledger_entry=consumption,
+            preview=None,
+            idempotent_replay=True,
+        )
+
+    @staticmethod
     def _issue_replay(
         db: Session, *, key: str, preview_fingerprint: str
     ) -> CreditIssueResult | None:
@@ -946,11 +1124,18 @@ class CreditNotes(ListResponseMixin):
             raise HTTPException(
                 status_code=409, detail="Credit note funding evidence was not found"
             )
+        _validate_funding_entry(credit_note, funding)
+        application = CreditNotes._issue_application_replay(
+            db,
+            issue_key=key,
+            credit_note=credit_note,
+        )
         return CreditIssueResult(
             credit_note=credit_note,
             funding_ledger_entry=funding,
             preview=None,
             idempotent_replay=True,
+            application=application,
         )
 
     @staticmethod
@@ -986,6 +1171,19 @@ class CreditNotes(ListResponseMixin):
             return replay
 
         lock_account(db, str(payload.account_id))
+        # A same-key contender waits here. Recheck replay before rebuilding the
+        # now-changed financial preview, otherwise a successful first command
+        # is incorrectly reported to its retry as a stale confirmation.
+        replay = CreditNotes._issue_replay(
+            db, key=key, preview_fingerprint=payload.preview_fingerprint
+        )
+        if replay:
+            return replay
+        if payload.invoice_id is not None:
+            invoice = lock_for_update(db, Invoice, payload.invoice_id)
+            if invoice is None:
+                raise HTTPException(status_code=404, detail="Invoice not found")
+            db.refresh(invoice)
         preview_request = _issue_preview_request(payload)
         preview = _build_issue_preview(
             db, preview_request, apply_on_issue=apply_on_issue
@@ -995,11 +1193,6 @@ class CreditNotes(ListResponseMixin):
                 status_code=409,
                 detail="Financial state changed after preview; preview again",
             )
-        replay = CreditNotes._issue_replay(
-            db, key=key, preview_fingerprint=payload.preview_fingerprint
-        )
-        if replay:
-            return replay
         reservation = CreditNotes._reserve_issue(
             db, key=key, account_id=payload.account_id
         )
@@ -1065,16 +1258,14 @@ class CreditNotes(ListResponseMixin):
             # transaction. Leaving it for a manual step overstates AR for as
             # long as nobody takes that step, and ages and duns a balance the
             # customer no longer owes.
-            application = (
-                CreditNotes._stage_issue_application(
-                    db,
-                    credit_note=credit_note,
-                    issue_key=key,
-                    memo=payload.memo,
-                    stage_audit=stage_audit,
-                )
-                if apply_on_issue
-                else None
+            application = CreditNotes._stage_issue_application(
+                db,
+                credit_note=credit_note,
+                issue_key=key,
+                issue_preview=preview,
+                apply_on_issue=apply_on_issue,
+                memo=payload.memo,
+                stage_audit=stage_audit,
             )
             if stage_audit:
                 _stage_credit_audit(
@@ -1087,6 +1278,8 @@ class CreditNotes(ListResponseMixin):
                         "currency": preview.currency,
                         "preview_fingerprint": preview.fingerprint,
                         "access_consequence": preview.access_consequence,
+                        "application_disposition": preview.application_disposition,
+                        "application_reason": preview.application_reason,
                         "application_id": (
                             str(application.application.id) if application else None
                         ),
@@ -1118,6 +1311,8 @@ class CreditNotes(ListResponseMixin):
         *,
         credit_note: CreditNote,
         issue_key: str,
+        issue_preview: CreditIssuePreview,
+        apply_on_issue: bool,
         memo: str | None,
         stage_audit: bool,
     ) -> CreditApplicationResult | None:
@@ -1126,23 +1321,56 @@ class CreditNotes(ListResponseMixin):
         Joins the issue's transaction, so the note, its funding, this
         application and every piece of its evidence land together or not at all.
 
-        Returns None when there is nothing to apply: the note names no invoice,
-        or the named invoice cannot absorb credit right now. Those are ordinary
-        states and the credit simply stays on the account.
+        Returns None only when the typed issue decision retains account credit:
+        no invoice was named, the named invoice was already paid, or a
+        reversible owner workflow explicitly requested a hold.
 
         The account lock is already held by the issue command; this adds the
         invoice lock, preserving the account -> credit note -> invoice order
         (the note is new in this transaction, so nothing else can hold it).
         """
         if credit_note.invoice_id is None:
+            if (
+                issue_preview.application_disposition
+                != CreditNoteIssueApplicationDisposition.retain_account_credit
+                or issue_preview.application_reason
+                != CreditNoteIssueApplicationReason.no_invoice_named
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Credit note issue application decision changed",
+                )
             return None
         invoice = lock_for_update(db, Invoice, coerce_uuid(str(credit_note.invoice_id)))
         if invoice is None:
             raise HTTPException(status_code=404, detail="Invoice not found")
-        if not _invoice_can_take_credit(invoice):
+        db.refresh(invoice)
+        decision = _decide_issue_application(
+            invoice,
+            credit_total=round_money(credit_note.total),
+            apply_on_issue=apply_on_issue,
+        )
+        if (
+            decision.disposition != issue_preview.application_disposition
+            or decision.reason != issue_preview.application_reason
+            or decision.application_amount != issue_preview.application_amount
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application decision changed",
+            )
+        if (
+            decision.disposition
+            == CreditNoteIssueApplicationDisposition.retain_account_credit
+        ):
             return None
 
         preview = _build_application_preview(credit_note, invoice, None)
+        if preview.apply_amount != issue_preview.application_amount:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit note issue application amount changed",
+            )
         reservation = IdempotencyKey(
             scope=_APPLICATION_IDEMPOTENCY_SCOPE,
             key=_issue_application_key(issue_key),
@@ -1296,8 +1524,23 @@ class CreditNotes(ListResponseMixin):
         draft = lock_for_update(db, CreditNote, coerce_uuid(credit_note_id))
         if not draft:
             raise HTTPException(status_code=404, detail="Credit note not found")
+        replay = CreditNotes._issue_replay(
+            db, key=key, preview_fingerprint=payload.preview_fingerprint
+        )
+        if replay:
+            if str(replay.credit_note.id) != str(credit_note_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency key belongs to another credit note",
+                )
+            return replay
         if draft.status != CreditNoteStatus.draft:
             raise HTTPException(status_code=409, detail="Credit note is not a draft")
+        if draft.invoice_id is not None:
+            invoice = lock_for_update(db, Invoice, draft.invoice_id)
+            if invoice is None:
+                raise HTTPException(status_code=404, detail="Invoice not found")
+            db.refresh(invoice)
         preview = _build_issue_preview(
             db,
             _draft_issue_request(draft),
@@ -1331,17 +1574,14 @@ class CreditNotes(ListResponseMixin):
             draft.issue_preview_fingerprint = preview.fingerprint
             reservation.ref_id = str(draft.id)
             db.flush()
-            # Draft holds, issued applies — the same rule on both issue paths.
-            application = (
-                CreditNotes._stage_issue_application(
-                    db,
-                    credit_note=draft,
-                    issue_key=key,
-                    memo=draft.memo,
-                    stage_audit=stage_audit,
-                )
-                if apply_on_issue
-                else None
+            application = CreditNotes._stage_issue_application(
+                db,
+                credit_note=draft,
+                issue_key=key,
+                issue_preview=preview,
+                apply_on_issue=apply_on_issue,
+                memo=draft.memo,
+                stage_audit=stage_audit,
             )
             if stage_audit:
                 _stage_credit_audit(
@@ -1354,6 +1594,16 @@ class CreditNotes(ListResponseMixin):
                         "currency": preview.currency,
                         "preview_fingerprint": preview.fingerprint,
                         "access_consequence": preview.access_consequence,
+                        "application_disposition": preview.application_disposition,
+                        "application_reason": preview.application_reason,
+                        "application_id": (
+                            str(application.application.id) if application else None
+                        ),
+                        "application_amount": str(
+                            application.application.amount
+                            if application
+                            else Decimal("0.00")
+                        ),
                     },
                 )
             if commit:
@@ -1361,7 +1611,8 @@ class CreditNotes(ListResponseMixin):
                 db.refresh(draft)
                 db.refresh(funding)
         except Exception:
-            db.rollback()
+            if commit:
+                db.rollback()
             raise
         return CreditIssueResult(
             credit_note=draft,
