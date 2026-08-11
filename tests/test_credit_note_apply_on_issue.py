@@ -213,6 +213,36 @@ def test_a_paid_invoice_retains_the_credit_without_claiming_settlement(
     assert result.credit_note.status == CreditNoteStatus.issued
 
 
+def test_an_open_invoice_with_nothing_left_to_reduce_retains_the_credit(
+    db_session, subscriber_account
+):
+    """An open invoice may legitimately owe nothing — settled by earlier credit
+    or payment without reaching paid, or issued at zero. Refusing would deny a
+    cancellation its credit for a state the customer did not cause."""
+    invoice = _invoice(
+        db_session,
+        subscriber_account.id,
+        "40.00",
+        balance_due="0.00",
+    )
+
+    preview, result = _issue(
+        db_session, subscriber_account.id, "40.00", invoice_id=invoice.id
+    )
+
+    assert preview.application_amount == Decimal("0.00")
+    assert preview.invoice_receivable_after == Decimal("0.00")
+    assert preview.settles_invoice is False
+    assert preview.application_disposition == (
+        CreditNoteIssueApplicationDisposition.retain_account_credit
+    )
+    assert preview.application_reason == (
+        CreditNoteIssueApplicationReason.invoice_receivable_exhausted
+    )
+    assert result.application is None
+    assert result.credit_note.status == CreditNoteStatus.issued
+
+
 @pytest.mark.parametrize(
     "invoice_kwargs",
     [
@@ -220,7 +250,6 @@ def test_a_paid_invoice_retains_the_credit_without_claiming_settlement(
         {"status": InvoiceStatus.written_off},
         {"is_proforma": True},
         {"is_active": False},
-        {"balance_due": "0.00"},
     ],
 )
 def test_incoherent_named_invoice_states_fail_issue_preview(
