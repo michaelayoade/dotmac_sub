@@ -47,6 +47,34 @@ def _response_cookies(response) -> dict[str, str]:
     return {key: morsel.value for key, morsel in jar.items()}
 
 
+def _confirm_customer_mfa_at_fixed_timecode(
+    db_session,
+    *,
+    subscriber_id: str,
+    method_id: str,
+    secret: str,
+    monkeypatch,
+) -> str:
+    """Confirm enrollment without racing a TOTP interval boundary in CI."""
+
+    import time
+
+    totp = pyotp.TOTP(secret)
+    timecode = int(time.time()) // totp.interval
+    code = totp.generate_otp(timecode)
+    original_generate = pyotp.TOTP.generate_otp
+
+    def verify_fixed(self, otp, for_time=None, valid_window=0):
+        return any(
+            original_generate(self, timecode + offset) == str(otp)
+            for offset in range(-valid_window, valid_window + 1)
+        )
+
+    monkeypatch.setattr(pyotp.TOTP, "verify", verify_fixed)
+    AuthFlow.mfa_confirm(db_session, method_id, code, subscriber_id)
+    return code
+
+
 def test_customer_login_template_has_submit_loading_state():
     template = Path("templates/customer/auth/login.html").read_text()
 
@@ -289,11 +317,12 @@ def test_customer_login_redirects_to_mfa_when_enabled(
     db_session.commit()
 
     setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
+    _confirm_customer_mfa_at_fixed_timecode(
         db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+        subscriber_id=str(subscriber.id),
+        method_id=str(setup["method_id"]),
+        secret=str(setup["secret"]),
+        monkeypatch=monkeypatch,
     )
 
     response = web_customer_auth_service.customer_login_submit(
@@ -329,11 +358,12 @@ def test_customer_mfa_submit_creates_customer_session(
     db_session.commit()
 
     setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
+    confirmation_code = _confirm_customer_mfa_at_fixed_timecode(
         db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+        subscriber_id=str(subscriber.id),
+        method_id=str(setup["method_id"]),
+        secret=str(setup["secret"]),
+        monkeypatch=monkeypatch,
     )
     login_response = web_customer_auth_service.customer_login_submit(
         _request(),
@@ -355,7 +385,7 @@ def test_customer_mfa_submit_creates_customer_session(
     valid_response = web_customer_auth_service.customer_mfa_submit(
         _request(cookies=pending_cookies),
         db_session,
-        pyotp.TOTP(setup["secret"]).now(),
+        confirmation_code,
     )
 
     assert valid_response.status_code == 303
