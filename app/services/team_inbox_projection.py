@@ -84,18 +84,31 @@ def get_media_content_projection(
     asset_id: UUID,
 ) -> InboxMediaContentProjection:
     media_content = team_inbox_media.stream_asset_content(db, asset_id)
+    if isinstance(media_content, tuple):
+        asset, stream = media_content
+        content_type = stream.content_type or asset.mime_type or "application/octet-stream"
+        file_name = asset.file_name or f"inbox-media-{asset.id}"
+        content_length = stream.content_length
+        chunks = stream.chunks
+        resolved_asset_id = asset.id
+    else:
+        content_type = media_content.content_type
+        file_name = media_content.file_name
+        content_length = media_content.stream.content_length
+        chunks = media_content.stream.chunks
+        resolved_asset_id = media_content.asset_id
     presentation = (
         InboxMediaBrowserPresentation.inline
-        if media_content.content_type in SAFE_INLINE_IMAGE_CONTENT_TYPES
+        if content_type in SAFE_INLINE_IMAGE_CONTENT_TYPES
         else InboxMediaBrowserPresentation.attachment
     )
     return InboxMediaContentProjection(
-        asset_id=media_content.asset_id,
-        file_name=media_content.file_name,
-        content_type=media_content.content_type,
-        content_length=media_content.stream.content_length,
+        asset_id=resolved_asset_id,
+        file_name=file_name,
+        content_type=content_type,
+        content_length=content_length,
         presentation=presentation,
-        chunks=media_content.stream.chunks,
+        chunks=chunks,
     )
 
 
@@ -692,15 +705,10 @@ def _assignment_counts(
     actor_person_id: UUID | None,
     queue_metrics: team_inbox_operations.InboxQueueMetrics,
 ) -> InboxAssignmentCounts:
-    all_count = team_inbox_read.list_conversations(db, limit=1).count
-    assigned_to_me = (
-        team_inbox_read.list_conversations(
-            db,
-            assigned_person_id=actor_person_id,
-            limit=1,
-        ).count
-        if actor_person_id is not None
-        else 0
+    all_count = team_inbox_read.queue_conversation_count(db)
+    assigned_to_me = team_inbox_read.assigned_conversation_count(
+        db,
+        assigned_person_id=actor_person_id,
     )
     my_team = 0
     my_team_ids: tuple[str, ...] = ()
@@ -749,11 +757,7 @@ def _assignment_counts(
         my_team_ids=my_team_ids,
         unassigned=queue_metrics.unassigned_open,
         unreplied=queue_metrics.needs_response,
-        needs_attention=team_inbox_read.list_conversations(
-            db,
-            needs_attention=True,
-            limit=1,
-        ).count,
+        needs_attention=0,
     )
 
 

@@ -1058,9 +1058,7 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
     ).where(InboxConversationAssignment.is_active.is_(True))
     return InboxQueueMetrics(
         total_open=count_open(),
-        needs_response=team_inbox_read.list_conversations(
-            db, needs_response=True, limit=1
-        ).count,
+        needs_response=team_inbox_read.needs_response_conversation_count(db),
         failed_outbound=int(
             db.query(func.count(InboxMessage.id))
             .filter(InboxMessage.direction == "outbound")

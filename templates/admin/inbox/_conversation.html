@@ -329,7 +329,15 @@
         </div>
 
         {% if action_eligibility.can_reply %}
-        <form method="post" action="/admin/inbox/{{ timeline.id }}/reply" hx-post="/admin/inbox/{{ timeline.id }}/reply" hx-swap="none" x-show="mode === 'reply'" @submit="prepareSend($event)" @htmx:after-request="finishSendRequest($event)" class="space-y-2" data-reply-form>
+        <form method="post" action="/admin/inbox/{{ timeline.id }}/reply"
+              hx-post="/admin/inbox/{{ timeline.id }}/reply"
+              hx-target="#triage-detail"
+              hx-swap="innerHTML"
+              x-show="mode === 'reply'"
+              @submit="prepareSend($event)"
+              @htmx:after-request="finishSendRequest($event)"
+              class="space-y-2"
+              data-reply-form>
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="idempotency_key" :value="idempotencyKey">
             <input type="hidden" name="reply_to_message_id" :value="replyTo ? replyTo.id : ''">

@@ -294,15 +294,7 @@ def team_inbox_queue(
     if projection.canonical_url is not None:
         return RedirectResponse(url=projection.canonical_url, status_code=307)
     can_manage_inbox = can(request, "support:ticket:update")
-    manager_dashboard = (
-        team_inbox_projection.build_manager_dashboard_projection(
-            db,
-            queue_metrics=projection.queue_metrics,
-            needs_attention=projection.assignment_counts.needs_attention,
-        )
-        if can_manage_inbox and not is_list_fragment_request
-        else None
-    )
+    manager_dashboard = None
     context = _ctx(request, db)
     context.update(
         {
@@ -447,6 +439,40 @@ def team_inbox_social_comments(
         }
     )
     return templates.TemplateResponse("admin/inbox/comments.html", context)
+
+
+@router.get(
+    "/manager-dashboard",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_manager_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    queue_metrics = team_inbox_operations.queue_metrics(db)
+    manager_dashboard = team_inbox_projection.build_manager_dashboard_projection(
+        db,
+        queue_metrics=queue_metrics,
+        needs_attention=team_inbox_read.needs_attention_conversation_count(db),
+    )
+    context = _ctx(request, db)
+    context.update(
+        {
+            "can_manage_inbox": True,
+            "manager_dashboard": manager_dashboard,
+        }
+    )
+    return templates.TemplateResponse("admin/inbox/_manager_dashboard.html", context)
+
+
+@router.get(
+    "/counts/needs-attention",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_needs_attention_count(db: Session = Depends(get_db)):
+    return HTMLResponse(str(team_inbox_read.needs_attention_conversation_count(db)))
 
 
 @router.get(
@@ -1198,15 +1224,22 @@ def team_inbox_reply(
         if outcome.replayed
         else "Reply scheduled."
         if outcome.kind == "scheduled"
-        else f"Reply queued from {outcome.sender}."
+        else f"Reply queued for delivery from {outcome.sender}. Watch the thread delivery status; mail rate limits can retry automatically."
         if outcome.kind == "queued"
+        else f"Reply delivery is retrying from {outcome.sender}. Watch the thread delivery status."
+        if outcome.kind == "retried"
+        else f"Reply could not be delivered from {outcome.sender}: {outcome.detail or 'provider rejected it'}."
+        if outcome.kind == "failed"
         else f"Reply sent from {outcome.sender}."
     )
     if _is_htmx_request(request):
-        return _reply_presentation_response(
+        return _detail_redirect(
             conversation_id,
             status="success",
             message=message,
+            next_url=next_url,
+            request=request,
+            db=db,
         )
     return _detail_redirect(
         conversation_id,
