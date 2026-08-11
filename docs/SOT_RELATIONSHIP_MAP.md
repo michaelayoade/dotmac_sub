@@ -3894,8 +3894,10 @@ writers are retired; historical rows remain readable evidence.
 46a. `network.ont_commissioning`: owns the explicit, expiring alternative to
    raw assignment-free authorization. Admission requires
    `network:ont:commission`, a reason, and one exact cached autofind candidate;
-   the worker re-reads live Huawei autofind for the same OLT/F/S/P/serial before
-   the first write. It may register the ONT and apply only the management VLAN
+   the worker reads global live Huawei autofind and filters the observation to
+   the same OLT/F/S/P/canonical serial before the first write. It never relies
+   on firmware-dependent scoped autofind syntax. It may register the ONT and
+   apply only the management VLAN
    service-port, IPHOST, and OLT TR-069 profile. It never creates an
    `OntAssignment` or applies internet, PPPoE, WAN, LAN, or Wi-Fi state.
    GenieACS readiness produces `management_ready`; only then may the normal

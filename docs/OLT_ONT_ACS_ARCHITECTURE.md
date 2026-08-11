@@ -246,7 +246,7 @@ User clicks "Authorize & provision"
 User with network:ont:commission clicks "Commission ONT"
     → network.ont_commissioning stores exact candidate + reason + 24h expiry
     → durable commission operation/dispatch
-    → worker re-reads model-supported live OLT autofind and filters exact F/S/P
+    → worker reads global live OLT autofind and filters exact F/S/P + serial
     → management-only dependency audit (line/service + DBA + TR-069)
     → ont_authorization.register_ont_for_commissioning(RegisterCommissioningOnt)
     → restricted management batch:
@@ -256,9 +256,10 @@ User with network:ont:commission clicks "Commission ONT"
     → assignment converts ownership, or expiry stages safe inventory cleanup
 ```
 
-MA5608T uses the supported global `display ont autofind all` observation and
-filters it in application code to the exact requested F/S/P and canonical
-serial. The unsupported per-port command is never attempted. Normal assigned
+Commissioning uses the supported global `display ont autofind all` observation
+on every Huawei shelf and filters it in application code to the exact requested
+F/S/P and canonical serial. The firmware-dependent per-port command is never
+attempted; deployed MA5608T and MA5800-X2 shelves can reject it. Normal assigned
 authorization retains the full live dependency audit, including customer
 traffic-table and WAN-profile inventories.
 

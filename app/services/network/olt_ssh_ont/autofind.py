@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.models.network import OLTDevice
-from app.services.network.huawei_cli_response import is_huawei_no_autofind_entries
+from app.services.network.huawei_cli_response import (
+    HuaweiCliErrorCode,
+    is_huawei_no_autofind_entries,
+)
 from app.services.network.huawei_command_profiles import get_huawei_command_profile
 from app.services.network.olt_ssh_session import OltSession, olt_session
 from app.services.network.olt_validators import validate_fsp
 from app.services.network.parsers.loader import AutofindEntry, parse_autofind
+
+logger = logging.getLogger(__name__)
+
+
+class AutofindCommandError(RuntimeError):
+    """Typed Huawei autofind command rejection retained across session retries."""
+
+    def __init__(self, message: str, *, error_code: HuaweiCliErrorCode) -> None:
+        super().__init__(message)
+        self.error_code = error_code
 
 
 def build_autofind_command(port: str | None = None) -> str:
@@ -40,10 +55,36 @@ def query_ont_autofind_session(
     if not result.success:
         if _is_no_autofind_entries_output(result.output):
             return []
-        raise RuntimeError(
-            result.message or result.output or "OLT autofind query failed"
+        raise AutofindCommandError(
+            result.message or result.output or "OLT autofind query failed",
+            error_code=result.error_code,
         )
     return parse_autofind_output(result.output)
+
+
+def _query_in_fresh_session(
+    olt: OLTDevice,
+    *,
+    port: str | None,
+) -> list[AutofindEntry]:
+    with olt_session(olt) as session:
+        return query_ont_autofind_session(session, port=port)
+
+
+def _query_global_with_bounded_retry(olt: OLTDevice) -> list[AutofindEntry]:
+    """Read global autofind, retrying one transient false grammar rejection."""
+
+    try:
+        return _query_in_fresh_session(olt, port=None)
+    except AutofindCommandError as exc:
+        if exc.error_code is not HuaweiCliErrorCode.UNKNOWN_COMMAND:
+            raise
+        logger.warning(
+            "Global Huawei autofind was rejected once on OLT %s; retrying in a "
+            "fresh read-only session",
+            getattr(olt, "name", "unknown"),
+        )
+        return _query_in_fresh_session(olt, port=None)
 
 
 def query_ont_autofind(
@@ -59,8 +100,20 @@ def query_ont_autofind(
             if requested_fsp is not None and profile.supports_scoped_autofind
             else None
         )
-        with olt_session(olt) as session:
-            entries = query_ont_autofind_session(session, port=command_fsp)
+        if command_fsp is None:
+            entries = _query_global_with_bounded_retry(olt)
+        else:
+            try:
+                entries = _query_in_fresh_session(olt, port=command_fsp)
+            except AutofindCommandError as exc:
+                if exc.error_code is not HuaweiCliErrorCode.UNKNOWN_COMMAND:
+                    raise
+                logger.warning(
+                    "Scoped Huawei autofind is unsupported on OLT %s; falling "
+                    "back to global inventory with exact in-process filtering",
+                    getattr(olt, "name", "unknown"),
+                )
+                entries = _query_global_with_bounded_retry(olt)
         if requested_fsp is not None:
             entries = [
                 entry

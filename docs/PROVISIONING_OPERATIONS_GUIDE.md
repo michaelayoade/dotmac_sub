@@ -607,11 +607,12 @@ fail closed. Do not force reauthorization or delete the suspected registration
 until a successful lookup or registered-ONT inventory read identifies its
 current F/S/P and ONT-ID; investigate physical/offline state separately.
 
-On MA5608T, `display ont autofind <F/S/P>` is not a supported command. Sub reads
-`display ont autofind all` and filters the parsed result to the exact requested
-OLT/F/S/P/serial before commissioning. If the cached row and live location
-disagree, refresh Autofind and review the new port; never authorize from the
-stale row.
+Commissioning reads `display ont autofind all` on every Huawei OLT and filters
+the parsed result to the exact requested OLT/F/S/P/canonical serial. It does not
+rely on the firmware-dependent `display ont autofind <F/S/P>` command, which
+deployed MA5608T and MA5800-X2 shelves can reject. If the cached row and live
+location disagree, refresh Autofind and review the new port; never authorize
+from the stale row.
 
 There is no operator, API, task, or service switch for registration-only
 authorization. Assigned authorization requires an exact typed ONT/OLT/F/S/P/

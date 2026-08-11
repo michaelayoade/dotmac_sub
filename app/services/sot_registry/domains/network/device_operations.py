@@ -470,8 +470,9 @@ SERVICES: tuple[SOTService, ...] = (
             "authorization. Each intent binds one live autofind serial, "
             "OLT, and F/S/P, expires after a bounded interval, and permits "
             "only OLT registration plus management VLAN/IPHOST/TR-069. "
-            "Model-aware live reads use global autofind plus exact parsed "
-            "F/S/P filtering where scoped Huawei syntax is unsupported. "
+            "Live commissioning reads always use global Huawei autofind plus "
+            "exact parsed F/S/P and canonical-serial filtering; deployed "
+            "MA5608T and MA5800-X2 firmware can reject scoped syntax. "
             "Its dependency audit includes only registration and management "
             "profiles; customer traffic-table and WAN inventories remain "
             "normal authorization dependencies. Separate named capabilities "
@@ -541,9 +542,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="external:huawei_olt",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "model-supported display ont autofind read immediately "
-                        "before the first commissioning device write, filtered "
-                        "to the exact parsed OLT/F/S/P/serial"
+                        "global display ont autofind all read immediately before "
+                        "the first commissioning device write, filtered to the "
+                        "exact parsed OLT/F/S/P/canonical serial"
                     ),
                 ),
                 AuthorityInput(

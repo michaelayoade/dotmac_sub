@@ -125,12 +125,13 @@ into durable review state instead of leaving the UI in `authorizing`.
 
 Commissioning admission locks the exact autofind candidate. Immediately before
 the first OLT write, the worker reads live autofind and fails closed if the
-serial is absent or appears on another F/S/P. Huawei command selection is
-model-aware: MA5608T uses `display ont autofind all`, then the parsed observation
-is filtered in-process to the requested F/S/P because that shelf rejects
-`display ont autofind <F/S/P>`. The cached candidate never substitutes for this
-live exact check. Commissioning also disables the legacy automatic “remove old
-registration and move” behavior.
+serial is absent or appears on another F/S/P. Commissioning always uses
+`display ont autofind all`, then filters the parsed live observation in-process
+to the exact requested F/S/P and canonical serial. This avoids firmware-specific
+scoped-command failures observed on both MA5608T and deployed MA5800-X2 shelves
+without weakening the exact pre-write identity check. The cached candidate never
+substitutes for this live exact check. Commissioning also disables the legacy
+automatic “remove old registration and move” behavior.
 
 The assignment owner locks the ONT and rejects assignment while commissioning
 is authorizing, awaiting ACS, or cleaning up. Assignment is allowed only after

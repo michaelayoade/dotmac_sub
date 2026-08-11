@@ -676,9 +676,15 @@ def _exact_live_autofind_preflight(
 ) -> _CommissioningPreflightOutcome:
     from app.services.network.olt_ssh_ont.autofind import query_ont_autofind
 
+    # Commissioning always reads the authoritative global inventory and then
+    # applies the exact typed F/S/P + serial match below. Scoped autofind is
+    # not portable even within one Huawei model family: deployed MA5800-X2
+    # firmware can reject ``display ont autofind <F/S/P>`` while accepting the
+    # global command. Never let that grammar difference bypass or weaken the
+    # exact pre-write identity check.
     ok, message, entries = query_ont_autofind(
         cast(OLTDevice, olt_config),
-        port=target.fsp.value,
+        port=None,
     )
     if not ok:
         return _CommissioningPreflightOutcome(False, message)

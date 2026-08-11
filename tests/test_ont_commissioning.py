@@ -267,9 +267,11 @@ def test_live_autofind_preflight_requires_exact_fsp_and_serial(
         requested_by="noc.operator",
         expires_at=datetime.now(UTC) + timedelta(hours=24),
     )
-    monkeypatch.setattr(
-        "app.services.network.olt_ssh_ont.autofind.query_ont_autofind",
-        lambda _olt, port=None: (
+    requested_ports: list[str | None] = []
+
+    def fake_query(_olt, port=None):
+        requested_ports.append(port)
+        return (
             True,
             "found",
             [
@@ -277,9 +279,18 @@ def test_live_autofind_preflight_requires_exact_fsp_and_serial(
                     fsp="0/1/9",
                     serial_number=target.serial,
                     serial_hex="",
-                )
+                ),
+                SimpleNamespace(
+                    fsp=target.fsp,
+                    serial_number="HWTC00000000",
+                    serial_hex="",
+                ),
             ],
-        ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.autofind.query_ont_autofind",
+        fake_query,
     )
 
     olt_config = OltConnectionConfig.from_model(olt)
@@ -294,6 +305,52 @@ def test_live_autofind_preflight_requires_exact_fsp_and_serial(
 
     assert outcome.success is False
     assert "no OLT write was attempted" in outcome.message
+    assert requested_ports == [None]
+
+
+def test_live_autofind_preflight_uses_global_inventory_for_exact_match(
+    db_session,
+    monkeypatch,
+):
+    olt, _candidate_row, target = _candidate(db_session)
+    requested_ports: list[str | None] = []
+
+    def fake_query(_olt, port=None):
+        requested_ports.append(port)
+        return (
+            True,
+            "found",
+            [
+                SimpleNamespace(
+                    fsp="0/1/9",
+                    serial_number=target.serial,
+                    serial_hex="",
+                ),
+                SimpleNamespace(
+                    fsp=target.fsp,
+                    serial_number=target.serial,
+                    serial_hex="",
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.autofind.query_ont_autofind",
+        fake_query,
+    )
+
+    outcome = _exact_live_autofind_preflight(
+        target=OntAuthorizationTarget.from_transport(
+            olt_id=target.olt_id,
+            fsp=target.fsp,
+            serial_number=target.serial,
+        ),
+        olt_config=OltConnectionConfig.from_model(olt),
+    )
+
+    assert outcome.success is True
+    assert outcome.message == "Exact live autofind target confirmed."
+    assert requested_ports == [None]
 
 
 def test_assignment_is_blocked_until_commissioning_is_management_ready(db_session):
