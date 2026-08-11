@@ -705,43 +705,62 @@ def build_network_map_plant_projection(*, db: Session) -> NetworkMapPlantProject
             )
         )
         counts[NetworkMapPlantLayer.sites] += 1
-    unmatched_olt_count = int(
-        db.query(func.count(OLTDevice.id))
-        .filter(
-            OLTDevice.is_active.is_(True),
-            ~OLTDevice.id.in_(mapped_olt_ids) if mapped_olt_ids else True,
-        )
-        .scalar()
-        or 0
+    unmatched_olt_query = db.query(func.count(OLTDevice.id)).filter(
+        OLTDevice.is_active.is_(True)
     )
+    if mapped_olt_ids:
+        unmatched_olt_query = unmatched_olt_query.filter(
+            ~OLTDevice.id.in_(mapped_olt_ids)
+        )
+    unmatched_olt_count = int(unmatched_olt_query.scalar() or 0)
 
-    for model, feature_type, layer in (
-        (FdhCabinet, NetworkMapFeatureType.fdh_cabinet, NetworkMapPlantLayer.osp),
+    point_groups = (
         (
-            FiberSpliceClosure,
+            db.query(FdhCabinet)
+            .filter(
+                FdhCabinet.is_active.is_(True),
+                FdhCabinet.latitude.isnot(None),
+                FdhCabinet.longitude.isnot(None),
+            )
+            .all(),
+            NetworkMapFeatureType.fdh_cabinet,
+            NetworkMapPlantLayer.osp,
+        ),
+        (
+            db.query(FiberSpliceClosure)
+            .filter(
+                FiberSpliceClosure.is_active.is_(True),
+                FiberSpliceClosure.latitude.isnot(None),
+                FiberSpliceClosure.longitude.isnot(None),
+            )
+            .all(),
             NetworkMapFeatureType.splice_closure,
             NetworkMapPlantLayer.osp,
         ),
         (
-            FiberAccessPoint,
+            db.query(FiberAccessPoint)
+            .filter(
+                FiberAccessPoint.is_active.is_(True),
+                FiberAccessPoint.latitude.isnot(None),
+                FiberAccessPoint.longitude.isnot(None),
+            )
+            .all(),
             NetworkMapFeatureType.access_point,
             NetworkMapPlantLayer.customer_edge,
         ),
         (
-            ServiceBuilding,
+            db.query(ServiceBuilding)
+            .filter(
+                ServiceBuilding.is_active.is_(True),
+                ServiceBuilding.latitude.isnot(None),
+                ServiceBuilding.longitude.isnot(None),
+            )
+            .all(),
             NetworkMapFeatureType.service_building,
             NetworkMapPlantLayer.customer_edge,
         ),
-    ):
-        rows = (
-            db.query(model)
-            .filter(
-                model.is_active.is_(True),
-                model.latitude.isnot(None),
-                model.longitude.isnot(None),
-            )
-            .all()
-        )
+    )
+    for rows, feature_type, layer in point_groups:
         for row in rows:
             features.append(
                 NetworkMapFeature(
