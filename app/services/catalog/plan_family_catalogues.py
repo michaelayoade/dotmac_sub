@@ -184,6 +184,25 @@ def _publish_catalogue(
     if not command.file_bytes:
         raise _error("file_required", "Choose a PDF catalogue to upload.")
 
+    # Do external object-storage I/O before the first database operation.  The
+    # command transaction is active, but SQLAlchemy has not checked out a
+    # connection yet; this keeps a slow upload from leaving PostgreSQL idle in
+    # a transaction until its timeout terminates the request.
+    catalogue_id = uuid4()
+    try:
+        prepared_file = file_uploads.prepare_upload(
+            domain="catalogues",
+            entity_type="plan_family_catalogue",
+            entity_id=str(catalogue_id),
+            original_filename=command.original_filename,
+            content_type=command.content_type,
+            data=command.file_bytes,
+            uploaded_by=None,
+            owner_subscriber_id=None,
+        )
+    except FileValidationError as exc:
+        raise _error("invalid_file", str(exc)) from exc
+
     rows = db.scalars(
         select(PlanFamilyCatalogue)
         .options(joinedload(PlanFamilyCatalogue.stored_file))
@@ -224,21 +243,7 @@ def _publish_catalogue(
         )
         + 1
     )
-    catalogue_id = uuid4()
-    try:
-        stored = file_uploads.stage_upload(
-            db=db,
-            domain="catalogues",
-            entity_type="plan_family_catalogue",
-            entity_id=str(catalogue_id),
-            original_filename=command.original_filename,
-            content_type=command.content_type,
-            data=command.file_bytes,
-            uploaded_by=None,
-            owner_subscriber_id=None,
-        )
-    except FileValidationError as exc:
-        raise _error("invalid_file", str(exc)) from exc
+    stored = file_uploads.stage_prepared_upload(db=db, prepared=prepared_file)
     row = PlanFamilyCatalogue(
         id=catalogue_id,
         plan_family=family,
