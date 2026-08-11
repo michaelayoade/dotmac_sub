@@ -84,9 +84,7 @@ def upgrade() -> None:
     # while adopting the kernel's tenant server default makes a raw insert
     # produce tenant + NULL and fail immediately.
     op.execute(
-        sa.text(
-            f"ALTER TABLE {TABLE} DROP CONSTRAINT IF EXISTS {SCOPE_CONSTRAINT}"
-        ),
+        sa.text(f"ALTER TABLE {TABLE} DROP CONSTRAINT IF EXISTS {SCOPE_CONSTRAINT}"),
     )
 
     op.alter_column(
