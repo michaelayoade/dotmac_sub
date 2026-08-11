@@ -586,6 +586,7 @@ def _build_issue_preview(
     payload: CreditNoteIssuePreviewRequest,
     *,
     credit_note_id: UUID | None = None,
+    apply_on_issue: bool = True,
 ) -> CreditIssuePreview:
     total = round_money(payload.total)
     data = payload.model_dump()
@@ -607,7 +608,8 @@ def _build_issue_preview(
     receivable = round_money(invoice.balance_due) if invoice else None
     application_amount = (
         round_money(min(total, receivable))
-        if invoice is not None
+        if apply_on_issue
+        and invoice is not None
         and receivable is not None
         and _invoice_can_take_credit(invoice)
         else Decimal("0.00")
@@ -621,6 +623,7 @@ def _build_issue_preview(
     )
     fingerprint = _stable_fingerprint(
         "credit_note_issue",
+        apply_on_issue=apply_on_issue,
         application_amount=application_amount,
         credit_note_id=credit_note_id,
         account_id=payload.account_id,
@@ -894,9 +897,12 @@ class CreditNotes(ListResponseMixin):
 
     @staticmethod
     def preview_issue(
-        db: Session, payload: CreditNoteIssuePreviewRequest
+        db: Session,
+        payload: CreditNoteIssuePreviewRequest,
+        *,
+        apply_on_issue: bool = True,
     ) -> CreditIssuePreview:
-        return _build_issue_preview(db, payload)
+        return _build_issue_preview(db, payload, apply_on_issue=apply_on_issue)
 
     @staticmethod
     def preview_draft_issue(db: Session, credit_note_id: str) -> CreditIssuePreview:
@@ -970,6 +976,7 @@ class CreditNotes(ListResponseMixin):
         *,
         commit: bool = True,
         stage_audit: bool = True,
+        apply_on_issue: bool = True,
     ) -> CreditIssueResult:
         key = _normalize_idempotency_key(payload.idempotency_key)
         replay = CreditNotes._issue_replay(
@@ -980,7 +987,9 @@ class CreditNotes(ListResponseMixin):
 
         lock_account(db, str(payload.account_id))
         preview_request = _issue_preview_request(payload)
-        preview = _build_issue_preview(db, preview_request)
+        preview = _build_issue_preview(
+            db, preview_request, apply_on_issue=apply_on_issue
+        )
         if preview.fingerprint != payload.preview_fingerprint:
             raise HTTPException(
                 status_code=409,
@@ -1056,12 +1065,16 @@ class CreditNotes(ListResponseMixin):
             # transaction. Leaving it for a manual step overstates AR for as
             # long as nobody takes that step, and ages and duns a balance the
             # customer no longer owes.
-            application = CreditNotes._stage_issue_application(
-                db,
-                credit_note=credit_note,
-                issue_key=key,
-                memo=payload.memo,
-                stage_audit=stage_audit,
+            application = (
+                CreditNotes._stage_issue_application(
+                    db,
+                    credit_note=credit_note,
+                    issue_key=key,
+                    memo=payload.memo,
+                    stage_audit=stage_audit,
+                )
+                if apply_on_issue
+                else None
             )
             if stage_audit:
                 _stage_credit_audit(
@@ -1154,9 +1167,16 @@ class CreditNotes(ListResponseMixin):
         *,
         idempotency_key: str,
         commit: bool = False,
+        apply_on_issue: bool = True,
     ) -> CreditIssueResult:
-        """Issue through the same preview/confirmation owner for automated callers."""
-        preview = CreditNotes.preview_issue(db, payload)
+        """Issue through the same preview/confirmation owner for automated callers.
+
+        ``apply_on_issue=False`` is for a caller whose own contract requires the
+        note to stay voidable — a credit note cannot be voided once applied and
+        there is no un-apply path, so a reversible workflow must hold its credit
+        deliberately. It is a recorded decision, not an oversight.
+        """
+        preview = CreditNotes.preview_issue(db, payload, apply_on_issue=apply_on_issue)
         return CreditNotes.issue_with_evidence(
             db,
             CreditNoteIssueRequest(
@@ -1165,6 +1185,7 @@ class CreditNotes(ListResponseMixin):
                 idempotency_key=idempotency_key,
             ),
             commit=commit,
+            apply_on_issue=apply_on_issue,
         )
 
     @staticmethod
@@ -1254,6 +1275,7 @@ class CreditNotes(ListResponseMixin):
         *,
         commit: bool = True,
         stage_audit: bool = True,
+        apply_on_issue: bool = True,
     ) -> CreditIssueResult:
         key = _normalize_idempotency_key(payload.idempotency_key)
         replay = CreditNotes._issue_replay(
@@ -1277,7 +1299,10 @@ class CreditNotes(ListResponseMixin):
         if draft.status != CreditNoteStatus.draft:
             raise HTTPException(status_code=409, detail="Credit note is not a draft")
         preview = _build_issue_preview(
-            db, _draft_issue_request(draft), credit_note_id=draft.id
+            db,
+            _draft_issue_request(draft),
+            credit_note_id=draft.id,
+            apply_on_issue=apply_on_issue,
         )
         if preview.fingerprint != payload.preview_fingerprint:
             raise HTTPException(
@@ -1306,6 +1331,18 @@ class CreditNotes(ListResponseMixin):
             draft.issue_preview_fingerprint = preview.fingerprint
             reservation.ref_id = str(draft.id)
             db.flush()
+            # Draft holds, issued applies — the same rule on both issue paths.
+            application = (
+                CreditNotes._stage_issue_application(
+                    db,
+                    credit_note=draft,
+                    issue_key=key,
+                    memo=draft.memo,
+                    stage_audit=stage_audit,
+                )
+                if apply_on_issue
+                else None
+            )
             if stage_audit:
                 _stage_credit_audit(
                     db,
@@ -1330,6 +1367,7 @@ class CreditNotes(ListResponseMixin):
             credit_note=draft,
             funding_ledger_entry=funding,
             preview=preview,
+            application=application,
         )
 
     @staticmethod

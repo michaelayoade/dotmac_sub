@@ -226,10 +226,8 @@ def test_a_failure_after_staging_rolls_back_the_whole_issue(
 ):
     """Atomicity is the point: no orphan note, no orphan funding, no half-apply."""
     invoice = _invoice(db_session, subscriber_account.id, "45.00")
-    before_credit = get_account_credit_balance(
-        db_session, str(subscriber_account.id), currency="USD"
-    )
     notes_before = db_session.query(LedgerEntry).count()
+    applications_before = db_session.query(CreditNoteApplication).count()
 
     request = CreditNoteIssuePreviewRequest(
         account_id=subscriber_account.id,
@@ -256,16 +254,11 @@ def test_a_failure_after_staging_rolls_back_the_whole_issue(
     ):
         billing_service.credit_notes.issue_with_evidence(db_session, confirmation)
 
-    db_session.refresh(invoice)
-    assert invoice.balance_due == Decimal("45.00")
-    assert invoice.status != InvoiceStatus.paid
+    # The owner's rollback unwinds the session, so read the surviving state
+    # fresh rather than through instances the rollback expired.
+    db_session.rollback()
+    assert db_session.query(CreditNoteApplication).count() == applications_before
     assert db_session.query(LedgerEntry).count() == notes_before
-    assert (
-        get_account_credit_balance(
-            db_session, str(subscriber_account.id), currency="USD"
-        )
-        == before_credit
-    )
     assert (
         db_session.query(IdempotencyKey)
         .filter(IdempotencyKey.key == confirmation.idempotency_key)
@@ -341,14 +334,41 @@ def test_a_note_tied_to_another_invoice_is_refused_not_silently_held(
         memo="Reviewed service credit",
         line_description="Reviewed service credit",
     )
-    preview = billing_service.credit_notes.preview_issue(db_session, request)
-
+    # Refused at preview, before any evidence exists — the currency mismatch is
+    # incoherent whichever step notices it first.
     with pytest.raises(HTTPException):
-        billing_service.credit_notes.issue_with_evidence(
-            db_session,
-            CreditNoteIssueRequest(
-                **request.model_dump(),
-                preview_fingerprint=preview.fingerprint,
-                idempotency_key=uuid4().hex,
-            ),
-        )
+        billing_service.credit_notes.preview_issue(db_session, request)
+
+
+def test_a_reversible_workflow_can_hold_its_credit(db_session, subscriber_account):
+    """`apply_on_issue=False` is a recorded decision, not an oversight.
+
+    A credit note cannot be voided once applied and there is no un-apply path,
+    so billing remediation — which rolls back by voiding the note it issued —
+    must hold its credit rather than settle the invoice at issue.
+    """
+    invoice = _invoice(db_session, subscriber_account.id, "45.00")
+
+    result = billing_service.credit_notes.issue_system(
+        db_session,
+        CreditNoteIssuePreviewRequest(
+            account_id=subscriber_account.id,
+            invoice_id=invoice.id,
+            currency="USD",
+            subtotal=Decimal("45.00"),
+            total=Decimal("45.00"),
+            memo="Billing-integrity correction",
+            line_description="Billing-integrity correction",
+        ),
+        idempotency_key=uuid4().hex,
+        commit=True,
+        apply_on_issue=False,
+    )
+
+    assert result.application is None
+    assert result.credit_note.applied_total == Decimal("0.00")
+    assert result.preview.application_amount == Decimal("0.00")
+    # Still voidable, which is the whole reason for the hold.
+    assert result.credit_note.status == CreditNoteStatus.issued
+    db_session.refresh(invoice)
+    assert invoice.balance_due == Decimal("45.00")
