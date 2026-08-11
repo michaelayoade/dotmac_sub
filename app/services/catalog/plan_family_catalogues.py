@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -22,7 +23,11 @@ from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
-from app.services.file_storage import FileValidationError, file_uploads
+from app.services.file_storage import (
+    FileValidationError,
+    PreparedFileUpload,
+    file_uploads,
+)
 from app.services.owner_commands import OwnerCommandDefinition, execute_owner_command
 from app.services.web_catalog_offers import plan_family_values
 
@@ -37,6 +42,16 @@ _PUBLISH = OwnerCommandDefinition(
 
 class PlanFamilyCatalogueError(DomainError):
     """Safe domain failure mapped by web adapters."""
+
+
+@dataclass(frozen=True)
+class _PreparedCataloguePublication:
+    """Validated command values and object uploaded before the transaction."""
+
+    catalogue_id: UUID
+    family: str
+    display_name: str
+    file: PreparedFileUpload
 
 
 def _error(code: str, message: str, **details: object) -> PlanFamilyCatalogueError:
@@ -157,17 +172,20 @@ def resolve_shareable_catalogue(
 def publish_catalogue(
     db: Session, command: PublishPlanFamilyCatalogueCommand
 ) -> PublishPlanFamilyCatalogueOutcome:
+    prepared = _prepare_publication(command)
     return execute_owner_command(
         db,
         definition=_PUBLISH,
         context=command.context,
-        operation=lambda: _publish_catalogue(db, command),
+        operation=lambda: _publish_catalogue(db, command, prepared),
     )
 
 
-def _publish_catalogue(
-    db: Session, command: PublishPlanFamilyCatalogueCommand
-) -> PublishPlanFamilyCatalogueOutcome:
+def _prepare_publication(
+    command: PublishPlanFamilyCatalogueCommand,
+) -> _PreparedCataloguePublication:
+    """Validate and upload before the owner opens its database transaction."""
+
     family = _normalize_family(command.plan_family)
     display_name = command.display_name.strip()
     if not display_name:
@@ -177,10 +195,6 @@ def _publish_catalogue(
     if not command.file_bytes:
         raise _error("file_required", "Choose a PDF catalogue to upload.")
 
-    # Do external object-storage I/O before the first database operation.  The
-    # command transaction is active, but SQLAlchemy has not checked out a
-    # connection yet; this keeps a slow upload from leaving PostgreSQL idle in
-    # a transaction until its timeout terminates the request.
     catalogue_id = uuid4()
     try:
         prepared_file = file_uploads.prepare_upload(
@@ -195,6 +209,22 @@ def _publish_catalogue(
         )
     except FileValidationError as exc:
         raise _error("invalid_file", str(exc)) from exc
+    return _PreparedCataloguePublication(
+        catalogue_id=catalogue_id,
+        family=family,
+        display_name=display_name,
+        file=prepared_file,
+    )
+
+
+def _publish_catalogue(
+    db: Session,
+    command: PublishPlanFamilyCatalogueCommand,
+    prepared: _PreparedCataloguePublication,
+) -> PublishPlanFamilyCatalogueOutcome:
+    family = prepared.family
+    display_name = prepared.display_name
+    catalogue_id = prepared.catalogue_id
 
     configured = {_normalize_family(item) for item in plan_family_values(db)}
     if family not in configured:
@@ -244,7 +274,7 @@ def _publish_catalogue(
         )
         + 1
     )
-    stored = file_uploads.stage_prepared_upload(db=db, prepared=prepared_file)
+    stored = file_uploads.stage_prepared_upload(db=db, prepared=prepared.file)
     row = PlanFamilyCatalogue(
         id=catalogue_id,
         plan_family=family,

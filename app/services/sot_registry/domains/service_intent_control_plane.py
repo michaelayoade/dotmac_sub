@@ -129,10 +129,10 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
-                        "publish_catalogue enters one root owner transaction; external "
-                        "object upload completes before its first database operation, then "
-                        "file metadata, prior-version supersession, audit, and event are "
-                        "staged before the boundary commits."
+                        "publish_catalogue validates and uploads the content-addressed "
+                        "object before entering one root owner transaction; file metadata, "
+                        "prior-version supersession, audit, and event are then staged "
+                        "before the boundary commits."
                     ),
                     locking=(
                         "Publication locks every existing version for the selected family; "
