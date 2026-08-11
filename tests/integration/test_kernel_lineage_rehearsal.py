@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -49,6 +50,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 
 from alembic import command
+from app import config as app_config
 
 #: The first kernel revision expected to fail against Sub's schema.
 #:
@@ -103,7 +105,7 @@ def _kernel_versions_dir() -> Path:
 
 
 @pytest.fixture
-def isolated_database() -> Iterator[URL]:
+def isolated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
     configured = os.getenv("TEST_DATABASE_URL")
     if not configured:
         raise pytest.UsageError("kernel lineage rehearsal requires TEST_DATABASE_URL")
@@ -116,7 +118,13 @@ def isolated_database() -> Iterator[URL]:
     with psycopg.connect(_psycopg_url(maintenance), autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     try:
-        yield base_url.set(database=name)
+        database_url = base_url.set(database=name)
+        monkeypatch.setattr(
+            app_config,
+            "settings",
+            replace(app_config.settings, database_url=_render(database_url)),
+        )
+        yield database_url
     finally:
         with psycopg.connect(_psycopg_url(maintenance), autocommit=True) as admin:
             admin.execute(
@@ -133,7 +141,6 @@ def _sub_config(database_url: URL) -> Config:
     config = Config("alembic.ini")
     config.set_main_option("script_location", "alembic")
     config.set_main_option("sqlalchemy.url", _render(database_url))
-    os.environ["MIGRATION_DATABASE_URL"] = _render(database_url)
     return config
 
 
@@ -142,7 +149,6 @@ def _kernel_config(database_url: URL) -> Config:
     config.set_main_option("script_location", "alembic")
     config.set_main_option("version_locations", str(_kernel_versions_dir()))
     config.set_main_option("sqlalchemy.url", _render(database_url))
-    os.environ["MIGRATION_DATABASE_URL"] = _render(database_url)
     return config
 
 
