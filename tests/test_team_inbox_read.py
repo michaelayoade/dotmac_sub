@@ -325,6 +325,13 @@ def test_admin_inbox_detail_renders_timeline(db_session, monkeypatch):
         "TemplateResponse",
         _fake_template_response,
     )
+    monkeypatch.setattr(
+        admin_inbox,
+        "_ctx",
+        lambda *_args, **_kwargs: pytest.fail(
+            "HTMX conversation partial computed global sidebar context"
+        ),
+    )
     db_session.commit()
 
     context = admin_inbox.team_inbox_detail(
@@ -341,6 +348,7 @@ def test_admin_inbox_detail_renders_timeline(db_session, monkeypatch):
     assert captured["template_name"] == "admin/inbox/_conversation.html"
     assert context["timeline"].id == str(conversation.id)
     assert context["timeline"].messages[0].body == "Down"
+    assert set(context).issuperset({"request", "timeline", "activity_events"})
 
 
 def test_admin_inbox_detail_non_htmx_redirects_to_workspace(db_session):

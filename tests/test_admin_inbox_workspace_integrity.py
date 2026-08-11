@@ -609,6 +609,23 @@ def test_realtime_activity_waits_for_an_explicit_queue_refresh():
     assert "this.refreshSidebar()" not in event_body
 
 
+def test_fallback_polling_is_coalesced_and_bounded():
+    request_marker = JAVASCRIPT.index("requestInboxList(urlValue")
+    request_body = JAVASCRIPT[request_marker : request_marker + 900]
+    assert "if (!operator && this.activeListRequest) return" in request_body
+
+    poll_marker = JAVASCRIPT.index("startFallbackPolling()")
+    poll_body = JAVASCRIPT[poll_marker : poll_marker + 700]
+    assert "if (this.activeListRequest) return" in poll_body
+    assert "}, 15000)" in poll_body
+    assert "ticks % 4 === 0" in poll_body
+
+
+def test_conversation_detail_route_uses_a_uuid_path_converter():
+    assert '"/{conversation_id:uuid}"' in ROUTES
+    assert '"/{conversation_id:uuid}/contact"' in ROUTES
+
+
 def test_every_list_request_uses_one_latest_request_wins_coordinator():
     for contract in (
         "requestInboxList(urlValue, options = {})",

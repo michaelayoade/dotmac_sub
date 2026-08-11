@@ -252,7 +252,10 @@ def team_inbox_queue(
         if can_manage_inbox and not is_list_fragment_request
         else None
     )
-    context = _ctx(request, db)
+    # Sidebar/queue fragments are the websocket fallback-poll target. They do
+    # not render the global admin navigation, so computing its database-backed
+    # counters on every poll only adds unrelated load to an already hot path.
+    context = {"request": request} if is_list_fragment_request else _ctx(request, db)
     context.update(
         {
             "rows": projection.rows,
@@ -444,7 +447,9 @@ def team_inbox_media_content(
     if isinstance(media_content, tuple):
         asset, stream = media_content
         file_name = asset.file_name or f"inbox-media-{asset.id}"
-        content_type = stream.content_type or asset.mime_type or "application/octet-stream"
+        content_type = (
+            stream.content_type or asset.mime_type or "application/octet-stream"
+        )
     else:
         stream = media_content.stream
         file_name = media_content.file_name or f"inbox-media-{media_content.asset_id}"
@@ -453,9 +458,7 @@ def team_inbox_media_content(
             or media_content.content_type
             or "application/octet-stream"
         )
-    headers = {
-        "Content-Disposition": build_content_disposition(file_name)
-    }
+    headers = {"Content-Disposition": build_content_disposition(file_name)}
     if stream.content_length is not None:
         headers["Content-Length"] = str(stream.content_length)
     return StreamingResponse(
@@ -466,7 +469,7 @@ def team_inbox_media_content(
 
 
 @router.get(
-    "/{conversation_id}",
+    "/{conversation_id:uuid}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("support:ticket:read"))],
 )
@@ -520,14 +523,17 @@ def team_inbox_detail(
     # HTMX list clicks swap the thread+context partial into #triage-detail;
     # a full navigation lands in the workspace with the conversation preselected.
     if request.headers.get("hx-request"):
-        context = _ctx(request, db)
+        # This response is swapped into the existing workspace. The global
+        # navigation and its sidebar counters are already on the page and are
+        # not part of this partial.
+        context = {"request": request}
         context.update(view)
         return templates.TemplateResponse("admin/inbox/_conversation.html", context)
     return RedirectResponse(url=f"/admin/inbox?c={conversation_id}", status_code=303)
 
 
 @router.get(
-    "/{conversation_id}/contact",
+    "/{conversation_id:uuid}/contact",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("support:ticket:read"))],
 )

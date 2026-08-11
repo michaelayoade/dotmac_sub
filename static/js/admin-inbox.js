@@ -564,7 +564,11 @@
             : new URL(urlValue, window.location.origin);
         const intent = options.intent || "operator_filter";
         const operator = !["poll", "read_state", "realtime"].includes(intent);
-        if (!operator && this.activeListRequest?.operator) return;
+        // Background refreshes must never abort or overlap another list load.
+        // When the server is slow, the old five-second poll loop repeatedly
+        // aborted the browser request while its database work continued,
+        // multiplying load and making the inbox appear permanently stuck.
+        if (!operator && this.activeListRequest) return;
         this.beginListRequest(intent, operator);
         if (options.historyMode === "push") history.pushState({}, "", url);
         if (options.historyMode === "replace") history.replaceState({}, "", url);
@@ -1329,12 +1333,13 @@
         this.pollTimer = window.setInterval(() => {
           if (document.visibilityState !== "visible") return;
           if (this.filterLoading) return;
+          if (this.activeListRequest) return;
           ticks += 1;
-          const dueWhileConnected = ticks % 6 === 0;
+          const dueWhileConnected = ticks % 4 === 0;
           if (!this.realtimeConnected || dueWhileConnected) {
             this.refreshSidebar("poll");
           }
-        }, 5000);
+        }, 15000);
       },
 
       filteredCommands() {

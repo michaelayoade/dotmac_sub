@@ -152,6 +152,14 @@ def test_every_route_declares_a_permission_guard():
     assert unguarded == []
 
 
+def test_static_conversations_path_is_not_captured_as_a_conversation_uuid(db_session):
+    response = _client(db_session).get("/inbox/conversations")
+
+    # POST owns this static path. A GET must be a method error, not a UUID
+    # validation failure from the earlier conversation-detail route.
+    assert response.status_code == 405
+
+
 def _post_new_email_conversation(
     db_session,
     *,
