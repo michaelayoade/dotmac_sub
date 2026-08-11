@@ -2505,7 +2505,12 @@ confirmation, tracking, or rating eligibility from raw statuses.
    projection supplies the admin new-ticket preview; the browser displays that
    decision but does not own assignment. Blank routing rows are ignored, while
    assignment data without a Region is rejected. A configured status must be
-   part of the lifecycle vocabulary.
+   part of the lifecycle vocabulary. `resolved` remains a readable historical
+   lifecycle value but is excluded from this operator-visible subset at the
+   configuration owner, including admin forms, quick and bulk changes,
+   automation configuration, and basic/advanced filters. Existing resolved
+   Tickets retain their value and presentation. The `not_closed` read scope
+   continues to exclude only `closed`.
 3. Status configuration does not own labels, tones, icons, or platform colors;
    those are read-side presentation concerns.
 4. `support.ticket_bulk_commands` owns exact selected membership, normalized

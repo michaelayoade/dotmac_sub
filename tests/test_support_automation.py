@@ -136,6 +136,15 @@ def test_admin_action_value_validation_rejects_mismatched_payload(db_session):
         )
 
 
+def test_admin_action_value_validation_rejects_resolved_status(db_session):
+    with pytest.raises(ValueError, match="configured status"):
+        admin_support_automation._validate_action_value(
+            db_session,
+            AutomationActionType.set_status,
+            {"status": TicketStatus.resolved.value},
+        )
+
+
 # ---------------------------------------------------------------------------
 # Service CRUD + apply_rules (needs db_session fixture).
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from app.models.support import (
     TicketCommentAuthorType,
     TicketStatus,
 )
+from app.schemas.status_presentation import StatusPresentation
 from app.schemas.support import (
     AttachmentMeta,
     TicketCommentCreate,
@@ -364,6 +365,33 @@ def _append_missing_option(options: list[str], value: str | None) -> list[str]:
     return [*options, text]
 
 
+def _unavailable_status_presentation(
+    options: list[str], value: str | None
+) -> StatusPresentation | None:
+    text = str(value or "").strip()
+    if not text or text in options:
+        return None
+    return ticket_status_presentation(text)
+
+
+def _admin_status_value(
+    db: Session, value: object, *, current_status: str | None = None
+) -> str:
+    normalized = support_ticket_settings_service.normalize_system_value(
+        str(value or "")
+    )
+    if normalized and normalized == str(current_status or "").strip():
+        return normalized
+    if normalized not in set(support_ticket_settings_service.list_status_options(db)):
+        db_session_adapter.release_read_transaction(db)
+        raise WebSupportTicketInputError(
+            code="support_ticket_status_not_selectable",
+            message="Select an available ticket status",
+            details={"status": normalized},
+        )
+    return normalized
+
+
 def _ticket_sla_state(
     ticket: Ticket, *, clock=None, now: datetime | None = None
 ) -> dict[str, object]:
@@ -595,8 +623,10 @@ def build_ticket_form_context(
     prefill["subscriber_label"] = (
         subscriber_person["label"] if subscriber_person else ""
     )
-    status_options = _append_missing_option(
-        status_options, str(prefill["status"] or "")
+    if ticket is None and str(prefill["status"] or "") not in status_options:
+        prefill["status"] = support_ticket_settings_service.default_status(db)
+    unavailable_status_presentation = _unavailable_status_presentation(
+        status_options, ticket.status if ticket is not None else None
     )
     priority_options = _append_missing_option(
         priority_options, str(prefill["priority"] or "")
@@ -611,6 +641,7 @@ def build_ticket_form_context(
     }
     return {
         "all_statuses": status_options,
+        "unavailable_status_presentation": unavailable_status_presentation,
         "all_priorities": priority_options,
         "all_channels": [item.value for item in TicketChannel],
         "region_options": support_service.regions(db),
@@ -773,6 +804,7 @@ def create_ticket_from_form(
     server-side on submit; without the operator's ``duplicate_override``
     confirmation a warning is raised so the route can re-render the form.
     """
+    form["status"] = _admin_status_value(db, form.get("status"))
     payload = build_ticket_create_payload(actor_id=actor_id, **form)
     duplicate_result = ticket_validation.find_duplicate_ticket_candidates(
         db, _duplicate_input_from_payload(payload)
@@ -823,6 +855,10 @@ def update_ticket_from_form(
     actor_id: str | None,
     **form,
 ):
+    ticket = support_service.tickets.get(db, ticket_id)
+    form["status"] = _admin_status_value(
+        db, form.get("status"), current_status=ticket.status
+    )
     payload = build_ticket_update_payload(**form)
     db_session_adapter.release_read_transaction(db)
     return support_service.tickets.update(
@@ -856,6 +892,7 @@ def quick_update_ticket(
         "service_team_id",
         "assigned_to_person_id",
     }
+    ticket = support_service.tickets.get(db, ticket_id)
     payload_data: dict = {}
     for key, value in fields.items():
         if value in (None, ""):
@@ -868,7 +905,11 @@ def quick_update_ticket(
                     code="support_ticket_form_invalid",
                     message=f"{key} must be a valid UUID",
                 ) from exc
-        elif key in ("status", "priority"):
+        elif key == "status":
+            payload_data[key] = _admin_status_value(
+                db, value, current_status=ticket.status
+            )
+        elif key == "priority":
             payload_data[key] = str(value).strip()
         else:
             payload_data[key] = value
@@ -1147,7 +1188,9 @@ def build_tickets_list_context(
     selected_status = list_query.filter_value("status")
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
-    status_options = _append_missing_option(status_options, selected_status)
+    unavailable_status_filter = _unavailable_status_presentation(
+        status_options, selected_status
+    )
     total = _ticket_scope_count(
         db,
         list_query=list_query,
@@ -1257,6 +1300,7 @@ def build_tickets_list_context(
         "visible_columns": visible_ticket_columns(visible_columns_cookie),
         "ticket_columns": TICKET_COLUMNS,
         "all_statuses": status_options,
+        "unavailable_status_filter": unavailable_status_filter,
         "all_priorities": priority_options,
         "ticket_type_options": support_service.ticket_types(db),
         "region_options": support_service.regions(db),
@@ -1490,7 +1534,9 @@ def build_ticket_detail_context(
     comments = support_service.ticket_comments.list(
         db, str(ticket.id), limit=500, offset=0
     )
-    status_options = _append_missing_option(status_options, ticket.status)
+    unavailable_status_presentation = _unavailable_status_presentation(
+        status_options, ticket.status
+    )
     priority_options = _append_missing_option(priority_options, ticket.priority)
     staff = support_service.list_assignment_people(
         db,
@@ -1537,6 +1583,7 @@ def build_ticket_detail_context(
             db, "support_ticket", str(ticket.id), limit=100
         ),
         "all_statuses": status_options,
+        "unavailable_status_presentation": unavailable_status_presentation,
         "all_priorities": priority_options,
         "all_channels": [item.value for item in TicketChannel],
         "people_options": subscribers,
@@ -1554,7 +1601,8 @@ def build_ticket_detail_context(
             ),
         ),
         "status_presentations": {
-            value: ticket_status_presentation(value) for value in status_options
+            value: ticket_status_presentation(value)
+            for value in {*status_options, ticket.status}
         },
         "is_merged_source": bool(
             ticket.merged_into_ticket_id

@@ -214,6 +214,14 @@ def test_support_ticket_bulk_rejects_implicit_scope_and_invalid_updates(db_sessi
                 "updates": {"status": "merged"},
             },
         )
+    with pytest.raises(DomainError, match="configured ticket status"):
+        web_support_ticket_bulk.preview_support_ticket_bulk_update(
+            db_session,
+            {
+                "selection": _selection(str(uuid4())),
+                "updates": {"status": "resolved"},
+            },
+        )
 
 
 def test_support_ticket_bulk_routes_are_thin_preview_and_execute_adapters():

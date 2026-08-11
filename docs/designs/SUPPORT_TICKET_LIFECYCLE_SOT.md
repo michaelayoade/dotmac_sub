@@ -42,6 +42,17 @@ current region choices from configured values and canonical Ticket observations.
 This separation prevents lifecycle and configuration from depending on each
 other while preserving the provenance of both inputs.
 
+`resolved` remains part of the closed lifecycle vocabulary for historical
+Tickets, integrations, reports, timestamps, and lifecycle reads, but it is not
+part of the operator-selectable status subset. The configuration owner removes
+it from stored/default option projections and rejects attempts to configure it.
+Admin create, edit, quick-status, bulk-update, automation, list-filter, and
+advanced-filter controls consume that one subset. A historical Ticket already
+in `resolved` remains displayable and may preserve that unchanged value while
+another field is edited; the UI presents it as a non-selectable current value.
+The `not_closed` list scope remains a separate read contract that excludes only
+`closed`, so it continues to include historical `resolved` Tickets.
+
 Regional routing configuration is replaced through the typed
 `TicketConfigurationUpdate` command. Region keys are normalized to lowercase.
 A completely blank routing row is ignored, but assignment data without a Region

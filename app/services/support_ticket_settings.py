@@ -40,7 +40,13 @@ SLA_POLICY_KEY = "support_ticket_sla_policy"
 TYPE_SLA_POLICY_KEY = "support_ticket_type_sla_policy"
 SETTINGS_DOMAIN = SettingDomain.workflow
 
-DEFAULT_STATUS_OPTIONS = [status.value for status in TicketStatus]
+LIFECYCLE_STATUS_OPTIONS = tuple(status.value for status in TicketStatus)
+ADMIN_NON_SELECTABLE_STATUSES = frozenset({TicketStatus.resolved.value})
+DEFAULT_STATUS_OPTIONS = [
+    value
+    for value in LIFECYCLE_STATUS_OPTIONS
+    if value not in ADMIN_NON_SELECTABLE_STATUSES
+]
 VALID_STATUS_OPTIONS = frozenset(DEFAULT_STATUS_OPTIONS)
 DEFAULT_PRIORITY_OPTIONS = [
     "lower",
@@ -267,7 +273,7 @@ def normalize_region_key(value: str | None) -> str:
 
 
 def normalize_ticket_status(value: str) -> str:
-    """Keep configured choices inside the lifecycle owner's vocabulary."""
+    """Keep configured choices inside the admin-selectable status subset."""
     normalized = normalize_system_value(value)
     return normalized if normalized in VALID_STATUS_OPTIONS else ""
 

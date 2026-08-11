@@ -7,7 +7,7 @@ import pytest
 from starlette.datastructures import FormData
 
 from app.models.service_team import ServiceTeam, ServiceTeamType
-from app.models.support import Ticket, TicketChannel
+from app.models.support import Ticket, TicketChannel, TicketStatus
 from app.models.ticket_workflow import TicketAssignmentRule
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_support_tickets as web_support_tickets_service
@@ -38,7 +38,10 @@ def _native_team(db_session, *, name: str, team_id=None) -> ServiceTeam:
 
 
 def test_ticket_settings_defaults_loaded_without_db_rows(db_session):
-    assert support_ticket_settings_service.list_status_options(db_session)
+    status_options = support_ticket_settings_service.list_status_options(db_session)
+    assert status_options
+    assert TicketStatus.resolved.value not in status_options
+    assert TicketStatus.resolved.value == "resolved"
     assert support_ticket_settings_service.list_priority_options(db_session)
     assert support_ticket_settings_service.list_ticket_type_options(db_session)
     assert (
@@ -78,6 +81,67 @@ def test_ticket_settings_reject_statuses_outside_lifecycle_vocabulary(db_session
             db_session,
             _configuration_command(statuses=("open", "needs_vendor")),
         )
+
+
+def test_ticket_settings_reject_resolved_from_operator_selectable_subset(db_session):
+    with pytest.raises(
+        support_ticket_settings_service.SupportTicketConfigurationError,
+        match="Unsupported ticket status: resolved",
+    ):
+        support_ticket_settings_service.update_ticket_configuration(
+            db_session,
+            _configuration_command(statuses=("open", "resolved")),
+        )
+
+
+def test_resolved_ticket_form_context_preserves_historical_display_only(db_session):
+    ticket = Ticket(
+        title="Historical resolved ticket",
+        status=TicketStatus.resolved.value,
+        priority="normal",
+        channel=TicketChannel.web,
+        is_active=True,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    context = web_support_tickets_service.build_ticket_form_context(
+        db_session, ticket=ticket
+    )
+
+    assert TicketStatus.resolved.value not in context["all_statuses"]
+    assert context["prefill"]["status"] == TicketStatus.resolved.value
+    assert context["unavailable_status_presentation"].value == "resolved"
+    assert context["unavailable_status_presentation"].label == "Resolved"
+
+
+def test_new_ticket_form_ignores_non_selectable_resolved_prefill(db_session):
+    context = web_support_tickets_service.build_ticket_form_context(
+        db_session, query_params={"status": TicketStatus.resolved.value}
+    )
+
+    assert TicketStatus.resolved.value not in context["all_statuses"]
+    assert context["prefill"]["status"] in context["all_statuses"]
+    assert context["unavailable_status_presentation"] is None
+
+
+def test_admin_status_mutations_reject_new_resolved_selection(db_session):
+    with pytest.raises(
+        web_support_tickets_service.WebSupportTicketInputError,
+        match="Select an available ticket status",
+    ):
+        web_support_tickets_service._admin_status_value(
+            db_session, TicketStatus.resolved.value
+        )
+
+    assert (
+        web_support_tickets_service._admin_status_value(
+            db_session,
+            TicketStatus.resolved.value,
+            current_status=TicketStatus.resolved.value,
+        )
+        == TicketStatus.resolved.value
+    )
 
 
 def test_ticket_settings_persist_routing_and_sla(db_session):
