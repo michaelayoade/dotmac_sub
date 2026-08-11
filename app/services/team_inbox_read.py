@@ -295,9 +295,7 @@ def _base_queue_query(db: Session):
 
 def queue_conversation_count(db: Session) -> int:
     return int(
-        _base_queue_query(db)
-        .with_entities(func.count(InboxConversation.id))
-        .scalar()
+        _base_queue_query(db).with_entities(func.count(InboxConversation.id)).scalar()
         or 0
     )
 
@@ -873,8 +871,10 @@ def _asset_attachment(asset: InboxMediaAsset) -> dict[str, object]:
         and asset.direction == "inbound"
         and bool(asset.provider_media_id)
     )
-    url = team_inbox_media.media_content_url(asset.id) if can_stream else (
-        asset.storage_url or asset.source_url
+    url = (
+        team_inbox_media.media_content_url(asset.id)
+        if can_stream
+        else (asset.storage_url or asset.source_url)
     )
     return {
         "id": str(asset.id),
