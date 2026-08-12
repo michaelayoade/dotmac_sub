@@ -1843,7 +1843,7 @@ class TestDeviceResolution:
         assert result is not None
         _client, device_id = result
         assert device_id == "00259E-HG8546M-48575443600AC29C"
-        assert reason == "resolved_via_ont_acs"
+        assert reason == "resolved_via_linked_tr069_device"
         assert linked.ont_unit_id == ont.id
         assert linked.genieacs_device_id == "00259E-HG8546M-48575443600AC29C"
 
