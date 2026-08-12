@@ -32,7 +32,9 @@ from app.schemas.ai_intake import (
     DataCleaningEligibilityReason,
 )
 from app.services import (
+    ai_conversation_intake,
     ai_intake,
+    team_inbox_assignment,
     team_inbox_automation,
     team_inbox_media,
     team_inbox_operations,
@@ -602,7 +604,7 @@ def _classify_inbound(
         awaiting_follow_up=awaiting_follow_up,
         follow_up_count=follow_up_count,
     )
-    return request, ai_intake.classify_message(db, request)
+    return request, ai_intake.prepare_async_intake(db, request)
 
 
 def receive_inbound_channel(
@@ -732,12 +734,38 @@ def receive_inbound_channel(
             reason=AiIntakeReason.context_error,
         )
     metadata.update(ai_intake.route_metadata(intake_outcome))
+    ai_session_context = None
     if intake_request is not None:
         conversation_metadata = dict(conversation.metadata_ or {})
         conversation_metadata["ai_intake"] = ai_intake.conversation_state(
             intake_request, intake_outcome
         )
         conversation.metadata_ = conversation_metadata
+        try:
+            ai_session_context = ai_conversation_intake.ensure_session_for_outcome(
+                db,
+                conversation=conversation,
+                outcome=intake_outcome,
+                provider=intake_request.provider,
+                account_scope=intake_request.account_scope,
+                created_conversation=created_conversation,
+            )
+            if ai_session_context is not None:
+                conversation.status = InboxConversationStatus.pending.value
+                ai_conversation_intake.mark_conversation_ai_metadata(
+                    conversation,
+                    session=ai_session_context.session,
+                    active=True,
+                )
+        except Exception as exc:
+            logger.warning(
+                "AI intake session creation failed",
+                extra={
+                    "event": "ai_intake_session_failure",
+                    "conversation_id": str(conversation.id),
+                    "error_type": type(exc).__name__,
+                },
+            )
         cleaning_eligibility = ai_intake.evaluate_data_cleaning_eligibility(
             db,
             request=intake_request,
@@ -846,6 +874,38 @@ def receive_inbound_channel(
     )
     db.add(message)
     db.flush()
+    if ai_session_context is not None and created_conversation:
+        session = ai_session_context.session
+        version = ai_session_context.version
+        if not ai_conversation_intake.has_human_takeover(db, conversation):
+            welcome_body = (
+                version.welcome_message
+                if version is not None
+                else ai_conversation_intake.DEFAULT_WELCOME_MESSAGE
+            )
+            welcome_metadata = ai_conversation_intake.ai_message_metadata(
+                session=session,
+                version=version,
+                purpose="welcome",
+            )
+            welcome_delivery = team_inbox_outbound.send_ai_intake_message(
+                db,
+                conversation=conversation,
+                body_text=welcome_body,
+                metadata=welcome_metadata,
+                dedupe_key=f"ai-intake-welcome:{session.id}",
+            )
+            ai_conversation_intake.record_generation_attempt(
+                db,
+                session=session,
+                purpose="welcome",
+                status="queued" if welcome_delivery.kind == "queued" else "failed",
+                inbound_message_id=message.id,
+                outbound_message_id=UUID(welcome_delivery.message_id)
+                if welcome_delivery.message_id
+                else None,
+                error_code=welcome_delivery.reason,
+            )
     # Shadow projection: record which endpoints took part. Nothing reads it for
     # a threading or export decision yet, so a failure here must not cost us an
     # ingested message.
@@ -900,8 +960,35 @@ def receive_inbound_channel(
                 inbound_message_id=message.id,
                 config_id=intake_outcome.config_id,
                 follow_up_count=intake_outcome.follow_up_count,
+                session_id=ai_session_context.session.id
+                if ai_session_context
+                else None,
+                policy_id=ai_session_context.session.policy_id
+                if ai_session_context
+                else None,
+                policy_version_id=ai_session_context.session.policy_version_id
+                if ai_session_context
+                else None,
+                display_name=ai_session_context.session.display_name
+                if ai_session_context
+                else "Dotmac Virtual Assistant",
             ),
         )
+        if ai_session_context is not None:
+            ai_conversation_intake.record_generation_attempt(
+                db,
+                session=ai_session_context.session,
+                purpose="clarification",
+                status="queued" if delivery.kind == "queued" else "failed",
+                inbound_message_id=message.id,
+                outbound_message_id=UUID(delivery.message_id)
+                if delivery.message_id
+                else None,
+                provider=intake_outcome.provider,
+                model=intake_outcome.model,
+                duration_ms=intake_outcome.duration_ms,
+                error_code=delivery.reason,
+            )
         delivery_status = "queued" if delivery.kind == "queued" else "failed"
         conversation_metadata = dict(conversation.metadata_ or {})
         state_value = conversation_metadata.get("ai_intake")
@@ -929,6 +1016,54 @@ def receive_inbound_channel(
                 "reason": delivery.reason,
             },
         )
+    elif (
+        ai_session_context is not None
+        and routing_decision.primary_service_team_id
+        and intake_outcome.status
+        in {
+            AiIntakeStatus.classified,
+            AiIntakeStatus.fallback,
+            AiIntakeStatus.escalated,
+        }
+    ):
+        if ai_conversation_intake.has_human_takeover(db, conversation):
+            ai_conversation_intake.complete_session(
+                ai_session_context.session, state="stopped_human_takeover"
+            )
+            ai_conversation_intake.mark_conversation_ai_metadata(
+                conversation,
+                session=ai_session_context.session,
+                active=False,
+            )
+        else:
+            ai_conversation_intake.mark_handoff_requested(
+                ai_session_context.session,
+                destination_team_id=routing_decision.primary_service_team_id,
+            )
+            conversation.status = InboxConversationStatus.open.value
+            handoff_result = (
+                team_inbox_assignment.assign_conversation_to_available_agent(
+                    db,
+                    conversation=conversation,
+                    service_team_id=routing_decision.primary_service_team_id,
+                    reason="AI intake handoff",
+                    source="routing_rule",
+                )
+            )
+            ai_conversation_intake.complete_session(ai_session_context.session)
+            ai_conversation_intake.mark_conversation_ai_metadata(
+                conversation,
+                session=ai_session_context.session,
+                active=False,
+            )
+            state = dict(conversation.metadata_ or {})
+            state["ai_intake_handoff_result"] = {
+                "kind": handoff_result.kind,
+                "service_team_id": handoff_result.service_team_id,
+                "assigned_person_id": handoff_result.assigned_person_id,
+                "reason": handoff_result.reason,
+            }
+            conversation.metadata_ = state
     team_inbox_realtime.publish_queue_event(
         db,
         conversation_id=str(conversation.id),

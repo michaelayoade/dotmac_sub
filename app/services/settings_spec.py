@@ -120,6 +120,7 @@ SCHEDULER_ENV_BOOTSTRAP_SETTING_KEYS = frozenset(
         (SettingDomain.collections, "billing_notifications_interval_seconds"),
         (SettingDomain.collections, "dunning_interval_seconds"),
         (SettingDomain.comms, "campaign_processing_interval_seconds"),
+        (SettingDomain.comms, "ai_intake_processing_interval_seconds"),
         (SettingDomain.gis, "sync_interval_minutes"),
         (
             SettingDomain.integration,
@@ -3840,6 +3841,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=30,
         min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="inbox_agent_default_max_concurrent_conversations",
+        env_var="INBOX_AGENT_DEFAULT_MAX_CONCURRENT_CONVERSATIONS",
+        value_type=SettingValueType.integer,
+        default=10,
+        min_value=1,
+        max_value=100,
+        label="Default active Inbox conversations per agent",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="ai_intake_processing_interval_seconds",
+        env_var="AI_INTAKE_PROCESSING_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=10,
+        max_value=3600,
+        label="AI intake session processing interval",
     ),
     # ============== Notification Domain: Email Settings ==============
     SettingSpec(

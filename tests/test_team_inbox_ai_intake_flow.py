@@ -18,6 +18,7 @@ from app.models.team_inbox import (
     InboxMessage,
 )
 from app.services import (
+    ai_conversation_intake,
     ai_intake,
     team_inbox_channel_receive,
     team_inbox_maintenance,
@@ -85,10 +86,13 @@ def _config(
     fallback_team_id=None,
     threshold: float = 0.75,
     data_cleaning_support_team_id=None,
+    mappings=None,
+    scope_key: str = "meta_cloud_api:phone-1",
+    channel_type: str = InboxChannelType.whatsapp.value,
 ):
     row = AiIntakeConfig(
-        scope_key="default",
-        channel_type="any",
+        scope_key=scope_key,
+        channel_type=channel_type,
         is_enabled=True,
         confidence_threshold=threshold,
         allow_followup_questions=True,
@@ -96,7 +100,7 @@ def _config(
         escalate_after_minutes=5,
         exclude_campaign_attribution=True,
         fallback_team_id=fallback_team_id,
-        department_mappings=[],
+        department_mappings=list(mappings or []),
         metadata_={
             "data_cleaning_support_team_id": str(data_cleaning_support_team_id)
             if data_cleaning_support_team_id
@@ -106,6 +110,30 @@ def _config(
     db_session.add(row)
     db_session.flush()
     return row
+
+
+def _mapping(intent: str, team: ServiceTeam, department: str | None = None) -> dict:
+    return {
+        "intent": intent,
+        "department": department or intent,
+        "service_team_id": str(team.id),
+    }
+
+
+def _process_ai(db_session):
+    db_session.commit()
+    result = ai_conversation_intake.process_ready_sessions(
+        db_session,
+        ai_conversation_intake.AiSessionProcessCommand(
+            context=CommandContext.system(
+                actor="task:test-ai-intake-session-processor",
+                scope="ai:intake-session",
+                reason="test AI intake session processing",
+            ),
+        ),
+    )
+    db_session.commit()
+    return result
 
 
 def _receive(db_session, *, message_id: str, body: str = "No internet"):
@@ -125,61 +153,78 @@ def _receive(db_session, *, message_id: str, body: str = "No internet"):
     )
 
 
-def test_high_confidence_routes_team_without_assigning_agent(db_session, monkeypatch):
-    technical = _team(db_session, "Technical Support")
-    _team(db_session, "Helpdesk")
-    _config(db_session)
+def test_high_confidence_routes_team_and_queues_when_no_agent(db_session, monkeypatch):
+    technical = _team(db_session, "Configured Technical Team")
+    _config(
+        db_session,
+        mappings=[_mapping("technical_support", technical, "technical")],
+    )
     gateway = _Gateway()
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     result = _receive(db_session, message_id="wamid-ai-1")
-    db_session.commit()
+    assert gateway.calls == 0
+    _process_ai(db_session)
 
     conversation = db_session.get(InboxConversation, result.conversation_id)
     message = db_session.get(InboxMessage, result.message_id)
     assert conversation.primary_service_team_id == technical.id
     assert conversation.assignments == []
+    assert conversation.status == "open"
     assert message.metadata_["ai_intent"] == "technical_support"
     assert message.metadata_["ai_category"] == "no_internet"
     assert message.metadata_["ai_intake_status"] == "classified"
     assert message.metadata_["routing"]["reason"] == "ai_intake_department"
+    outbound = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.direction == "outbound")
+        .order_by(InboxMessage.created_at.asc())
+        .all()
+    )
+    assert outbound[0].metadata_["sender_type"] == "ai"
+    assert outbound[0].metadata_["ai_display_name"] == "Dotmac Virtual Assistant"
 
 
 def test_high_confidence_billing_routes_helpdesk(db_session, monkeypatch):
-    helpdesk = _team(db_session, "Helpdesk")
-    _config(db_session)
+    billing = _team(db_session, "Configured Billing Team")
+    _config(db_session, mappings=[_mapping("billing_issue", billing, "billing")])
     gateway = _Gateway(intent="billing_issue", category="payment_not_reflected")
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     result = _receive(
         db_session, message_id="wamid-ai-billing", body="My payment is missing"
     )
+    _process_ai(db_session)
 
     conversation = db_session.get(InboxConversation, result.conversation_id)
-    assert conversation.primary_service_team_id == helpdesk.id
+    assert conversation.primary_service_team_id == billing.id
     assert conversation.assignments == []
 
 
 def test_department_mapping_routes_to_configured_team(db_session, monkeypatch):
     finance = _team(db_session, "Finance")
-    config = _config(db_session)
-    config.department_mappings = [{"intent": "billing_issue", "department": "finance"}]
+    _config(
+        db_session,
+        mappings=[_mapping("billing_issue", finance, "finance")],
+    )
     gateway = _Gateway(intent="billing_issue", category="invoice_request")
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     result = _receive(db_session, message_id="wamid-ai-finance", body="Invoice please")
+    _process_ai(db_session)
 
     conversation = db_session.get(InboxConversation, result.conversation_id)
     assert conversation.primary_service_team_id == finance.id
 
 
 def test_gateway_failure_still_routes_to_fallback(db_session, monkeypatch):
-    fallback = _team(db_session, "Helpdesk")
+    fallback = _team(db_session, "Configured Fallback Team")
     _config(db_session, fallback_team_id=fallback.id)
     gateway = _Gateway(error=TimeoutError("provider timeout"))
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     result = _receive(db_session, message_id="wamid-ai-timeout")
+    _process_ai(db_session)
 
     conversation = db_session.get(InboxConversation, result.conversation_id)
     message = db_session.get(InboxMessage, result.message_id)
@@ -191,9 +236,14 @@ def test_gateway_failure_still_routes_to_fallback(db_session, monkeypatch):
 def test_campaign_attribution_skips_gateway_in_observation_path(
     db_session, monkeypatch
 ):
-    fallback = _team(db_session, "Helpdesk")
+    fallback = _team(db_session, "Configured Fallback Team")
     fallback_id = fallback.id
-    _config(db_session, fallback_team_id=fallback_id)
+    _config(
+        db_session,
+        fallback_team_id=fallback_id,
+        scope_key="meta_social:page-campaign",
+        channel_type=InboxChannelType.facebook_messenger.value,
+    )
     db_session.commit()
     gateway = _Gateway()
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
@@ -224,18 +274,27 @@ def test_campaign_attribution_skips_gateway_in_observation_path(
 def test_duplicate_delivery_does_not_reclassify_or_duplicate_message(
     db_session, monkeypatch
 ):
-    _team(db_session, "Technical Support")
-    _config(db_session)
+    technical = _team(db_session, "Configured Technical Team")
+    _config(
+        db_session,
+        mappings=[_mapping("technical_support", technical, "technical")],
+    )
     gateway = _Gateway()
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     first = _receive(db_session, message_id="wamid-ai-duplicate")
     second = _receive(db_session, message_id="wamid-ai-duplicate", body="Again")
+    _process_ai(db_session)
 
     assert first.duplicate is False
     assert second.duplicate is True
     assert gateway.calls == 1
-    assert db_session.query(InboxMessage).count() == 1
+    assert (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.direction == "inbound")
+        .count()
+        == 1
+    )
 
 
 def test_postgres_thread_lock_uses_stable_conversation_scope():
@@ -270,7 +329,7 @@ def test_postgres_thread_lock_uses_stable_conversation_scope():
 
 
 def test_existing_assigned_conversation_is_not_reclassified(db_session, monkeypatch):
-    helpdesk = _team(db_session, "Helpdesk")
+    helpdesk = _team(db_session, "Configured Existing Owner Team")
     _config(db_session)
     conversation = InboxConversation(
         channel_type=InboxChannelType.whatsapp.value,
@@ -303,14 +362,20 @@ def test_existing_assigned_conversation_is_not_reclassified(db_session, monkeypa
 def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
     db_session, monkeypatch
 ):
-    technical = _team(db_session, "Technical Support")
-    fallback = _team(db_session, "Helpdesk")
+    technical = _team(db_session, "Configured Technical Team")
+    fallback = _team(db_session, "Configured Fallback Team")
     fallback_id = fallback.id
-    _config(db_session, fallback_team_id=fallback_id, threshold=0.8)
+    _config(
+        db_session,
+        fallback_team_id=fallback_id,
+        threshold=0.8,
+        mappings=[_mapping("technical_support", technical, "technical")],
+    )
     gateway = _Gateway(confidence=0.3)
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     first = _receive(db_session, message_id="wamid-follow-1", body="Please help")
+    _process_ai(db_session)
     conversation = db_session.get(InboxConversation, first.conversation_id)
     first_message = db_session.get(InboxMessage, first.message_id)
     assert conversation.primary_service_team_id is None
@@ -339,6 +404,7 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
         message_id="wamid-follow-2",
         body="It is about my internet connection",
     )
+    _process_ai(db_session)
     second_message = db_session.get(InboxMessage, second.message_id)
 
     assert conversation.primary_service_team_id == technical.id
@@ -355,17 +421,19 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
 def test_second_uncertain_reply_falls_back_without_another_question(
     db_session, monkeypatch
 ):
-    fallback = _team(db_session, "Helpdesk")
+    fallback = _team(db_session, "Configured Fallback Team")
     _config(db_session, fallback_team_id=fallback.id, threshold=0.8)
     gateway = _Gateway(confidence=0.2)
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
     first = _receive(db_session, message_id="wamid-follow-bad-1", body="Please help")
+    _process_ai(db_session)
     second = _receive(
         db_session,
         message_id="wamid-follow-bad-2",
         body="I am still not sure",
     )
+    _process_ai(db_session)
 
     conversation = db_session.get(InboxConversation, first.conversation_id)
     second_message = db_session.get(InboxMessage, second.message_id)
@@ -383,7 +451,7 @@ def test_second_uncertain_reply_falls_back_without_another_question(
 def test_whatsapp_follow_up_dispatcher_sends_the_approved_question(
     db_session, monkeypatch
 ):
-    fallback = _team(db_session, "Helpdesk")
+    fallback = _team(db_session, "Configured Fallback Team")
     _config(db_session, fallback_team_id=fallback.id, threshold=0.8)
     gateway = _Gateway(confidence=0.2)
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
@@ -395,6 +463,7 @@ def test_whatsapp_follow_up_dispatcher_sends_the_approved_question(
     )
 
     _receive(db_session, message_id="wamid-follow-deliver", body="Please help")
+    _process_ai(db_session)
     delivered = notification_tasks._deliver_notification_queue(
         db_session, batch_size=10
     )
@@ -412,12 +481,13 @@ def test_whatsapp_follow_up_dispatcher_sends_the_approved_question(
 def test_stale_follow_up_recovers_to_configured_fallback_without_assignment(
     db_session, monkeypatch
 ):
-    fallback = _team(db_session, "Helpdesk")
+    fallback = _team(db_session, "Configured Fallback Team")
     fallback_id = fallback.id
     _config(db_session, fallback_team_id=fallback_id, threshold=0.8)
     gateway = _Gateway(confidence=0.2)
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
     received = _receive(db_session, message_id="wamid-stale")
+    _process_ai(db_session)
     db_session.commit()
     conversation = db_session.get(InboxConversation, received.conversation_id)
     due_text = conversation.metadata_["ai_intake"]["ai_intake_fallback_due_at"]
@@ -452,8 +522,23 @@ def test_stale_follow_up_recovers_to_configured_fallback_without_assignment(
 def test_whatsapp_facebook_and_instagram_use_the_same_classifier(
     db_session, monkeypatch
 ):
-    _team(db_session, "Technical Support")
-    _config(db_session)
+    technical = _team(db_session, "Configured Technical Team")
+    _config(
+        db_session,
+        mappings=[_mapping("technical_support", technical, "technical")],
+    )
+    _config(
+        db_session,
+        mappings=[_mapping("technical_support", technical, "technical")],
+        scope_key="meta_social:page-fb",
+        channel_type=InboxChannelType.facebook_messenger.value,
+    )
+    _config(
+        db_session,
+        mappings=[_mapping("technical_support", technical, "technical")],
+        scope_key="meta_social:page-ig",
+        channel_type=InboxChannelType.instagram_dm.value,
+    )
     gateway = _Gateway()
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
 
@@ -483,6 +568,7 @@ def test_whatsapp_facebook_and_instagram_use_the_same_classifier(
             ),
         )
 
+    _process_ai(db_session)
     assert gateway.calls == 3
 
 

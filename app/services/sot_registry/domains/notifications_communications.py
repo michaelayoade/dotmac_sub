@@ -1694,6 +1694,8 @@ DOMAIN = DomainSOT(
                 "routing assignment and escalation transitions",
                 "immutable routing assignment and escalation evidence",
                 "durable FIFO queue admission and promotion",
+                "durable per-team round-robin cursor",
+                "customer-visible FIFO queue notification evidence",
             ),
             depends_on=(
                 "ai.intake",
@@ -1715,6 +1717,14 @@ DOMAIN = DomainSOT(
                     ),
                     (
                         "durable FIFO queue admission and promotion",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                    (
+                        "durable per-team round-robin cursor",
+                        OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
+                    (
+                        "customer-visible FIFO queue notification evidence",
                         OwnerRole.COMMAND_WRITER,
                     ),
                 ),
@@ -1750,8 +1760,11 @@ DOMAIN = DomainSOT(
                     "team_inbox.escalated.v1",
                     "team_inbox.queue_promoted.v1",
                 ),
-                projections=("FIFO queue position and estimated wait",),
-                test_refs=("tests/test_team_inbox_fifo_queue.py",),
+                projections=("FIFO queue position and notification due state",),
+                test_refs=(
+                    "tests/test_team_inbox_fifo_queue.py",
+                    "tests/test_team_inbox_queue_notifications.py",
+                ),
             ),
         ),
         SOTService(

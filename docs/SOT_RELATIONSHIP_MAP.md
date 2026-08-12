@@ -2454,12 +2454,14 @@ Tax-accounting migration record:
 network summary composition.
 4. Customer network context owns the raw customer-to-network footprint.
 5. Network access path owns the customer service path.
-6. `customer.profile_commands` owns admin customer profile edits and explicit
-   person-to-business customer conversion. Normal person edit submission must
-   not mutate account type; conversion is a dedicated command with its own
-   validation and audit trail. `customer.name_repairs` separately owns exact,
-   audit-evidenced legacy Subscriber name remediation until Party name
-   projection cutover; no webhook, CLI, or generic profile helper writes it.
+6. `customer.profile_commands` owns admin customer profile edits, explicit
+   person-to-business customer conversion, and governed NCC profile cleanup
+   writes for AI-collected DOB/gender candidates. Normal person edit submission
+   must not mutate account type; conversion and AI cleanup are dedicated
+   commands with their own validation and audit trails. `customer.name_repairs`
+   separately owns exact, audit-evidenced legacy Subscriber name remediation
+   until Party name projection cutover; no webhook, CLI, or generic profile
+   helper writes it.
 7. `customer.account_status_actions` owns reviewed administrative account
    lifecycle previews and confirmations. Its `unsuspend` action is distinct
    from broad activation: it clears only an explicit suspended override,
