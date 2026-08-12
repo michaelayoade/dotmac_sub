@@ -519,13 +519,23 @@ AccessCredential (Subscriber's network credentials)
 
 ```
 UserCredential (Login credentials)
-├── subscriber_id → Subscriber
-├── provider (local, sso, radius)
+├── subscriber_id | system_user_id | reseller_user_id (legacy R1 login authority)
+├── provider (legacy persisted enum; sso is compatibility-only/unimplemented)
 ├── username, password_hash
 ├── radius_server_id (when provider='radius')
+├── party_id → Person Party (nullable additive projection; migration 524)
+├── authentication_binding_id → installed verifier binding
+├── tenant_id → operator tenant
+├── party_bound_at, party_binding_source, party_binding_reason
 ├── must_change_password
 ├── failed_login_attempts, locked_until
 ├── last_login_at, is_active
+
+AuthenticationBinding (installed verifier configuration)
+├── binding_key + mechanism_code (immutable deployment-global identity)
+├── mechanism_code vocabulary is open and owner-declared: local, radius
+├── name (operator-facing label), is_active
+└── no credential material and no radius_server_id coupling
 
 MFAMethod (Multi-Factor Authentication)
 ├── subscriber_id → Subscriber

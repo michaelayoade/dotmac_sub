@@ -14,6 +14,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
+    inspect,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -23,6 +25,13 @@ from app.db import Base
 
 
 class AuthProvider(enum.Enum):
+    """Legacy persisted provider vocabulary; compatibility-only during R1.
+
+    New mechanism membership is declared by its SOT owner through
+    ``authentication_mechanism_registry``. In particular, this historical enum
+    retaining ``sso`` does not declare or implement SSO.
+    """
+
     local = "local"
     sso = "sso"
     radius = "radius"
@@ -57,7 +66,11 @@ class AuthenticationBinding(Base):
 
     __tablename__ = "authentication_bindings"
     __table_args__ = (
-        UniqueConstraint("mechanism_code", "name", name="uq_auth_bindings_code_name"),
+        UniqueConstraint("binding_key", name="uq_auth_bindings_binding_key"),
+        CheckConstraint(
+            "length(trim(binding_key)) > 0",
+            name="ck_auth_bindings_binding_key_nonempty",
+        ),
         CheckConstraint(
             "length(trim(mechanism_code)) > 0", name="ck_auth_bindings_code_nonempty"
         ),
@@ -67,6 +80,7 @@ class AuthenticationBinding(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    binding_key: Mapped[str] = mapped_column(String(80), nullable=False)
     mechanism_code: Mapped[str] = mapped_column(String(40), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
@@ -83,6 +97,27 @@ class AuthenticationBinding(Base):
     )
 
 
+class AuthenticationBindingIdentityError(ValueError):
+    """An installed binding's immutable identity was changed."""
+
+
+@event.listens_for(AuthenticationBinding, "before_update")
+def _reject_authentication_binding_identity_change(
+    _mapper: object, _connection: object, target: AuthenticationBinding
+) -> None:
+    state = inspect(target)
+    changed = [
+        field
+        for field in ("binding_key", "mechanism_code")
+        if getattr(state.attrs, field).history.has_changes()
+    ]
+    if changed:
+        raise AuthenticationBindingIdentityError(
+            "An installed authentication binding's binding_key and "
+            "mechanism_code are immutable; install a new binding instead."
+        )
+
+
 class UserCredential(Base):
     __tablename__ = "user_credentials"
     __table_args__ = (
@@ -90,18 +125,25 @@ class UserCredential(Base):
             "(provider != 'local') OR (username IS NOT NULL AND password_hash IS NOT NULL)",
             name="ck_user_credentials_local_requires_username_password",
         ),
-        # Migration 524. All four present or all four absent: a Party binding
-        # can never exist without reviewed provenance. Same shape as
-        # `subscribers`, `system_users`, `reseller_users`, `subscriber_contacts`.
+        # Migration 524. Tenant, Party, verifier binding and evidence are one
+        # projection: all present or all absent.
         CheckConstraint(
-            "(party_id IS NULL AND party_bound_at IS NULL AND "
+            "(party_id IS NULL AND authentication_binding_id IS NULL AND "
+            "tenant_id IS NULL AND party_bound_at IS NULL AND "
             "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
-            "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "(party_id IS NOT NULL AND authentication_binding_id IS NOT NULL AND "
+            "tenant_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
             "party_binding_source IS NOT NULL AND "
             "party_binding_reason IS NOT NULL AND "
             "length(trim(party_binding_source)) > 0 AND "
             "length(trim(party_binding_reason)) > 0)",
-            name="ck_user_credentials_party_binding_evidence",
+            name="ck_user_credentials_party_binding_projection",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "party_id",
+            "authentication_binding_id",
+            name="uq_user_credentials_tenant_party_auth_binding",
         ),
         CheckConstraint(
             # Exactly one principal: subscriber (customer), system_user (admin),
@@ -158,9 +200,11 @@ class UserCredential(Base):
         UUID(as_uuid=True),
         ForeignKey("authentication_bindings.id", ondelete="RESTRICT"),
     )
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT")
-    )
+    # The deployed schema has a RESTRICT FK to kernel-owned ``tenants``. The
+    # kernel maps that table on a separate declarative base, so repeating the FK
+    # here would make Sub's metadata unable to resolve its own graph in the
+    # SQLite unit lane. Migration 524 remains the schema authority for the FK.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     password_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)

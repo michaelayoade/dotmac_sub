@@ -20,6 +20,7 @@ from app.models.audit import AuditActorType, AuditEvent  # noqa: F401
 from app.models.auth import (  # noqa: F401
     ApiKey,
     AuthenticationBinding,
+    AuthenticationBindingIdentityError,
     MFAMethod,
     MFARecoveryCode,
     Session,

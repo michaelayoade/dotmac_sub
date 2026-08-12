@@ -1,9 +1,9 @@
 """Let a credential name the Party it authenticates, and the binding that proves it
 
 R1 of the Party/principal adoption slice. **Additive only.** It adds columns and
-one table; it enforces no uniqueness, removes no legacy column, binds no row and
-touches no reader. The legacy `subscriber_id`/`system_user_id`/`reseller_user_id`
-principal FKs and their exactly-one CHECK are untouched and remain authoritative.
+one table, removes no legacy column, binds no row and touches no reader. The
+legacy `subscriber_id`/`system_user_id`/`reseller_user_id` principal FKs and
+their exactly-one CHECK are untouched and remain authoritative.
 
 ## Why a binding table rather than a `provider` column
 
@@ -23,22 +23,23 @@ than by structure. This table costs two rows now and is expensive to retrofit
 after a uniqueness constraint ships.
 
 `mechanism_code` is a plain string on purpose (ADR-0008): the vocabulary is open
-and declared, so a deployment names a mechanism without a migration. The typed
-contract lives behind the binding, in the provider module — which is why nothing
+and declared, so a provider module can add a mechanism without changing a host
+enum or database CHECK. `binding_key` is the immutable, deployment-global
+configuration identity; `name` is only an operator-facing label. The typed
+contract lives behind the binding, in the provider owner — which is why nothing
 here has a `radius_server_id` column.
 
-## The evidence quartet
+## The complete projection
 
-`party_id`/`party_bound_at`/`party_binding_source`/`party_binding_reason` follow
-the shape Sub already uses on `subscribers`, `system_users`, `reseller_users`
-and `subscriber_contacts`: all four present or all four absent, enforced by
-CHECK, so a binding can never exist without reviewed provenance.
+Party, authentication binding, tenant and the evidence quartet are all present
+or all absent. A partial projection cannot be persisted. The nullable unique
+key on `(tenant_id, party_id, authentication_binding_id)` is safe over the
+legacy population because all three columns are NULL, and makes the first
+future collision fail closed rather than admitting two credentials for the
+same Party and verifier.
 
 ## What this deliberately does NOT do
 
-- no UNIQUE on `(party_id, authentication_binding_id)` — R3's job, and it would
-  force credential merging, which needs a security policy and production
-  evidence that do not exist yet;
 - no NOT NULL, no RLS, no legacy-column removal;
 - no backfill. Production has 4,102 unbound credential-bearing principals; they
   are bound by the reviewed command, in approved capped batches, never by DDL.
@@ -51,6 +52,8 @@ Create Date: 2026-08-12
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from uuid import UUID
 
 import sqlalchemy as sa
 
@@ -63,136 +66,276 @@ depends_on: str | Sequence[str] | None = None
 
 BINDINGS = "authentication_bindings"
 CREDENTIALS = "user_credentials"
+IDENTITY_FUNCTION = "prevent_authentication_binding_identity_change"
+IDENTITY_TRIGGER = "trg_authentication_binding_identity_immutable"
+_SEEDED_AT = datetime(2026, 8, 12, tzinfo=UTC)
 
-#: Seeded from the production measurement. `sso` is deliberately absent: it is
-#: declared in `AuthProvider` and implemented nowhere, and an open vocabulary
-#: should carry zero declarations for a capability that does not exist.
+#: Seeded from the owner declarations. ``sso`` is deliberately absent: the
+#: legacy compatibility enum contains it but no SOT owner declares or implements
+#: it. The deterministic ids make a restored/rehearsed seed byte-identical.
 _SEED = (
-    ("local", "Local password", "Password verified against the stored hash."),
-    ("radius", "RADIUS", "Password verified by the configured RADIUS target."),
+    (
+        UUID("73271924-4749-5762-b53c-0bfff4e914ff"),
+        "local.default",
+        "local",
+        "Local password",
+        "Password verified against the stored hash.",
+    ),
+    (
+        UUID("f31a94fb-2409-5c9c-8776-c6a7bb6fee15"),
+        "radius.default",
+        "radius",
+        "RADIUS",
+        "Password verified by the configured RADIUS authority.",
+    ),
 )
 
-_EVIDENCE = (
-    "(party_id IS NULL AND party_bound_at IS NULL AND "
+_PROJECTION = (
+    "(party_id IS NULL AND authentication_binding_id IS NULL AND "
+    "tenant_id IS NULL AND party_bound_at IS NULL AND "
     "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
-    "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+    "(party_id IS NOT NULL AND authentication_binding_id IS NOT NULL AND "
+    "tenant_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
     "party_binding_source IS NOT NULL AND party_binding_reason IS NOT NULL AND "
     "length(trim(party_binding_source)) > 0 AND "
     "length(trim(party_binding_reason)) > 0)"
 )
 
 
+def _matching_fk_exists(
+    foreign_keys: list[dict[str, object]],
+    *,
+    name: str,
+    columns: list[str],
+    referred_table: str,
+    ondelete: str,
+) -> bool:
+    """Adopt one exact semantic FK and reject a same-named different shape."""
+
+    expected = (columns, referred_table, ["id"], ondelete)
+    for foreign_key in foreign_keys:
+        options = foreign_key.get("options") or {}
+        assert isinstance(options, dict)
+        actual = (
+            foreign_key.get("constrained_columns"),
+            foreign_key.get("referred_table"),
+            foreign_key.get("referred_columns"),
+            str(options.get("ondelete", "")).upper(),
+        )
+        if actual == expected:
+            return True
+        if foreign_key.get("name") == name:
+            raise RuntimeError(
+                f"{name} exists with unexpected definition {actual!r}; refusing "
+                "to replace it implicitly"
+            )
+    return False
+
+
 def upgrade() -> None:
-    op.create_table(
-        BINDINGS,
-        sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("mechanism_code", sa.String(length=40), nullable=False),
-        sa.Column("name", sa.String(length=120), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
-        sa.Column(
-            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
-        ),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.UniqueConstraint(
-            "mechanism_code", "name", name="uq_auth_bindings_code_name"
-        ),
-        sa.CheckConstraint(
-            "length(trim(mechanism_code)) > 0", name="ck_auth_bindings_code_nonempty"
-        ),
-    )
-    op.create_index(
-        "ix_auth_bindings_code_active", BINDINGS, ["mechanism_code", "is_active"]
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
+    if BINDINGS not in tables:
+        op.create_table(
+            BINDINGS,
+            sa.Column("id", sa.Uuid(), primary_key=True),
+            sa.Column("binding_key", sa.String(length=80), nullable=False),
+            sa.Column("mechanism_code", sa.String(length=40), nullable=False),
+            sa.Column("name", sa.String(length=120), nullable=False),
+            sa.Column("description", sa.Text(), nullable=True),
+            sa.Column(
+                "is_active",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("true"),
+            ),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.UniqueConstraint("binding_key", name="uq_auth_bindings_binding_key"),
+            sa.CheckConstraint(
+                "length(trim(binding_key)) > 0",
+                name="ck_auth_bindings_binding_key_nonempty",
+            ),
+            sa.CheckConstraint(
+                "length(trim(mechanism_code)) > 0",
+                name="ck_auth_bindings_code_nonempty",
+            ),
+        )
+        op.create_index(
+            "ix_auth_bindings_code_active",
+            BINDINGS,
+            ["mechanism_code", "is_active"],
+        )
 
     bindings = sa.table(
         BINDINGS,
         sa.column("id", sa.Uuid()),
+        sa.column("binding_key", sa.String()),
         sa.column("mechanism_code", sa.String()),
         sa.column("name", sa.String()),
         sa.column("description", sa.Text()),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
     )
-    op.bulk_insert(
-        bindings,
-        [
-            {
-                "id": sa.func.gen_random_uuid(),
-                "mechanism_code": code,
-                "name": name,
-                "description": description,
-            }
-            for code, name, description in _SEED
-        ],
-    )
+    seed_rows = [
+        {
+            "id": binding_id,
+            "binding_key": binding_key,
+            "mechanism_code": code,
+            "name": name,
+            "description": description,
+            "created_at": _SEEDED_AT,
+            "updated_at": _SEEDED_AT,
+        }
+        for binding_id, binding_key, code, name, description in _SEED
+    ]
+    for seed in seed_rows:
+        exists = bind.scalar(
+            sa.select(sa.literal(1))
+            .select_from(bindings)
+            .where(bindings.c.binding_key == seed["binding_key"])
+        )
+        if exists is None:
+            op.bulk_insert(bindings, [seed])
 
-    op.add_column(CREDENTIALS, sa.Column("party_id", sa.Uuid(), nullable=True))
-    op.add_column(
-        CREDENTIALS,
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION {IDENTITY_FUNCTION}()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.binding_key IS DISTINCT FROM OLD.binding_key
+                   OR NEW.mechanism_code IS DISTINCT FROM OLD.mechanism_code THEN
+                    RAISE EXCEPTION
+                        'authentication binding identity is immutable'
+                        USING ERRCODE = '23514';
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        op.execute(f"DROP TRIGGER IF EXISTS {IDENTITY_TRIGGER} ON {BINDINGS}")
+        op.execute(
+            f"""
+            CREATE TRIGGER {IDENTITY_TRIGGER}
+            BEFORE UPDATE OF binding_key, mechanism_code ON {BINDINGS}
+            FOR EACH ROW EXECUTE FUNCTION {IDENTITY_FUNCTION}()
+            """
+        )
+
+    credential_columns = {
+        column["name"] for column in inspector.get_columns(CREDENTIALS)
+    }
+    additions = (
+        sa.Column("party_id", sa.Uuid(), nullable=True),
         sa.Column("party_bound_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        CREDENTIALS,
         sa.Column("party_binding_source", sa.String(length=80), nullable=True),
+        sa.Column("party_binding_reason", sa.Text(), nullable=True),
+        sa.Column("authentication_binding_id", sa.Uuid(), nullable=True),
+        # Nullable until the later RLS/GUC cutover hardens the table.
+        sa.Column("tenant_id", sa.Uuid(), nullable=True),
     )
-    op.add_column(
-        CREDENTIALS, sa.Column("party_binding_reason", sa.Text(), nullable=True)
-    )
-    op.add_column(
-        CREDENTIALS, sa.Column("authentication_binding_id", sa.Uuid(), nullable=True)
-    )
-    # Nullable, and it stays nullable. Sub has one operator tenant; the kernel's
-    # contract wants the column, but making it NOT NULL is R3's job and depends
-    # on the GUC/session contract landing first.
-    op.add_column(CREDENTIALS, sa.Column("tenant_id", sa.Uuid(), nullable=True))
+    for column in additions:
+        if column.name not in credential_columns:
+            op.add_column(CREDENTIALS, column)
 
-    op.create_foreign_key(
-        "fk_user_credentials_party",
-        CREDENTIALS,
-        "parties",
-        ["party_id"],
-        ["id"],
+    # Refresh after DDL: a squashed fresh install already has today's model
+    # shape, while a deployed 522 database has none of these objects.
+    inspector = sa.inspect(bind)
+    foreign_keys = inspector.get_foreign_keys(CREDENTIALS)
+    if not _matching_fk_exists(
+        foreign_keys,
+        name="fk_user_credentials_party",
+        columns=["party_id"],
+        referred_table="parties",
         ondelete="RESTRICT",
-    )
-    op.create_foreign_key(
-        "fk_user_credentials_auth_binding",
-        CREDENTIALS,
-        BINDINGS,
-        ["authentication_binding_id"],
-        ["id"],
+    ):
+        op.create_foreign_key(
+            "fk_user_credentials_party",
+            CREDENTIALS,
+            "parties",
+            ["party_id"],
+            ["id"],
+            ondelete="RESTRICT",
+        )
+    if not _matching_fk_exists(
+        foreign_keys,
+        name="fk_user_credentials_auth_binding",
+        columns=["authentication_binding_id"],
+        referred_table=BINDINGS,
         ondelete="RESTRICT",
-    )
-    op.create_foreign_key(
-        "fk_user_credentials_tenant",
-        CREDENTIALS,
-        "tenants",
-        ["tenant_id"],
-        ["id"],
+    ):
+        op.create_foreign_key(
+            "fk_user_credentials_auth_binding",
+            CREDENTIALS,
+            BINDINGS,
+            ["authentication_binding_id"],
+            ["id"],
+            ondelete="RESTRICT",
+        )
+    if not _matching_fk_exists(
+        foreign_keys,
+        name="fk_user_credentials_tenant",
+        columns=["tenant_id"],
+        referred_table="tenants",
         ondelete="RESTRICT",
-    )
-    op.create_check_constraint(
-        "ck_user_credentials_party_binding_evidence", CREDENTIALS, _EVIDENCE
-    )
-    op.create_index("ix_user_credentials_party_id", CREDENTIALS, ["party_id"])
-    op.create_index(
-        "ix_user_credentials_auth_binding", CREDENTIALS, ["authentication_binding_id"]
-    )
+    ):
+        op.create_foreign_key(
+            "fk_user_credentials_tenant",
+            CREDENTIALS,
+            "tenants",
+            ["tenant_id"],
+            ["id"],
+            ondelete="RESTRICT",
+        )
+
+    constraints = {
+        item["name"] for item in inspector.get_check_constraints(CREDENTIALS)
+    }
+    uniques = {item["name"] for item in inspector.get_unique_constraints(CREDENTIALS)}
+    indexes = {item["name"] for item in inspector.get_indexes(CREDENTIALS)}
+    if "ck_user_credentials_party_binding_projection" not in constraints:
+        op.create_check_constraint(
+            "ck_user_credentials_party_binding_projection", CREDENTIALS, _PROJECTION
+        )
+    if "uq_user_credentials_tenant_party_auth_binding" not in uniques:
+        op.create_unique_constraint(
+            "uq_user_credentials_tenant_party_auth_binding",
+            CREDENTIALS,
+            ["tenant_id", "party_id", "authentication_binding_id"],
+        )
+    if "ix_user_credentials_party_id" not in indexes:
+        op.create_index("ix_user_credentials_party_id", CREDENTIALS, ["party_id"])
+    if "ix_user_credentials_auth_binding" not in indexes:
+        op.create_index(
+            "ix_user_credentials_auth_binding",
+            CREDENTIALS,
+            ["authentication_binding_id"],
+        )
 
 
 def downgrade() -> None:
     op.drop_index("ix_user_credentials_auth_binding", table_name=CREDENTIALS)
     op.drop_index("ix_user_credentials_party_id", table_name=CREDENTIALS)
     op.drop_constraint(
-        "ck_user_credentials_party_binding_evidence", CREDENTIALS, type_="check"
+        "uq_user_credentials_tenant_party_auth_binding",
+        CREDENTIALS,
+        type_="unique",
+    )
+    op.drop_constraint(
+        "ck_user_credentials_party_binding_projection", CREDENTIALS, type_="check"
     )
     op.drop_constraint("fk_user_credentials_tenant", CREDENTIALS, type_="foreignkey")
     op.drop_constraint(
@@ -208,5 +351,8 @@ def downgrade() -> None:
         "party_id",
     ):
         op.drop_column(CREDENTIALS, column)
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(f"DROP TRIGGER IF EXISTS {IDENTITY_TRIGGER} ON {BINDINGS}")
+        op.execute(f"DROP FUNCTION IF EXISTS {IDENTITY_FUNCTION}()")
     op.drop_index("ix_auth_bindings_code_active", table_name=BINDINGS)
     op.drop_table(BINDINGS)
