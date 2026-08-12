@@ -90,7 +90,7 @@ class UserCredential(Base):
             "(provider != 'local') OR (username IS NOT NULL AND password_hash IS NOT NULL)",
             name="ck_user_credentials_local_requires_username_password",
         ),
-        # Migration 522. All four present or all four absent: a Party binding
+        # Migration 524. All four present or all four absent: a Party binding
         # can never exist without reviewed provenance. Same shape as
         # `subscribers`, `system_users`, `reseller_users`, `subscriber_contacts`.
         CheckConstraint(
@@ -144,7 +144,7 @@ class UserCredential(Base):
     radius_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("radius_servers.id")
     )
-    # Migration 522 — additive Party/binding/tenant columns. Nothing reads
+    # Migration 524 — additive Party/binding/tenant columns. Nothing reads
     # through them yet; the legacy principal FKs above stay authoritative until
     # a separate reader cutover (R2). All nullable, and they stay nullable
     # until R3.

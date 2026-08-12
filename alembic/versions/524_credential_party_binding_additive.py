@@ -43,8 +43,8 @@ CHECK, so a binding can never exist without reviewed provenance.
 - no backfill. Production has 4,102 unbound credential-bearing principals; they
   are bound by the reviewed command, in approved capped batches, never by DDL.
 
-Revision ID: 522_credential_party_binding_additive
-Revises: 521_backfill_nas_radius_pool_links
+Revision ID: 524_credential_party_binding_additive
+Revises: 523_domain_settings_tenant_fk
 Create Date: 2026-08-12
 """
 
@@ -56,8 +56,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "522_credential_party_binding_additive"
-down_revision: str | None = "521_backfill_nas_radius_pool_links"
+revision: str = "524_credential_party_binding_additive"
+down_revision: str | None = "523_domain_settings_tenant_fk"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
