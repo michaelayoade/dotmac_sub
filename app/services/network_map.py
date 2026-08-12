@@ -954,6 +954,8 @@ def _v2_layer_for_feature(feature: NetworkMapFeature) -> NetworkMapV2Layer | Non
             return NetworkMapV2Layer.customers_connected
         return NetworkMapV2Layer.customers_not_connected
     if feature_type is NetworkMapFeatureType.fiber_segment:
+        if properties.segment_type is None:
+            return None
         return {
             FiberSegmentType.feeder: NetworkMapV2Layer.feeder,
             FiberSegmentType.distribution: NetworkMapV2Layer.distribution,
