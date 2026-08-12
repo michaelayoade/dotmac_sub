@@ -644,6 +644,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "locked rows already settled by inbound processing or an earlier sweep "
         "are skipped on re-run.",
     ),
+    "app.tasks.team_inbox.repair_whatsapp_locations": _c(
+        "support",
+        MANUAL,
+        IDEMP,
+        STATUS,
+        "Repairs only explicitly named conversations from verified Inbox receipt "
+        "evidence; already-complete location attachments are unchanged on re-run.",
+    ),
     "app.tasks.team_inbox.release_scheduled_replies": _c(
         "support",
         SWEEP,
