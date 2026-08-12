@@ -185,6 +185,11 @@ def upgrade() -> None:
         sa.column("mechanism_code", sa.String()),
         sa.column("name", sa.String()),
         sa.column("description", sa.Text()),
+        # Listed and supplied explicitly below. `op.bulk_insert` emits an INSERT
+        # naming only the columns it is handed, so the server default never
+        # fires: omit `is_active` and it inserts NULL against a NOT NULL column.
+        # PostgreSQL is the only place that surfaces this.
+        sa.column("is_active", sa.Boolean()),
         sa.column("created_at", sa.DateTime(timezone=True)),
         sa.column("updated_at", sa.DateTime(timezone=True)),
     )
@@ -195,6 +200,7 @@ def upgrade() -> None:
             "mechanism_code": code,
             "name": name,
             "description": description,
+            "is_active": True,
             "created_at": _SEEDED_AT,
             "updated_at": _SEEDED_AT,
         }
