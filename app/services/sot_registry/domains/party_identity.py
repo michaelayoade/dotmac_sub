@@ -164,6 +164,134 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="party.staff_principal_adoption",
+            module="app.services.staff_party_adoption",
+            owns=("existing staff Party principal adoption",),
+            depends_on=(
+                "party.registry",
+                "auth.staff_provisioning",
+                "observability.audit_log",
+            ),
+            notes=(
+                "Consumes one exact approved UUID-only decision and delegates "
+                "the native SystemUser link to party.registry. It creates no "
+                "Party, selects no identity, writes no credential projection, "
+                "and changes no login, role, permission or active state."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="existing staff Party principal adoption",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "reviewed existing-staff Party binding decision",
+                            "canonical staff principal state",
+                            "canonical Person Party identity",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="reviewed existing-staff Party binding decision",
+                        owner="party.staff_principal_adoption",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "typed UUID-only plan item, exact decision and approval "
+                            "SHA-256 evidence, expiring approval, and attributable "
+                            "user CommandContext"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical staff principal state",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "the exact existing SystemUser selected by reviewed UUID"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical Person Party identity",
+                        owner="party.registry",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "active or quarantined Person Party and guarded native "
+                            "SystemUser.person_party_id binding"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary=(
+                        "bind_existing_staff_party enters one owner transaction, "
+                        "delegates the native field write to party.registry, stages "
+                        "PII-free audit evidence, and commits before return."
+                    ),
+                    locking=(
+                        "Lock the reviewed Person Party before its SystemUser to "
+                        "match the credential-projection lock suffix; native Party "
+                        "validation repeats under the same transaction."
+                    ),
+                    idempotency=(
+                        "Only the exact Party, source, reason, approval digest and "
+                        "complete original timestamp replay; changed evidence or a "
+                        "repoint fails closed."
+                    ),
+                    retries=(
+                        "Retry the exact typed command after a transient database "
+                        "failure; stale or conflicting identity evidence requires a "
+                        "new review and plan."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "party.staff_principal_adoption.invalid_command",
+                        "party.staff_principal_adoption.staff_account_not_found",
+                        "party.staff_principal_adoption.party_binding_refused",
+                        *owner_command_boundary_error_codes(
+                            "party.staff_principal_adoption"
+                        ),
+                    ),
+                    mapping_owner=(
+                        "scripts.migration.execute_staff_party_credential_adoption"
+                    ),
+                    fail_closed_on=(
+                        "unattributable approver",
+                        "missing, non-Person or unavailable Party",
+                        "missing SystemUser",
+                        "incomplete, changed or conflicting binding evidence",
+                        "active caller transaction or manifest mismatch",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.SHADOWING,
+                    old_owner="unbound existing SystemUser principal rows",
+                    new_owner="party.staff_principal_adoption",
+                    verification=(
+                        "Exact typed-plan, approval, delegation, audit, replay, "
+                        "composition, liveness and boundary canaries."
+                    ),
+                    cutover_gate=(
+                        "Every in-scope staff principal and credential is projected, "
+                        "drift cohorts are zero, login shadow parity passes, and the "
+                        "tenant GUC/RLS rehearsal is green."
+                    ),
+                    fallback_retirement=(
+                        "Legacy staff principal and credential reads remain until "
+                        "the separately approved authentication reader cutover."
+                    ),
+                ),
+                steward="identity and authentication",
+                design_refs=(
+                    "docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_staff_party_credential_adoption.py",
+                    "tests/architecture/test_credential_party_binding_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="party.credential_authentication_projection",
             module="app.services.credential_party_binding",
             owns=(
@@ -315,6 +443,10 @@ DOMAIN = DomainSOT(
                         ),
                         (
                             "party.credential_authentication_projection."
+                            "principal_mismatch"
+                        ),
+                        (
+                            "party.credential_authentication_projection."
                             "organization_administrator_required"
                         ),
                         (
@@ -343,7 +475,9 @@ DOMAIN = DomainSOT(
                             "party.credential_authentication_projection"
                         ),
                     ),
-                    mapping_owner="future approved staff/subscriber batch adapters",
+                    mapping_owner=(
+                        "scripts.migration.execute_staff_party_credential_adoption"
+                    ),
                     fail_closed_on=(
                         "organization Party",
                         "missing or mismatched legacy principal Party binding",
@@ -422,6 +556,7 @@ DOMAIN = DomainSOT(
                     "tests/test_credential_party_binding.py",
                     "tests/test_credential_party_binding_migration.py",
                     "tests/architecture/test_credential_party_binding_boundary.py",
+                    "tests/test_staff_party_credential_adoption.py",
                 ),
             ),
         ),
@@ -453,6 +588,8 @@ DOMAIN = DomainSOT(
         "scripts.migration.execute_subscriber_party_backfill",
         "scripts.migration.audit_party_organization_profiles",
         "scripts.migration.audit_party_principal_contexts",
+        "scripts.migration.execute_staff_party_credential_adoption",
+        "scripts.migration.execute_staff_party_credential_adoption",
         "scripts.migration.audit_party_contact_inbox",
         "future party backfills",
         "future subscriber/reseller/vendor cutovers",

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import NoReturn
 from uuid import UUID
 
@@ -51,6 +52,14 @@ class CredentialBindingError(DomainError):
     """Stable, transport-neutral credential projection failure."""
 
 
+class CredentialPrincipalKind(StrEnum):
+    """Open-owner principal variants accepted by the typed projection command."""
+
+    subscriber = "subscriber"
+    system_user = "system_user"
+    reseller_user = "reseller_user"
+
+
 def _error(suffix: str, message: str, **details: object) -> NoReturn:
     raise CredentialBindingError(
         code=f"{_OWNER}.{suffix}",
@@ -65,6 +74,8 @@ class CredentialPartyBinding:
 
     context: CommandContext
     credential_id: UUID
+    expected_principal_kind: CredentialPrincipalKind
+    expected_principal_id: UUID
     party_id: UUID
     authentication_binding_id: UUID
     tenant_id: UUID
@@ -162,29 +173,65 @@ def _locked_binding(db: Session, binding_id: UUID) -> AuthenticationBinding:
 
 
 def _require_legacy_principal_alignment(
-    db: Session, credential: UserCredential, party: Party
+    db: Session,
+    credential: UserCredential,
+    party: Party,
+    *,
+    expected_principal_kind: CredentialPrincipalKind,
+    expected_principal_id: UUID,
 ) -> None:
-    """Prove R1 agrees with the still-authoritative legacy principal link."""
+    """Prove the command and R1 agree with the authoritative legacy principal."""
 
     from app.models.subscriber import ResellerUser, Subscriber
     from app.models.system_user import SystemUser
 
+    actual_principal_kind: CredentialPrincipalKind
+    actual_principal_id: UUID
+    if credential.system_user_id is not None:
+        actual_principal_kind = CredentialPrincipalKind.system_user
+        actual_principal_id = credential.system_user_id
+    elif credential.reseller_user_id is not None:
+        actual_principal_kind = CredentialPrincipalKind.reseller_user
+        actual_principal_id = credential.reseller_user_id
+    elif credential.subscriber_id is not None:
+        actual_principal_kind = CredentialPrincipalKind.subscriber
+        actual_principal_id = credential.subscriber_id
+    else:
+        _error(
+            "principal_mismatch",
+            "The credential has no authoritative legacy principal reference.",
+            expected_principal_kind=expected_principal_kind.value,
+            actual_principal_kind="none",
+        )
+
+    if (
+        actual_principal_kind is not expected_principal_kind
+        or actual_principal_id != expected_principal_id
+    ):
+        _error(
+            "principal_mismatch",
+            "The credential's authoritative legacy principal differs from the "
+            "typed command.",
+            expected_principal_kind=expected_principal_kind.value,
+            actual_principal_kind=actual_principal_kind.value,
+        )
+
     principal_party_id: UUID | None
     principal_party_type: str | None
-    if credential.system_user_id is not None:
+    if actual_principal_kind is CredentialPrincipalKind.system_user:
         system_user = db.scalar(
             select(SystemUser)
-            .where(SystemUser.id == credential.system_user_id)
+            .where(SystemUser.id == actual_principal_id)
             .with_for_update()
         )
         principal_party_id = (
             system_user.person_party_id if system_user is not None else None
         )
         principal_party_type = PartyType.person.value
-    elif credential.reseller_user_id is not None:
+    elif actual_principal_kind is CredentialPrincipalKind.reseller_user:
         reseller_user = db.scalar(
             select(ResellerUser)
-            .where(ResellerUser.id == credential.reseller_user_id)
+            .where(ResellerUser.id == actual_principal_id)
             .with_for_update()
         )
         principal_party_id = (
@@ -194,7 +241,7 @@ def _require_legacy_principal_alignment(
     else:
         subscriber = db.scalar(
             select(Subscriber)
-            .where(Subscriber.id == credential.subscriber_id)
+            .where(Subscriber.id == actual_principal_id)
             .with_for_update()
         )
         principal_party_id = subscriber.party_id if subscriber is not None else None
@@ -296,7 +343,13 @@ def _bind_credential_party(
 
     credential = _locked_credential(db, command.credential_id)
     party = _locked_person_party(db, command.party_id)
-    _require_legacy_principal_alignment(db, credential, party)
+    _require_legacy_principal_alignment(
+        db,
+        credential,
+        party,
+        expected_principal_kind=command.expected_principal_kind,
+        expected_principal_id=command.expected_principal_id,
+    )
     binding = _locked_binding(db, command.authentication_binding_id)
     provider_code = _provider_code(credential)
     if binding.mechanism_code != provider_code:

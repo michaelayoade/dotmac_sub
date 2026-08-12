@@ -65,10 +65,55 @@ legacy principal readiness and completion/correctness of the new projection.
 Neither number is allowed to stand in for the other. The report is aggregate
 and PII-free.
 
-Migration 524 performs no population change. Staff and subscriber adapters
+Migration 524 performs no population change. Staff and subscriber adoption
 remain separate approval-bound work: the existing Subscriber executor cannot
 bind SystemUsers, and no command infers identity from email, name, username, or
 other contact values.
+
+The first real credential-projection caller is
+`scripts/migration/execute_staff_party_credential_adoption.py`. Its public
+boundary is fully typed: immutable plan item, plan, approval, phase, outcome,
+refusal-code, staff-binding command, and credential-projection command
+contracts carry UUIDs, enums, aware timestamps, counts, and SHA-256 values
+rather than free-form bags. JSON exists only at the private-file adapter and is
+normalized into those contracts before any owner is called.
+
+The plan uses a discriminated typed union. Both actions name the exact
+SystemUser, Person Party, credential, authentication binding, decision UUID,
+and decision-evidence digest. `project_only` does not request a SystemUser
+rebind, but its SystemUser id remains an expected-principal precondition: the
+generic projection owner locks the credential and refuses unless its typed
+legacy principal kind and id match. This permits one Party to hold credentials
+against separate declared bindings without encoding today's one-credential
+population as policy. Unknown or action-inapplicable
+fields are refused, so a name, email, username, or other inferred identity
+input cannot enter the plan unnoticed. The canonical plan digest is independent
+of item order, the plan and approval files must be non-symlink mode-`0600`
+files, and execution requires all of:
+
+1. the exact plan digest typed on the command line;
+2. a SHA-256 binding to the exact plan-file bytes;
+3. an attributable approving SystemUser UUID;
+4. approval timestamps no more than 24 hours apart;
+5. exact principal-binding and credential-projection counts; and
+6. an explicit `--execute` acknowledgement.
+
+Every owner command carries the digest of the complete normalized approval,
+including approver UUID, approval window, reason digest, plan digest,
+plan-file digest, and exact count limits. Consequently a changed approval is
+different replay evidence even when it reuses an approval UUID.
+
+For `bind_principal_and_project`, `party.staff_principal_adoption` first
+delegates the exact existing-SystemUser link to `party.registry` in one owner
+transaction.
+The adapter then invokes `party.credential_authentication_projection` in a
+separate owner transaction. `project_only` is permitted only for an already
+reviewed SystemUser link; the projection command carries `system_user` plus its
+exact UUID, and the owner revalidates both under the credential lock. The adapter
+does not commit, mutate ORM state, resolve a mechanism by guess, or hold a
+batch transaction. A crash between phases leaves a valid staff identity link;
+an exact retry replays that phase and resumes the credential projection. Every
+item is revalidated against the unexpired approval before each owner call.
 
 ## Migration 353
 
@@ -108,8 +153,11 @@ fresh Person Party and delegate the binding to
 `bind_system_user_principal` in the same owner transaction. This covers both
 ERP HR provisioning and reviewed local staff creation; it never matches an
 existing Party by name or email. The explicit local-admin seeder follows the
-same fresh-Party rule for bootstrap. Existing staff remain a separate reviewed
-backfill concern, and conflicting bindings remain fail-closed.
+same fresh-Party rule for bootstrap. Existing staff use the separately
+approved UUID-only adoption plan described above. `party.staff_principal_adoption`
+locks the reviewed Person Party and SystemUser, delegates the native write to
+`bind_system_user_principal`, records PII-free audit evidence, permits only an
+exact same-Party replay, and refuses conflicting or incomplete state.
 
 Service-team source retirement does not create or bind Party identity and does
 not adopt CRM membership. Existing staff binding remains a separate,

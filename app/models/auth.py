@@ -25,13 +25,12 @@ from app.db import Base
 
 
 class AuthProvider(enum.Enum):
-    """Legacy persisted provider vocabulary; compatibility-only during R1.
-
-    New mechanism membership is declared by its SOT owner through
-    ``authentication_mechanism_registry``. In particular, this historical enum
-    retaining ``sso`` does not declare or implement SSO.
-    """
-
+    # Legacy persisted provider vocabulary; compatibility-only during R1.
+    # New mechanism membership is declared by its SOT owner through
+    # authentication_mechanism_registry. In particular, retaining historical
+    # ``sso`` here does not declare or implement SSO. Keep these as comments:
+    # an enum docstring becomes an OpenAPI schema description and would turn
+    # this additive persistence change into an unintended public API change.
     local = "local"
     sso = "sso"
     radius = "radius"

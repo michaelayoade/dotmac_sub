@@ -19,6 +19,7 @@ from app.services import party as party_service
 from app.services.credential_party_binding import (
     CredentialBindingError,
     CredentialPartyBinding,
+    CredentialPrincipalKind,
     bind_credential_party,
     credential_convergence_report,
     resolve_binding_for_mechanism,
@@ -88,22 +89,29 @@ def _staff_credential(db_session):
     db_session.add(credential)
     db_session.flush()
     credential_id = credential.id
+    staff_id = staff.id
     party_id = party.id
     binding_id = binding.id
     db_session.commit()
-    return credential_id, party_id, binding_id
+    return credential_id, staff_id, party_id, binding_id
 
 
 def _command(
-    credential_id,
-    party_id,
-    binding_id,
+    credential_id: uuid.UUID,
+    expected_principal_id: uuid.UUID,
+    party_id: uuid.UUID,
+    binding_id: uuid.UUID,
     *,
+    expected_principal_kind: CredentialPrincipalKind = (
+        CredentialPrincipalKind.system_user
+    ),
     reason: str = "reviewed exact credential projection",
 ) -> CredentialPartyBinding:
     return CredentialPartyBinding(
         context=_context(),
         credential_id=credential_id,
+        expected_principal_kind=expected_principal_kind,
+        expected_principal_id=expected_principal_id,
         party_id=party_id,
         authentication_binding_id=binding_id,
         tenant_id=OPERATOR_TENANT_ID,
@@ -113,8 +121,8 @@ def _command(
 
 
 def test_complete_projection_commits_and_exact_retry_preserves_evidence(db_session):
-    credential_id, party_id, binding_id = _staff_credential(db_session)
-    command = _command(credential_id, party_id, binding_id)
+    credential_id, staff_id, party_id, binding_id = _staff_credential(db_session)
+    command = _command(credential_id, staff_id, party_id, binding_id)
 
     first = bind_credential_party(db_session, command)
     replay = bind_credential_party(db_session, command)
@@ -140,14 +148,17 @@ def test_complete_projection_commits_and_exact_retry_preserves_evidence(db_sessi
 
 
 def test_changed_evidence_is_not_an_exact_retry(db_session):
-    credential_id, party_id, binding_id = _staff_credential(db_session)
-    bind_credential_party(db_session, _command(credential_id, party_id, binding_id))
+    credential_id, staff_id, party_id, binding_id = _staff_credential(db_session)
+    bind_credential_party(
+        db_session, _command(credential_id, staff_id, party_id, binding_id)
+    )
 
     with pytest.raises(CredentialBindingError) as raised:
         bind_credential_party(
             db_session,
             _command(
                 credential_id,
+                staff_id,
                 party_id,
                 binding_id,
                 reason="different review evidence",
@@ -157,8 +168,24 @@ def test_changed_evidence_is_not_an_exact_retry(db_session):
     assert raised.value.code.endswith(".repoint_refused")
 
 
+def test_typed_expected_principal_must_match_the_locked_credential(db_session):
+    credential_id, _staff_id, party_id, binding_id = _staff_credential(db_session)
+
+    with pytest.raises(CredentialBindingError) as raised:
+        bind_credential_party(
+            db_session,
+            _command(credential_id, uuid.uuid4(), party_id, binding_id),
+        )
+
+    assert raised.value.code.endswith(".principal_mismatch")
+    assert raised.value.details == {
+        "expected_principal_kind": "system_user",
+        "actual_principal_kind": "system_user",
+    }
+
+
 def test_person_and_declared_matching_mechanism_are_required(db_session):
-    credential_id, party_id, _ = _staff_credential(db_session)
+    credential_id, staff_id, party_id, _ = _staff_credential(db_session)
     organization = party_service.create_party(
         db_session,
         party_type=PartyType.organization,
@@ -174,17 +201,19 @@ def test_person_and_declared_matching_mechanism_are_required(db_session):
     with pytest.raises(CredentialBindingError) as non_person:
         bind_credential_party(
             db_session,
-            _command(credential_id, organization_id, radius_id),
+            _command(credential_id, staff_id, organization_id, radius_id),
         )
     assert non_person.value.code.endswith(".person_required")
 
     with pytest.raises(CredentialBindingError) as mismatch:
-        bind_credential_party(db_session, _command(credential_id, party_id, radius_id))
+        bind_credential_party(
+            db_session, _command(credential_id, staff_id, party_id, radius_id)
+        )
     assert mismatch.value.code.endswith(".mechanism_mismatch")
 
     with pytest.raises(CredentialBindingError) as undeclared:
         bind_credential_party(
-            db_session, _command(credential_id, party_id, invented_id)
+            db_session, _command(credential_id, staff_id, party_id, invented_id)
         )
     assert undeclared.value.code.endswith(".undeclared_mechanism")
 
@@ -217,11 +246,13 @@ def test_installed_binding_identity_is_immutable(db_session):
 
 
 def test_report_separates_principal_readiness_from_projection(db_session):
-    credential_id, party_id, binding_id = _staff_credential(db_session)
+    credential_id, staff_id, party_id, binding_id = _staff_credential(db_session)
 
     before = credential_convergence_report(db_session)
     db_session.commit()
-    bind_credential_party(db_session, _command(credential_id, party_id, binding_id))
+    bind_credential_party(
+        db_session, _command(credential_id, staff_id, party_id, binding_id)
+    )
     after = credential_convergence_report(db_session)
 
     staff_before = next(
@@ -241,7 +272,7 @@ def test_report_separates_principal_readiness_from_projection(db_session):
 def test_second_local_credential_for_same_party_is_refused(db_session):
     from app.services.subscriber import _default_reseller_id
 
-    credential_id, party_id, binding_id = _staff_credential(db_session)
+    credential_id, staff_id, party_id, binding_id = _staff_credential(db_session)
     subscriber = Subscriber(
         first_name="Private",
         last_name="Subscriber",
@@ -267,10 +298,22 @@ def test_second_local_credential_for_same_party_is_refused(db_session):
     db_session.add(second)
     db_session.flush()
     second_id = second.id
+    subscriber_id = subscriber.id
     db_session.commit()
 
-    bind_credential_party(db_session, _command(credential_id, party_id, binding_id))
+    bind_credential_party(
+        db_session, _command(credential_id, staff_id, party_id, binding_id)
+    )
     with pytest.raises(CredentialBindingError) as raised:
-        bind_credential_party(db_session, _command(second_id, party_id, binding_id))
+        bind_credential_party(
+            db_session,
+            _command(
+                second_id,
+                subscriber_id,
+                party_id,
+                binding_id,
+                expected_principal_kind=CredentialPrincipalKind.subscriber,
+            ),
+        )
 
     assert raised.value.code.endswith(".projection_collision")

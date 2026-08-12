@@ -537,6 +537,14 @@ AuthenticationBinding (installed verifier configuration)
 ├── name (operator-facing label), is_active
 └── no credential material and no radius_server_id coupling
 
+Staff Party credential adoption (R1 operator adapter)
+├── exact UUID-only plan + SHA-256 decision evidence
+├── digest-bound, attributable, maximum-24-hour approval
+├── party.staff_principal_adoption → party.registry for existing SystemUser binding
+├── typed expected SystemUser precondition checked under the credential lock
+├── party.credential_authentication_projection for credential projection
+└── no identity inference, script-owned mutation/commit, or auth reader cutover
+
 MFAMethod (Multi-Factor Authentication)
 ├── subscriber_id → Subscriber
 ├── method_type (totp, sms, email)

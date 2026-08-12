@@ -7,6 +7,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNER = "app/services/credential_party_binding.py"
+STAFF_ADAPTER = PROJECT_ROOT / (
+    "scripts/migration/execute_staff_party_credential_adoption.py"
+)
+STAFF_OWNER = PROJECT_ROOT / "app/services/staff_party_adoption.py"
 FIELDS = {
     "party_id",
     "authentication_binding_id",
@@ -54,3 +58,82 @@ def test_writer_detector_sensitivity(tmp_path: Path) -> None:
     writers = _credential_projection_writers(app)
 
     assert writers == {"app/bad_adapter.py": {"party_id"}}
+
+
+def _staff_adapter_boundary_violations(source: str) -> set[str]:
+    tree = ast.parse(source)
+    violations: set[str] = set()
+    forbidden_calls = {
+        "add",
+        "begin",
+        "begin_nested",
+        "commit",
+        "execute",
+        "flush",
+        "query",
+        "rollback",
+    }
+    required_calls = {
+        "BindExistingStaffPartyCommand",
+        "CredentialPartyBinding",
+        "bind_credential_party",
+        "bind_existing_staff_party",
+    }
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                calls.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                calls.add(node.func.attr)
+                if node.func.attr in forbidden_calls:
+                    violations.add(f"transaction_or_persistence:{node.func.attr}")
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
+            raw_targets = (
+                node.targets if isinstance(node, ast.Assign) else [node.target]
+            )
+            if any(
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id
+                in {"credential", "party", "staff", "system_user", "user"}
+                for target in raw_targets
+            ):
+                violations.add("direct_attribute_mutation")
+    for missing in required_calls - calls:
+        violations.add(f"missing_typed_owner_delegation:{missing}")
+    return violations
+
+
+def test_staff_adoption_adapter_is_typed_transaction_neutral_delegation() -> None:
+    source = STAFF_ADAPTER.read_text(encoding="utf-8")
+
+    assert _staff_adapter_boundary_violations(source) == set()
+
+
+def test_staff_adoption_adapter_detector_sensitivity() -> None:
+    violation = """
+credential.party_id = party_id
+db.commit()
+"""
+
+    assert _staff_adapter_boundary_violations(violation) == {
+        "direct_attribute_mutation",
+        "transaction_or_persistence:commit",
+        "missing_typed_owner_delegation:BindExistingStaffPartyCommand",
+        "missing_typed_owner_delegation:CredentialPartyBinding",
+        "missing_typed_owner_delegation:bind_credential_party",
+        "missing_typed_owner_delegation:bind_existing_staff_party",
+    }
+
+
+def test_staff_adoption_owner_is_separate_from_completed_staff_provisioning() -> None:
+    source = STAFF_OWNER.read_text(encoding="utf-8")
+
+    assert 'OWNER = "party.staff_principal_adoption"' in source
+    assert "app.services.staff_party_adoption" in (
+        PROJECT_ROOT / "app/services/sot_registry/domains/party_identity.py"
+    ).read_text(encoding="utf-8")
+    assert "StaffPartyAdoption" not in (
+        PROJECT_ROOT / "app/services/staff_provisioning.py"
+    ).read_text(encoding="utf-8")
