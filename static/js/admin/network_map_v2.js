@@ -112,6 +112,47 @@
         return Array.from(byId.values());
     }
 
+    const GOVERNED_ASSET_TYPES = Object.freeze([
+        'fdh_cabinet', 'splice_closure', 'access_point', 'support_structure'
+    ]);
+
+    function editableAssetType(feature) {
+        const properties = feature && feature.properties ? feature.properties : {};
+        return GOVERNED_ASSET_TYPES.includes(properties.type) ? properties.type : null;
+    }
+
+    function proposalDiffRows(before, after) {
+        const keys = new Set(Object.keys(before || {}).concat(Object.keys(after || {})));
+        return Array.from(keys).sort().filter((key) => {
+            return JSON.stringify(before ? before[key] : null) !== JSON.stringify(after ? after[key] : null);
+        }).map((key) => ({
+            field: key,
+            before: before && before[key] != null ? before[key] : null,
+            after: after && after[key] != null ? after[key] : null
+        }));
+    }
+
+    function proposalPreviewModels(proposals) {
+        return (proposals || []).filter((proposal) => proposal.status === 'pending').flatMap((proposal) => {
+            const before = proposal.before || null;
+            const after = proposal.after || null;
+            if (!after || !Number.isFinite(Number(after.latitude)) || !Number.isFinite(Number(after.longitude))) return [];
+            const model = {
+                proposalId: proposal.id,
+                operation: proposal.operation,
+                assetType: proposal.asset_type,
+                after: { latitude: Number(after.latitude), longitude: Number(after.longitude) },
+                before: null,
+                topology: false,
+                label: 'Pending proposal preview — not canonical topology'
+            };
+            if (before && Number.isFinite(Number(before.latitude)) && Number.isFinite(Number(before.longitude))) {
+                model.before = { latitude: Number(before.latitude), longitude: Number(before.longitude) };
+            }
+            return [model];
+        });
+    }
+
     function captureLeafletMap(globalObject) {
         if (!globalObject) return;
         let leaflet = globalObject.L;
@@ -166,6 +207,9 @@
         haversineMeters,
         nearestFeature,
         topologyMarkerModels,
+        editableAssetType,
+        proposalDiffRows,
+        proposalPreviewModels,
         captureLeafletMap
     };
 
@@ -202,22 +246,26 @@
         const topology = Array.isArray(overlay.segment_topology) ? overlay.segment_topology : [];
         const counts = overlay.layer_counts || {};
         const unavailable = Array.isArray(overlay.unavailable_layers) ? overlay.unavailable_layers : [];
+        const governance = payload.governance || {};
 
         const layers = {
             olt: L.layerGroup().addTo(map),
             service_buildings: L.layerGroup().addTo(map),
             topology_endpoints: L.layerGroup().addTo(map),
+            proposal_previews: L.layerGroup().addTo(map),
             tools: L.layerGroup().addTo(map),
             selection: L.layerGroup().addTo(map)
         };
         const renderedFeatureLayers = new Map();
         renderAdditionalFeatures({ L, map, layers, features: additionalFeatures, renderedFeatureLayers, topology, document });
         renderTopologyEndpoints({ L, layers, topology, document });
+        renderProposalPreviews({ L, layers, proposals: governance.items || [] });
         installV2Panel({ document, L, map, layers, features, topology, counts, unavailable, overlay });
         installCounts({ document, counts });
         installLayerControls({ document, map, layers, counts, unavailable });
         installSearch({ document, L, map, layers, features, topology, renderedFeatureLayers });
         installDeepLinks({ globalObject, document, L, map, layers, features, topology, renderedFeatureLayers });
+        installGovernanceWorkbench({ globalObject, document, L, map, layers, features, governance });
     }
 
     function escapeHtml(value) {
@@ -272,6 +320,7 @@
         if (!panel || !content) return;
         content.innerHTML = featurePopup(feature, topology);
         panel.classList.remove('hidden');
+        document.dispatchEvent(new CustomEvent('network-map-v2:asset-selected', { detail: { feature } }));
     }
 
     function pointIcon(L, color, label) {
@@ -322,6 +371,256 @@
             marker.bindPopup(`<div class="text-sm"><strong>${escapeHtml(endpoint.name || endpoint.id)}</strong><div>${escapeHtml(humanize(endpoint.endpoint_type))}</div><div>${endpoint.has_explicit_connection ? 'Explicit connection' : 'Disconnected endpoint'}</div><ul class="mt-1 list-disc pl-4">${segmentRows}</ul><div class="mt-2 text-xs">Endpoint markers never create connectivity by proximity.</div></div>`);
             marker.addTo(layers.topology_endpoints);
         });
+    }
+
+    function renderProposalPreviews(context) {
+        const { L, layers, proposals } = context;
+        proposalPreviewModels(proposals).forEach((preview) => {
+            const after = [preview.after.latitude, preview.after.longitude];
+            const marker = L.circleMarker(after, {
+                radius: 9,
+                color: '#7c3aed',
+                fillColor: '#ddd6fe',
+                fillOpacity: 0.75,
+                weight: 3,
+                dashArray: '4 3'
+            }).bindPopup(`<strong>${escapeHtml(humanize(preview.operation))} proposal</strong><div>${escapeHtml(preview.label)}</div><div class="mt-1 font-mono text-xs">${escapeHtml(preview.proposalId)}</div>`);
+            marker.addTo(layers.proposal_previews);
+            if (preview.operation === 'move' && preview.before) {
+                L.polyline(
+                    [[preview.before.latitude, preview.before.longitude], after],
+                    { color: '#7c3aed', weight: 2, opacity: 0.8, dashArray: '5 7' }
+                ).bindPopup('Proposed movement only — this dashed guide is not fibre geometry or topology.')
+                    .addTo(layers.proposal_previews);
+            }
+        });
+    }
+
+    function proposalValue(value) {
+        if (value == null || value === '') return '—';
+        return typeof value === 'object' ? JSON.stringify(value) : String(value);
+    }
+
+    function proposalCard(proposal, governance) {
+        const rows = proposalDiffRows(proposal.before, proposal.after);
+        const history = (proposal.audit_history || []).map((entry) =>
+            `<li>${escapeHtml(humanize(entry.action))} · ${escapeHtml(entry.actor_label || entry.actor_id || 'unknown actor')} · ${escapeHtml(entry.occurred_at || '')}</li>`
+        ).join('');
+        const canReview = governance.can_review && proposal.status === 'pending'
+            && String(proposal.requested_by_actor_id || '') !== String(governance.actor_id || '');
+        return `<article class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900" data-proposal-id="${escapeHtml(proposal.id)}">
+            <div class="flex flex-wrap items-center justify-between gap-2"><strong>${escapeHtml(humanize(proposal.operation))} ${escapeHtml(humanize(proposal.asset_type))}</strong><span class="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">${escapeHtml(humanize(proposal.status))}</span></div>
+            <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">${escapeHtml(proposal.request_reason || '')}</p>
+            <div class="mt-2 overflow-x-auto"><table class="w-full text-xs"><thead><tr><th class="text-left">Field</th><th class="text-left">Before</th><th class="text-left">After</th></tr></thead><tbody>${rows.map((row) => `<tr><td class="py-1 pr-2 font-medium">${escapeHtml(humanize(row.field))}</td><td class="py-1 pr-2">${escapeHtml(proposalValue(row.before))}</td><td class="py-1">${escapeHtml(proposalValue(row.after))}</td></tr>`).join('') || '<tr><td colspan="3" class="py-2 text-slate-500">No changed values available.</td></tr>'}</tbody></table></div>
+            ${proposal.review_notes ? `<p class="mt-2 text-xs"><strong>Reviewer comments:</strong> ${escapeHtml(proposal.review_notes)}</p>` : ''}
+            <details class="mt-2 text-xs"><summary class="cursor-pointer font-medium">Audit history (${(proposal.audit_history || []).length})</summary><ol class="mt-1 space-y-1">${history || '<li>No audit events are available.</li>'}</ol></details>
+            ${canReview ? `<div class="mt-3"><label class="block text-xs font-medium">Reviewer comments<textarea data-review-notes rows="2" required class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></textarea></label><div class="mt-2 flex gap-2"><button type="button" data-review-action="approve" class="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Approve</button><button type="button" data-review-action="reject" class="rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white">Reject</button></div></div>` : ''}
+        </article>`;
+    }
+
+    function installGovernanceWorkbench(context) {
+        const { globalObject, document, L, map, layers, features, governance } = context;
+        const controls = document.getElementById('network-map-v2-controls');
+        if (!controls) return;
+        const editable = features.filter((feature) => editableAssetType(feature));
+        const panel = document.createElement('section');
+        panel.id = 'network-map-v2-governance';
+        panel.className = 'mt-4 rounded-xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-800 dark:bg-violet-950/30';
+        const permissionMessage = governance.can_propose
+            ? 'Changes remain pending until an independent authorized reviewer approves them.'
+            : 'You can inspect proposal evidence but cannot submit asset changes.';
+        panel.innerHTML = `<div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="font-semibold text-slate-900 dark:text-white">Governed asset changes</h2><p class="text-xs text-slate-600 dark:text-slate-300">${escapeHtml(permissionMessage)}</p></div><label class="flex items-center gap-2 text-xs"><input id="v2-proposal-preview-toggle" type="checkbox" checked> Proposal previews (${Number(governance.total || 0)})</label></div>
+            <p id="v2-governance-message" class="mt-3 rounded bg-white/70 p-2 text-xs text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">${escapeHtml(governance.unavailable_message || '')}</p>
+            ${governance.can_propose ? `<form id="v2-proposal-form" class="mt-3 grid gap-3 rounded-lg border border-violet-200 bg-white p-3 dark:border-violet-800 dark:bg-slate-900 sm:grid-cols-2">
+                <label class="text-xs font-medium">Operation<select name="operation" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"><option value="create">Create</option><option value="edit">Edit</option><option value="move">Move</option></select></label>
+                <label class="text-xs font-medium">Asset type<select name="asset_type" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800">${GOVERNED_ASSET_TYPES.map((type) => `<option value="${type}">${escapeHtml(humanize(type))}</option>`).join('')}</select></label>
+                <label class="text-xs font-medium sm:col-span-2">Existing asset<select name="asset_id" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"><option value="">Select a mapped asset</option>${editable.map((feature) => `<option value="${escapeHtml(feature.properties.id)}" data-type="${escapeHtml(feature.properties.type)}">${escapeHtml(feature.properties.name || feature.properties.code || feature.properties.id)} · ${escapeHtml(humanize(feature.properties.type))}</option>`).join('')}</select></label>
+                <label class="text-xs font-medium">Name<input name="name" maxlength="160" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium">Code<input name="code" maxlength="80" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium">Latitude<input name="latitude" type="number" min="-90" max="90" step="any" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium">Longitude<input name="longitude" type="number" min="-180" max="180" step="any" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium">Access-point type<input name="access_point_type" maxlength="60" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium">Placement<input name="placement" maxlength="60" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium">Street<input name="street" maxlength="200" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium">City<input name="city" maxlength="100" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></label>
+                <label class="text-xs font-medium sm:col-span-2">Support type<select name="support_type" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"><option value="">Default pole</option><option value="pole">Pole</option><option value="tower">Tower</option><option value="building_attachment">Building attachment</option><option value="other">Other</option></select></label>
+                <label class="text-xs font-medium sm:col-span-2">Notes<textarea name="notes" maxlength="4000" rows="2" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></textarea></label>
+                <label class="text-xs font-medium sm:col-span-2">Reason<textarea name="reason" minlength="3" maxlength="1000" rows="2" required class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></textarea></label>
+                <div class="flex flex-wrap gap-2 sm:col-span-2"><button type="button" id="v2-place-proposal" class="rounded border border-violet-400 px-3 py-2 text-xs font-semibold text-violet-700 dark:text-violet-200">Place preview on map</button><button type="submit" class="rounded bg-violet-700 px-3 py-2 text-xs font-semibold text-white">Submit pending proposal</button></div>
+                <p class="text-xs text-slate-500 sm:col-span-2">A draggable marker changes only the proposal coordinates. It never moves the canonical marker or any fibre route.</p>
+            </form>` : ''}
+            <div class="mt-4"><h3 class="text-sm font-semibold">Proposal history</h3><div id="v2-proposal-list" class="mt-2 grid gap-3">${(governance.items || []).map((proposal) => proposalCard(proposal, governance)).join('') || '<p class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">No asset proposals exist yet. This is a valid empty state.</p>'}</div>${governance.truncated ? `<p class="mt-2 text-xs text-amber-700">Showing ${Number(governance.limit || 0)} of ${Number(governance.total || 0)} proposals.</p>` : ''}</div>`;
+        controls.after(panel);
+
+        const previewToggle = document.getElementById('v2-proposal-preview-toggle');
+        previewToggle.addEventListener('change', () => {
+            if (previewToggle.checked) map.addLayer(layers.proposal_previews);
+            else map.removeLayer(layers.proposal_previews);
+        });
+        if (!governance.can_propose) {
+            installReviewActions({ globalObject, document, governance });
+            return;
+        }
+        const form = document.getElementById('v2-proposal-form');
+        const operation = form.elements.operation;
+        const assetType = form.elements.asset_type;
+        const assetId = form.elements.asset_id;
+        const latitude = form.elements.latitude;
+        const longitude = form.elements.longitude;
+        let draftMarker = null;
+
+        const selectedFeature = () => editable.find((feature) => String(feature.properties.id) === String(assetId.value));
+        const syncForm = () => {
+            const feature = selectedFeature();
+            const requiresAsset = operation.value !== 'create';
+            assetId.disabled = !requiresAsset;
+            assetId.required = requiresAsset;
+            assetType.disabled = requiresAsset;
+            const requiresCoordinates = operation.value !== 'edit';
+            latitude.disabled = !requiresCoordinates;
+            longitude.disabled = !requiresCoordinates;
+            latitude.required = requiresCoordinates;
+            longitude.required = requiresCoordinates;
+            if (!feature || !requiresAsset) return;
+            const properties = feature.properties || {};
+            const coordinates = feature.geometry && feature.geometry.coordinates ? feature.geometry.coordinates : [];
+            assetType.value = properties.type;
+            form.elements.name.value = properties.name || '';
+            form.elements.code.value = properties.code || '';
+            form.elements.notes.value = properties.notes || '';
+            form.elements.access_point_type.value = properties.access_point_type || '';
+            form.elements.placement.value = properties.placement || '';
+            form.elements.street.value = properties.street || '';
+            form.elements.city.value = properties.city || '';
+            form.elements.support_type.value = properties.support_type || '';
+            latitude.value = coordinates[1] == null ? '' : coordinates[1];
+            longitude.value = coordinates[0] == null ? '' : coordinates[0];
+            const moving = operation.value === 'move';
+            form.elements.name.disabled = moving;
+            form.elements.code.disabled = moving;
+            form.elements.notes.disabled = moving;
+            form.elements.access_point_type.disabled = moving;
+            form.elements.placement.disabled = moving;
+            form.elements.street.disabled = moving;
+            form.elements.city.disabled = moving;
+            form.elements.support_type.disabled = moving;
+        };
+        operation.addEventListener('change', () => {
+            form.elements.name.disabled = false;
+            form.elements.code.disabled = false;
+            form.elements.notes.disabled = false;
+            form.elements.access_point_type.disabled = false;
+            form.elements.placement.disabled = false;
+            form.elements.street.disabled = false;
+            form.elements.city.disabled = false;
+            form.elements.support_type.disabled = false;
+            syncForm();
+        });
+        assetId.addEventListener('change', syncForm);
+        document.addEventListener('network-map-v2:asset-selected', (event) => {
+            const feature = event.detail && event.detail.feature;
+            if (!editableAssetType(feature)) return;
+            operation.value = 'edit';
+            assetId.value = feature.properties.id;
+            syncForm();
+        });
+        document.getElementById('v2-place-proposal').addEventListener('click', () => {
+            if (draftMarker) layers.tools.removeLayer(draftMarker);
+            const initial = Number.isFinite(Number(latitude.value)) && Number.isFinite(Number(longitude.value))
+                ? [Number(latitude.value), Number(longitude.value)]
+                : [map.getCenter().lat, map.getCenter().lng];
+            draftMarker = L.marker(initial, { draggable: true, icon: pointIcon(L, '#7c3aed', 'P') })
+                .bindPopup('Pending proposal position only. Dragging does not mutate the asset or fibre geometry.')
+                .addTo(layers.tools);
+            const syncCoordinates = () => {
+                const point = draftMarker.getLatLng();
+                latitude.value = point.lat.toFixed(7);
+                longitude.value = point.lng.toFixed(7);
+            };
+            syncCoordinates();
+            draftMarker.on('dragend', syncCoordinates);
+            draftMarker.openPopup();
+        });
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const data = new FormData(form);
+            const body = {
+                asset_type: assetType.value,
+                operation: operation.value,
+                asset_id: operation.value === 'create' ? null : assetId.value,
+                reason: String(data.get('reason') || ''),
+                idempotency_key: globalObject.crypto.randomUUID()
+            };
+            if (operation.value !== 'move') {
+                body.name = String(data.get('name') || '');
+                body.code = String(data.get('code') || '') || null;
+                body.notes = String(data.get('notes') || '') || null;
+                if (assetType.value === 'access_point') {
+                    body.access_point_type = String(data.get('access_point_type') || '') || null;
+                    body.placement = String(data.get('placement') || '') || null;
+                    body.street = String(data.get('street') || '') || null;
+                    body.city = String(data.get('city') || '') || null;
+                }
+                if (assetType.value === 'support_structure') {
+                    body.support_type = String(data.get('support_type') || '') || null;
+                }
+            }
+            if (operation.value !== 'edit') {
+                body.latitude = Number(data.get('latitude'));
+                body.longitude = Number(data.get('longitude'));
+            }
+            await postProposal(globalObject, '/admin/network/map-v2/proposals', body);
+        });
+        installReviewActions({ globalObject, document, governance });
+        syncForm();
+    }
+
+    function installReviewActions(context) {
+        const { globalObject, document } = context;
+        document.querySelectorAll('[data-review-action]').forEach((button) => {
+            button.addEventListener('click', async () => {
+                const card = button.closest('[data-proposal-id]');
+                const notes = card.querySelector('[data-review-notes]').value.trim();
+                if (notes.length < 3) {
+                    showGovernanceMessage(document, 'Reviewer comments must contain at least three characters.', true);
+                    return;
+                }
+                const proposal = (context.governance.items || []).find((item) => item.id === card.dataset.proposalId);
+                await postProposal(
+                    globalObject,
+                    `/admin/network/map-v2/proposals/${encodeURIComponent(proposal.id)}/${button.dataset.reviewAction}`,
+                    { expected_proposal_sha256: proposal.proposal_sha256, review_notes: notes, idempotency_key: globalObject.crypto.randomUUID() }
+                );
+            });
+        });
+    }
+
+    function showGovernanceMessage(document, message, error) {
+        const element = document.getElementById('v2-governance-message');
+        if (!element) return;
+        element.textContent = message;
+        element.classList.toggle('text-red-700', Boolean(error));
+    }
+
+    async function postProposal(globalObject, url, body) {
+        const document = globalObject.document;
+        showGovernanceMessage(document, 'Saving governed proposal evidence…', false);
+        try {
+            const response = await globalObject.fetch(url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                },
+                body: JSON.stringify(body)
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || 'The proposal command was refused.');
+            globalObject.location.reload();
+        } catch (error) {
+            showGovernanceMessage(document, error.message || 'The proposal command failed.', true);
+        }
     }
 
     function installV2Panel(context) {
