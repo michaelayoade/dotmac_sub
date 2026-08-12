@@ -810,15 +810,14 @@ def _review_proposal(
         )
 
     now = datetime.now(UTC)
-    row.review_key_sha256 = review_key_sha256
-    row.review_fingerprint_sha256 = review_fingerprint
-    row.reviewed_by_actor_id = command.actor_id
-    row.reviewed_by_actor_type = command.actor_type.value
-    row.reviewed_by_actor_label = command.actor_label.strip()
-    row.review_notes = notes
-    row.reviewed_at = now
-
     if command.decision is NetworkAssetReviewDecision.reject:
+        row.review_key_sha256 = review_key_sha256
+        row.review_fingerprint_sha256 = review_fingerprint
+        row.reviewed_by_actor_id = command.actor_id
+        row.reviewed_by_actor_type = command.actor_type.value
+        row.reviewed_by_actor_label = command.actor_label.strip()
+        row.review_notes = notes
+        row.reviewed_at = now
         row.status = NetworkAssetProposalStatus.rejected.value
         _stage_proposal_audit(
             db,
@@ -893,6 +892,13 @@ def _review_proposal(
             "The canonical asset owner refused a conflicting asset identity.",
             asset_type=asset_type.value,
         ) from exc
+    row.review_key_sha256 = review_key_sha256
+    row.review_fingerprint_sha256 = review_fingerprint
+    row.reviewed_by_actor_id = command.actor_id
+    row.reviewed_by_actor_type = command.actor_type.value
+    row.reviewed_by_actor_label = command.actor_label.strip()
+    row.review_notes = notes
+    row.reviewed_at = now
     row.status = NetworkAssetProposalStatus.applied.value
     row.result_asset_id = applied.asset_id
     row.applied_at = now
