@@ -1,4 +1,4 @@
-"""Fresh and deployed-523 PostgreSQL proofs for migration 525."""
+"""Fresh and deployed-524 PostgreSQL proofs for migration 525."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 
 ROOT = Path(__file__).resolve().parents[2]
-PREDECESSOR = "523_domain_settings_tenant_fk"
+PREDECESSOR = "524_audit_events_kernel_r1"
 CANDIDATE = "525_credential_party_binding_additive"
 
 
@@ -230,7 +230,7 @@ def _seed_legacy_canaries(url: URL) -> tuple[str, str, tuple[object, ...]]:
         sqlalchemy_engine.dispose()
 
 
-def _restore_deployed_523_shape(url: URL) -> None:
+def _restore_deployed_524_shape(url: URL) -> None:
     with psycopg.connect(_render(url), autocommit=True) as connection:
         for column in (
             "tenant_id",
@@ -248,12 +248,12 @@ def _restore_deployed_523_shape(url: URL) -> None:
         connection.execute("DROP TABLE IF EXISTS authentication_bindings CASCADE")
 
 
-def test_deployed_523_upgrade_preserves_credentials_and_party_roles(
+def test_deployed_524_upgrade_preserves_credentials_and_party_roles(
     engine, migrated_database
 ) -> None:
     _upgrade(PREDECESSOR)
     credential_id, staff_id, role_before = _seed_legacy_canaries(migrated_database)
-    _restore_deployed_523_shape(migrated_database)
+    _restore_deployed_524_shape(migrated_database)
 
     _upgrade(CANDIDATE)
 

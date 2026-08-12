@@ -1,6 +1,6 @@
 # Party Principal and Organization-Context Binding
 
-Status: migrations 353 and 524 provide additive principal and credential
+Status: migrations 353 and 525 provide additive principal and credential
 projection foundations; no credential data backfill, authentication reader
 cutover, RLS, or compatibility retirement.
 

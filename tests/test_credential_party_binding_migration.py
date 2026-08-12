@@ -9,7 +9,7 @@ def _load_migration():
         Path(__file__).resolve().parents[1]
         / "alembic/versions/525_credential_party_binding_additive.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_524", path)
+    spec = importlib.util.spec_from_file_location("migration_525", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -21,7 +21,7 @@ def test_revision_is_linear_additive_and_adoption_aware() -> None:
     source = Path(migration.__file__).read_text(encoding="utf-8")
 
     assert migration.revision == "525_credential_party_binding_additive"
-    assert migration.down_revision == "523_domain_settings_tenant_fk"
+    assert migration.down_revision == "524_audit_events_kernel_r1"
     assert "inspect(bind)" in source
     assert "authentication_bindings" in source
     assert "binding_key" in source
