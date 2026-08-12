@@ -87,6 +87,12 @@ def _upgrade(revision: str) -> None:
     command.upgrade(config, revision)
 
 
+def _downgrade(revision: str) -> None:
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    command.downgrade(config, revision)
+
+
 def _candidate_contract(url: URL) -> tuple[set[str], set[str], set[str]]:
     with psycopg.connect(_render(url)) as connection:
         columns = {
@@ -149,6 +155,29 @@ def test_fresh_head_has_complete_projection_contract(engine, migrated_database) 
                 "UPDATE authentication_bindings SET mechanism_code = 'changed' "
                 "WHERE binding_key = 'local.default'"
             )
+
+    _downgrade(PREDECESSOR)
+
+    with psycopg.connect(_render(migrated_database)) as connection:
+        remaining_columns = {
+            row[0]
+            for row in connection.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'user_credentials'"
+            )
+        }
+        bindings_table = connection.execute(
+            "SELECT to_regclass('public.authentication_bindings')"
+        ).fetchone()
+    assert {
+        "party_id",
+        "authentication_binding_id",
+        "tenant_id",
+        "party_bound_at",
+        "party_binding_source",
+        "party_binding_reason",
+    }.isdisjoint(remaining_columns)
+    assert bindings_table == (None,)
 
 
 def _seed_legacy_canaries(url: URL) -> tuple[str, str, tuple[object, ...]]:

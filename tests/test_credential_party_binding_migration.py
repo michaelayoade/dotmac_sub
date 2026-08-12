@@ -43,3 +43,26 @@ def test_seed_matches_declared_runtime_mechanisms_and_is_deterministic() -> None
     assert {row[1] for row in migration._SEED} == {"local.default", "radius.default"}
     assert len({row[0] for row in migration._SEED}) == len(migration._SEED)
     assert "sso" not in {row[2] for row in migration._SEED}
+
+
+def test_semantic_fk_adoption_returns_the_database_name_for_downgrade() -> None:
+    migration = _load_migration()
+    generated_name = "user_credentials_authentication_binding_id_fkey"
+
+    actual = migration._matching_fk_name(
+        [
+            {
+                "name": generated_name,
+                "constrained_columns": ["authentication_binding_id"],
+                "referred_table": "authentication_bindings",
+                "referred_columns": ["id"],
+                "options": {"ondelete": "RESTRICT"},
+            }
+        ],
+        name="fk_user_credentials_auth_binding",
+        columns=["authentication_binding_id"],
+        referred_table="authentication_bindings",
+        ondelete="RESTRICT",
+    )
+
+    assert actual == generated_name

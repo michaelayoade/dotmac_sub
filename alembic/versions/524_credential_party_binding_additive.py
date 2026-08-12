@@ -102,15 +102,15 @@ _PROJECTION = (
 )
 
 
-def _matching_fk_exists(
+def _matching_fk_name(
     foreign_keys: list[dict[str, object]],
     *,
     name: str,
     columns: list[str],
     referred_table: str,
     ondelete: str,
-) -> bool:
-    """Adopt one exact semantic FK and reject a same-named different shape."""
+) -> str | None:
+    """Return an exact semantic FK's real name; reject name/shape conflicts."""
 
     expected = (columns, referred_table, ["id"], ondelete)
     for foreign_key in foreign_keys:
@@ -123,13 +123,19 @@ def _matching_fk_exists(
             str(options.get("ondelete", "")).upper(),
         )
         if actual == expected:
-            return True
+            actual_name = foreign_key.get("name")
+            if not isinstance(actual_name, str) or not actual_name:
+                raise RuntimeError(
+                    f"Exact {name} semantic FK has no usable database name; "
+                    "refusing an unaddressable adoption"
+                )
+            return actual_name
         if foreign_key.get("name") == name:
             raise RuntimeError(
                 f"{name} exists with unexpected definition {actual!r}; refusing "
                 "to replace it implicitly"
             )
-    return False
+    return None
 
 
 def upgrade() -> None:
@@ -261,12 +267,15 @@ def upgrade() -> None:
     # shape, while a deployed 522 database has none of these objects.
     inspector = sa.inspect(bind)
     foreign_keys = inspector.get_foreign_keys(CREDENTIALS)
-    if not _matching_fk_exists(
-        foreign_keys,
-        name="fk_user_credentials_party",
-        columns=["party_id"],
-        referred_table="parties",
-        ondelete="RESTRICT",
+    if (
+        _matching_fk_name(
+            foreign_keys,
+            name="fk_user_credentials_party",
+            columns=["party_id"],
+            referred_table="parties",
+            ondelete="RESTRICT",
+        )
+        is None
     ):
         op.create_foreign_key(
             "fk_user_credentials_party",
@@ -276,12 +285,15 @@ def upgrade() -> None:
             ["id"],
             ondelete="RESTRICT",
         )
-    if not _matching_fk_exists(
-        foreign_keys,
-        name="fk_user_credentials_auth_binding",
-        columns=["authentication_binding_id"],
-        referred_table=BINDINGS,
-        ondelete="RESTRICT",
+    if (
+        _matching_fk_name(
+            foreign_keys,
+            name="fk_user_credentials_auth_binding",
+            columns=["authentication_binding_id"],
+            referred_table=BINDINGS,
+            ondelete="RESTRICT",
+        )
+        is None
     ):
         op.create_foreign_key(
             "fk_user_credentials_auth_binding",
@@ -291,12 +303,15 @@ def upgrade() -> None:
             ["id"],
             ondelete="RESTRICT",
         )
-    if not _matching_fk_exists(
-        foreign_keys,
-        name="fk_user_credentials_tenant",
-        columns=["tenant_id"],
-        referred_table="tenants",
-        ondelete="RESTRICT",
+    if (
+        _matching_fk_name(
+            foreign_keys,
+            name="fk_user_credentials_tenant",
+            columns=["tenant_id"],
+            referred_table="tenants",
+            ondelete="RESTRICT",
+        )
+        is None
     ):
         op.create_foreign_key(
             "fk_user_credentials_tenant",
@@ -343,11 +358,30 @@ def downgrade() -> None:
     op.drop_constraint(
         "ck_user_credentials_party_binding_projection", CREDENTIALS, type_="check"
     )
-    op.drop_constraint("fk_user_credentials_tenant", CREDENTIALS, type_="foreignkey")
-    op.drop_constraint(
-        "fk_user_credentials_auth_binding", CREDENTIALS, type_="foreignkey"
-    )
-    op.drop_constraint("fk_user_credentials_party", CREDENTIALS, type_="foreignkey")
+    # A squashed fresh install creates equivalent model FKs before this
+    # incremental revision runs, and PostgreSQL assigns those constraints its
+    # own names. Upgrade deliberately adopts their semantics. Downgrade must
+    # therefore drop the names actually present, not assume only the names
+    # created on a deployed-523 upgrade can exist.
+    foreign_keys = sa.inspect(op.get_bind()).get_foreign_keys(CREDENTIALS)
+    for canonical_name, columns, referred_table in (
+        ("fk_user_credentials_tenant", ["tenant_id"], "tenants"),
+        (
+            "fk_user_credentials_auth_binding",
+            ["authentication_binding_id"],
+            BINDINGS,
+        ),
+        ("fk_user_credentials_party", ["party_id"], "parties"),
+    ):
+        actual_name = _matching_fk_name(
+            foreign_keys,
+            name=canonical_name,
+            columns=columns,
+            referred_table=referred_table,
+            ondelete="RESTRICT",
+        )
+        if actual_name is not None:
+            op.drop_constraint(actual_name, CREDENTIALS, type_="foreignkey")
     for column in (
         "tenant_id",
         "authentication_binding_id",
