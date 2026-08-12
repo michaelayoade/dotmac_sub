@@ -104,7 +104,9 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.func.now(),
         ),
-        sa.UniqueConstraint("mechanism_code", "name", name="uq_auth_bindings_code_name"),
+        sa.UniqueConstraint(
+            "mechanism_code", "name", name="uq_auth_bindings_code_name"
+        ),
         sa.CheckConstraint(
             "length(trim(mechanism_code)) > 0", name="ck_auth_bindings_code_nonempty"
         ),
@@ -135,12 +137,16 @@ def upgrade() -> None:
 
     op.add_column(CREDENTIALS, sa.Column("party_id", sa.Uuid(), nullable=True))
     op.add_column(
-        CREDENTIALS, sa.Column("party_bound_at", sa.DateTime(timezone=True), nullable=True)
+        CREDENTIALS,
+        sa.Column("party_bound_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.add_column(
-        CREDENTIALS, sa.Column("party_binding_source", sa.String(length=80), nullable=True)
+        CREDENTIALS,
+        sa.Column("party_binding_source", sa.String(length=80), nullable=True),
     )
-    op.add_column(CREDENTIALS, sa.Column("party_binding_reason", sa.Text(), nullable=True))
+    op.add_column(
+        CREDENTIALS, sa.Column("party_binding_reason", sa.Text(), nullable=True)
+    )
     op.add_column(
         CREDENTIALS, sa.Column("authentication_binding_id", sa.Uuid(), nullable=True)
     )
