@@ -2681,7 +2681,26 @@ def _build_ont_provisioning_summary(
         "retired": "unprovisioned",
         "saved": "pending_service_config",
     }
-    status = phase_status.get(configuration_phase or "", "unprovisioned")
+    # Before an assigned ONT has a service-configuration head, commissioning
+    # still owns the current operational phase (for example, waiting for the
+    # first ACS Inform). Once a configuration lifecycle exists, its exact
+    # assignment/revision phase takes precedence. Event evidence remains
+    # lifecycle-scoped by the caller, so this fallback cannot reintroduce an
+    # old assignment's unscoped latest failure.
+    if configuration_phase is not None:
+        status = phase_status.get(configuration_phase, "unprovisioned")
+    else:
+        raw_status = str(
+            getattr(
+                getattr(ont, "provisioning_status", None),
+                "value",
+                getattr(ont, "provisioning_status", None),
+            )
+            or ""
+        ).strip()
+        status = (
+            raw_status if raw_status in _PROVISIONING_STATUS_META else "unprovisioned"
+        )
     status_meta = _PROVISIONING_STATUS_META.get(
         status, _PROVISIONING_STATUS_META["unprovisioned"]
     )

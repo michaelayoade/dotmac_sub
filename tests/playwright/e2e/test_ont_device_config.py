@@ -9,15 +9,19 @@ from playwright.sync_api import Page, expect
 
 def _first_ont_detail_path(admin_page: Page, base_url: str) -> str:
     admin_page.goto(f"{base_url}/admin/network/onts", wait_until="domcontentloaded")
-    detail_link = admin_page.locator("a[href*='/admin/network/onts/']").first
-    if detail_link.count() == 0:
-        pytest.skip("No ONT records available for device-config panel check")
+    links = admin_page.locator("a[href*='/admin/network/onts/']")
+    for index in range(links.count()):
+        href = links.nth(index).get_attribute("href")
+        if not href:
+            continue
+        path = href if href.startswith("/") else re.sub(r"^https?://[^/]+", "", href)
+        if re.search(
+            r"/admin/network/onts/[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}(?:[/?#]|$)",
+            path,
+        ):
+            return path
 
-    href = detail_link.get_attribute("href")
-    if not href:
-        pytest.skip("No ONT detail link available")
-
-    return href if href.startswith("/") else re.sub(r"^https?://[^/]+", "", href)
+    pytest.skip("No ONT record detail link available")
 
 
 def _route_success(admin_page: Page, pattern: str):
