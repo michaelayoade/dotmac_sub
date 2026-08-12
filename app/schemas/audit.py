@@ -35,8 +35,7 @@ class AuditEventBase(BaseModel):
             return self
         if self.actor_id is None or not self.actor_id.strip():
             raise ValueError(
-                f"audit actor type {self.actor_type.value!r} needs a non-empty "
-                "actor_id"
+                f"audit actor type {self.actor_type.value!r} needs a non-empty actor_id"
             )
         return self
 
