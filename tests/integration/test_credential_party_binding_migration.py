@@ -1,4 +1,4 @@
-"""Fresh and deployed-523 PostgreSQL proofs for migration 524."""
+"""Fresh and deployed-523 PostgreSQL proofs for migration 525."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from app.models.system_user import SystemUser
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "523_domain_settings_tenant_fk"
-CANDIDATE = "524_credential_party_binding_additive"
+CANDIDATE = "525_credential_party_binding_additive"
 
 
 def _render(url: URL) -> str:
