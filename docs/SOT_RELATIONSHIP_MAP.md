@@ -4034,11 +4034,16 @@ owned by the TR-069 Inform handler and persisted on
 `Tr069CpeDevice.genieacs_device_id`. No planner, applier, task, or adapter may
 construct one from a default OUI or ProductClass — the fleet spans several ONT
 models and a fabricated identifier is a permanent NBI 404 that retries forever.
-The ONT reconciler resolves the identifier from that record, or from the `_id`
-the ACS itself reported for the serial on the same pass, and fails closed
-otherwise: a device absent from the ACS, an ambiguous multi-document match, or a
-recorded-versus-reported disagreement produces an OLT-only plan plus an explicit
-`ont_not_informing` / `acs_identity_unresolved` wait, never a speculative push.
+The ONT reconciler reads ACS state by that exact persisted identifier first.
+This keeps Huawei-form OLT serials (`HWTC...`) aligned with CWMP documents that
+use their equivalent hexadecimal serial (`48575443...`). Only when no recorded
+identifier exists, or the recorded document is absent, may the reader use a
+trailing-serial query to observe current ACS identity. The planner then resolves
+the identifier from the persisted record or from the `_id` the ACS itself
+reported on the same pass, and fails closed otherwise: a device absent from the
+ACS, an ambiguous multi-document match, or a recorded-versus-reported
+disagreement produces an OLT-only plan plus an explicit `ont_not_informing` /
+`acs_identity_unresolved` wait, never a speculative push.
 Repeated undeliverable passes are counted on the ONT and escalated so a
 permanently broken ONT cannot fail silently in the sweep.
 
