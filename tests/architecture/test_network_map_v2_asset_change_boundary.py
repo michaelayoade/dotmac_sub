@@ -46,10 +46,14 @@ def _has_permission(route: APIRoute, expected: str) -> bool:
 
 
 def test_governed_write_routes_exist_only_under_network_map_v2():
+    proposals = _route("/network/map-v2/proposals", "GET")
     submit = _route("/network/map-v2/proposals", "POST")
     approve = _route("/network/map-v2/proposals/{proposal_id}/approve", "POST")
     reject = _route("/network/map-v2/proposals/{proposal_id}/reject", "POST")
 
+    assert all(
+        route.response_model is None for route in (proposals, submit, approve, reject)
+    )
     assert _has_permission(submit, "network:fiber:write")
     assert _has_permission(approve, "network:fiber:review")
     assert _has_permission(reject, "network:fiber:review")

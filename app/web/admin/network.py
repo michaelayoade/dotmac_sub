@@ -412,6 +412,7 @@ def comprehensive_network_map_v2(
 
 @router.get(
     "/map-v2/proposals",
+    response_model=None,
     dependencies=[Depends(require_permission("network:map:read"))],
 )
 def network_map_v2_proposals(
@@ -438,6 +439,7 @@ def network_map_v2_proposals(
 
 @router.post(
     "/map-v2/proposals",
+    response_model=None,
     dependencies=[
         Depends(require_permission(network_map_asset_changes.PROPOSE_PERMISSION))
     ],
@@ -548,6 +550,7 @@ def _network_map_v2_review(
 
 @router.post(
     "/map-v2/proposals/{proposal_id}/approve",
+    response_model=None,
     dependencies=[
         Depends(require_permission(network_map_asset_changes.REVIEW_PERMISSION))
     ],
@@ -572,6 +575,7 @@ def network_map_v2_approve_proposal(
 
 @router.post(
     "/map-v2/proposals/{proposal_id}/reject",
+    response_model=None,
     dependencies=[
         Depends(require_permission(network_map_asset_changes.REVIEW_PERMISSION))
     ],
