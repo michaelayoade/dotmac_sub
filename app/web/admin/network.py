@@ -274,6 +274,28 @@ def comprehensive_network_map(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/map-v2",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:map:read"))],
+)
+def comprehensive_network_map_v2(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Isolated CRM-parity experiment; the original Network Map is unchanged."""
+    from app.services import network_map as network_map_service
+
+    context = _base_context(request, db, active_page="network-map-v2")
+    base_projection = network_map_service.build_network_map_projection(db=db)
+    v2_projection = network_map_service.build_network_map_v2_projection(
+        db=db,
+        base_projection=base_projection,
+    )
+    context.update(base_projection.to_template_context())
+    context["network_map_v2"] = v2_projection.to_transport()
+    return templates.TemplateResponse("admin/network/map_v2.html", context)
+
+
+@router.get(
     "/map/plant-data",
     dependencies=[Depends(require_permission("network:map:read"))],
 )
