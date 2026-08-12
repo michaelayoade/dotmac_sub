@@ -12,6 +12,8 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -38,12 +40,68 @@ class SessionStatus(enum.Enum):
     expired = "expired"
 
 
+class AuthenticationBinding(Base):
+    """One installed, configured way of proving you are a Party.
+
+    ADR-0019 (starter): a credential authenticates a Party and may repeat only
+    per authentication *mechanism* — never per principal kind, portal, account
+    or membership. The discriminator is the **binding**, not the mechanism code:
+    two OIDC issuers or two RADIUS verifiers are two bindings of one code, and a
+    code-keyed constraint would forbid a party holding a credential against each.
+
+    ``mechanism_code`` is a plain string on purpose (ADR-0008) — the vocabulary
+    is open and declared, so a deployment names a mechanism without a migration.
+    The typed contract lives behind the binding in the owning provider module,
+    which is why there is no ``radius_server_id`` here.
+    """
+
+    __tablename__ = "authentication_bindings"
+    __table_args__ = (
+        UniqueConstraint("mechanism_code", "name", name="uq_auth_bindings_code_name"),
+        CheckConstraint(
+            "length(trim(mechanism_code)) > 0", name="ck_auth_bindings_code_nonempty"
+        ),
+        Index("ix_auth_bindings_code_active", "mechanism_code", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    mechanism_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
 class UserCredential(Base):
     __tablename__ = "user_credentials"
     __table_args__ = (
         CheckConstraint(
             "(provider != 'local') OR (username IS NOT NULL AND password_hash IS NOT NULL)",
             name="ck_user_credentials_local_requires_username_password",
+        ),
+        # Migration 522. All four present or all four absent: a Party binding
+        # can never exist without reviewed provenance. Same shape as
+        # `subscribers`, `system_users`, `reseller_users`, `subscriber_contacts`.
+        CheckConstraint(
+            "(party_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_user_credentials_party_binding_evidence",
         ),
         CheckConstraint(
             # Exactly one principal: subscriber (customer), system_user (admin),
@@ -86,6 +144,23 @@ class UserCredential(Base):
     radius_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("radius_servers.id")
     )
+    # Migration 522 — additive Party/binding/tenant columns. Nothing reads
+    # through them yet; the legacy principal FKs above stay authoritative until
+    # a separate reader cutover (R2). All nullable, and they stay nullable
+    # until R3.
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="RESTRICT")
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
+    authentication_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("authentication_bindings.id", ondelete="RESTRICT"),
+    )
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT")
+    )
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     password_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
@@ -109,6 +184,8 @@ class UserCredential(Base):
     system_user = relationship("SystemUser")
     reseller_user = relationship("ResellerUser")
     radius_server = relationship("RadiusServer")
+    party = relationship("Party", foreign_keys=[party_id])
+    authentication_binding = relationship("AuthenticationBinding")
 
 
 class MFAMethod(Base):
