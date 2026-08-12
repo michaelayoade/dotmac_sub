@@ -475,6 +475,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Permanent convergence pass converts assignments and stages expired cleanup.",
     ),
+    "app.tasks.ont_service_configuration.apply": _c(
+        "network",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "The dispatch outbox admits an existing operation once; exact assignment, "
+        "configuration-head, revision, and readback evidence prevent stale delivery.",
+    ),
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

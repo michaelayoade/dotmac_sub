@@ -137,6 +137,7 @@ from app.tasks.ont_runtime_status import (
     dispatch_huawei_ont_status,
     refresh_huawei_olt_status,
 )
+from app.tasks.ont_service_configuration import apply as apply_ont_service_configuration
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.outage_auto_notify import auto_dispatch_outage_notifications
@@ -355,6 +356,7 @@ __all__ = [
     "check_nas_health",
     "execute_ont_bulk_action",
     "run_ont_reconcile_sweep",
+    "apply_ont_service_configuration",
     "apply_huawei_ont_firmware",
     "verify_huawei_ont_firmware",
     "dispatch_huawei_ont_status",
