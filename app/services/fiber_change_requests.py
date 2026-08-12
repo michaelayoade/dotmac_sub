@@ -2,7 +2,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeAlias
 
 from fastapi import HTTPException
 from sqlalchemy import Uuid, func, select
@@ -57,12 +57,9 @@ ASSET_MODEL_MAP = {
     "splitter_port": SplitterPort,
 }
 
-_GOVERNED_MODEL_MAP = {
-    GovernedNetworkAssetType.fdh_cabinet: FdhCabinet,
-    GovernedNetworkAssetType.splice_closure: FiberSpliceClosure,
-    GovernedNetworkAssetType.access_point: FiberAccessPoint,
-    GovernedNetworkAssetType.support_structure: FiberSupportStructure,
-}
+GovernedAssetRow: TypeAlias = (
+    FdhCabinet | FiberSpliceClosure | FiberAccessPoint | FiberSupportStructure
+)
 
 
 class GovernedFiberAssetError(DomainError):
@@ -81,7 +78,7 @@ def _governed_error(
 
 def _governed_snapshot(
     asset_type: GovernedNetworkAssetType,
-    row: FdhCabinet | FiberSpliceClosure | FiberAccessPoint | FiberSupportStructure,
+    row: GovernedAssetRow,
 ) -> NetworkAssetSnapshot:
     latitude = getattr(row, "latitude", None)
     longitude = getattr(row, "longitude", None)
@@ -111,6 +108,32 @@ def _governed_snapshot(
     )
 
 
+def _governed_asset_row(
+    db: Session,
+    *,
+    asset_type: GovernedNetworkAssetType,
+    asset_id: uuid.UUID,
+    lock: bool,
+) -> GovernedAssetRow | None:
+    """Load one governed model without erasing its precise ORM type."""
+
+    if asset_type is GovernedNetworkAssetType.fdh_cabinet:
+        stmt = select(FdhCabinet).where(FdhCabinet.id == asset_id)
+        return db.scalar(stmt.with_for_update() if lock else stmt)
+    if asset_type is GovernedNetworkAssetType.splice_closure:
+        closure_stmt = select(FiberSpliceClosure).where(
+            FiberSpliceClosure.id == asset_id
+        )
+        return db.scalar(closure_stmt.with_for_update() if lock else closure_stmt)
+    if asset_type is GovernedNetworkAssetType.access_point:
+        access_stmt = select(FiberAccessPoint).where(FiberAccessPoint.id == asset_id)
+        return db.scalar(access_stmt.with_for_update() if lock else access_stmt)
+    support_stmt = select(FiberSupportStructure).where(
+        FiberSupportStructure.id == asset_id
+    )
+    return db.scalar(support_stmt.with_for_update() if lock else support_stmt)
+
+
 def get_governed_asset_snapshot(
     db: Session,
     *,
@@ -120,11 +143,12 @@ def get_governed_asset_snapshot(
 ) -> NetworkAssetSnapshot:
     """Read one canonical passive asset through its owning service."""
 
-    model = _GOVERNED_MODEL_MAP[asset_type]
-    stmt = select(model).where(model.id == asset_id)
-    if lock:
-        stmt = stmt.with_for_update()
-    row = db.scalar(stmt)
+    row = _governed_asset_row(
+        db,
+        asset_type=asset_type,
+        asset_id=asset_id,
+        lock=lock,
+    )
     if row is None:
         raise _governed_error(
             "asset_not_found",
@@ -194,6 +218,7 @@ def apply_governed_map_asset_change(
                 "A create change cannot name an existing canonical asset.",
             )
         geometry = _governed_geometry(db, after)
+        row: GovernedAssetRow
         if change.asset_type is GovernedNetworkAssetType.fdh_cabinet:
             row = FdhCabinet(
                 name=after.name,
@@ -290,11 +315,13 @@ def apply_governed_map_asset_change(
             "A movement proposal cannot change non-coordinate asset fields.",
         )
 
-    model = _GOVERNED_MODEL_MAP[change.asset_type]
-    row = db.scalar(
-        select(model).where(model.id == change.target_asset_id).with_for_update()
+    target_row = _governed_asset_row(
+        db,
+        asset_type=change.asset_type,
+        asset_id=change.target_asset_id,
+        lock=True,
     )
-    assert row is not None
+    assert target_row is not None
     if change.asset_type is GovernedNetworkAssetType.support_structure:
         from app.services.network.fiber_support_structures import (
             FiberSupportStructureError,
@@ -302,7 +329,7 @@ def apply_governed_map_asset_change(
         )
 
         try:
-            row = apply_reviewed_support_change(
+            target_row = apply_reviewed_support_change(
                 db,
                 operation=FiberChangeRequestOperation.update,
                 asset_id=change.target_asset_id,
@@ -311,24 +338,21 @@ def apply_governed_map_asset_change(
         except FiberSupportStructureError as exc:
             raise _governed_error("support_change_refused", str(exc)) from exc
     else:
-        row.name = after.name
-        row.latitude = after.coordinates.latitude
-        row.longitude = after.coordinates.longitude
-        row.geom = _governed_geometry(db, after)
-        row.notes = after.notes
-        if change.asset_type in {
-            GovernedNetworkAssetType.fdh_cabinet,
-            GovernedNetworkAssetType.access_point,
-        }:
-            row.code = after.code
-        if change.asset_type is GovernedNetworkAssetType.access_point:
-            row.access_point_type = after.access_point_type
-            row.placement = after.placement
-            row.street = after.street
-            row.city = after.city
+        target_row.name = after.name
+        target_row.latitude = after.coordinates.latitude
+        target_row.longitude = after.coordinates.longitude
+        target_row.geom = _governed_geometry(db, after)
+        target_row.notes = after.notes
+        if isinstance(target_row, (FdhCabinet, FiberAccessPoint)):
+            target_row.code = after.code
+        if isinstance(target_row, FiberAccessPoint):
+            target_row.access_point_type = after.access_point_type
+            target_row.placement = after.placement
+            target_row.street = after.street
+            target_row.city = after.city
         db.flush()
-    result = _governed_snapshot(change.asset_type, row)
-    return AppliedNetworkAssetChange(asset_id=row.id, snapshot=result)
+    result = _governed_snapshot(change.asset_type, target_row)
+    return AppliedNetworkAssetChange(asset_id=target_row.id, snapshot=result)
 
 
 def _normalize_asset_type(asset_type: str) -> str:

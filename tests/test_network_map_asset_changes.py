@@ -12,6 +12,7 @@ from app.models.network import (
     FiberSegmentType,
     FiberTerminationPoint,
 )
+from app.models.network_map_asset_change import NetworkMapAssetChangeProposal
 from app.schemas.network_map_asset_changes import (
     GovernedNetworkAssetType,
     NetworkAssetChangeOperation,
@@ -23,11 +24,18 @@ from app.schemas.network_map_asset_changes import (
     SubmitNetworkAssetProposalCommand,
 )
 from app.services import network_map_asset_changes as service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 
 PROPOSER = uuid4()
 REVIEWER = uuid4()
+
+
+def test_create_proposal_before_values_persist_as_sql_null():
+    column_type = NetworkMapAssetChangeProposal.__table__.c.before_values.type
+
+    assert column_type.none_as_null is True
 
 
 def _context(*, actor_id: UUID, scope: str, reason: str) -> CommandContext:
@@ -49,6 +57,7 @@ def _submit(
     asset_id: UUID | None,
     draft: NetworkAssetDraft,
 ):
+    db_session_adapter.release_read_transaction(db_session)
     return service.submit_proposal(
         db_session,
         SubmitNetworkAssetProposalCommand(
@@ -69,6 +78,7 @@ def _submit(
 
 
 def _review(db_session, proposal, decision, *, actor_id: UUID = REVIEWER):
+    db_session_adapter.release_read_transaction(db_session)
     return service.review_proposal(
         db_session,
         ReviewNetworkAssetProposalCommand(

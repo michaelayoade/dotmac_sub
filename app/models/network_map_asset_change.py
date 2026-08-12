@@ -95,7 +95,9 @@ class NetworkMapAssetChangeProposal(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     target_asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     result_asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    before_values: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    before_values: Mapped[dict[str, object] | None] = mapped_column(
+        JSON(none_as_null=True)
+    )
     after_values: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     source_asset_sha256: Mapped[str | None] = mapped_column(String(64))
     proposal_sha256: Mapped[str] = mapped_column(String(64), nullable=False)

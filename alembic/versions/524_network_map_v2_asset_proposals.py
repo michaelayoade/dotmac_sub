@@ -52,7 +52,7 @@ def upgrade() -> None:
         ),
         sa.Column("target_asset_id", sa.Uuid(), nullable=True),
         sa.Column("result_asset_id", sa.Uuid(), nullable=True),
-        sa.Column("before_values", sa.JSON(), nullable=True),
+        sa.Column("before_values", sa.JSON(none_as_null=True), nullable=True),
         sa.Column("after_values", sa.JSON(), nullable=False),
         sa.Column("source_asset_sha256", sa.String(length=64), nullable=True),
         sa.Column("proposal_sha256", sa.String(length=64), nullable=False),
