@@ -113,14 +113,16 @@ def test_a_write_converges_a_role_that_predates_the_column(db_session) -> None:
 
     legacy = Role(name="legacy_role", is_active=True)
     db_session.add(legacy)
-    db_session.commit()
+    db_session.flush()
+    legacy_id = legacy.id
     assert legacy.slug is None and legacy.tenant_id is None
+    db_session.commit()
 
     rbac_catalog.update_role(
         db_session,
         rbac_catalog.UpdateRoleCommand(
             context=_context(),
-            role_id=legacy.id,
+            role_id=legacy_id,
             description="now described",
             update_description=True,
         ),
@@ -145,13 +147,15 @@ def test_ensure_role_seeds_the_kernel_identity_too(db_session) -> None:
 def test_deactivate_role_also_converges_a_legacy_kernel_identity(db_session) -> None:
     legacy = Role(name="legacy_deactivation", is_active=True)
     db_session.add(legacy)
+    db_session.flush()
+    legacy_id = legacy.id
     db_session.commit()
 
     outcome = rbac_catalog.deactivate_role(
         db_session,
         rbac_catalog.DeactivateRoleCommand(
             context=_context(rbac_catalog.ROLE_DELETE_SCOPE),
-            role_id=legacy.id,
+            role_id=legacy_id,
         ),
     )
     db_session.commit()
