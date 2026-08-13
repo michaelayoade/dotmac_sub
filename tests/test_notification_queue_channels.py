@@ -12,6 +12,7 @@ from app.services.branding_config import get_brand
 from app.services.communication_attachments import CommunicationAttachmentError
 from app.tasks.notifications import (
     _deliver_notification_queue,
+    _deliver_notification_queue_stats,
     deliver_inbound_smtp_health_probe,
 )
 
@@ -216,6 +217,47 @@ def test_deliver_notification_queue_sends_html_email_with_text_part(
     assert email.status == NotificationStatus.delivered
     assert "<p>Your <strong>invoice</strong> is ready.</p>" in captured["body_html"]
     assert captured["body_text"] == "Your invoice is ready."
+
+
+def test_deliver_notification_stats_processes_exact_notification_only(
+    db_session,
+    monkeypatch,
+):
+    first = _queued_notification(
+        channel=NotificationChannel.email,
+        recipient="first@example.com",
+        body="First reply",
+    )
+    second = _queued_notification(
+        channel=NotificationChannel.email,
+        recipient="second@example.com",
+        body="Second reply",
+    )
+    db_session.add_all([first, second])
+    db_session.commit()
+    recipients: list[str] = []
+
+    def _fake_send_email(**kwargs):
+        recipients.append(kwargs["to_email"])
+        return True
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email",
+        _fake_send_email,
+    )
+
+    stats = _deliver_notification_queue_stats(
+        db_session,
+        batch_size=10,
+        notification_id=first.id,
+    )
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert stats["delivered"] == 1
+    assert recipients == ["first@example.com"]
+    assert first.status == NotificationStatus.delivered
+    assert second.status == NotificationStatus.queued
 
 
 def test_required_invoice_attachment_failure_does_not_send_body_only_email(

@@ -8,6 +8,11 @@ from types import SimpleNamespace
 import pytest
 from jinja2 import Environment, FileSystemLoader
 
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.models.party import Party, PartyType
 from app.models.sales import Lead, LeadOriginCapture
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
@@ -567,6 +572,14 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
     def fake_send(db, *, conversation, payload, record_failure):
         nonlocal calls
         calls += 1
+        notification = Notification(
+            channel=NotificationChannel.email,
+            recipient=conversation.contact_address,
+            subject="Reply",
+            body=payload.body_text,
+            status=NotificationStatus.queued,
+            is_active=True,
+        )
         message = InboxMessage(
             conversation_id=conversation.id,
             channel_type="email",
@@ -581,12 +594,14 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
                 "delivery_status": "queued",
             },
         )
-        db.add(message)
+        db.add_all([notification, message])
         db.flush()
+        message.notification_id = notification.id
         return team_inbox_outbound.InboxReplyResult(
             kind="queued",
             conversation_id=str(conversation.id),
             message_id=str(message.id),
+            notification_id=notification.id,
             from_address=message.from_address,
         )
 
@@ -615,8 +630,60 @@ def test_reply_idempotency_key_replays_without_duplicate_message(
     assert second.replayed is True
     assert first.message_id is not None
     assert second.message_id == first.message_id
+    assert first.notification_id is not None
+    assert second.notification_id == first.notification_id
     assert calls == 1
     assert db_session.query(InboxMessage).count() == 1
+
+
+def test_reply_outcome_carries_queued_notification_id(db_session, monkeypatch):
+    conversation_id = _conversation(db_session)
+
+    def fake_send(db, *, conversation, payload, record_failure):
+        notification = Notification(
+            channel=NotificationChannel.email,
+            recipient=conversation.contact_address,
+            subject="Reply",
+            body=payload.body_text,
+            status=NotificationStatus.queued,
+            is_active=True,
+        )
+        message = InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="email",
+            direction="outbound",
+            body=payload.body_text,
+            from_address="support@example.test",
+            to_addresses=[conversation.contact_address],
+            cc_addresses=[],
+            metadata_={"delivery_status": "queued"},
+        )
+        db.add_all([notification, message])
+        db.flush()
+        message.notification_id = notification.id
+        return team_inbox_outbound.InboxReplyResult(
+            kind="queued",
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            notification_id=notification.id,
+            from_address=message.from_address,
+        )
+
+    monkeypatch.setattr(
+        team_inbox_commands.team_inbox_outbound,
+        "send_inbox_reply",
+        fake_send,
+    )
+
+    outcome = team_inbox_commands.reply(
+        db_session,
+        conversation_id=conversation_id,
+        body_text="We are checking.",
+        actor_person_id=uuid.uuid4(),
+    )
+
+    assert outcome.notification_id is not None
+    assert outcome.kind == "queued"
 
 
 def test_reply_idempotency_key_rejects_changed_body(db_session, monkeypatch):

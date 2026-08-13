@@ -2062,6 +2062,13 @@ DOMAIN = DomainSOT(
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 event_types=("team_inbox.outbound_intent_recorded.v1",),
                 projections=("outbound attempt and failed-worklist projection",),
+                test_refs=(
+                    "tests/test_team_inbox_sot_completion.py",
+                    "tests/test_admin_inbox_workspace.py",
+                    "tests/test_notification_queue_channels.py",
+                    "tests/architecture/test_team_inbox_boundaries.py",
+                    "tests/architecture/test_team_inbox_sot_contracts.py",
+                ),
             ),
         ),
         SOTService(

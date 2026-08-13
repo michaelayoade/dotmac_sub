@@ -118,9 +118,12 @@ capacity snapshot; it never makes a routing decision.
 An operator command locks the active conversation and records a communication
 intent, durable notification/outbox row, and Inbox outbound-attempt projection
 in one owner transaction. Dispatch occurs after commit through the canonical
-notification delivery point. SMTP, WhatsApp, and social integrations translate
-the intent and later return normalized receipt observations; they cannot change
-conversation or ticket lifecycle state.
+notification delivery point. Operator replies that create a queued notification
+wake an exact notification-delivery task immediately after commit; the periodic
+queue worker remains the retry and recovery path, not the primary latency path.
+SMTP, WhatsApp, and social integrations translate the intent and later return
+normalized receipt observations; they cannot change conversation or ticket
+lifecycle state.
 
 Operator-initiated conversations use the same command boundary. The opening
 message retains approved WhatsApp template identity and submitted provider

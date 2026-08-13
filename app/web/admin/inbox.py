@@ -11,6 +11,7 @@ from uuid import UUID
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -151,6 +152,19 @@ def _parse_datetime_field(value: object) -> datetime | None:
 def _prepare_mutation(db: Session) -> None:
     """Close permission/sidebar reads before entering a public owner command."""
     finish_read_transaction(db)
+
+
+def _request_immediate_notification_delivery(notification_id: UUID) -> None:
+    try:
+        from app.tasks.notifications import deliver_notification
+
+        deliver_notification.apply_async(args=[str(notification_id)], retry=False)
+    except Exception:
+        logger.warning(
+            "team_inbox_immediate_delivery_enqueue_failed notification_id=%s",
+            notification_id,
+            exc_info=True,
+        )
 
 
 def _query_text(value: object) -> str | None:
@@ -1145,6 +1159,7 @@ def team_inbox_mark_read(
 def team_inbox_reply(
     conversation_id: UUID,
     request: Request,
+    background_tasks: BackgroundTasks,
     body_text: str = Form(default=""),
     macro_id: str | None = Form(default=None),
     template_id: str | None = Form(default=None),
@@ -1173,6 +1188,14 @@ def team_inbox_reply(
             reply_to_message_id=_query_text(reply_to_message_id),
             actor_person_id=_actor_id_from_request(request),
         )
+        if outcome.notification_id is not None and outcome.kind in {
+            "queued",
+            "retried",
+        }:
+            background_tasks.add_task(
+                _request_immediate_notification_delivery,
+                outcome.notification_id,
+            )
     except team_inbox_commands.ConversationNotFoundError:
         if _is_htmx_request(request):
             return _reply_presentation_response(

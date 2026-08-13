@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from app.api import support as support_api
 from app.models.notification import Notification
@@ -376,10 +376,12 @@ def test_admin_inbox_detail_reply_queues_message(db_session):
     support = _team(db_session, "Support")
     conversation = _conversation(db_session, support, subject="Router offline")
     db_session.commit()
+    background_tasks = BackgroundTasks()
 
     response = admin_inbox.team_inbox_reply(
         conversation.id,
         request=SimpleNamespace(state=SimpleNamespace()),
+        background_tasks=background_tasks,
         body_text="We are checking this now.",
         db=db_session,
     )
@@ -392,6 +394,7 @@ def test_admin_inbox_detail_reply_queues_message(db_session):
     assert timeline is not None
     assert timeline.messages[-1].body == "<p>We are checking this now.</p>"
     assert timeline.messages[-1].metadata["source_route"] == "admin_inbox_detail_reply"
+    assert len(background_tasks.tasks) == 1
 
 
 def test_conversation_timeline_returns_teams_assignments_and_messages(db_session):
