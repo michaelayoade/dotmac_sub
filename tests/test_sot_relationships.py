@@ -629,6 +629,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "ui.list_contracts",
         "support.ticket_lifecycle",
         "support.ticket_configuration",
+        "operations.service_team_lifecycle",
     )
     assert sot_relationships.dependencies_for("ui.bulk_action_contracts") == (
         "ui.list_contracts",
