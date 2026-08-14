@@ -8,6 +8,7 @@ from app.models.scheduler import ScheduledTask
 from app.services.integrations import installations
 from app.services.integrations.backoffice_contracts import (
     ERP_OPERATIONAL_SYNC_CAPABILITY,
+    ERP_STATUS_CAPABILITY,
 )
 from app.services.integrations.runtime import ValidationResult
 from app.web.admin.integrations import erp_connector_config_save
@@ -34,6 +35,19 @@ def _erp_installation(db_session, monkeypatch):
             "service_credentials": "env://ERP_TEST_TOKEN",
             "webhook_signing_secret": "env://ERP_TEST_WEBHOOK_SECRET",
         },
+    )
+    installations.bind_capability(
+        db_session,
+        installation_id=installation.id,
+        capability_id=ERP_STATUS_CAPABILITY,
+        scope={"resource": "status"},
+        policy={"default": True},
+    )
+    installations.validate_static(db_session, installation_id=installation.id)
+    installations.enable_after_connection_validation(
+        db_session,
+        installation_id=installation.id,
+        connection_result=ValidationResult(valid=True),
     )
     return installation
 
