@@ -120,9 +120,7 @@ def test_domain_sync_pushes_sub_ids_and_advances_cursors(db_session):
     assert result.errors == ()
     command = client.commands[0]
     assert command.projects[0].source_id
-    assert (
-        command.project_tasks[0].project_source_id == command.projects[0].source_id
-    )
+    assert command.project_tasks[0].project_source_id == command.projects[0].source_id
     assert command.tickets[0].source_id
     assert command.work_orders[0].source_id
     assert command.projects[0].metadata is not None

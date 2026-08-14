@@ -1480,9 +1480,7 @@ DOMAIN = DomainSOT(
                 migration=MigrationContract(
                     state=AuthorityMigrationState.CUTOVER_READY,
                     old_owner="untyped operational sync helper and ERP version-1 endpoint",
-                    new_owner=(
-                        "integration.dotmac_erp_operational_context_adapter"
-                    ),
+                    new_owner=("integration.dotmac_erp_operational_context_adapter"),
                     verification=(
                         "Typed Sub tests plus ERP API/PostgreSQL end-to-end acceptance "
                         "for project, ticket, task, forms, and idempotent replay."
@@ -1524,9 +1522,7 @@ DOMAIN = DomainSOT(
                             "canonical Sub service work orders",
                             "ERP version-2 operational-sync response",
                         ),
-                        writer=(
-                            "integration.dotmac_erp_operational_context_adapter"
-                        ),
+                        writer=("integration.dotmac_erp_operational_context_adapter"),
                         freshness="scheduled five-minute keyset batches",
                         stale_behavior=(
                             "Expense context in ERP may lag, while Sub remains authoritative."
