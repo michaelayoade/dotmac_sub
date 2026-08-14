@@ -826,7 +826,9 @@ def test_draft_policy_creation_stays_inactive_and_unactivated(db_session):
     assert version.status == "draft"
     assert version.is_active is False
     assert version.activated_at is None
-    assert db_session.query(AiIntakePolicyVersion).filter_by(is_active=True).count() == 0
+    assert (
+        db_session.query(AiIntakePolicyVersion).filter_by(is_active=True).count() == 0
+    )
 
 
 def test_draft_policy_creation_rejects_inactive_team(db_session):

@@ -161,7 +161,9 @@ def test_polish_uses_configured_business_voice_and_channel_guidance(
 
     report = captured["report"]
     assert report["CONFIGURABLE_BUSINESS_VOICE"] == "Use the reviewed support voice."
-    assert report["CONFIGURABLE_CHANNEL_GUIDANCE"] == "Keep WhatsApp direct and concise."
+    assert (
+        report["CONFIGURABLE_CHANNEL_GUIDANCE"] == "Keep WhatsApp direct and concise."
+    )
 
 
 def test_polish_denies_conversation_without_object_access(db_session, monkeypatch):

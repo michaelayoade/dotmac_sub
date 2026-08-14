@@ -34,8 +34,11 @@ from app.models.team_inbox import (
 )
 from app.schemas.ai_intake import AiIntakeOutcome, AiIntakeStatus
 from app.services import team_inbox_status
-from app.services.integrations import installations
-from app.services.integrations import meta_social_capability, whatsapp_capability
+from app.services.integrations import (
+    installations,
+    meta_social_capability,
+    whatsapp_capability,
+)
 from app.services.integrations.connectors.meta_social_runtime import (
     META_SOCIAL_RECEIVE_CAPABILITY,
     META_SOCIAL_SEND_CAPABILITY,
@@ -280,7 +283,9 @@ def _validate_whatsapp_provider_scope(
     send_revision = send_binding.installation.current_config_revision
     receive_revision = receive_binding.installation.current_config_revision
     if send_revision is None or receive_revision is None:
-        raise ValueError("WhatsApp AI intake requires validated configuration revisions")
+        raise ValueError(
+            "WhatsApp AI intake requires validated configuration revisions"
+        )
     config = dict(send_revision.config_json or {})
     configured_phone_number_id = str(config.get("phone_number_id") or "").strip()
     if not configured_phone_number_id:
@@ -316,7 +321,9 @@ def _validate_meta_social_provider_scope(
         else projection.instagram_account_id
     )
     if not expected_scope or expected_scope != account_scope:
-        raise ValueError("Meta private-message AI intake account scope is not configured")
+        raise ValueError(
+            "Meta private-message AI intake account scope is not configured"
+        )
 
 
 def _validate_provider_scope(
@@ -372,7 +379,9 @@ def create_draft_policy(
             .one_or_none()
         )
         if conflicting_policy is not None:
-            raise ValueError("AI intake policy identity conflicts with an existing policy")
+            raise ValueError(
+                "AI intake policy identity conflicts with an existing policy"
+            )
         policy = (
             db.query(AiIntakePolicy)
             .filter(AiIntakePolicy.scope_key == scope_key)
@@ -406,8 +415,9 @@ def create_draft_policy(
             db.flush()
         else:
             draft_display_name = (
-                str(command.display_name or policy.display_name or DEFAULT_DISPLAY_NAME)
-                .strip()[:120]
+                str(
+                    command.display_name or policy.display_name or DEFAULT_DISPLAY_NAME
+                ).strip()[:120]
                 or DEFAULT_DISPLAY_NAME
             )
             if not policy.is_enabled and policy.active_version_id is None:
