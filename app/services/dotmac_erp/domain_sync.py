@@ -291,7 +291,7 @@ def _sync_operational_domains(
             projects=0, project_tasks=0, tickets=0, work_orders=0
         )
 
-    command = ErpOperationalSyncCommand(
+    outbound_command = ErpOperationalSyncCommand(
         projects=tuple(_project_payload(row) for row in projects),
         project_tasks=tuple(_project_task_payload(row) for row in project_tasks),
         tickets=tuple(_ticket_payload(row) for row in tickets),
@@ -300,7 +300,7 @@ def _sync_operational_domains(
     owned_client = client or capability_client(db)
     created_client = client is None
     try:
-        response = owned_client.sync_operational_domains(command)
+        response = owned_client.sync_operational_domains(outbound_command)
     finally:
         if created_client:
             owned_client.close()
