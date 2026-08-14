@@ -35,12 +35,6 @@ def _erp_installation(db_session, monkeypatch):
             "webhook_signing_secret": "env://ERP_TEST_WEBHOOK_SECRET",
         },
     )
-    installations.validate_static(db_session, installation_id=installation.id)
-    installations.enable_after_connection_validation(
-        db_session,
-        installation_id=installation.id,
-        connection_result=ValidationResult(valid=True),
-    )
     return installation
 
 
@@ -49,6 +43,13 @@ def test_erp_profile_save_releases_review_transaction_before_owner_command(
     monkeypatch,
 ) -> None:
     installation = _erp_installation(db_session, monkeypatch)
+    from app.services.integrations import runtime_execution
+
+    monkeypatch.setattr(
+        runtime_execution,
+        "validate_connection",
+        lambda _context: ValidationResult(valid=True),
+    )
 
     # Match a real request, where authentication or other adapter reads may
     # already have opened an implicit read transaction.

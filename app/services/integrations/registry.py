@@ -589,6 +589,7 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
             "properties": {
                 "provider": {"type": "string", "enum": ["meta_cloud_api"]},
                 "phone_number": {"type": "string"},
+                "phone_number_id": {"type": "string", "minLength": 1},
                 "waba_id": {"type": "string"},
                 "webhook_url": {"type": "string"},
                 "graph_version": {"type": "string"},

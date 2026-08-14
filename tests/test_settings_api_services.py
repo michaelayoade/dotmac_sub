@@ -224,7 +224,7 @@ def test_ai_polish_settings_are_integration_settings(db_session):
             key,
             DomainSettingUpdate(value_text=f"configured {key}"),
         )
-        assert setting.domain is SettingDomain.integration
+        assert setting.domain == SettingDomain.integration
         assert setting.value_text == f"configured {key}"
 
         with pytest.raises(HTTPException) as exc:
