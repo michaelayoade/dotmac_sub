@@ -143,15 +143,16 @@ def configure_domains(
 ) -> None:
     selected = plan.domains
     if not selected:
+        binding_id = plan.expected_binding_id
         if (
-            plan.expected_binding_id is not None
+            binding_id is not None
             and plan.expected_binding_state is IntegrationBindingState.enabled
         ):
             installations.execute_command(
                 db,
                 lambda: installations.disable_capability_binding(
                     db,
-                    capability_binding_id=plan.expected_binding_id,
+                    capability_binding_id=binding_id,
                     actor=actor,
                 ),
             )
