@@ -75,6 +75,22 @@ def _sql_literals(source: str) -> list[str]:
     ]
 
 
+def _reportable(path: Path) -> Path:
+    """Name the offender relative to the repo when it lives there.
+
+    The canaries below scan a planted tree under `tmp_path`, which is not under
+    PROJECT_ROOT. Calling `relative_to` unconditionally raised ValueError there,
+    so every canary that expected a DETECTION died before it could assert — the
+    guard's proof that it can fail was itself unproven from the day it was
+    written, and no run caught it because this job never completed on the branch.
+    """
+
+    try:
+        return path.relative_to(PROJECT_ROOT)
+    except ValueError:
+        return path
+
+
 def _offenders(roots=SCANNED_ROOTS) -> dict[Path, int]:
     found: dict[Path, int] = {}
     for root in roots:
@@ -88,7 +104,7 @@ def _offenders(roots=SCANNED_ROOTS) -> dict[Path, int]:
                 if RAW_SET_TRANSACTION.search(literal)
             )
             if hits:
-                found[path.relative_to(PROJECT_ROOT)] = hits
+                found[_reportable(path)] = hits
     return found
 
 
