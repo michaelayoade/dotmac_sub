@@ -21,51 +21,54 @@ the database it measures, and no unit test could tell.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError, InternalError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import db as app_db
 from app.services.operator_tenant import OPERATOR_TENANT_ID
-from app.services.staff_authentication_shadow import (
-    staff_authentication_parity_report,
-)
+from scripts.migration import staff_authentication_shadow_parity
 
 pytestmark = pytest.mark.integration
 
 
-def _snapshot_session(engine: Engine) -> Session:
-    """Open a session configured exactly as the operator adapter configures one."""
-
-    session = sessionmaker(bind=engine)()
-    session.connection(
-        execution_options={
-            "isolation_level": "REPEATABLE READ",
-            "postgresql_readonly": True,
-        }
-    )
-    return session
+@pytest.fixture()
+def operator_session_factory(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> sessionmaker[Session]:
+    if engine.dialect.name != "postgresql":
+        pytest.fail("the snapshot contract requires migrated PostgreSQL")
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(app_db, "SessionLocal", factory)
+    return factory
 
 
 @pytest.fixture()
-def snapshot(engine: Engine):
-    if engine.dialect.name != "postgresql":
-        pytest.skip("the snapshot contract is PostgreSQL-only")
-    session = _snapshot_session(engine)
-    try:
+def snapshot(
+    operator_session_factory: sessionmaker[Session],
+) -> Iterator[Session]:
+    del operator_session_factory
+    with app_db.read_only_snapshot_session() as session:
         yield session
-    finally:
-        session.rollback()
-        session.close()
 
 
-def test_the_report_runs_against_the_migrated_schema(snapshot: Session) -> None:
-    """The regression this module exists for: it must not raise."""
+def test_the_report_entry_point_runs_against_the_migrated_schema(
+    operator_session_factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Run the real adapter and shared seam, not a reconstructed proxy."""
 
-    report = staff_authentication_parity_report(snapshot)
+    del operator_session_factory
+    result = staff_authentication_shadow_parity.main(["--report-only"])
 
-    payload = report.as_dict()
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
     assert payload["credentials"] >= 0
     assert isinstance(payload["blocking_reasons"], list)
 

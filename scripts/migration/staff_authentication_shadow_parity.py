@@ -15,7 +15,7 @@ import argparse
 import json
 from collections.abc import Sequence
 
-from app.db import SessionLocal
+from app.db import read_only_snapshot_session
 from app.services.staff_authentication_shadow import (
     staff_authentication_parity_report,
 )
@@ -30,29 +30,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    with SessionLocal() as db:
-        # A parity claim assembled from several statements has to see one
-        # snapshot, or a login landing mid-run can make the cohorts disagree
-        # with each other and with themselves. Read-only is the second half:
-        # this report must be incapable of writing to the database it measures.
-        #
-        # Both are requested as connection execution options rather than issued
-        # as `SET TRANSACTION`. That statement is only legal as the FIRST one in
-        # a transaction, and it never is here: the operator-tenant hook installs
-        # `app.current_tenant` via set_config on `after_begin`, so a statement
-        # has already run by the time any caller-issued SQL arrives. The
-        # previous form raised ActiveSqlTransaction on every PostgreSQL run,
-        # which SQLite unit coverage could not see because it skipped the branch
-        # entirely.
-        if db.bind is not None and db.bind.dialect.name == "postgresql":
-            db.connection(
-                execution_options={
-                    "isolation_level": "REPEATABLE READ",
-                    "postgresql_readonly": True,
-                }
-            )
+    with read_only_snapshot_session() as db:
         report = staff_authentication_parity_report(db)
-        db.rollback()
 
     print(json.dumps(report.as_dict(), sort_keys=True))
     if not report.is_read_cutover_safe and not args.report_only:

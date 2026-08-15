@@ -3,13 +3,13 @@
 `SET TRANSACTION ISOLATION LEVEL ...` is only legal as the FIRST statement in a
 transaction. Since #2353 installs `app.current_tenant` via `set_config` on
 `after_begin`, it never is: a statement has always run before any caller SQL
-arrives. Twelve read-only operator reports and one serializable writer raised
+arrives. Thirteen read-only operator reports and one serializable writer raised
 ActiveSqlTransaction on every PostgreSQL invocation, while SQLite unit coverage
 stayed green because it skips the dialect branch entirely.
 
 The repair is two seams in the transaction-authority layer. This guard stops the
 raw pattern coming back — including through a typo, which is how one of the
-twelve escaped the original search (`REPEATABLE READ READ ONLY`, no comma).
+thirteen escaped the original search (`REPEATABLE READ READ ONLY`, no comma).
 """
 
 from __future__ import annotations
