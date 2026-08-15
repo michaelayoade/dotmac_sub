@@ -158,6 +158,20 @@ def begin_serializable_write(db: Session) -> None:
         db.connection(execution_options=dict(SERIALIZABLE_WRITE_OPTIONS))
 
 
+def begin_read_only_snapshot(db: Session) -> None:
+    """Pin an existing session's transaction to REPEATABLE READ, READ ONLY.
+
+    The caller-owned counterpart to `read_only_snapshot_session`, for the report
+    that cannot accept a yielded session because it owns its own savepoint
+    discipline and layers further `SET LOCAL` rails on the same transaction.
+    `SET LOCAL` stays legal mid-transaction; `SET TRANSACTION` is the one that
+    must come first, which is exactly why it cannot be used here.
+    """
+
+    if db.get_bind().dialect.name == "postgresql":
+        db.connection(execution_options=dict(READ_ONLY_SNAPSHOT_OPTIONS))
+
+
 @contextmanager
 def read_only_snapshot_session() -> Generator[Session, None, None]:
     """Yield a session pinned to one REPEATABLE READ, READ ONLY snapshot.
@@ -180,8 +194,7 @@ def read_only_snapshot_session() -> Generator[Session, None, None]:
 
     db = SessionLocal()
     try:
-        if db.get_bind().dialect.name == "postgresql":
-            db.connection(execution_options=dict(READ_ONLY_SNAPSHOT_OPTIONS))
+        begin_read_only_snapshot(db)
         yield db
     finally:
         db.rollback()
