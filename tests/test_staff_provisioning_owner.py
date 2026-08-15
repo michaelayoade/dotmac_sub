@@ -679,6 +679,10 @@ def test_deactivation_remediates_a_principal_already_inactive(db_session) -> Non
     session = AuthSession(
         system_user_id=result.user_id,
         status=SessionStatus.active,
+        token_hash="drifted-identity-stale-session",
+        # Expired on purpose: the seven drifted production principals carry
+        # `status=active, revoked_at IS NULL` rows that are all past expiry, and
+        # the sweep must revoke them on expiry-independent criteria.
         expires_at=datetime.now(UTC) - timedelta(days=1),
     )
     db_session.add(session)
