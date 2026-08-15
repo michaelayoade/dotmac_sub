@@ -44,7 +44,7 @@ from app.schemas.ai_operations import AiIntakeConfigUpsert
 from app.services.ai.client import AIClientError
 from app.services.ai.output_parsers import parse_json_object
 from app.services.ai.redaction import redact_text
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -452,8 +452,7 @@ def _upsert_config_locked(
         action="ai.intake_config_upserted",
         entity_type="ai_intake_config",
         entity_id=str(row.id),
-        actor_type=actor_type,
-        actor_id=actor_id,
+        actor=AuditActor(actor_type=actor_type, actor_id=actor_id),
         request_id=str(command.context.correlation_id),
         metadata=evidence,
     )
@@ -515,8 +514,7 @@ def disable_projected_config(
         action="ai.intake_config_disabled",
         entity_type="ai_intake_config",
         entity_id=str(row.id),
-        actor_type=actor_type,
-        actor_id=actor_id,
+        actor=AuditActor(actor_type=actor_type, actor_id=actor_id),
         request_id=str(context.correlation_id),
         metadata=evidence,
     )
