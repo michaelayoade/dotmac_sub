@@ -1,7 +1,8 @@
 import re
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, TypeVar
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -109,6 +110,53 @@ def finish_read_transaction(db: Session) -> None:
         db.commit()
     finally:
         db.expire_on_commit = original_expire_on_commit
+
+
+#: Both halves of the operator-report snapshot contract, requested as connection
+#: execution options rather than issued as SQL.
+#:
+#: `SET TRANSACTION ISOLATION LEVEL ... READ ONLY` is only legal as the FIRST
+#: statement in a transaction, and since the operator-tenant hook installs
+#: `app.current_tenant` via set_config on `after_begin`, it never is: a statement
+#: has always run before any caller SQL arrives. Every adapter that issued it
+#: raised ActiveSqlTransaction on PostgreSQL while SQLite unit coverage stayed
+#: green, because SQLite skips the branch entirely.
+READ_ONLY_SNAPSHOT_OPTIONS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "isolation_level": "REPEATABLE READ",
+        "postgresql_readonly": True,
+    }
+)
+
+
+@contextmanager
+def read_only_snapshot_session() -> Generator[Session, None, None]:
+    """Yield a session pinned to one REPEATABLE READ, READ ONLY snapshot.
+
+    The single seam every read-only operator report goes through. Two guarantees
+    that must not be separated:
+
+    - **REPEATABLE READ**, because a report assembled from several statements has
+      to see one snapshot, or its own cohorts can disagree with each other.
+    - **READ ONLY**, because a report that measures a production database must be
+      structurally incapable of changing it.
+
+    Fixing the isolation level while dropping read-only would leave a report that
+    still looks correct and can now write, which is strictly worse than the
+    failure it replaced.
+
+    Non-PostgreSQL binds get an ordinary session: SQLite has no equivalent, and
+    silently pretending otherwise is what hid the original defect.
+    """
+
+    db = SessionLocal()
+    try:
+        if db.get_bind().dialect.name == "postgresql":
+            db.connection(execution_options=dict(READ_ONLY_SNAPSHOT_OPTIONS))
+        yield db
+    finally:
+        db.rollback()
+        db.close()
 
 
 def finish_read_response(db: Session, value: T) -> T:
