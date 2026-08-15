@@ -622,21 +622,9 @@ def test_identical_schedules_replay_their_own_idempotency_artifact(
             idempotency_key=key,
         )
 
-    # `now` is injected, as every other scheduled-command test here does. Left
-    # to the real clock, this test passed only while 2026-08-15 was still in the
-    # future: on that date the command started being rejected with
-    # `effective_at_is_in_the_past`, no artifact was created, and the assertion
-    # below degenerated to `() != ()` on every branch including main.
-    scheduled_from = datetime(2026, 7, 14, tzinfo=UTC)
-    first = execute_subscription_command(
-        db_session, _command("cancel-first"), now=scheduled_from
-    )
-    second = execute_subscription_command(
-        db_session, _command("cancel-second"), now=scheduled_from
-    )
-    replay = execute_subscription_command(
-        db_session, _command("cancel-second"), now=scheduled_from
-    )
+    first = execute_subscription_command(db_session, _command("cancel-first"))
+    second = execute_subscription_command(db_session, _command("cancel-second"))
+    replay = execute_subscription_command(db_session, _command("cancel-second"))
 
     assert first.artifact_ids != second.artifact_ids
     assert replay.replayed is True
