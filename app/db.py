@@ -129,6 +129,35 @@ READ_ONLY_SNAPSHOT_OPTIONS: Final[Mapping[str, object]] = MappingProxyType(
 )
 
 
+#: The write counterpart. Deliberately a SEPARATE constant and seam: a
+#: serializable writer and a read-only reporter share only the fact that both
+#: were broken by the same regression. Reusing the read-only seam here would
+#: hand a writer a `postgresql_readonly` connection and fail every write, and
+#: widening the read-only seam to be write-capable would silently remove the
+#: guarantee that a report cannot modify the database it measures.
+SERIALIZABLE_WRITE_OPTIONS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "isolation_level": "SERIALIZABLE",
+        "postgresql_readonly": False,
+    }
+)
+
+
+def begin_serializable_write(db: Session) -> None:
+    """Pin an existing session's transaction to SERIALIZABLE, READ WRITE.
+
+    Same defect as the read-only seam — `SET TRANSACTION ISOLATION LEVEL` is
+    only legal as the first statement, and the operator-tenant hook always runs
+    one first — but the opposite requirement: this caller must be able to write.
+
+    Applied to a caller-owned session rather than yielding its own, because the
+    backfill executes inside a command that owns its transaction.
+    """
+
+    if db.get_bind().dialect.name == "postgresql":
+        db.connection(execution_options=dict(SERIALIZABLE_WRITE_OPTIONS))
+
+
 @contextmanager
 def read_only_snapshot_session() -> Generator[Session, None, None]:
     """Yield a session pinned to one REPEATABLE READ, READ ONLY snapshot.
