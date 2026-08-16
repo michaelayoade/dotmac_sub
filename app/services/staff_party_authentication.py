@@ -46,11 +46,18 @@ class StaffProjectionRefusal(StrEnum):
 
 
 class StaffProjectionError(Exception):
-    """A staff credential cannot be resolved through its Party projection."""
+    """A staff credential cannot be resolved through its Party projection.
+
+    `credential_id` is the subject the refusal is about: a credential id, a
+    session id, or the Party itself. It is optional because the most basic
+    refusal is "there is no identity here at all", which has no subject to name.
+    """
 
     __slots__ = ("credential_id", "refusal")
 
-    def __init__(self, refusal: StaffProjectionRefusal, credential_id: UUID) -> None:
+    def __init__(
+        self, refusal: StaffProjectionRefusal, credential_id: UUID | None
+    ) -> None:
         self.refusal = refusal
         self.credential_id = credential_id
         super().__init__(f"{refusal.value} for credential {credential_id}")
