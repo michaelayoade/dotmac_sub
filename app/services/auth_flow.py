@@ -2109,7 +2109,7 @@ def validate_active_session(
                     db,
                     session.party_id,
                     session.system_user_id,
-                    reference=str(session.id),
+                    reference=session.id,
                 )
             else:
                 principal = (
