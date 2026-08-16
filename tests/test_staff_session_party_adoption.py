@@ -194,10 +194,12 @@ def test_owner_projects_audits_and_replays_exactly(db_session) -> None:
     session_id = session.id
     user_id = user.id
     party_id = person.id
+    approver_id = approver.id
+    approver_party_id = approver_person.id
     db_session.commit()
     command = owner.ProjectStaffSessionPartyCommand(
         context=CommandContext.system(
-            actor=f"user:{approver.id}",
+            actor=f"user:{approver_id}",
             scope=owner.COMMAND_SCOPE,
             reason="approved exact staff session projection",
         ),
@@ -223,8 +225,8 @@ def test_owner_projects_audits_and_replays_exactly(db_session) -> None:
         .filter(AuditEvent.action == "party.staff_session_projected")
         .one()
     )
-    assert audit.actor_id == str(approver.id)
-    assert audit.actor_party_id == approver_person.id
+    assert audit.actor_id == str(approver_id)
+    assert audit.actor_party_id == approver_party_id
     assert audit.metadata_["person_party_id"] == str(party_id)
 
 
@@ -237,10 +239,11 @@ def test_owner_refuses_changed_or_ineligible_rows_without_mutation(db_session) -
     session_id = session.id
     user_id = user.id
     party_id = person.id
+    approver_id = approver.id
     db_session.commit()
     command = owner.ProjectStaffSessionPartyCommand(
         context=CommandContext.system(
-            actor=f"user:{approver.id}",
+            actor=f"user:{approver_id}",
             scope=owner.COMMAND_SCOPE,
             reason="approved exact staff session projection",
         ),
