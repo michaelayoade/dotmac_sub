@@ -137,10 +137,10 @@ def test_a_rolled_back_projection_write_leaves_no_party_id(db_session) -> None:
     db_session.add(session)
     db_session.commit()
 
-    db_session.begin_nested()
+    savepoint = db_session.begin_nested()
     session.party_id = person.id
     db_session.flush()
-    db_session.rollback()
+    savepoint.rollback()
     db_session.expire_all()
 
     assert db_session.get(AuthSession, session.id).party_id is None
