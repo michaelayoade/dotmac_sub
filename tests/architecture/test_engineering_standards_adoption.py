@@ -94,7 +94,7 @@ def test_the_workflow_executes_the_profile_pin_exactly_once() -> None:
 
 def test_the_action_ref_parser_refuses_a_moving_or_missing_reference() -> None:
     armed = (
-        "- uses: michaelayoade/dotmac_governance/"
+        "uses: michaelayoade/dotmac_governance/"
         f".github/actions/standards-check@{ACCEPTED_GOVERNANCE_SHA}\n"
     )
     assert _action_refs(armed) == [ACCEPTED_GOVERNANCE_SHA]
