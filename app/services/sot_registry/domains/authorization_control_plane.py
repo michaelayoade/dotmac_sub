@@ -1432,6 +1432,42 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="party.staff_authentication_reader",
+            module="app.services.staff_party_authentication",
+            owns=(
+                "Party-keyed staff principal resolution",
+                "staff authentication projection refusal",
+            ),
+            depends_on=(
+                "party.registry",
+                "auth.staff_provisioning",
+            ),
+            notes=(
+                "The single owner of staff principal resolution for "
+                "authentication. Four consumers delegate: login, refresh, "
+                "per-request session validation, and vendor login "
+                "eligibility. Vendor ACCESS eligibility stays owned by the "
+                "vendor module; only identity resolution moved here. "
+                "resolve_staff_principal_by_party is the canonical "
+                "primitive and the query direction is the contract: it "
+                "starts at the Party and finds the principal, never the "
+                "reverse. system_user_id is compared as the Sub-owned staff "
+                "context assertion and never used to resolve, because "
+                "resolving from it and checking Party afterwards would agree "
+                "on healthy data while leaving the legacy key authoritative. "
+                "Fails closed with typed refusals and no legacy fallback. "
+                "resolve_staff_principal_assertion is a TEMPORARY bridge for "
+                "sessions predating migration 534 (party_id IS NULL) and is "
+                "deleted in deploy 2. Rollback floor is migration 534: never "
+                "roll back below it, or new sessions mint without party_id."
+            ),
+            test_refs=(
+                "tests/test_staff_party_authentication.py",
+                "tests/integration/test_session_party_projection.py",
+                ("tests/architecture/test_staff_party_authentication_owner.py"),
+            ),
+        ),
+        SOTService(
             name="auth.staff_provisioning",
             module="app.services.staff_provisioning",
             owns=(

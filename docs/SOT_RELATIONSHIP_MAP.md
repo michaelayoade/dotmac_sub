@@ -352,6 +352,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `party.credential_authentication_projection` | credential principal readiness and projection convergence report | `resolver` | legacy credential principal reference ← `party.credential_authentication_projection`<br>reviewed Person Party binding ← `party.registry`<br>declared installed authentication binding ← `party.credential_authentication_projection` | `owner_managed` | `shadowing` | identity and authentication | `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_credential_party_binding.py`<br>`tests/test_credential_party_binding_migration.py`<br>`tests/architecture/test_credential_party_binding_boundary.py`<br>`tests/test_staff_party_credential_adoption.py` |
 | `party.staff_authentication_shadow` | legacy and Party-keyed staff authentication parity | `resolver` | canonical staff identity and credential state ← `auth.staff_provisioning`<br>credential Party authentication projection ← `party.credential_authentication_projection`<br>database authentication session state ← `app_sessions.auth`<br>legacy staff MFA persistence observation ← `party.staff_authentication_shadow` | `read_only` | `shadowing` | identity and authentication | `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_staff_authentication_shadow.py`<br>`tests/integration/test_staff_party_identity_constraint.py` |
 | `party.staff_authentication_shadow` | staff Party authentication read-cutover readiness | `policy` | canonical staff identity and credential state ← `auth.staff_provisioning`<br>credential Party authentication projection ← `party.credential_authentication_projection`<br>database authentication session state ← `app_sessions.auth`<br>legacy staff MFA persistence observation ← `party.staff_authentication_shadow` | `read_only` | `shadowing` | identity and authentication | `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_staff_authentication_shadow.py`<br>`tests/integration/test_staff_party_identity_constraint.py` |
+| `party.staff_authentication_reader` | Party-keyed staff principal resolution for authentication | `resolver` | canonical Person Party identity ← `party.registry`<br>credential Party authentication projection ← `party.credential_authentication_projection`<br>canonical staff context state ← `auth.staff_provisioning`<br>database authentication session state ← `app_sessions.auth` | `read_only` | `cutover_predecessor` | identity and authentication | `docs/SOT_RELATIONSHIP_MAP.md`<br>`app/services/staff_party_authentication.py`<br>`tests/test_staff_party_authentication.py`<br>`tests/integration/test_session_party_projection.py`<br>`tests/architecture/test_staff_party_authentication_owner.py` |
 | `customer.account_visibility` | legacy imported Subscriber deletion classification | `policy` | canonical Subscriber account record ← `customer.accounts`<br>canonical Subscriber lifecycle projection ← `access.subscription_lifecycle`<br>retained Splynx deletion observation ← `external:splynx_import` | `read_only` | `complete` | customer operations | `docs/designs/SPLYNX_RETIREMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_subscriber_splynx_soft_delete.py`<br>`tests/test_web_customer_lists.py` |
 | `customer.crm_subscriber_provisioning` | authenticated CRM Subscriber provisioning coordination | `application_coordinator` | authenticated CRM provisioning command evidence ← `customer.crm_subscriber_provisioning`<br>retained exact CRM Subscriber provenance ← `customer.crm_subscriber_provisioning`<br>canonical Subscriber account state ← `customer.accounts` | `coordinator_managed` | `cutover_ready` | customer operations | `docs/PARTY_CUSTOMER_LIFECYCLE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`tests/test_crm_subscriber_provisioning.py`<br>`tests/test_crm_api.py`<br>`tests/architecture/test_crm_customer_boundary.py` |
 | `customer.billing_approval` | atomic account billing-approval and lifecycle transition | `application_coordinator` | account billing-approval command evidence ← `customer.billing_approval`<br>canonical account billing-approval fact ← `customer.billing_approval`<br>canonical account lifecycle state ← `access.subscription_lifecycle`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle` | `coordinator_managed` | `complete` | customer and billing operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/adr/0003-permanent-customer-financial-lifecycle.md`<br>`tests/test_account_billing_approval.py`<br>`tests/architecture/test_account_billing_approval_boundary.py` |
@@ -5096,3 +5097,52 @@ observations into `/admin/network/map`. Proposal creation, review, and bounded
 execution are delegated to `network.fiber_identity_decisions` and
 `network.fiber_identity_review`; canonical passive-asset writes remain delegated
 to `network.fiber_asset_changes`.
+
+## Staff Party authentication cutover — deploy 1 predecessor
+
+`app/services/staff_party_authentication.py` is the single owner of staff
+principal resolution for authentication. Four consumers delegate to it:
+
+| consumer | entry point |
+|---|---|
+| login | `auth_flow._principal_for_credential` |
+| refresh | `auth_flow.refresh` |
+| per-request validation | `auth_flow.validate_active_session` |
+| vendor admission | `field/vendor_auth.resolve_vendor_login_eligibility` |
+
+Vendor **access eligibility** remains owned by the vendor module; only identity
+resolution moved.
+
+**The canonical primitive** is `resolve_staff_principal_by_party(db, party_id,
+asserted_system_user_id)`. Query direction is the contract: it starts at the
+Party and finds the principal. `system_user_id` is compared as the Sub-owned
+staff context assertion and is never used to resolve. Resolving from
+`system_user_id` and checking the Party afterwards would agree on healthy data
+while leaving the legacy key authoritative — that shape is forbidden, and
+`tests/architecture/test_staff_party_authentication_owner.py` plants it as a
+regression and requires the guard to reject it.
+
+**A staff session is a bound pair.** `sessions.party_id` (migration **534**) is
+the authenticated identity; `sessions.system_user_id` is the Sub-owned staff
+context and is NOT retired.
+
+**Temporary compatibility bridge.** `resolve_staff_principal_assertion` serves
+sessions predating migration 534 only, where `party_id IS NULL`. It is confined
+by guard to the owner and `auth_flow`, and is **deleted in deploy 2**.
+
+### Retirement gate and rollback floor
+
+This is deploy 1 of two. It is a predecessor, not the completed cutover.
+
+1. **Deploy 1** — migration 534, dual-write, Party-keyed branch, null-only bridge.
+2. **Approved digest-bound session backfill** from exact FK evidence only.
+   Unmappable sessions are refused and revoked through the canonical session
+   owner with reason `staff_party_projection_unresolvable` — preserved for
+   audit, never deleted, never guessed.
+3. **Deploy 2** — require `sessions.party_id`, delete the bridge, strengthen the
+   guard to reject assertion-first resolution entirely.
+
+**Rollback floor: migration 534.** Deploy 1's exact image digest is deploy 2's
+rollback target. On rollback, keep all `party_id` values and backfill evidence;
+do not reverse the data migration. **Never roll back below 534** — a pre-534
+image would mint new sessions with no `party_id`.
