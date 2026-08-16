@@ -72,7 +72,7 @@ def test_the_writer_guard_detects_assignment_and_bulk_update(tmp_path: Path) -> 
     app.mkdir()
     assignment = app / "assignment.py"
     assignment.write_text(
-        "def bypass(session, party_id):\n" "    session.party_id = party_id\n",
+        "def bypass(session, party_id):\n    session.party_id = party_id\n",
         encoding="utf-8",
     )
     bulk = app / "bulk.py"
