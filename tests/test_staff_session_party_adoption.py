@@ -189,6 +189,7 @@ def test_database_plan_refuses_an_active_unbound_principal(db_session) -> None:
 
 def test_owner_projects_audits_and_replays_exactly(db_session) -> None:
     user, person = add_bound_staff_user(db_session)
+    approver, approver_person = add_bound_staff_user(db_session)
     session = _legacy_session(db_session, system_user_id=user.id)
     session_id = session.id
     user_id = user.id
@@ -196,7 +197,7 @@ def test_owner_projects_audits_and_replays_exactly(db_session) -> None:
     db_session.commit()
     command = owner.ProjectStaffSessionPartyCommand(
         context=CommandContext.system(
-            actor=f"user:{uuid4()}",
+            actor=f"user:{approver.id}",
             scope=owner.COMMAND_SCOPE,
             reason="approved exact staff session projection",
         ),
@@ -217,16 +218,19 @@ def test_owner_projects_audits_and_replays_exactly(db_session) -> None:
     assert replay.replayed is True
     assert replay.session_id == first.session_id
     assert db_session.get(AuthSession, session_id).party_id == party_id
-    assert (
+    audit = (
         db_session.query(AuditEvent)
         .filter(AuditEvent.action == "party.staff_session_projected")
-        .count()
-        == 1
+        .one()
     )
+    assert audit.actor_id == str(approver.id)
+    assert audit.actor_party_id == approver_person.id
+    assert audit.metadata_["person_party_id"] == str(party_id)
 
 
 def test_owner_refuses_changed_or_ineligible_rows_without_mutation(db_session) -> None:
     user, person = add_bound_staff_user(db_session)
+    approver, _approver_person = add_bound_staff_user(db_session)
     session = _legacy_session(db_session, system_user_id=user.id)
     session.status = SessionStatus.revoked
     session.revoked_at = PLANNED_AT
@@ -236,7 +240,7 @@ def test_owner_refuses_changed_or_ineligible_rows_without_mutation(db_session) -
     db_session.commit()
     command = owner.ProjectStaffSessionPartyCommand(
         context=CommandContext.system(
-            actor=f"user:{uuid4()}",
+            actor=f"user:{approver.id}",
             scope=owner.COMMAND_SCOPE,
             reason="approved exact staff session projection",
         ),

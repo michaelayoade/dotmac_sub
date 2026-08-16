@@ -18,7 +18,7 @@ from app.models.auth import Session as AuthSession
 from app.models.auth import SessionStatus
 from app.models.party import Party, PartyType
 from app.models.system_user import SystemUser
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
     CommandContext,
@@ -100,6 +100,28 @@ def _approver_id(context: CommandContext) -> UUID:
         ) from exc
 
 
+def _approver_actor(db: Session, context: CommandContext) -> AuditActor:
+    """Resolve the approval principal's canonical Party for audit provenance."""
+
+    approver_id = _approver_id(context)
+    row = db.execute(
+        select(SystemUser.is_active, SystemUser.person_party_id).where(
+            SystemUser.id == approver_id
+        )
+    ).one_or_none()
+    if row is None or not row.is_active or row.person_party_id is None:
+        raise _error(
+            "invalid_command",
+            "Staff session Party projection requires an active Party-bound approver.",
+            field="actor",
+        )
+    return AuditActor.user(
+        str(approver_id),
+        label=context.actor,
+        party_id=row.person_party_id,
+    )
+
+
 def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(
         character in "0123456789abcdef" for character in value
@@ -110,7 +132,7 @@ def _project_staff_session_party(
     db: Session,
     command: ProjectStaffSessionPartyCommand,
 ) -> StaffSessionPartyProjectionOutcome:
-    approver_id = _approver_id(command.context)
+    approver = _approver_actor(db, command.context)
     if not all(
         _is_sha256(value)
         for value in (
@@ -198,9 +220,7 @@ def _project_staff_session_party(
         action="party.staff_session_projected",
         entity_type="session",
         entity_id=str(auth_session.id),
-        actor_type=AuditActorType.user,
-        actor_id=str(approver_id),
-        actor_label=command.context.actor,
+        actor=approver,
         request_id=str(command.context.correlation_id),
         metadata={
             "person_party_id": str(party.id),
