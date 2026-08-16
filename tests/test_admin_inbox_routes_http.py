@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -249,11 +250,22 @@ def test_contact_drawer_renders_previous_conversation_tab_and_route(
     assert "Conversations" in response.text
     assert "Previous installation chat" in response.text
     assert f'href="/admin/inbox?c={previous.id}"' in response.text
-    # SQLite's datetime serialization is not deployed-schema evidence. This
-    # route test owns the composed UI boundary: expose a machine-readable time
-    # element and preserve the projected wall time shown to the operator.
-    assert '<time datetime="' in response.text
-    assert "Aug 15, 09:30" in response.text
+    # The machine-readable value is the stable cross-database contract. Keep
+    # the assertion scoped to this exact history row and compare wall time:
+    # SQLite drops timezone metadata while PostgreSQL preserves it, and the
+    # human label is deliberately locale-sensitive presentation.
+    history_time = re.search(
+        rf'href="/admin/inbox\?c={previous.id}".*?'
+        r'<time datetime="([^"]+)">([^<]+)</time>',
+        response.text,
+        re.DOTALL,
+    )
+    assert history_time is not None
+    rendered_at = datetime.fromisoformat(history_time.group(1))
+    assert rendered_at.replace(tzinfo=None) == previous.last_message_at.replace(
+        tzinfo=None
+    )
+    assert history_time.group(2).strip()
 
 
 def test_every_route_declares_a_permission_guard():
