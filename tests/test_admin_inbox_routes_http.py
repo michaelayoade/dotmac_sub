@@ -251,9 +251,10 @@ def test_contact_drawer_renders_previous_conversation_tab_and_route(
     assert "Previous installation chat" in response.text
     assert f'href="/admin/inbox?c={previous.id}"' in response.text
     # The machine-readable value is the stable cross-database contract. Keep
-    # the assertion scoped to this exact history row and compare wall time:
-    # SQLite drops timezone metadata while PostgreSQL preserves it, and the
-    # human label is deliberately locale-sensitive presentation.
+    # the assertion scoped to this exact history row and compare instants:
+    # SQLite drops UTC metadata while the renderer emits the configured local
+    # offset, so deleting tzinfo would incorrectly compare different wall
+    # clocks (09:30 UTC and 10:30+01:00).
     history_time = re.search(
         rf'href="/admin/inbox\?c={previous.id}".*?'
         r'<time datetime="([^"]+)">([^<]+)</time>',
@@ -262,9 +263,11 @@ def test_contact_drawer_renders_previous_conversation_tab_and_route(
     )
     assert history_time is not None
     rendered_at = datetime.fromisoformat(history_time.group(1))
-    assert rendered_at.replace(tzinfo=None) == previous.last_message_at.replace(
-        tzinfo=None
-    )
+    stored_at = previous.last_message_at
+    assert stored_at is not None
+    if stored_at.tzinfo is None:
+        stored_at = stored_at.replace(tzinfo=UTC)
+    assert rendered_at.astimezone(UTC) == stored_at.astimezone(UTC)
     assert history_time.group(2).strip()
 
 
