@@ -249,7 +249,9 @@ def test_contact_drawer_renders_previous_conversation_tab_and_route(
     assert "Conversations" in response.text
     assert "Previous installation chat" in response.text
     assert f'href="/admin/inbox?c={previous.id}"' in response.text
-    assert 'datetime="2026-08-15T09:30:00+00:00"' in response.text
+    # SQLite drops timezone metadata while PostgreSQL preserves it. The wall
+    # time is the contract under test; accept either ISO suffix.
+    assert 'datetime="2026-08-15T09:30:00' in response.text
 
 
 def test_every_route_declares_a_permission_guard():
