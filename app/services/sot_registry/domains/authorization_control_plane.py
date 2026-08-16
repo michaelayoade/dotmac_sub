@@ -1461,11 +1461,6 @@ DOMAIN = DomainSOT(
                 "deleted in deploy 2. Rollback floor is migration 534: never "
                 "roll back below it, or new sessions mint without party_id."
             ),
-            test_refs=(
-                "tests/test_staff_party_authentication.py",
-                "tests/integration/test_session_party_projection.py",
-                ("tests/architecture/test_staff_party_authentication_owner.py"),
-            ),
         ),
         SOTService(
             name="auth.staff_provisioning",
