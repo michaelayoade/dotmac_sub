@@ -146,7 +146,11 @@ def _observation_body(envelope: IntegratorObservationEnvelope) -> dict[str, Any]
     payload = envelope.message or envelope.delivery_receipt
     if payload is None:  # pragma: no cover - guarded by require_capability
         raise _error("empty_observation", "The envelope carries no observation.")
-    return payload.model_dump(mode="json")
+    # The transport hashes the object it serialized.  Preserve explicitly sent
+    # nulls, but do not invent omitted optional fields from Pydantic defaults:
+    # doing so changes the canonical JSON for sparse typed attachments such as
+    # a location-only message.
+    return payload.model_dump(mode="json", exclude_unset=True)
 
 
 def require_capability(envelope: IntegratorObservationEnvelope) -> None:
