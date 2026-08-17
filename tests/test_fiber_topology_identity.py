@@ -352,17 +352,17 @@ def test_supersede_refuses_decisions_without_newer_evidence_or_change_requests(
             reason="No newer source evidence exists",
         )
 
+    executed = execute_identity_decision(
+        db_session, decision.id, executed_by="executor@example.com"
+    )
+
+    assert executed.status == "change_requested"
     _stage_feature(
         db_session,
         asset_type="splice_closure",
         external_id="CLOSURE-PYTEST-2",
         geometry={"type": "Point", "coordinates": [7.41, 9.11]},
     )
-    executed = execute_identity_decision(
-        db_session, decision.id, executed_by="executor@example.com"
-    )
-
-    assert executed.status == "change_requested"
     with pytest.raises(FiberTopologyIdentityError, match="change requests"):
         supersede_approved_identity_decision(
             db_session,

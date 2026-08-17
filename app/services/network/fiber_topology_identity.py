@@ -617,8 +617,7 @@ def supersede_approved_identity_decision(
     decision.status = "declined"
     decision.closed_reason = "authoritative_source_superseded"
     decision.review_notes = (
-        f"{decision.review_notes}\n\n"
-        f"Superseded by {actor}: {normalized_reason}"
+        f"{decision.review_notes}\n\nSuperseded by {actor}: {normalized_reason}"
     )
     if commit:
         db.commit()
