@@ -5,8 +5,8 @@ the staff Party projection, and revoked/expired historical staff rows are kept
 without inventing an identity. The ratchet applies only to active, unrevoked
 staff sessions and refuses a Party projection on a non-staff session.
 
-Revision ID: 540_staff_session_party_ratchet
-Revises: 537_team_inbox_plain_bodies
+Revision ID: 541_staff_session_party_ratchet
+Revises: 540_ticket_comment_mentions
 Create Date: 2026-08-17
 """
 
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "540_staff_session_party_ratchet"
-down_revision = "539_active_sub_billing_anchor"
+revision = "541_staff_session_party_ratchet"
+down_revision = "540_ticket_comment_mentions"
 branch_labels = None
 depends_on = None
 
