@@ -2295,6 +2295,10 @@
           .map((file) => file.id)
           .join(",");
       },
+      syncAttachmentInput(form) {
+        const attachmentInput = form?.querySelector('[name="attachment_ids"]');
+        if (attachmentInput) attachmentInput.value = this.attachmentIds();
+      },
       composerDirty() {
         return Boolean(
           this.draft.trim() ||
@@ -2388,6 +2392,12 @@
           );
           return;
         }
+        if (this.files.some((file) => !file.id)) {
+          event.preventDefault();
+          this.workspace()?.showToast?.("Attach upload did not finish. Remove it and try again.");
+          return;
+        }
+        this.syncAttachmentInput(event.currentTarget);
         // Attachments and scheduling both submit for real now: staged uploads
         // ride along as attachment_ids, and a chosen time rides as send_after.
         if (this.scheduled && !this.scheduledAt) {
