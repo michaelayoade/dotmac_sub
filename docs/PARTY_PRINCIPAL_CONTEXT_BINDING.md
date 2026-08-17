@@ -186,7 +186,7 @@ generation refuses; remediation belongs to the canonical authentication/session
 owner before a new plan is reviewed, not to a second revocation path in the
 operator adapter.
 
-Migration `540_staff_session_party_ratchet` is the authority ratchet. It may be
+Migration `541_staff_session_party_ratchet` is the authority ratchet. It may be
 admitted only after the production projection report returns `is_ratchet_ready`
 with zero active/unrevoked remaining rows, unbound principals, or projection
 disagreements. The migration preflight independently repeats those database

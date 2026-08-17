@@ -559,7 +559,7 @@ DOMAIN = DomainSOT(
                         ),
                         stale_behavior=(
                             "A null active, unrevoked staff row is unusable and is "
-                            "refused by both the reader and migration-540 database "
+                            "refused by both the reader and migration-541 database "
                             "ratchet; preserved revoked or non-active history does "
                             "not authenticate."
                         ),

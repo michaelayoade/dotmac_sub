@@ -1,4 +1,4 @@
-"""Fail-closed contract for migration 540's staff-session Party ratchet."""
+"""Fail-closed contract for migration 541's staff-session Party ratchet."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "alembic/versions/540_staff_session_party_ratchet.py"
+MIGRATION = ROOT / "alembic/versions/541_staff_session_party_ratchet.py"
 
 
 def _load_migration() -> ModuleType:
@@ -94,8 +94,8 @@ class _Operations:
 def test_revision_extends_the_current_head() -> None:
     migration = _load_migration()
 
-    assert migration.revision == "540_staff_session_party_ratchet"
-    assert migration.down_revision == "539_active_sub_billing_anchor"
+    assert migration.revision == "541_staff_session_party_ratchet"
+    assert migration.down_revision == "540_ticket_comment_mentions"
 
 
 @pytest.mark.parametrize(
