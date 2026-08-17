@@ -242,6 +242,10 @@
       recentlyRefreshedMessageIds: new Set(),
       pendingDeliveryStatuses: new Map(),
       threadRefreshTimer: null,
+      threadResizeObserver: null,
+      threadScrollElement: null,
+      threadScrollHandler: null,
+      threadFollowBottom: false,
       readStateInFlight: new Set(),
       locallyReadConversationIds: [],
       filterLoading: false,
@@ -306,7 +310,7 @@
         this.bindHtmx();
         this.connectRealtime();
         this.startFallbackPolling();
-        this.scrollThread();
+        this.scrollThread(true);
         this.clearDraftAfterSuccessfulSend();
         this.$nextTick(() => this.syncSelectedCheckboxes());
       },
@@ -714,7 +718,7 @@
               this.clearTypingPresence();
               this.subscribeVisibleTopics();
               this.updateSelectedHighlight();
-              this.scrollThread();
+              this.scrollThread(true);
               this.newMessagesAvailable = false;
               if (thread.dataset.conversationUnread === "true") {
                 this.markConversationRead(this.selectedId);
@@ -727,7 +731,7 @@
             target.querySelector("[data-inbox-empty-thread]")?.remove();
             this.applyPendingDeliveryStatuses();
             this.newMessagesAvailable = false;
-            this.scrollThread();
+            this.scrollThread(false);
           }
           if (
             target.id === "inbox-sidebar-content" ||
@@ -1534,10 +1538,67 @@
         }, 4200);
       },
 
-      scrollThread() {
+      threadIsNearBottom(thread, threshold = 96) {
+        return (
+          thread.scrollHeight - thread.scrollTop - thread.clientHeight <=
+          threshold
+        );
+      },
+
+      disconnectThreadAutoScroll() {
+        this.threadResizeObserver?.disconnect();
+        this.threadResizeObserver = null;
+        if (this.threadScrollElement && this.threadScrollHandler) {
+          this.threadScrollElement.removeEventListener(
+            "scroll",
+            this.threadScrollHandler,
+          );
+        }
+        this.threadScrollElement = null;
+        this.threadScrollHandler = null;
+        this.threadFollowBottom = false;
+      },
+
+      bindThreadAutoScroll(thread, scrollToBottom) {
+        this.disconnectThreadAutoScroll();
+        this.threadScrollElement = thread;
+        this.threadFollowBottom = true;
+        this.threadScrollHandler = () => {
+          this.threadFollowBottom = this.threadIsNearBottom(thread);
+        };
+        thread.addEventListener("scroll", this.threadScrollHandler, {
+          passive: true,
+        });
+        if ("ResizeObserver" in window) {
+          this.threadResizeObserver = new ResizeObserver(() => {
+            if (this.threadFollowBottom) scrollToBottom();
+          });
+          this.threadResizeObserver.observe(
+            thread.querySelector("[data-thread-content]") || thread,
+          );
+        }
+      },
+
+      scrollThread(force = true) {
         this.$nextTick(() => {
           const thread = document.querySelector("[data-thread-scroll]");
-          if (thread) thread.scrollTop = thread.scrollHeight;
+          if (!thread) return;
+          const shouldFollow =
+            force ||
+            this.threadFollowBottom ||
+            this.threadIsNearBottom(thread);
+          if (!shouldFollow) return;
+
+          const scrollToBottom = () => {
+            if (!this.threadFollowBottom || !document.contains(thread)) return;
+            thread.scrollTop = thread.scrollHeight;
+          };
+          this.bindThreadAutoScroll(thread, scrollToBottom);
+          scrollToBottom();
+          window.requestAnimationFrame(() => {
+            scrollToBottom();
+            window.requestAnimationFrame(scrollToBottom);
+          });
         });
       },
 
@@ -1897,6 +1958,12 @@
 
       cleanupInboxElement(root) {
         if (!root) return;
+        if (
+          root.matches?.("[data-thread-scroll]") ||
+          root.querySelector?.("[data-thread-scroll]")
+        ) {
+          this.disconnectThreadAutoScroll();
+        }
         const elements = [root, ...(root.querySelectorAll?.("*") || [])];
         elements.forEach((element) => {
           if (element.__inboxReplyWindowTimer) {
