@@ -199,9 +199,7 @@ def test_team_capacity_snapshots_preserve_per_team_capacity(db_session):
     )
     db_session.flush()
 
-    snapshots = team_capacity_snapshots(
-        db_session, (first_team.id, second_team.id)
-    )
+    snapshots = team_capacity_snapshots(db_session, (first_team.id, second_team.id))
 
     assert snapshots[first_team.id].active_assignments == 1
     assert snapshots[first_team.id].total_capacity == 2

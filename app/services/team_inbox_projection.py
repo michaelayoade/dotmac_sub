@@ -2491,9 +2491,7 @@ def build_queue_projection(
         ),
         agent_options=list_agent_options(db) if include_sidebar else (),
         agent_presence=(
-            get_agent_presence(db, request.actor_person_id)
-            if include_sidebar
-            else None
+            get_agent_presence(db, request.actor_person_id) if include_sidebar else None
         ),
         assignment_counts=assignment_counts,
         status_options=tuple(item.value for item in InboxConversationStatus),

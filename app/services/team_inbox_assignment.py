@@ -202,9 +202,7 @@ def team_capacity_snapshots(
     person_ids = list(dict.fromkeys(user.id for _member, user in member_users))
     if not person_ids:
         return {
-            team_id: InboxTeamCapacitySnapshot(
-                active_assignments=0, total_capacity=0
-            )
+            team_id: InboxTeamCapacitySnapshot(active_assignments=0, total_capacity=0)
             for team_id in team_ids
         }
     presences = {
@@ -216,8 +214,7 @@ def team_capacity_snapshots(
     online_ids = {
         person_id
         for person_id, presence in presences.items()
-        if _effective_presence_status(presence)
-        == InboxAgentPresenceStatus.online.value
+        if _effective_presence_status(presence) == InboxAgentPresenceStatus.online.value
     }
     online_ids_by_team: dict[UUID, set[UUID]] = {team_id: set() for team_id in team_ids}
     for member, user in member_users:
