@@ -363,7 +363,7 @@ def test_supersede_refuses_decisions_without_newer_evidence_or_change_requests(
         external_id="CLOSURE-PYTEST-2",
         geometry={"type": "Point", "coordinates": [7.41, 9.11]},
     )
-    with pytest.raises(FiberTopologyIdentityError, match="change requests"):
+    with pytest.raises(FiberTopologyIdentityError, match="approved, unexecuted"):
         supersede_approved_identity_decision(
             db_session,
             decision.id,
