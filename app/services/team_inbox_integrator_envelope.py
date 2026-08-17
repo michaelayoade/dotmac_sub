@@ -65,6 +65,7 @@ from app.services.owner_commands import CommandContext
 from app.services.team_inbox_observations import (
     DeliveryReceiptObservation,
     InboundAttachmentObservation,
+    InboundLocationObservation,
     InboundMessageObservation,
     InboxProvider,
     RecordProviderObservationCommand,
@@ -233,6 +234,16 @@ def _attachments(
             caption=item.caption,
             file_size=item.file_size,
             download_status=item.download_status,
+            location=(
+                InboundLocationObservation(
+                    latitude=item.location.latitude,
+                    longitude=item.location.longitude,
+                    name=item.location.name,
+                    address=item.location.address,
+                )
+                if item.location is not None
+                else None
+            ),
         )
         for item in message.attachments
     )
