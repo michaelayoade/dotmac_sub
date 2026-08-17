@@ -185,11 +185,7 @@
       ),
       resizingSidebar: false,
       filtersOpen: parseStoredBoolean(KEYS.filtersOpen, false),
-      byAgentOpen: Boolean(
-        new URLSearchParams(window.location.search).get("assigned_person_id") ||
-          new URLSearchParams(window.location.search).get("activity_from") ||
-          new URLSearchParams(window.location.search).get("activity_to"),
-      ),
+      byAgentOpen: false,
       savedViewName: "",
       selectedIds: [],
       bulkAction: "status",
@@ -209,6 +205,7 @@
       newMessagesAvailable: false,
       newListActivityAvailable: false,
       toastMessage: "",
+      outboundToastMessageId: "",
       replyFailure: previewIncludes("reply-failed")
         ? { detail: "The channel did not accept this message. Try again." }
         : null,
@@ -1526,12 +1523,22 @@
         );
       },
 
-      showToast(message) {
+      showToast(message, { persistent = false } = {}) {
         this.toastMessage = message;
         window.clearTimeout(this.toastTimer);
-        this.toastTimer = window.setTimeout(() => {
-          this.toastMessage = "";
-        }, 4200);
+        this.toastTimer = null;
+        if (!persistent) {
+          this.toastTimer = window.setTimeout(() => {
+            this.toastMessage = "";
+          }, 4200);
+        }
+      },
+
+      trackOutboundSend(messageId) {
+        const id = String(messageId || "").trim();
+        if (!id) return;
+        this.outboundToastMessageId = id;
+        this.showToast("Message sending…", { persistent: true });
       },
 
       scrollThread() {
@@ -1869,6 +1876,17 @@
         const messageId = String(data.message_id || "");
         const status = String(data.delivery_status || "").trim().toLowerCase();
         if (!messageId || !status) return;
+        if (messageId === this.outboundToastMessageId) {
+          if (status === "delivered" || status === "sent") {
+            this.outboundToastMessageId = "";
+            this.showToast("Message sent.");
+          } else if (status === "failed" || status === "cancelled") {
+            this.outboundToastMessageId = "";
+            this.showToast("Message delivery failed. Open the message status to retry.");
+          } else {
+            this.showToast("Message sending…", { persistent: true });
+          }
+        }
         const statusNode = Array.from(
           document.querySelectorAll("[data-inbox-delivery-status]"),
         ).find((node) => node.dataset.inboxDeliveryStatus === messageId);
@@ -1882,7 +1900,7 @@
           .replace(/^./, (value) => value.toUpperCase());
         statusNode.classList.toggle("text-rose-600", status === "failed");
         statusNode.classList.toggle("text-slate-400", status !== "failed");
-        if (status === "failed") {
+        if (status === "failed" && messageId !== this.outboundToastMessageId) {
           this.showToast(
             "Message delivery failed. Open the message status to retry.",
           );
@@ -2340,11 +2358,29 @@
           return;
         }
         this.sending = false;
-        this.workspace()?.showToast?.(
-          result.message ||
-            (result.status === "success" ? "Reply sent." : "Reply failed."),
-        );
-        if (result.status !== "success") return;
+        const workspace = this.workspace();
+        if (result.status !== "success") {
+          workspace?.showToast?.(result.message || "Reply failed.");
+          return;
+        }
+
+        const outcomeMessage = String(result.message || "");
+        if (outcomeMessage.startsWith("Reply scheduled")) {
+          workspace?.showToast?.("Message scheduled.");
+        } else if (
+          outcomeMessage.startsWith("Reply sent") ||
+          outcomeMessage.startsWith("Reply could not be delivered")
+        ) {
+          workspace?.showToast?.(
+            outcomeMessage.startsWith("Reply sent")
+              ? "Message sent."
+              : "Message delivery failed. Open the message status to retry.",
+          );
+        } else if (result.message_id) {
+          workspace?.trackOutboundSend?.(result.message_id);
+        } else {
+          workspace?.showToast?.(outcomeMessage || "Message submitted.");
+        }
 
         this.draft = "";
         this.files = [];
@@ -2357,7 +2393,6 @@
         this.polishSuggestion = null;
         localStorage.removeItem(`${KEYS.draftPrefix}${this.conversationId}`);
 
-        const workspace = this.workspace();
         workspace?.refreshThreadForMessage?.(
           this.conversationId,
           result.message_id,
@@ -2368,7 +2403,9 @@
       finishSendRequest(event) {
         this.sending = false;
         if (event.detail?.successful) return;
-        this.workspace()?.showToast?.("Could not send reply. Try again.");
+        const workspace = this.workspace();
+        if (workspace) workspace.outboundToastMessageId = "";
+        workspace?.showToast?.("Could not send reply. Try again.");
       },
 
       prepareSend(event) {
@@ -2407,6 +2444,7 @@
         );
         if (replyInput) replyInput.value = this.replyTo?.id || "";
         this.sending = true;
+        this.workspace()?.showToast?.("Message sending…", { persistent: true });
         this.workspace()?.publishTyping?.(this.conversationId, false);
       },
     };
