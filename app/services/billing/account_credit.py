@@ -54,6 +54,7 @@ from app.schemas.billing import (
 )
 from app.services.billing._common import (
     get_account_credit_balance,
+    get_spendable_account_credit_balance,
     lock_account,
     resolve_invoice_settlement_amounts,
 )
@@ -441,7 +442,7 @@ def _source_payments(
             account_remaining[currency] = max(
                 Decimal("0.00"),
                 round_money(
-                    get_account_credit_balance(
+                    get_spendable_account_credit_balance(
                         db,
                         account_id,
                         currency=currency,
@@ -501,7 +502,7 @@ class AccountCreditApplications:
         account_credit = max(
             Decimal("0.00"),
             round_money(
-                get_account_credit_balance(
+                get_spendable_account_credit_balance(
                     db,
                     str(invoice.account_id),
                     currency=currency,
@@ -599,7 +600,7 @@ class AccountCreditApplications:
             select(Payment).where(Payment.id == payment_id).with_for_update()
         )
         account_credit = round_money(
-            get_account_credit_balance(
+            get_spendable_account_credit_balance(
                 db,
                 str(invoice.account_id),
                 currency=currency,
@@ -859,7 +860,9 @@ class AccountCreditApplications:
         )
         credit_by_currency = {
             currency: round_money(
-                get_account_credit_balance(db, str(account_id), currency=currency)
+                get_spendable_account_credit_balance(
+                    db, str(account_id), currency=currency
+                )
             )
             for currency in currencies
         }
