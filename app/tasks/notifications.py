@@ -1221,6 +1221,10 @@ def _deliver_notification_queue_stats(
             .scalar()
             or 0
         )
+    # Queue-health SELECTs autobegin a read transaction after the final
+    # delivery commit. Release that read-only boundary so a caller can safely
+    # enter a subsequent owner command with the same adapter-owned session.
+    db_session_adapter.release_read_transaction(db)
     return {
         "delivered": delivered,
         "retried": retried,
