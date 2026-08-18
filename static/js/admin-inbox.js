@@ -42,6 +42,7 @@
       upstreamSignal?.removeEventListener("abort", abortFromUpstream);
     }
   };
+  window.inboxFetchWithTimeout = fetchWithTimeout;
 
   window.inboxTeamFilterBuilder = function inboxTeamFilterBuilder(initialJson) {
     const blankCondition = (bucket = "and") => ({
@@ -2755,7 +2756,7 @@
       sync();
     });
 
-    fetchWithTimeout(form.dataset.templateEndpoint, {
+    window.inboxFetchWithTimeout(form.dataset.templateEndpoint, {
       headers: { Accept: "application/json" },
     })
       .then((response) => response.json().then((payload) => ({ response, payload })))
