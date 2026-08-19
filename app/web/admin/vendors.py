@@ -16,12 +16,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.vendor_routes import InstallationProjectStatus
 from app.services import web_vendors as web_vendors_service
 from app.services.auth_dependencies import can, require_permission
+from app.services.domain_errors import DomainError
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendors", tags=["web-admin-vendors"])
@@ -257,7 +259,7 @@ def vendor_user_create(
             email=email,
             role=role,
         )
-    except ValueError as exc:
+    except (ValueError, DomainError, SQLAlchemyError) as exc:
         # The owner rejects before writing, so nothing to roll back here.
         return _detail_with_error(request, db, vendor_id, _error_detail(exc))
     return RedirectResponse(url=f"/admin/vendors/{vendor_id}", status_code=303)
