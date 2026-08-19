@@ -31,6 +31,7 @@ from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field import vendor_capabilities
+from app.services.field.map_assets import VENDOR_ROUTE_AUTHORING_POI_FILTERS
 from app.services.field.vendor_auth import vendor_context
 from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_operations import (
@@ -40,6 +41,9 @@ from app.services.vendor_portal_operations import (
     RequestVendorAdvanceCommand,
     RequestVendorMaterialReleaseCommand,
     SubmitVendorRouteRevisionCommand,
+    VENDOR_ROUTE_AUTHORING_LAYER_FILTERS,
+    VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS,
+    VENDOR_ROUTE_AUTHORING_STATUS_FILTERS,
     vendor_portal_operations,
 )
 from app.services.vendor_purchase_invoices import (
@@ -169,6 +173,27 @@ def _route_revision_payload(
         ) from exc
 
 
+def _as_built_payload(
+    project_id: str,
+    geojson: str,
+    actual_length_meters: float | None,
+    variation_reason: str | None,
+) -> VendorAsBuiltCreate:
+    try:
+        geometry = json.loads(geojson)
+        return VendorAsBuiltCreate(
+            project_id=coerce_uuid(project_id),
+            geojson=geometry,
+            actual_length_meters=actual_length_meters,
+            variation_reason=variation_reason,
+        )
+    except (json.JSONDecodeError, TypeError, ValueError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Trace a valid as-built route with at least two map points.",
+        ) from exc
+
+
 @router.get("", response_class=HTMLResponse)
 def vendor_dashboard(
     request: Request,
@@ -267,6 +292,10 @@ def vendor_project_detail(
             "supply": supply,
             "vendor_work_orders": vendor_work_orders,
             "can_propose_closure": can_propose_closure,
+            "vendor_route_authoring_layer_filters": VENDOR_ROUTE_AUTHORING_LAYER_FILTERS,
+            "vendor_route_authoring_poi_filters": VENDOR_ROUTE_AUTHORING_POI_FILTERS,
+            "vendor_route_authoring_radius_options": VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS,
+            "vendor_route_authoring_status_filters": VENDOR_ROUTE_AUTHORING_STATUS_FILTERS,
             "message": message,
         },
     )
@@ -636,15 +665,16 @@ def vendor_submit_as_built(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db, vendor_capabilities.AS_BUILT_WRITE)
+    payload = _as_built_payload(
+        project_id,
+        geojson,
+        actual_length_meters,
+        variation_reason,
+    )
     proposal = _submission_call(
         lambda: vendor_submission_proposals.issue_as_built_submission(
             db,
-            payload=VendorAsBuiltCreate(
-                project_id=coerce_uuid(project_id),
-                geojson=json.loads(geojson),
-                actual_length_meters=actual_length_meters,
-                variation_reason=variation_reason,
-            ),
+            payload=payload,
             vendor_id=str(context["native_vendor_id"]),
             user_id=str(auth["principal_id"]),
         )

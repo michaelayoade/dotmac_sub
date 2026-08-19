@@ -37,6 +37,38 @@ def linestring_length_meters(geojson: dict[str, object]) -> float:
     return round(total, 1)
 
 
+def normalize_linestring_geojson(value: dict[str, object]) -> dict[str, object]:
+    if value.get("type") != "LineString":
+        raise ValueError("Route geometry must be a GeoJSON LineString")
+    coordinates = value.get("coordinates")
+    if not isinstance(coordinates, list) or len(coordinates) < 2:
+        raise ValueError("Route geometry requires at least two coordinates")
+
+    normalized: list[list[float]] = []
+    for coordinate in coordinates:
+        if (
+            not isinstance(coordinate, (list, tuple))
+            or len(coordinate) != 2
+            or isinstance(coordinate[0], bool)
+            or isinstance(coordinate[1], bool)
+        ):
+            raise ValueError(
+                "Each route coordinate must contain longitude and latitude"
+            )
+        try:
+            longitude = float(coordinate[0])
+            latitude = float(coordinate[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Route coordinates must contain numeric values") from exc
+        if not math.isfinite(longitude) or not math.isfinite(latitude):
+            raise ValueError("Route coordinates must be finite")
+        if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
+            raise ValueError("Route coordinates are outside valid bounds")
+        normalized.append([longitude, latitude])
+
+    return {"type": "LineString", "coordinates": normalized}
+
+
 class VendorQuoteCreate(BaseModel):
     project_id: UUID
     currency: str | None = Field(default=None, min_length=3, max_length=3)
@@ -72,37 +104,7 @@ class VendorRouteRevisionCreate(BaseModel):
     @field_validator("geojson")
     @classmethod
     def validate_linestring(cls, value: dict[str, object]) -> dict[str, object]:
-        if value.get("type") != "LineString":
-            raise ValueError("Route geometry must be a GeoJSON LineString")
-        coordinates = value.get("coordinates")
-        if not isinstance(coordinates, list) or len(coordinates) < 2:
-            raise ValueError("Route geometry requires at least two coordinates")
-
-        normalized: list[list[float]] = []
-        for coordinate in coordinates:
-            if (
-                not isinstance(coordinate, (list, tuple))
-                or len(coordinate) != 2
-                or isinstance(coordinate[0], bool)
-                or isinstance(coordinate[1], bool)
-            ):
-                raise ValueError(
-                    "Each route coordinate must contain longitude and latitude"
-                )
-            try:
-                longitude = float(coordinate[0])
-                latitude = float(coordinate[1])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "Route coordinates must contain numeric values"
-                ) from exc
-            if not math.isfinite(longitude) or not math.isfinite(latitude):
-                raise ValueError("Route coordinates must be finite")
-            if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
-                raise ValueError("Route coordinates are outside valid bounds")
-            normalized.append([longitude, latitude])
-
-        return {"type": "LineString", "coordinates": normalized}
+        return normalize_linestring_geojson(value)
 
     @model_validator(mode="after")
     def derive_authoritative_length(self) -> VendorRouteRevisionCreate:
@@ -117,12 +119,21 @@ class VendorAsBuiltLineCreate(VendorQuoteLineCreate):
 class VendorAsBuiltCreate(BaseModel):
     project_id: UUID
     proposed_revision_id: UUID | None = None
-    geojson: dict | None = None
-    actual_length_meters: float | None = Field(default=None, ge=0)
+    geojson: dict[str, object] | None = None
+    actual_length_meters: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     variation_type: str | None = Field(default=None, max_length=40)
     variation_reason: str | None = Field(default=None, max_length=2000)
     work_order_ref: str | None = Field(default=None, max_length=120)
     line_items: list[VendorAsBuiltLineCreate] = Field(default_factory=list)
+
+    @field_validator("geojson")
+    @classmethod
+    def validate_optional_linestring(
+        cls, value: dict[str, object] | None
+    ) -> dict[str, object] | None:
+        if value is None:
+            return None
+        return normalize_linestring_geojson(value)
 
     @model_validator(mode="after")
     def derive_authoritative_length(self) -> VendorAsBuiltCreate:
