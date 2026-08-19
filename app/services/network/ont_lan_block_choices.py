@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.services.catalog.ip_block_choices import IpBlockPrefix
+from app.services.network_catalog_ip_block_bridge import IpBlockPrefix
 
 
 @dataclass(frozen=True, slots=True)

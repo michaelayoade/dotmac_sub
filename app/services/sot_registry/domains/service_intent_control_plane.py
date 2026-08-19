@@ -96,9 +96,7 @@ DOMAIN = DomainSOT(
                     state=AuthorityMigrationState.COMPLETE,
                     old_owner="catalog plan-marker readers without a typed resolver",
                     new_owner="service_intent.ip_block_catalog",
-                    verification=(
-                        "Catalog choice and entitlement resolver tests"
-                    ),
+                    verification=("Catalog choice and entitlement resolver tests"),
                     cutover_gate=(
                         "Catalog IP block size readers call this typed resolver"
                     ),

@@ -50,6 +50,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_desired_config import set_desired_config_values
+from app.services.network.ont_lan_block_choices import OPERATOR_LAN_BLOCK_PREFIXES
 from app.services.network.ont_management_ipam import (
     allocate_ont_management_ip,
     release_ont_management_ip,
@@ -66,7 +67,6 @@ from app.services.network.provisioning_events import (
 )
 from app.services.network.subscriber_wan_ipam import ensure_wan_static_ip_available
 from app.services.network_catalog_ip_block_bridge import IpBlockPrefix
-from app.services.network.ont_lan_block_choices import OPERATOR_LAN_BLOCK_PREFIXES
 from app.services.network_operation_dispatch import (
     NetworkOperationCommand,
     stage_dispatch,
