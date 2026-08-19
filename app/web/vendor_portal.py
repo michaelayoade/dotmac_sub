@@ -3,7 +3,7 @@
 import json
 from collections.abc import Callable
 from decimal import Decimal
-from typing import TypeVar
+from typing import TypeVar, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -162,8 +162,10 @@ def _route_revision_payload(
 ) -> VendorRouteRevisionCreate:
     try:
         geometry = json.loads(geojson)
+        if not isinstance(geometry, dict):
+            raise TypeError("Route geometry must be an object")
         return VendorRouteRevisionCreate(
-            geojson=geometry,
+            geojson=cast(dict[str, object], geometry),
             length_meters=length_meters,
         )
     except (json.JSONDecodeError, TypeError, ValidationError) as exc:
@@ -181,9 +183,11 @@ def _as_built_payload(
 ) -> VendorAsBuiltCreate:
     try:
         geometry = json.loads(geojson)
+        if not isinstance(geometry, dict):
+            raise TypeError("As-built route geometry must be an object")
         return VendorAsBuiltCreate(
             project_id=coerce_uuid(project_id),
-            geojson=geometry,
+            geojson=cast(dict[str, object], geometry),
             actual_length_meters=actual_length_meters,
             variation_reason=variation_reason,
         )
