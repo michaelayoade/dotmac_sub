@@ -115,6 +115,7 @@ def test_closure_pin_is_not_coupled_to_asbuilt_submission_eligibility():
     assert "vendor_capabilities.AS_BUILT_WRITE" in source
     assert "project.as_built_action) and vendor_work_orders" not in TEMPLATE
     assert "or can_propose_closure" in TEMPLATE
-    assert "var canProposeClosure" in TEMPLATE
+    assert "canProposeClosure: {{ can_propose_closure | tojson }}" in TEMPLATE
+    assert "var canProposeClosure" in ASBUILT_JS
     assert "canProposeClosure" in ASBUILT_JS
     assert "if (canCapture) {" in ASBUILT_JS

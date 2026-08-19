@@ -43,6 +43,9 @@ TEMPLATE = (PROJECT_ROOT / "templates/vendor/project_detail.html").read_text(
 AUTHORING_JS = (PROJECT_ROOT / "static/js/vendor-route-authoring.js").read_text(
     encoding="utf-8"
 )
+ASBUILT_JS = (PROJECT_ROOT / "static/js/vendor-asbuilt-map.js").read_text(
+    encoding="utf-8"
+)
 
 
 def _route_payload(coordinates: list[list[float]]) -> VendorRouteRevisionCreate:
@@ -206,7 +209,7 @@ def test_authoring_ui_draws_saves_and_submits_owned_revisions() -> None:
     assert "Submitting locks that revision for review" in TEMPLATE
     assert 'id="closure-pin-toggle"' in TEMPLATE
     assert 'id="closure-proposal-form"' in TEMPLATE
-    assert "pending staff review" in TEMPLATE
+    assert "pending staff review" in ASBUILT_JS
     assert 'id="route-author-filters"' in TEMPLATE
     assert "{% for layer_filter in vendor_route_authoring_layer_filters %}" in TEMPLATE
     assert 'data-route-layer-filter value="{{ layer_filter.value }}"' in TEMPLATE
