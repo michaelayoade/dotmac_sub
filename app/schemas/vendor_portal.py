@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -24,8 +25,10 @@ def linestring_length_meters(geojson: dict[str, object]) -> float:
             second, (list, tuple)
         ):
             raise ValueError("Route coordinates must be coordinate pairs")
-        lon1, lat1 = float(first[0]), float(first[1])
-        lon2, lat2 = float(second[0]), float(second[1])
+        first_pair = cast(Sequence[object], first)
+        second_pair = cast(Sequence[object], second)
+        lon1, lat1 = float(first_pair[0]), float(first_pair[1])
+        lon2, lat2 = float(second_pair[0]), float(second_pair[1])
         lat1_rad = math.radians(lat1)
         lat2_rad = math.radians(lat2)
         lat_delta = math.radians(lat2 - lat1)
@@ -55,9 +58,10 @@ def normalize_linestring_geojson(value: dict[str, object]) -> dict[str, object]:
             raise ValueError(
                 "Each route coordinate must contain longitude and latitude"
             )
+        coordinate_pair = cast(Sequence[object], coordinate)
         try:
-            longitude = float(coordinate[0])
-            latitude = float(coordinate[1])
+            longitude = float(coordinate_pair[0])
+            latitude = float(coordinate_pair[1])
         except (TypeError, ValueError) as exc:
             raise ValueError("Route coordinates must contain numeric values") from exc
         if not math.isfinite(longitude) or not math.isfinite(latitude):

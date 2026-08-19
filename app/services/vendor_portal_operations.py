@@ -1482,14 +1482,15 @@ class VendorPortalOperations:
                 "Provide a route or line items.",
             )
         if payload.geojson:
+            coordinates = payload.geojson.get("coordinates")
             if payload.geojson.get("type") != "LineString" or not isinstance(
-                payload.geojson.get("coordinates"), list
+                coordinates, list
             ):
                 raise _error(
                     "invalid_as_built_route",
                     "As-built route must be a GeoJSON LineString.",
                 )
-            if len(payload.geojson["coordinates"]) < 2:
+            if len(coordinates) < 2:
                 raise _error(
                     "invalid_as_built_route",
                     "As-built route requires at least two coordinates.",
