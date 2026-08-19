@@ -211,13 +211,17 @@ def test_authoring_ui_draws_saves_and_submits_owned_revisions() -> None:
     assert "{% for layer_filter in vendor_route_authoring_layer_filters %}" in TEMPLATE
     assert 'data-route-layer-filter value="{{ layer_filter.value }}"' in TEMPLATE
     assert "{{ layer_filter.label }}" in TEMPLATE
-    assert "{% for status_filter in vendor_route_authoring_status_filters %}" in TEMPLATE
+    assert (
+        "{% for status_filter in vendor_route_authoring_status_filters %}" in TEMPLATE
+    )
     assert 'data-route-status-filter value="{{ status_filter.value }}"' in TEMPLATE
     assert "{{ status_filter.label }}" in TEMPLATE
     assert "{% for poi_filter in vendor_route_authoring_poi_filters %}" in TEMPLATE
     assert 'data-route-poi-filter value="{{ poi_filter.value }}"' in TEMPLATE
     assert "{{ poi_filter.label }}" in TEMPLATE
-    assert "{% for radius_option in vendor_route_authoring_radius_options %}" in TEMPLATE
+    assert (
+        "{% for radius_option in vendor_route_authoring_radius_options %}" in TEMPLATE
+    )
     assert 'value="{{ radius_option.value_meters }}"' in TEMPLATE
     assert "{{ radius_option.label }}" in TEMPLATE
     assert 'data-route-filter-action="all"' in TEMPLATE

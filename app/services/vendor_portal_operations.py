@@ -206,9 +206,7 @@ class VendorRouteAuthoringRadiusOption:
     selected_by_default: bool
 
 
-VENDOR_ROUTE_AUTHORING_LAYER_FILTERS: tuple[
-    VendorRouteAuthoringFilterOption, ...
-] = (
+VENDOR_ROUTE_AUTHORING_LAYER_FILTERS: tuple[VendorRouteAuthoringFilterOption, ...] = (
     VendorRouteAuthoringFilterOption("proposed", "Proposed routes", True),
     VendorRouteAuthoringFilterOption("as_built", "As-built routes", True),
     VendorRouteAuthoringFilterOption(
@@ -217,9 +215,7 @@ VENDOR_ROUTE_AUTHORING_LAYER_FILTERS: tuple[
         True,
     ),
 )
-VENDOR_ROUTE_AUTHORING_STATUS_FILTERS: tuple[
-    VendorRouteAuthoringFilterOption, ...
-] = (
+VENDOR_ROUTE_AUTHORING_STATUS_FILTERS: tuple[VendorRouteAuthoringFilterOption, ...] = (
     VendorRouteAuthoringFilterOption("draft", "Draft", True),
     VendorRouteAuthoringFilterOption("submitted", "Submitted", True),
     VendorRouteAuthoringFilterOption("accepted", "Accepted", True),
@@ -227,9 +223,7 @@ VENDOR_ROUTE_AUTHORING_STATUS_FILTERS: tuple[
     VendorRouteAuthoringFilterOption("pending", "Pending", True),
     VendorRouteAuthoringFilterOption("applied", "Applied", True),
 )
-VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS: tuple[
-    VendorRouteAuthoringRadiusOption, ...
-] = (
+VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS: tuple[VendorRouteAuthoringRadiusOption, ...] = (
     VendorRouteAuthoringRadiusOption(500, "500 m", False),
     VendorRouteAuthoringRadiusOption(1000, "1 km", True),
     VendorRouteAuthoringRadiusOption(5000, "5 km", False),
