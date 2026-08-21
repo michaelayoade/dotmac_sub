@@ -256,7 +256,7 @@ def _project_action_error_response(
     project_id: str,
     exc: HTTPException,
 ) -> HTMLResponse:
-    db.rollback()
+    db_session_adapter.release_read_transaction(db)
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
     return _project_detail_response(
         request,
@@ -342,6 +342,7 @@ def vendor_project_detail(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
+    # _project_detail_response resolves route_geojson and can_propose_closure.
     return _project_detail_response(
         request,
         db,

@@ -229,6 +229,7 @@ def test_signed_material_issue_records_source_and_quantities(db_session):
     actor_id = uuid4()
     vendor_material_release.approve(db_session, release.id, actor_id=actor_id)
     db_session.commit()
+    release_id = release.id
     line_id = release.items[0].id
     queued = material_issue_queue(db_session)
 
@@ -238,7 +239,7 @@ def test_signed_material_issue_records_source_and_quantities(db_session):
     proposal = vendor_supply_review_proposals.issue_review(
         db_session,
         supply_type=VendorSupplyType.material,
-        record_id=release.id,
+        record_id=release_id,
         action=VendorSupplyReviewAction.issue,
         actor_id=actor_id,
         issue_input=MaterialIssueInput(
@@ -253,10 +254,10 @@ def test_signed_material_issue_records_source_and_quantities(db_session):
     result = vendor_supply_review_proposals.confirm_review(
         db_session,
         ConfirmVendorSupplyReviewCommand(
-            context=_context(actor=actor_id, scope=release.id),
+            context=_context(actor=actor_id, scope=release_id),
             confirmation_token=confirmation_token,
             supply_type=VendorSupplyType.material,
-            record_id=release.id,
+            record_id=release_id,
             action=VendorSupplyReviewAction.issue,
             actor_id=actor_id,
         ),

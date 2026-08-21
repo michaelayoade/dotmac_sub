@@ -343,9 +343,9 @@ def apply_provider_outcome(
         release.status = VendorMaterialReleaseStatus.issued.value
         if issued_quantities:
             for item in release.items:
-                issued = issued_quantities.get(str(item.id))
-                if issued is not None:
-                    item.issued_quantity = int(issued)
+                issued_for_item = issued_quantities.get(str(item.id))
+                if issued_for_item is not None:
+                    item.issued_quantity = int(issued_for_item)
         emit_event(
             db,
             EventType.vendor_material_release_issued,

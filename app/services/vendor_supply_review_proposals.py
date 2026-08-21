@@ -245,10 +245,13 @@ def _issue_input_from_claims(claims: dict[str, Any]) -> MaterialIssueInput | Non
         for raw_line in raw_lines:
             if not isinstance(raw_line, dict):
                 raise TypeError
+            raw_quantity = raw_line.get("quantity")
+            if raw_quantity is None:
+                raise TypeError
             lines.append(
                 MaterialIssueLineInput(
                     item_id=coerce_uuid(raw_line.get("item_id")),
-                    quantity=int(raw_line.get("quantity")),
+                    quantity=int(raw_quantity),
                 )
             )
     except (TypeError, ValueError) as exc:

@@ -1741,6 +1741,16 @@ DOMAIN = DomainSOT(
                         source="inventory and finance accounts-payable read/write results",
                     ),
                     AuthorityInput(
+                        name="material issue source, reference, and quantities",
+                        owner="ui.vendor_supply_projection",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "staff-selected issue source, optional issue reference, "
+                            "and exact material line issue quantities signed into "
+                            "the confirmation preview"
+                        ),
+                    ),
+                    AuthorityInput(
                         name="canonical vendor supply status presentation",
                         owner="ui.status_presentation",
                         kind=AuthorityKind.DERIVED_PROJECTION,
