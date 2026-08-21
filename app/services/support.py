@@ -1503,6 +1503,32 @@ class Tickets:
             ticket.assigned_to_person_id = deduped[0]
 
     @staticmethod
+    def _assignee_person_ids_in_unit_of_work(
+        db: Session, ticket: Ticket
+    ) -> set[UUID]:
+        """Resolve persisted and staged assignees without triggering autoflush."""
+
+        person_ids = {
+            row.person_id
+            for row in db.query(TicketAssignee)
+            .filter(TicketAssignee.ticket_id == ticket.id)
+            .all()
+        }
+        person_ids.update(
+            row.person_id
+            for row in db.new
+            if isinstance(row, TicketAssignee) and row.ticket_id == ticket.id
+        )
+        return person_ids
+
+    @staticmethod
+    def _ensure_assignee(db: Session, ticket: Ticket, person_id: UUID) -> bool:
+        if person_id in Tickets._assignee_person_ids_in_unit_of_work(db, ticket):
+            return False
+        db.add(TicketAssignee(ticket_id=ticket.id, person_id=person_id))
+        return True
+
+    @staticmethod
     def _auto_assignment_enabled(db: Session) -> bool:
         return support_ticket_settings_service.auto_assign_enabled(db)
 
@@ -1553,16 +1579,8 @@ class Tickets:
                 if uid is not None
             ]
             if resolved:
-                existing = {
-                    str(row.person_id)
-                    for row in db.query(TicketAssignee)
-                    .filter(TicketAssignee.ticket_id == ticket.id)
-                    .all()
-                }
                 for person_id in resolved:
-                    if str(person_id) in existing:
-                        continue
-                    db.add(TicketAssignee(ticket_id=ticket.id, person_id=person_id))
+                    Tickets._ensure_assignee(db, ticket, person_id)
                 changed["assignee_person_ids"] = [str(uid) for uid in resolved]
 
         return {"matched": True, "changes": changed}
@@ -1635,8 +1653,7 @@ class Tickets:
         elif result.assignment_target == "technician" and assignee_id:
             if not ticket.assigned_to_person_id:
                 ticket.assigned_to_person_id = assignee_id
-            if not any(row.person_id == assignee_id for row in ticket.assignees):
-                db.add(TicketAssignee(ticket_id=ticket.id, person_id=assignee_id))
+            Tickets._ensure_assignee(db, ticket, assignee_id)
         return result.as_dict()
 
     @staticmethod
