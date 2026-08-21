@@ -105,6 +105,13 @@ class InboxTimelineAttachment:
 
 
 @dataclass(frozen=True)
+class InboxTimelineReplyReference:
+    message_id: str | None
+    author: str | None
+    excerpt: str | None
+
+
+@dataclass(frozen=True)
 class InboxTimelineMessage:
     id: str
     channel_type: str
@@ -120,6 +127,7 @@ class InboxTimelineMessage:
     metadata: dict[str, object] | None
     attachments: list[InboxTimelineAttachment]
     sender: InboxTimelineSenderIdentity | None
+    reply_to: InboxTimelineReplyReference | None = None
 
 
 @dataclass(frozen=True)
@@ -1853,6 +1861,17 @@ def _timeline_message_projection(
     assets: Sequence[InboxMediaAsset],
     outbound_sender_identities: Mapping[UUID, InboxTimelineSenderIdentity],
 ) -> InboxTimelineMessage:
+    metadata = message.metadata_ if isinstance(message.metadata_, Mapping) else {}
+    raw_reply = metadata.get("reply_to")
+    reply_to = (
+        InboxTimelineReplyReference(
+            message_id=_optional_text(raw_reply.get("message_id")),
+            author=_optional_text(raw_reply.get("author")),
+            excerpt=_optional_text(raw_reply.get("excerpt")),
+        )
+        if isinstance(raw_reply, Mapping)
+        else None
+    )
     return InboxTimelineMessage(
         id=str(message.id),
         channel_type=message.channel_type,
@@ -1865,12 +1884,13 @@ def _timeline_message_projection(
         sent_at=message.sent_at,
         received_at=message.received_at,
         created_at=message.created_at,
-        metadata=message.metadata_,
+        metadata={str(key): value for key, value in metadata.items()},
         attachments=(
             [_asset_attachment(asset) for asset in assets]
             or _message_attachments(message)
         ),
         sender=_timeline_sender_identity(message, outbound_sender_identities),
+        reply_to=reply_to,
     )
 
 

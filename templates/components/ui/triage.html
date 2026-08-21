@@ -203,11 +203,11 @@
         </div>
         <div class="rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed
                     {% if ai_message %}rounded-br-md border border-cyan-300 bg-cyan-50 text-slate-900 ring-1 ring-cyan-100 dark:border-cyan-700 dark:bg-cyan-950/30 dark:text-slate-100 dark:ring-cyan-900/40{% elif outbound %}rounded-br-md border border-amber-200 bg-amber-50 text-slate-900 dark:border-amber-800/60 dark:bg-amber-950/25 dark:text-slate-100{% else %}rounded-bl-md border border-slate-200 bg-slate-100 text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100{% endif %}">
-            {% if metadata.get('reply_to') %}
-            {% set reply = metadata.get('reply_to') %}
+            {% if message.reply_to %}
+            {% set reply = message.reply_to %}
             <div class="mb-2 rounded-lg border-l-4 border-amber-400 bg-white/70 px-2.5 py-2 text-[11px] text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
-                <p class="font-semibold">{{ reply.get('author') or "Previous message" }}</p>
-                <p class="line-clamp-2">{{ reply.get('excerpt') or "" }}</p>
+                <p class="font-semibold">{{ reply.author or "Previous message" }}</p>
+                <p class="line-clamp-2">{{ reply.excerpt or "" }}</p>
             </div>
             {% endif %}
             <p class="whitespace-pre-wrap break-words">{{ message.body or "—" }}</p>

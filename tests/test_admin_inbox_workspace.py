@@ -503,6 +503,73 @@ def test_message_fragment_projects_only_the_confirmed_message(db_session, monkey
     assert projection.message.body == "The router replacement is scheduled."
 
 
+@pytest.mark.parametrize("legacy_reply", [[], ["legacy-message-id"]])
+def test_message_projection_ignores_non_mapping_legacy_reply_metadata(
+    db_session, legacy_reply
+):
+    conversation = InboxConversation(
+        channel_type="email",
+        contact_address="customer@example.test",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction="outbound",
+        body="Legacy reply metadata",
+        sent_at=datetime.now(UTC),
+        metadata_={"reply_to": legacy_reply},
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    projection = team_inbox_projection.get_message_fragment_projection(
+        db_session,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
+
+    assert projection is not None
+    assert projection.message.reply_to is None
+
+
+def test_message_projection_exposes_typed_reply_reference(db_session):
+    conversation = InboxConversation(
+        channel_type="email",
+        contact_address="customer@example.test",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction="outbound",
+        body="Quoted reply",
+        sent_at=datetime.now(UTC),
+        metadata_={
+            "reply_to": {
+                "message_id": str(uuid.uuid4()),
+                "author": "Customer",
+                "excerpt": "Original message",
+            }
+        },
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    projection = team_inbox_projection.get_message_fragment_projection(
+        db_session,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
+
+    assert projection is not None
+    assert projection.message.reply_to is not None
+    assert projection.message.reply_to.author == "Customer"
+    assert projection.message.reply_to.excerpt == "Original message"
+
+
 def test_targeted_queue_row_honours_the_active_response_filter(db_session):
     conversation = InboxConversation(
         channel_type="email",
