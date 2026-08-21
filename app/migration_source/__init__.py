@@ -31,6 +31,12 @@ where they cannot be.
 
 from __future__ import annotations
 
+from app.migration_source.canonical import (
+    CanonicalisationError,
+    NaiveDatetimeError,
+    canonical_digest,
+    canonical_form,
+)
 from app.migration_source.cohort import (
     COHORT_TABLES,
     CohortComponent,
@@ -40,6 +46,17 @@ from app.migration_source.cohort import (
     cohort_table_names,
     cohort_tables_by_entity,
 )
+from app.migration_source.digest import (
+    CohortDigest,
+    EntityDigest,
+    EntityTypeDigest,
+    Mismatch,
+    MismatchCategory,
+    build_cohort_digest,
+    build_entity_type_digest,
+    compare,
+    digest_page,
+)
 from app.migration_source.programme import (
     ACCEPTED_REVISION,
     BINDING,
@@ -48,6 +65,17 @@ from app.migration_source.programme import (
     CohortState,
     GovernanceBinding,
     SourceReadinessClaim,
+)
+from app.migration_source.snapshot import (
+    Completeness,
+    ContractVersion,
+    ExportCursor,
+    SnapshotPage,
+    SourceIdentity,
+    SourceRevision,
+    TenantScope,
+    UnsupportedContractVersionError,
+    require_contract_version,
 )
 from app.migration_source.surfaces import (
     COHORT_SURFACES,
@@ -61,6 +89,28 @@ from app.migration_source.surfaces import (
 
 __all__ = [
     "ACCEPTED_REVISION",
+    "ExportCursor",
+    "CanonicalisationError",
+    "CohortDigest",
+    "Completeness",
+    "ContractVersion",
+    "EntityDigest",
+    "EntityTypeDigest",
+    "Mismatch",
+    "MismatchCategory",
+    "NaiveDatetimeError",
+    "SnapshotPage",
+    "SourceIdentity",
+    "SourceRevision",
+    "TenantScope",
+    "UnsupportedContractVersionError",
+    "build_cohort_digest",
+    "build_entity_type_digest",
+    "canonical_digest",
+    "canonical_form",
+    "compare",
+    "digest_page",
+    "require_contract_version",
     "BINDING",
     "CLAIMS",
     "COHORT_ID",

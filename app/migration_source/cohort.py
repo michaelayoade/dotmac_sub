@@ -87,7 +87,11 @@ class CohortComponent(StrEnum):
 class CohortTable(BaseModel):
     """One Sub table holding source state for one cohort entity type."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    # `protected_namespaces=()` because two fields below start with `model_`
+    # and pydantic reserves that prefix for its own API. Renaming them to
+    # dodge the warning would cost the two clearest names available: these
+    # really are the mapped model's class and module.
+    model_config = ConfigDict(frozen=True, extra="forbid", protected_namespaces=())
 
     entity_type: CohortEntityType
     #: The physical table. The ratchet matches raw SQL against this.
