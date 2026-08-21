@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from app.services.web_network_ont_actions.context_builders import (
     _desired_config_context,
     _operator_summary_context,
+    _service_recovery_context,
 )
 
 
@@ -124,6 +125,46 @@ def test_operator_summary_does_not_flag_missing_vlans_when_service_ports_deferre
     assert "Run State" not in labels
     assert "Config State" not in labels
     assert "Match State" not in labels
+
+
+def test_service_recovery_uses_olt_fallback_when_acs_hides_ppp_wan() -> None:
+    db = MagicMock()
+    db.scalars.return_value.first.return_value = SimpleNamespace(
+        framed_ip_address="172.16.254.17",
+        bytes_in=1024,
+        bytes_out=2048,
+    )
+    ont = SimpleNamespace(tr069_last_snapshot={"raw_device": {}})
+
+    context = _service_recovery_context(
+        db,
+        ont,
+        desired_wan={"pppoe_username": "100000010", "wan_vlan": "203"},
+        service_ports_context={
+            "service_ports": [{"vlan_id": "203", "state": "up"}],
+        },
+        olt_status={
+            "entry": {
+                "run_state": "online",
+                "config_state": "normal",
+                "match_state": "match",
+            }
+        },
+        has_tr069_device=True,
+    )["service_recovery"]
+
+    ppp_row = next(row for row in context["rows"] if row["label"] == "PPP WAN")
+    bind_row = next(row for row in context["rows"] if row["label"] == "LAN/WiFi bind")
+
+    assert context["status"] == "warn"
+    assert context["bind_action_enabled"] is True
+    assert context["ppp_object_present"] is False
+    assert context["ppp_connected"] is False
+    assert context["ppp_connected_for_bind"] is True
+    assert context["recovery_stage"]["title"] == "Internet WAN hidden from ACS"
+    assert "Huawei OLT fallback path" in context["recovery_stage"]["action_hint"]
+    assert "OLT/RADIUS shows PPPoE is online" in ppp_row["message"]
+    assert "Huawei OLT fallback bind is available" in bind_row["message"]
 
 
 def test_unified_config_context_does_not_perform_live_reads(
