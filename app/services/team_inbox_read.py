@@ -121,6 +121,7 @@ class InboxTimelineMessage:
     from_address: str | None
     to_addresses: list[str]
     cc_addresses: list[str]
+    bcc_addresses: list[str]
     sent_at: datetime | None
     received_at: datetime | None
     created_at: datetime
@@ -1872,6 +1873,7 @@ def _timeline_message_projection(
         if isinstance(raw_reply, Mapping)
         else None
     )
+    raw_bcc_addresses = metadata.get("bcc")
     return InboxTimelineMessage(
         id=str(message.id),
         channel_type=message.channel_type,
@@ -1881,6 +1883,11 @@ def _timeline_message_projection(
         from_address=message.from_address,
         to_addresses=[str(value) for value in (message.to_addresses or [])],
         cc_addresses=[str(value) for value in (message.cc_addresses or [])],
+        bcc_addresses=(
+            [str(value) for value in raw_bcc_addresses if isinstance(value, str)]
+            if isinstance(raw_bcc_addresses, list)
+            else []
+        ),
         sent_at=message.sent_at,
         received_at=message.received_at,
         created_at=message.created_at,

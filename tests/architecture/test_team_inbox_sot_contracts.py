@@ -69,6 +69,9 @@ def test_admin_route_delegates_query_contract_and_transactions() -> None:
 def test_projection_owns_response_cohorts_from_authoritative_inputs() -> None:
     service = service_relationship("communications.team_inbox_projection")
     assert service.contract is not None
+    assert "Inbox email recipient envelope projection" in {
+        concern.name for concern in service.contract.concerns
+    }
     input_owners = {
         item.name: item.owner for item in service.contract.authoritative_inputs
     }
@@ -92,6 +95,7 @@ def test_projection_owns_response_cohorts_from_authoritative_inputs() -> None:
     assert "needs_attention" not in model
     assert "class InboxResponseCohort" in projection
     assert "def response_cohort" in projection
+    assert "bcc_addresses" in projection
 
 
 def test_operator_unread_projection_is_set_based_and_indexed() -> None:

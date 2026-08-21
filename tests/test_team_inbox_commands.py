@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from app.models.team_inbox import (
     InboxConversation,
     InboxConversationStatus,
+    InboxMessage,
 )
 from app.services import team_inbox_commands, team_inbox_outbound
 
@@ -92,6 +93,125 @@ def test_rejected_reply_rolls_back_the_command_transaction(monkeypatch, db_sessi
 
     assert db_session.get(InboxConversation, conversation_id) is not None
     assert db_session.query(InboxConversation).count() == 1
+
+
+def test_email_reply_normalizes_and_preserves_copy_recipients(monkeypatch, db_session):
+    conversation = _conversation(db_session)
+    conversation_id = conversation.id
+    db_session.commit()
+    captured: list[team_inbox_outbound.InboxReplyPayload] = []
+
+    def fake_send(db, *, conversation, payload, record_failure):
+        captured.append(payload)
+        message = InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="email",
+            direction="outbound",
+            body=payload.body_text,
+            from_address="support@example.test",
+            to_addresses=[conversation.contact_address],
+            cc_addresses=list(payload.cc_addresses),
+            metadata_={
+                **dict(payload.metadata or {}),
+                "body_text": payload.body_text,
+                "cc": list(payload.cc_addresses),
+                "bcc": list(payload.bcc_addresses),
+                "delivery_status": "queued",
+            },
+        )
+        db.add(message)
+        db.flush()
+        return team_inbox_outbound.InboxReplyResult(
+            kind="queued",
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            from_address=message.from_address,
+        )
+
+    monkeypatch.setattr(team_inbox_outbound, "send_inbox_reply", fake_send)
+
+    team_inbox_commands.reply(
+        db_session,
+        command=team_inbox_commands.ReplyCommand(
+            conversation_id=conversation_id,
+            body_text="We are checking this.",
+            actor_person_id=uuid.uuid4(),
+            email_copy_recipients=team_inbox_commands.EmailCopyRecipients(
+                cc=("COPY@example.com", "copy@example.com"),
+                bcc=("Audit@example.com",),
+            ),
+            idempotency_key="email-copy-recipients-1",
+        ),
+    )
+
+    assert captured[0].cc_addresses == ("copy@example.com",)
+    assert captured[0].bcc_addresses == ("audit@example.com",)
+    message = db_session.query(InboxMessage).one()
+    assert message.cc_addresses == ["copy@example.com"]
+    assert message.metadata_["bcc"] == ["audit@example.com"]
+
+    with pytest.raises(team_inbox_commands.InboxCommandRejected, match="different"):
+        team_inbox_commands.reply(
+            db_session,
+            command=team_inbox_commands.ReplyCommand(
+                conversation_id=conversation_id,
+                body_text="We are checking this.",
+                actor_person_id=uuid.uuid4(),
+                email_copy_recipients=team_inbox_commands.EmailCopyRecipients(
+                    cc=("another@example.com",),
+                    bcc=("audit@example.com",),
+                ),
+                idempotency_key="email-copy-recipients-1",
+            ),
+        )
+    assert len(captured) == 1
+
+
+@pytest.mark.parametrize(
+    "recipients",
+    [
+        team_inbox_commands.EmailCopyRecipients(cc=("not-an-email",)),
+        team_inbox_commands.EmailCopyRecipients(bcc=("not-an-email",)),
+    ],
+)
+def test_invalid_email_copy_recipient_blocks_reply(db_session, recipients):
+    conversation = _conversation(db_session)
+    conversation_id = conversation.id
+    db_session.commit()
+
+    with pytest.raises(team_inbox_commands.InboxCommandError, match="Invalid"):
+        team_inbox_commands.reply(
+            db_session,
+            command=team_inbox_commands.ReplyCommand(
+                conversation_id=conversation_id,
+                body_text="We are checking this.",
+                actor_person_id=uuid.uuid4(),
+                email_copy_recipients=recipients,
+            ),
+        )
+
+
+def test_non_email_reply_rejects_copy_recipients(db_session):
+    conversation = _conversation(db_session)
+    conversation.channel_type = "chat_widget"
+    conversation_id = conversation.id
+    db_session.commit()
+
+    with pytest.raises(
+        team_inbox_commands.InboxCommandError,
+        match="available only for email",
+    ):
+        team_inbox_commands.reply(
+            db_session,
+            command=team_inbox_commands.ReplyCommand(
+                conversation_id=conversation_id,
+                body_text="We are checking this.",
+                actor_person_id=uuid.uuid4(),
+                email_copy_recipients=team_inbox_commands.EmailCopyRecipients(
+                    cc=("copy@example.com",)
+                ),
+            ),
+        )
 
 
 class _PostgresLockUnavailable(RuntimeError):
