@@ -200,7 +200,7 @@ def test_customer_portal_does_not_write_direct_transfer_intent_state() -> None:
     assert "selected_bank_account" not in constants
 
 
-def test_customer_portal_creation_delegates_without_policy_or_record_writes() -> None:
+def test_customer_portal_creation_rejects_without_policy_or_record_writes() -> None:
     portal_function = _function(
         "app/services/customer_portal_flow_payments.py",
         "create_direct_transfer_topup_intent",
@@ -210,8 +210,9 @@ def test_customer_portal_creation_delegates_without_policy_or_record_writes() ->
         child.id for child in ast.walk(portal_function) if isinstance(child, ast.Name)
     }
 
-    assert "create_direct_transfer_intent" in calls
-    assert "release_read_transaction" in calls
+    assert "_raise_customer_direct_transfer_unavailable" in referenced_names
+    assert "create_direct_transfer_intent" not in calls
+    assert "release_read_transaction" not in calls
     assert "TopupIntent" not in referenced_names
     assert "AccountCreditDeposits" not in referenced_names
     assert "resolve_value" not in referenced_names
