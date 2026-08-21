@@ -97,3 +97,24 @@ def test_vendor_template_uses_the_shared_action_gate():
     ).read_text(encoding="utf-8")
     assert "action_permitted(request, quote.edit_action)" in source
     assert "action_permitted(request, invoice.edit_action)" in source
+
+
+def test_vendor_project_template_has_action_error_banner():
+    source = (
+        Path(__file__).resolve().parents[1] / "templates/vendor/project_detail.html"
+    ).read_text(encoding="utf-8")
+
+    assert "{% if error_message %}" in source
+    assert 'role="alert"' in source
+    assert "border-red-200" in source
+
+
+def test_vendor_portal_post_actions_render_project_errors():
+    source = (
+        Path(__file__).resolve().parents[1] / "app/web/vendor_portal.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _project_action_error_response" in source
+    assert "error_message=str(exc.detail" in source
+    assert source.count("_project_action_error_response(") >= 16
+    assert '@router.post("/projects/{project_id}/submissions/confirm")' in source

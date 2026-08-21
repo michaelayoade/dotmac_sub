@@ -39,8 +39,12 @@ from app.services.vendor_supply_review_proposals import (
     ConfirmVendorSupplyReviewCommand,
 )
 from app.services.vendor_supply_views import (
+    MaterialIssueInput,
+    MaterialIssueLineInput,
+    MaterialIssueSource,
     VendorSupplyReviewAction,
     VendorSupplyType,
+    material_issue_queue,
     project_workspace,
 )
 
@@ -217,6 +221,53 @@ def test_signed_material_review_confirms_once_and_records_decision(db_session):
     assert release.status == VendorMaterialReleaseStatus.approved.value
     assert release.review_notes == "Required for the approved route"
     assert release.support_status is None
+
+
+def test_signed_material_issue_records_source_and_quantities(db_session):
+    installation, vendor = _project(db_session)
+    release = _release(db_session, installation, vendor)
+    actor_id = uuid4()
+    vendor_material_release.approve(db_session, release.id, actor_id=actor_id)
+    db_session.commit()
+    line_id = release.items[0].id
+    queued = material_issue_queue(db_session)
+
+    assert queued.count == 1
+    assert queued.items[0].issue_action.allowed is True
+
+    proposal = vendor_supply_review_proposals.issue_review(
+        db_session,
+        supply_type=VendorSupplyType.material,
+        record_id=release.id,
+        action=VendorSupplyReviewAction.issue,
+        actor_id=actor_id,
+        issue_input=MaterialIssueInput(
+            source=MaterialIssueSource.dotmac_store,
+            reference="STORE-22",
+            lines=(MaterialIssueLineInput(item_id=line_id, quantity=240),),
+        ),
+    )
+    confirmation_token = proposal.confirmation_token
+    db_session_adapter.release_read_transaction(db_session)
+
+    result = vendor_supply_review_proposals.confirm_review(
+        db_session,
+        ConfirmVendorSupplyReviewCommand(
+            context=_context(actor=actor_id, scope=release.id),
+            confirmation_token=confirmation_token,
+            supply_type=VendorSupplyType.material,
+            record_id=release.id,
+            action=VendorSupplyReviewAction.issue,
+            actor_id=actor_id,
+        ),
+    )
+
+    db_session.refresh(release)
+    assert result.action is VendorSupplyReviewAction.issue
+    assert release.status == VendorMaterialReleaseStatus.issued.value
+    assert release.support_system == "dotmac_store"
+    assert release.support_reference == "STORE-22"
+    assert release.items[0].issued_quantity == 240
 
 
 def test_material_confirmation_fails_closed_when_a_line_changes(db_session):

@@ -24,10 +24,14 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 from app.services.vendor_supply_views import (
+    MaterialIssueInput,
+    MaterialIssueLineInput,
+    MaterialIssueSource,
     SupplyReviewPreview,
     VendorSupplyReviewAction,
     VendorSupplyType,
     advance_review_preview,
+    material_issue_preview,
     material_review_preview,
 )
 
@@ -106,10 +110,23 @@ def _preview(
     record_id: UUID,
     action: VendorSupplyReviewAction,
     reason: str | None,
+    issue_input: MaterialIssueInput | None = None,
     for_update: bool = False,
 ) -> SupplyReviewPreview:
     try:
         if supply_type is VendorSupplyType.material:
+            if action is VendorSupplyReviewAction.issue:
+                if issue_input is None:
+                    raise _error(
+                        "issue_details_required",
+                        "Recording material issue requires issue details.",
+                    )
+                return material_issue_preview(
+                    db,
+                    release_id=record_id,
+                    issue=issue_input,
+                    for_update=for_update,
+                )
             return material_review_preview(
                 db,
                 release_id=record_id,
@@ -140,6 +157,7 @@ def issue_review(
     action: VendorSupplyReviewAction,
     actor_id: UUID,
     reason: str | None = None,
+    issue_input: MaterialIssueInput | None = None,
 ) -> VendorSupplyReviewProposal:
     normalized_actor = str(actor_id)
     preview = _preview(
@@ -148,6 +166,7 @@ def issue_review(
         record_id=record_id,
         action=action,
         reason=reason,
+        issue_input=issue_input,
     )
     issued_at = datetime.now(UTC)
     expires_at = issued_at + _TOKEN_TTL
@@ -162,6 +181,14 @@ def issue_review(
         "action": action.value,
         "actor_id": normalized_actor,
         "reason": preview.reason,
+        "issue_source": (
+            preview.issue_source.value if preview.issue_source is not None else None
+        ),
+        "issue_reference": preview.issue_reference,
+        "issued_quantities": [
+            {"item_id": str(line.item_id), "quantity": line.quantity}
+            for line in preview.issued_quantities
+        ],
         "state_fingerprint": _fingerprint(preview.state),
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
@@ -202,6 +229,37 @@ def _decode(db: Session, token: str) -> dict[str, Any]:
     return claims
 
 
+def _issue_input_from_claims(claims: dict[str, Any]) -> MaterialIssueInput | None:
+    raw_source = claims.get("issue_source")
+    if raw_source is None:
+        return None
+    try:
+        source = MaterialIssueSource(str(raw_source))
+    except ValueError as exc:
+        raise _error("invalid_proposal", "Confirmation proposal is invalid.") from exc
+    raw_lines = claims.get("issued_quantities")
+    if not isinstance(raw_lines, list):
+        raise _error("invalid_proposal", "Confirmation proposal is invalid.")
+    lines: list[MaterialIssueLineInput] = []
+    try:
+        for raw_line in raw_lines:
+            if not isinstance(raw_line, dict):
+                raise TypeError
+            lines.append(
+                MaterialIssueLineInput(
+                    item_id=coerce_uuid(raw_line.get("item_id")),
+                    quantity=int(raw_line.get("quantity")),
+                )
+            )
+    except (TypeError, ValueError) as exc:
+        raise _error("invalid_proposal", "Confirmation proposal is invalid.") from exc
+    return MaterialIssueInput(
+        source=source,
+        reference=str(claims.get("issue_reference") or "").strip() or None,
+        lines=tuple(lines),
+    )
+
+
 def _review(
     db: Session,
     *,
@@ -210,6 +268,7 @@ def _review(
     action: VendorSupplyReviewAction,
     actor_id: UUID,
     reason: str | None,
+    issue_input: MaterialIssueInput | None = None,
 ) -> None:
     try:
         if supply_type is VendorSupplyType.material:
@@ -218,6 +277,23 @@ def _review(
                     "unsupported_action",
                     "Only an advance can be recorded as disbursed.",
                 )
+            if action is VendorSupplyReviewAction.issue:
+                if issue_input is None:
+                    raise _error(
+                        "issue_details_required",
+                        "Recording material issue requires issue details.",
+                    )
+                vendor_material_release.apply_provider_outcome(
+                    db,
+                    record_id,
+                    support_system=issue_input.source.value,
+                    support_reference=issue_input.reference,
+                    support_status="issued",
+                    issued_quantities={
+                        str(line.item_id): line.quantity for line in issue_input.lines
+                    },
+                )
+                return
             if action is VendorSupplyReviewAction.approve:
                 vendor_material_release.approve(
                     db, record_id, actor_id=actor_id, notes=reason
@@ -242,6 +318,11 @@ def _review(
                 payables_system="operator",
                 payables_reference=payment_reference,
                 payables_status="paid",
+            )
+        elif action is VendorSupplyReviewAction.issue:
+            raise _error(
+                "unsupported_action",
+                "Only a material release can be recorded as issued.",
             )
         elif action is VendorSupplyReviewAction.approve:
             vendor_advances.approve(db, record_id, actor_id=actor_id, notes=reason)
@@ -277,6 +358,7 @@ def confirm_review(
         key = str(claims.get("jti") or "").strip()
         if not key:
             raise _error("invalid_proposal", "Confirmation proposal is invalid.")
+        issue_input = _issue_input_from_claims(claims)
         scope = f"vendor_supply_{command.supply_type.value}_{command.action.value}"
         prior = (
             db.query(IdempotencyKey)
@@ -297,6 +379,7 @@ def confirm_review(
             record_id=command.record_id,
             action=command.action,
             reason=claims.get("reason"),
+            issue_input=issue_input,
             for_update=True,
         )
         replay = (
@@ -336,6 +419,7 @@ def confirm_review(
             action=command.action,
             actor_id=command.actor_id,
             reason=claims.get("reason"),
+            issue_input=issue_input,
         )
         reservation.ref_id = str(command.record_id)
         return VendorSupplyReviewResult(

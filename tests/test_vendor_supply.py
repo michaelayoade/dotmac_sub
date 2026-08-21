@@ -262,6 +262,35 @@ def test_a_provider_issue_marks_the_release_issued(db_session):
     assert release.items[0].issued_quantity == 480
 
 
+def test_a_provider_issue_refuses_too_much_material(db_session):
+    installation, vendor = _project(db_session)
+    release = vendor_material_release.request_release(
+        db_session,
+        vendor_material_release.RequestMaterialRelease(
+            project_id=installation.id,
+            vendor_id=vendor.id,
+            requested_by_person_id=ACTOR,
+            items=_items(),
+        ),
+    )
+    vendor_material_release.approve(db_session, release.id, actor_id=ACTOR)
+    db_session.commit()
+    item_id = str(release.items[0].id)
+
+    with pytest.raises(vendor_material_release.VendorMaterialReleaseError) as exc:
+        vendor_material_release.apply_provider_outcome(
+            db_session,
+            release.id,
+            support_system="dotmac_store",
+            support_reference="STORE-14",
+            support_status="issued",
+            issued_quantities={item_id: 501},
+        )
+
+    assert exc.value.code == "invalid_quantity"
+    assert release.status == VendorMaterialReleaseStatus.approved.value
+
+
 def test_provider_outcomes_are_idempotent(db_session):
     installation, vendor = _project(db_session)
     release = vendor_material_release.request_release(

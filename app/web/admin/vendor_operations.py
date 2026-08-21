@@ -1,6 +1,8 @@
 """Admin review workspace for vendor projects, quotes, and purchase invoices."""
 
+from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -48,18 +50,45 @@ from app.services.vendor_supply_review_proposals import (
     ConfirmVendorSupplyReviewCommand,
 )
 from app.services.vendor_supply_views import (
+    MaterialIssueInput,
+    MaterialIssueLineInput,
+    MaterialIssueSource,
     VendorSupplyReviewAction,
     VendorSupplyType,
     advance_disbursement_queue,
     advance_review_queue,
+    material_issue_queue,
     material_review_queue,
 )
+from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendors/operations", tags=["web-admin-vendor-operations"])
 _read = require_any_permission("inventory:read", "finance:ap:read")
 _write = require_any_permission("inventory:write", "finance:ap:write")
 _project_write = require_permission("inventory:write")
+
+
+@dataclass(frozen=True, slots=True)
+class VendorOperationsTab:
+    key: str
+    label: str
+    count: int
+    href: str
+
+
+def _operations_tab_href(*, view: str, search: str) -> str:
+    params = {"view": view}
+    if search:
+        params["q"] = search
+    return f"/admin/vendors/operations?{urlencode(params)}"
+
+
+def _matches_queue_search(search: str, *values: object) -> bool:
+    if not search:
+        return True
+    needle = search.casefold()
+    return any(needle in str(value).casefold() for value in values if value is not None)
 
 
 def _ctx(request: Request, db: Session) -> dict:
@@ -84,6 +113,38 @@ def _supply_action(value: str) -> VendorSupplyReviewAction:
         return VendorSupplyReviewAction(value)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Unknown action") from exc
+
+
+def _material_issue_input(request: Request) -> MaterialIssueInput:
+    form = parse_form_data_sync(request)
+    try:
+        source = MaterialIssueSource(str(form.get("issue_source") or "").strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Choose a valid issue source."
+        ) from exc
+    lines: list[MaterialIssueLineInput] = []
+    try:
+        for key, value in form.multi_items():
+            field = str(key)
+            if not field.startswith("issued_quantity_"):
+                continue
+            lines.append(
+                MaterialIssueLineInput(
+                    item_id=coerce_uuid(field.removeprefix("issued_quantity_")),
+                    quantity=int(str(value or "0")),
+                )
+            )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Issued quantities must be whole numbers.",
+        ) from exc
+    return MaterialIssueInput(
+        source=source,
+        reference=str(form.get("issue_reference") or "").strip() or None,
+        lines=tuple(lines),
+    )
 
 
 def _review_context(request: Request, *, quote_id: str) -> CommandContext:
@@ -130,10 +191,42 @@ def _quote_error(exc: DomainError) -> HTTPException:
     return HTTPException(status_code=status_code, detail=exc.message)
 
 
+def _invoice_review_page_response(
+    request: Request,
+    db: Session,
+    *,
+    invoice_id: str,
+    message: str | None = None,
+    error_message: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    try:
+        invoice = vendor_purchase_invoices.get(db, invoice_id)
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
+    context = _ctx(request, db)
+    context.update(
+        {
+            "invoice": invoice,
+            "message": message,
+            "error_message": error_message,
+            "can_review_operations": can(request, "inventory:write")
+            or can(request, "finance:ap:write"),
+            "show_payment_details": can(request, "finance:ap:read"),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/vendors/invoice_review_detail.html",
+        context,
+        status_code=status_code,
+    )
+
+
 @router.get("", response_class=HTMLResponse)
 def vendor_operations_queue(
     request: Request,
     message: str | None = None,
+    view: str | None = Query(default=None, max_length=32),
     q: str | None = Query(default=None, max_length=120),
     _auth: dict = Depends(_read),
     db: Session = Depends(get_db),
@@ -147,63 +240,206 @@ def vendor_operations_queue(
         "finance:ap:read",
     )
     show_advance_reviews = can(request, "finance:ap:read")
+    draft_projects = (
+        vendor_portal_operations.list_draft_projects(db, search=search)
+        if show_field_reviews
+        else []
+    )
+    active_vendors = (
+        vendor_portal_operations.list_active_vendors(db) if show_field_reviews else []
+    )
+    material_releases = material_review_queue(db).items if show_field_reviews else ()
+    material_releases_awaiting_issue = (
+        material_issue_queue(db).items if show_field_reviews else ()
+    )
+    advances = advance_review_queue(db).items if show_advance_reviews else ()
+    advances_awaiting_disbursement = (
+        advance_disbursement_queue(db).items if show_advance_reviews else ()
+    )
+    projects = (
+        vendor_portal_operations.list_reviewable_projects(db)
+        if show_field_reviews
+        else []
+    )
+    route_revisions = (
+        vendor_portal_operations.list_reviewable_route_revisions(db)
+        if show_route_reviews
+        else []
+    )
+    as_builts = (
+        vendor_portal_operations.list_reviewable_as_builts(db)
+        if show_field_reviews
+        else []
+    )
+    quotes = (
+        vendor_portal_operations.list_reviewable_quotes(db, search=search)
+        if show_field_reviews
+        else []
+    )
+    invoices = (
+        vendor_purchase_invoices.list(
+            db,
+            status="submitted",
+            limit=200,
+            offset=0,
+        )
+        if show_financial_reviews
+        else []
+    )
+    if search:
+        material_releases = tuple(
+            release
+            for release in material_releases
+            if _matches_queue_search(
+                search,
+                release.project.name,
+                release.project.code,
+                release.vendor.name,
+            )
+        )
+        material_releases_awaiting_issue = tuple(
+            release
+            for release in material_releases_awaiting_issue
+            if _matches_queue_search(
+                search,
+                release.project.name,
+                release.project.code,
+                release.vendor.name,
+            )
+        )
+        advances = tuple(
+            advance
+            for advance in advances
+            if _matches_queue_search(
+                search,
+                advance.project.name,
+                advance.project.code,
+                advance.vendor.name,
+            )
+        )
+        advances_awaiting_disbursement = tuple(
+            advance
+            for advance in advances_awaiting_disbursement
+            if _matches_queue_search(
+                search,
+                advance.project.name,
+                advance.project.code,
+                advance.vendor.name,
+            )
+        )
+        projects = [
+            project
+            for project in projects
+            if _matches_queue_search(
+                search,
+                project.get("project_name"),
+                project.get("project_code"),
+                project.get("id"),
+                project.get("vendor_name"),
+                project.get("assigned_vendor_id"),
+            )
+        ]
+        route_revisions = [
+            revision
+            for revision in route_revisions
+            if _matches_queue_search(
+                search,
+                revision.get("project_name"),
+                revision.get("project_code"),
+                revision.get("project_id"),
+                revision.get("vendor_name"),
+                revision.get("vendor_id"),
+            )
+        ]
+        as_builts = [
+            as_built
+            for as_built in as_builts
+            if _matches_queue_search(
+                search,
+                as_built.get("project_name"),
+                as_built.get("project_code"),
+                as_built.get("project_id"),
+                as_built.get("vendor_name"),
+                as_built.get("vendor_id"),
+            )
+        ]
+        invoices = [
+            invoice
+            for invoice in invoices
+            if _matches_queue_search(
+                search,
+                invoice.get("invoice_number"),
+                invoice.get("project_name"),
+                invoice.get("project_code"),
+                invoice.get("project_id"),
+                invoice.get("vendor_name"),
+                invoice.get("vendor_id"),
+            )
+        ]
+    available_tabs = [
+        ("procurement", "Procurement", len(draft_projects), show_field_reviews),
+        ("quotes", "Quotes", len(quotes), show_field_reviews),
+        ("routes", "Routes", len(route_revisions), show_route_reviews),
+        ("as-built", "As-built", len(as_builts), show_field_reviews),
+        (
+            "materials",
+            "Materials",
+            len(material_releases) + len(material_releases_awaiting_issue),
+            show_field_reviews,
+        ),
+        (
+            "advances",
+            "Advances",
+            len(advances) + len(advances_awaiting_disbursement),
+            show_advance_reviews,
+        ),
+        ("invoices", "Invoices", len(invoices), show_financial_reviews),
+        ("verification", "Verification", len(projects), show_field_reviews),
+    ]
+    visible_tab_rows = [tab for tab in available_tabs if tab[3]]
+    if not visible_tab_rows:
+        raise HTTPException(
+            status_code=403, detail="Vendor operations are unavailable."
+        )
+    requested_view = (view or "").strip().lower()
+    visible_keys = {key for key, _label, _count, _visible in visible_tab_rows}
+    if requested_view not in visible_keys:
+        pending_tab = next((tab for tab in visible_tab_rows if tab[2] > 0), None)
+        requested_view = pending_tab[0] if pending_tab else visible_tab_rows[0][0]
+    vendor_operations_tabs = tuple(
+        VendorOperationsTab(
+            key=key,
+            label=label,
+            count=count,
+            href=_operations_tab_href(view=key, search=search),
+        )
+        for key, label, count, _visible in visible_tab_rows
+    )
+    active_tab_label = next(
+        tab.label for tab in vendor_operations_tabs if tab.key == requested_view
+    )
     context.update(
         {
-            "draft_projects": (
-                vendor_portal_operations.list_draft_projects(db, search=search)
-                if show_field_reviews
-                else []
-            ),
-            "active_vendors": (
-                vendor_portal_operations.list_active_vendors(db)
-                if show_field_reviews
-                else []
-            ),
+            "draft_projects": draft_projects,
+            "active_vendors": active_vendors,
             "message": message,
             "queue_search": search,
+            "active_vendor_operations_view": requested_view,
+            "active_vendor_operations_label": active_tab_label,
+            "vendor_operations_tabs": vendor_operations_tabs,
             "show_field_reviews": show_field_reviews,
             "show_route_reviews": show_route_reviews,
             "show_financial_reviews": show_financial_reviews,
             "show_advance_reviews": show_advance_reviews,
-            "material_releases": (
-                material_review_queue(db).items if show_field_reviews else ()
-            ),
-            "advances": (
-                advance_review_queue(db).items if show_advance_reviews else ()
-            ),
-            "advances_awaiting_disbursement": (
-                advance_disbursement_queue(db).items if show_advance_reviews else ()
-            ),
-            "projects": (
-                vendor_portal_operations.list_reviewable_projects(db)
-                if show_field_reviews
-                else []
-            ),
-            "route_revisions": (
-                vendor_portal_operations.list_reviewable_route_revisions(db)
-                if show_route_reviews
-                else []
-            ),
-            "as_builts": (
-                vendor_portal_operations.list_reviewable_as_builts(db)
-                if show_field_reviews
-                else []
-            ),
-            "quotes": (
-                vendor_portal_operations.list_reviewable_quotes(db, search=search)
-                if show_field_reviews
-                else []
-            ),
-            "invoices": (
-                vendor_purchase_invoices.list(
-                    db,
-                    status="submitted",
-                    limit=200,
-                    offset=0,
-                )
-                if show_financial_reviews
-                else []
-            ),
+            "material_releases": material_releases,
+            "material_releases_awaiting_issue": material_releases_awaiting_issue,
+            "advances": advances,
+            "advances_awaiting_disbursement": advances_awaiting_disbursement,
+            "projects": projects,
+            "route_revisions": route_revisions,
+            "as_builts": as_builts,
+            "quotes": quotes,
+            "invoices": invoices,
         }
     )
     return templates.TemplateResponse("admin/vendors/operations.html", context)
@@ -237,7 +473,8 @@ def configure_vendor_procurement(
     except DomainError as exc:
         raise _quote_error(exc) from exc
     return RedirectResponse(
-        "/admin/vendors/operations?message=Vendor+procurement+configured",
+        "/admin/vendors/operations?view=procurement"
+        "&message=Vendor+procurement+configured",
         status_code=303,
     )
 
@@ -321,23 +558,11 @@ def vendor_invoice_review_detail(
     _auth: dict = Depends(_read),
     db: Session = Depends(get_db),
 ):
-    try:
-        invoice = vendor_purchase_invoices.get(db, invoice_id)
-    except DomainError as exc:
-        raise _quote_error(exc) from exc
-    context = _ctx(request, db)
-    context.update(
-        {
-            "invoice": invoice,
-            "message": message,
-            "can_review_operations": can(request, "inventory:write")
-            or can(request, "finance:ap:write"),
-            "show_payment_details": can(request, "finance:ap:read"),
-        }
-    )
-    return templates.TemplateResponse(
-        "admin/vendors/invoice_review_detail.html",
-        context,
+    return _invoice_review_page_response(
+        request,
+        db,
+        invoice_id=invoice_id,
+        message=message,
     )
 
 
@@ -444,7 +669,8 @@ def confirm_vendor_project_review(
     )
     label = "verified" if result.action == "verify" else "returned for rework"
     return RedirectResponse(
-        f"/admin/vendors/operations?message=Project+{label}", status_code=303
+        f"/admin/vendors/operations?view=verification&message=Project+{label}",
+        status_code=303,
     )
 
 
@@ -614,6 +840,16 @@ def approve_vendor_invoice(
             ),
         )
     except DomainError as exc:
+        if (
+            exc.code
+            == "operations.vendor_purchase_invoices.invoice_exceeds_quote_net_of_advances"
+        ):
+            return _invoice_review_page_response(
+                request,
+                db,
+                invoice_id=invoice_id,
+                error_message=exc.message,
+            )
         raise _quote_error(exc) from exc
     return RedirectResponse(
         f"/admin/vendors/operations/invoices/{invoice_id}?message=Invoice+approved",
@@ -668,16 +904,23 @@ def preview_vendor_material_release(
     request: Request,
     release_id: str,
     action: str,
-    review_notes: str = Form(default=""),
     db: Session = Depends(get_db),
 ):
+    supply_action = _supply_action(action)
+    issue_input: MaterialIssueInput | None = None
+    review_notes = ""
+    if supply_action is VendorSupplyReviewAction.issue:
+        issue_input = _material_issue_input(request)
+    else:
+        review_notes = str(parse_form_data_sync(request).get("review_notes") or "")
     proposal = vendor_supply_review_proposals.issue_review(
         db,
         supply_type=VendorSupplyType.material,
         record_id=coerce_uuid(release_id),
-        action=_supply_action(action),
+        action=supply_action,
         actor_id=coerce_uuid(_actor(request)),
         reason=review_notes,
+        issue_input=issue_input,
     )
     context = _ctx(request, db)
     context["proposal"] = proposal
@@ -716,11 +959,13 @@ def confirm_vendor_material_release(
             actor_id=coerce_uuid(actor_id),
         ),
     )
-    label = (
-        "approved" if result.action is VendorSupplyReviewAction.approve else "rejected"
-    )
+    label = {
+        VendorSupplyReviewAction.approve: "approved",
+        VendorSupplyReviewAction.reject: "rejected",
+        VendorSupplyReviewAction.issue: "issued",
+    }.get(result.action, "updated")
     return RedirectResponse(
-        f"/admin/vendors/operations?message=Material+release+{label}",
+        f"/admin/vendors/operations?view=materials&message=Material+release+{label}",
         status_code=303,
     )
 
@@ -786,6 +1031,6 @@ def confirm_vendor_advance(
         "approved" if result.action is VendorSupplyReviewAction.approve else "rejected"
     )
     return RedirectResponse(
-        f"/admin/vendors/operations?message=Advance+{label}",
+        f"/admin/vendors/operations?view=advances&message=Advance+{label}",
         status_code=303,
     )

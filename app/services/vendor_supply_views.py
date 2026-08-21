@@ -51,10 +51,24 @@ class VendorSupplyType(StrEnum):
 class VendorSupplyReviewAction(StrEnum):
     approve = "approve"
     reject = "reject"
+    # Materials only: the operator records the store/provider issue outcome.
+    # The stock system remains the source of stock levels and warehouse detail.
+    issue = "issue"
     # Advances only: the operator records that the money actually left. Payment
     # happens outside Sub and no payables transport reports it back, so the
     # person who paid is the observation source.
     disburse = "disburse"
+
+
+class MaterialIssueSource(StrEnum):
+    dotmac_store = "dotmac_store"
+    erp = "erp"
+
+
+_MATERIAL_ISSUE_SOURCE_LABELS: dict[MaterialIssueSource, str] = {
+    MaterialIssueSource.dotmac_store: "Dotmac store",
+    MaterialIssueSource.erp: "ERP/provider",
+}
 
 
 def _error(suffix: str, message: str) -> VendorSupplyProjectionError:
@@ -73,6 +87,16 @@ def _review_reason(value: str | None, *, required: bool) -> str | None:
         )
     if required and normalized is None:
         raise _error("reason_required", "A rejection reason is required.")
+    return normalized
+
+
+def _issue_reference(value: str | None) -> str | None:
+    normalized = str(value or "").strip() or None
+    if normalized is not None and len(normalized) > 120:
+        raise _error(
+            "issue_reference_too_long",
+            "Issue reference must be 120 characters or fewer.",
+        )
     return normalized
 
 
@@ -109,6 +133,19 @@ class MaterialLine:
 
 
 @dataclass(frozen=True, slots=True)
+class MaterialIssueLineInput:
+    item_id: UUID
+    quantity: int
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialIssueInput:
+    source: MaterialIssueSource
+    reference: str | None
+    lines: tuple[MaterialIssueLineInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class MaterialReleaseView:
     id: UUID
     project: ProjectIdentity
@@ -122,6 +159,7 @@ class MaterialReleaseView:
     provider: ProviderObservation
     approve_action: Action
     reject_action: Action
+    issue_action: Action
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +214,9 @@ class SupplyReviewPreview:
     details: tuple[tuple[str, str], ...]
     state: tuple[tuple[str, str], ...]
     reason: str | None
+    issue_source: MaterialIssueSource | None = None
+    issue_reference: str | None = None
+    issued_quantities: tuple[MaterialIssueLineInput, ...] = ()
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -303,12 +344,14 @@ def _material_line(row: VendorMaterialReleaseItem) -> MaterialLine:
 
 def material_release_view(row: VendorMaterialRelease) -> MaterialReleaseView:
     eligibility = vendor_material_release.review_eligibility(row.status)
+    can_issue = row.status == VendorMaterialReleaseStatus.approved.value
+    active_items = tuple(item for item in row.items if item.is_active)
     return MaterialReleaseView(
         id=row.id,
         project=_project_identity(row.project),
         vendor=_vendor_identity(row),
         status=vendor_material_release_status_presentation(row.status),
-        items=tuple(_material_line(item) for item in row.items if item.is_active),
+        items=tuple(_material_line(item) for item in active_items),
         notes=row.notes,
         requested_at=row.requested_at,
         reviewed_at=row.reviewed_at,
@@ -338,6 +381,23 @@ def material_release_view(row: VendorMaterialRelease) -> MaterialReleaseView:
             ),
             affected=len([item for item in row.items if item.is_active]),
             tone=StatusTone.negative,
+            requires_confirmation=True,
+        ),
+        issue_action=Action(
+            key="issue_material_release",
+            label="Record issue",
+            allowed=can_issue,
+            reason=(
+                None
+                if can_issue
+                else "Only an approved material release can be recorded as issued."
+            ),
+            permission="inventory:write",
+            preview_url=(
+                f"/admin/vendors/operations/material-releases/{row.id}/issue/preview"
+            ),
+            affected=len(active_items),
+            tone=StatusTone.positive,
             requires_confirmation=True,
         ),
     )
@@ -581,6 +641,34 @@ def advance_disbursement_queue(
     )
 
 
+def material_issue_queue(
+    db: Session, *, limit: int = 100, offset: int = 0
+) -> VendorSupplyQueue:
+    """Approved material releases that nobody has recorded as issued yet."""
+
+    normalized_limit = max(1, min(limit, 200))
+    rows = (
+        _material_query(db)
+        .filter(
+            VendorMaterialRelease.status == VendorMaterialReleaseStatus.approved.value,
+            VendorMaterialRelease.is_active.is_(True),
+        )
+        .order_by(
+            VendorMaterialRelease.reviewed_at.asc(), VendorMaterialRelease.id.asc()
+        )
+        .offset(max(0, offset))
+        .limit(normalized_limit + 1)
+        .all()
+    )
+    return VendorSupplyQueue(
+        items=tuple(material_release_view(row) for row in rows[:normalized_limit]),
+        count=min(len(rows), normalized_limit),
+        limit=normalized_limit,
+        offset=max(0, offset),
+        has_next=len(rows) > normalized_limit,
+    )
+
+
 def material_detail(db: Session, release_id: UUID | str) -> MaterialReleaseView:
     row = (
         _material_query(db)
@@ -694,6 +782,16 @@ def material_review_preview(
     reason: str | None = None,
     for_update: bool = False,
 ) -> SupplyReviewPreview:
+    if action is VendorSupplyReviewAction.issue:
+        raise _error(
+            "material_issue_requires_issue_input",
+            "Recording material issue requires issue details.",
+        )
+    if action is VendorSupplyReviewAction.disburse:
+        raise _error(
+            "unsupported_action",
+            "Only an advance can be recorded as disbursed.",
+        )
     normalized_reason = _review_reason(
         reason,
         required=action is VendorSupplyReviewAction.reject,
@@ -758,6 +856,121 @@ def material_review_preview(
     )
 
 
+def _material_issue_source_label(source: MaterialIssueSource) -> str:
+    return _MATERIAL_ISSUE_SOURCE_LABELS.get(source, source.value)
+
+
+def material_issue_preview(
+    db: Session,
+    *,
+    release_id: UUID | str,
+    issue: MaterialIssueInput,
+    for_update: bool = False,
+) -> SupplyReviewPreview:
+    reference = _issue_reference(issue.reference)
+    query = _material_query(db).filter(
+        VendorMaterialRelease.id == coerce_uuid(release_id),
+        VendorMaterialRelease.is_active.is_(True),
+    )
+    if for_update:
+        query = query.with_for_update(of=VendorMaterialRelease)
+    row = query.one_or_none()
+    if row is None:
+        raise _error("material_release_not_found", "Material release not found.")
+    if row.status != VendorMaterialReleaseStatus.approved.value:
+        raise _error(
+            "material_not_issuable",
+            "Only an approved material release can be recorded as issued.",
+        )
+    active_items = tuple(item for item in row.items if item.is_active)
+    active_by_id = {item.id: item for item in active_items}
+    issued_by_id: dict[UUID, int] = {}
+    for line in issue.lines:
+        if line.item_id in issued_by_id:
+            raise _error(
+                "invalid_issue_quantity",
+                "Each material line can appear only once.",
+            )
+        issued_by_id[line.item_id] = int(line.quantity)
+    if set(issued_by_id) != set(active_by_id):
+        raise _error(
+            "invalid_issue_quantity",
+            "Issue quantities must match the requested material lines.",
+        )
+    normalized_lines: list[MaterialIssueLineInput] = []
+    detail_lines: list[tuple[str, str]] = []
+    total_issued = 0
+    for item_id, item in sorted(active_by_id.items(), key=lambda value: str(value[0])):
+        issued = issued_by_id[item_id]
+        if issued < 0 or issued > item.quantity:
+            raise _error(
+                "invalid_issue_quantity",
+                "Issued quantity must be between zero and the requested quantity.",
+            )
+        total_issued += issued
+        normalized_lines.append(
+            MaterialIssueLineInput(item_id=item_id, quantity=issued)
+        )
+        unit = item.unit or "unit(s)"
+        detail_lines.append((item.description, f"{issued} of {item.quantity} {unit}"))
+    if total_issued <= 0:
+        raise _error(
+            "invalid_issue_quantity",
+            "At least one material line must have an issued quantity.",
+        )
+    source_label = _material_issue_source_label(issue.source)
+    return SupplyReviewPreview(
+        supply_type=VendorSupplyType.material,
+        record_id=row.id,
+        project_id=row.project_id,
+        action=VendorSupplyReviewAction.issue,
+        title="Record material issue",
+        summary=(
+            "This records that the approved materials were issued from the "
+            "selected source. The stock system still owns stock balances."
+        ),
+        details=(
+            ("Project", _project_identity(row.project).name),
+            ("Vendor", _vendor_identity(row).name),
+            ("Issue source", source_label),
+            ("Issue reference", reference or "No reference supplied"),
+            ("Total issued", str(total_issued)),
+            *detail_lines,
+            ("Result", "Recorded as issued"),
+        ),
+        state=(
+            ("record_id", str(row.id)),
+            ("project_id", str(row.project_id)),
+            ("vendor_id", str(row.vendor_id)),
+            ("status", row.status),
+            ("updated_at", str(_aware(row.updated_at))),
+            ("support_system", row.support_system or ""),
+            ("support_reference", row.support_reference or ""),
+            ("support_status", row.support_status or ""),
+            (
+                "items",
+                "|".join(
+                    f"{item.id}:{item.description}:{item.quantity}:{item.unit or ''}"
+                    for item in sorted(active_items, key=lambda value: str(value.id))
+                ),
+            ),
+            ("action", VendorSupplyReviewAction.issue.value),
+            ("issue_source", issue.source.value),
+            ("issue_reference", reference or ""),
+            (
+                "issued_quantities",
+                "|".join(
+                    f"{line.item_id}:{line.quantity}" for line in normalized_lines
+                ),
+            ),
+        ),
+        reason=None,
+        issue_source=issue.source,
+        issue_reference=reference,
+        issued_quantities=tuple(normalized_lines),
+    )
+
+
 def advance_review_preview(
     db: Session,
     *,
@@ -766,6 +979,11 @@ def advance_review_preview(
     reason: str | None = None,
     for_update: bool = False,
 ) -> SupplyReviewPreview:
+    if action is VendorSupplyReviewAction.issue:
+        raise _error(
+            "unsupported_action",
+            "Only a material release can be recorded as issued.",
+        )
     is_disbursement = action is VendorSupplyReviewAction.disburse
     normalized_reason = _review_reason(
         reason,

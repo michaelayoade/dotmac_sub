@@ -18,6 +18,7 @@
   </div>
 
   {% if message %}<div class="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ message }}</div>{% endif %}
+  {% if error_message %}<div role="alert" class="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">{{ error_message }}</div>{% endif %}
 
   <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
     <section class="overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
