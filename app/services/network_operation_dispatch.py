@@ -398,7 +398,6 @@ def _ont_service_config_invocation(
                 (operation.input_payload or {}).get("explicit_repair")
             ),
         },
-        queue="network",
     )
 
 
