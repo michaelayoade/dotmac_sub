@@ -1,6 +1,7 @@
 from pathlib import Path
 
 TEMPLATE = Path("templates/admin/vendors/operations.html")
+QUOTE_TEMPLATE = Path("templates/admin/vendors/quote_review_detail.html")
 
 
 def test_vendor_operations_search_and_procurement_controls_are_visibly_spaced():
@@ -51,3 +52,18 @@ def test_draft_procurement_rows_expand_to_reveal_the_existing_form():
     )
     assert 'onclick="event.stopPropagation()"' in template
     assert ">View project</a>" in template
+
+
+def test_quote_revision_note_control_is_visible_and_required_for_revision_only():
+    template = QUOTE_TEMPLATE.read_text(encoding="utf-8")
+
+    textarea = template.split('id="quote-review-notes"', maxsplit=1)[1]
+    textarea = textarea.split(">", maxsplit=1)[0]
+    assert "border border-slate-400" in textarea
+    assert "bg-white" in textarea
+    assert "focus:border-teal-500" in textarea
+    assert "data-quote-review-note" in textarea
+    assert "data-quote-review-revision" in template
+    assert "data-quote-review-approve" in template
+    assert 'setAttribute("required", "required")' in template
+    assert 'removeAttribute("required")' in template

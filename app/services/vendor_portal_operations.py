@@ -321,7 +321,9 @@ def _as_utc(value: datetime | None) -> datetime | None:
     values. Compare everything in UTC rather than raising on a mixed pair."""
     if value is None:
         return None
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return (
+        value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    )
 
 
 def _quote_creation_eligibility(
@@ -1032,17 +1034,16 @@ class VendorPortalOperations:
                 project.assignment_type = VendorAssignmentType.direct.value
                 project.status = InstallationProjectStatus.assigned.value
             elif command.mode == VendorAssignmentType.bidding.value:
-                if (
-                    command.bidding_close_at is None
-                    or command.bidding_close_at <= _now()
-                ):
+                now = _now()
+                bidding_close_at = _as_utc(command.bidding_close_at)
+                if bidding_close_at is None or bidding_close_at <= now:
                     raise _error(
                         "bidding_window_required", "Choose a future bid closing time."
                     )
                 project.assigned_vendor_id = None
                 project.assignment_type = VendorAssignmentType.bidding.value
-                project.bidding_open_at = _now()
-                project.bidding_close_at = command.bidding_close_at
+                project.bidding_open_at = now
+                project.bidding_close_at = bidding_close_at
                 project.status = InstallationProjectStatus.open_for_bidding.value
             else:
                 raise _error(
