@@ -70,6 +70,11 @@ def _run_with_test_session(monkeypatch, db_session):
     )
 
 
+def _expected_boundary(value: datetime | None) -> str:
+    assert value is not None
+    return catalog_tasks._reminder_boundary_key(value)
+
+
 def test_send_expiry_reminders_suppresses_open_infrastructure_down_ticket(
     db_session, subscriber, monkeypatch
 ):
@@ -138,7 +143,9 @@ def test_send_expiry_reminders_ignores_non_infrastructure_tickets(
     assert len(events) == 1
     args, kwargs = events[0]
     assert args[1] == EventType.subscription_expiring
-    assert args[2]["reminder_boundary"] == subscription.next_billing_at.isoformat()
+    assert args[2]["reminder_boundary"] == _expected_boundary(
+        subscription.next_billing_at
+    )
     assert args[2]["reminder_boundary_source"] == "next_billing_at"
     assert kwargs["subscription_id"] == subscription.id
     assert kwargs["account_id"] == subscriber.id
@@ -174,7 +181,7 @@ def test_send_expiry_reminders_uses_end_at_when_renewal_anchor_missing(
     }
     assert len(events) == 1
     args, _kwargs = events[0]
-    assert args[2]["reminder_boundary"] == subscription.end_at.isoformat()
+    assert args[2]["reminder_boundary"] == _expected_boundary(subscription.end_at)
     assert args[2]["reminder_boundary_source"] == "end_at"
 
 

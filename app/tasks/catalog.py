@@ -155,7 +155,7 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
         for candidate in expiring:
             sub = candidate.subscription
             boundary = candidate.boundary
-            boundary_key = boundary.isoformat()
+            boundary_key = _reminder_boundary_key(boundary)
             try:
                 if sub.subscriber_id in suppressed_subscriber_ids:
                     suppressed += 1
@@ -272,8 +272,26 @@ def _subscription_expiring_reminder_periods(
         boundary = payload.get("reminder_boundary")
         if not isinstance(boundary, str) or not boundary:
             continue
-        periods.setdefault(subscription_id, set()).add(boundary)
+        normalized_boundary = _reminder_boundary_key_from_string(boundary)
+        if normalized_boundary is None:
+            continue
+        periods.setdefault(subscription_id, set()).add(normalized_boundary)
     return periods
+
+
+def _reminder_boundary_key(value: datetime) -> str:
+    utc_value = _as_utc(value)
+    if utc_value is None:
+        raise ValueError("reminder boundary is required")
+    return utc_value.isoformat()
+
+
+def _reminder_boundary_key_from_string(value: str) -> str | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return _reminder_boundary_key(parsed)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
