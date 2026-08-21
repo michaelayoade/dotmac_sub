@@ -74,6 +74,7 @@ class EntryPointFamily(StrEnum):
     """
 
     API_ROUTE = "api_route"
+    WEBHOOK_HANDLER = "webhook_handler"
     WEB_ROUTE = "web_route"
     WEB_PRESENTER = "web_presenter"
     SERVICE = "service"
@@ -698,6 +699,38 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         registry_declared=False,
         production_runtime=True,
         note="Portal location confirmation; calls location capture and owns only the commit.",
+    ),
+    SourceSurface(
+        path="app/api/crm_webhooks.py",
+        family=EntryPointFamily.WEBHOOK_HANDLER,
+        classification=SurfaceClassification.TRANSPORT,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service=None,
+        registry_declared=False,
+        production_runtime=True,
+        note=(
+            "The one inbound provider callback carrying customer identity. It "
+            "terminates the request, verifies it, and hands the payload to "
+            "`crm_customers.observe_customer`; it names no cohort model and "
+            "writes no cohort row. Inventoried because a webhook writer is the "
+            "hardest kind to notice by reading code — nothing in this "
+            "repository calls one."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/crm_customers.py",
+        family=EntryPointFamily.SERVICE,
+        classification=SurfaceClassification.READ_ONLY_CONSUMER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service=None,
+        registry_declared=False,
+        production_runtime=True,
+        note=(
+            "Interprets a verified CRM observation by matching it to an "
+            "existing account through exact retained provenance. It reads "
+            "`Subscriber`, creates and updates nothing, and completes no "
+            "transaction — its own docstring says so and the census agrees."
+        ),
     ),
     SourceSurface(
         path="app/tasks/nin_tasks.py",

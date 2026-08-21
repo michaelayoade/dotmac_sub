@@ -70,6 +70,13 @@ class EntryPointFamily(StrEnum):
     """The executable families a cohort write can arrive from."""
 
     API_ROUTE = "api_route"
+    #: An inbound HTTP handler for another system's callback. Positionally an
+    #: API route, split out because "does anything a foreign system can
+    #: trigger write our cohort?" is a question worth answering on its own —
+    #: and because the brief for this census names webhook handlers as a
+    #: family in their own right, so a coverage claim that quietly folded
+    #: them into `api_route` would be unverifiable.
+    WEBHOOK_HANDLER = "webhook_handler"
     WEB_ROUTE = "web_route"
     #: `app/services/web_*.py`. Positionally a service module, but the
     #: repository's own convention (see `scripts/architecture/sot_debt.py`)
@@ -99,6 +106,12 @@ class EntryPointFamily(StrEnum):
 #: first so `app/services/events/handlers` is an event handler rather than a
 #: service, and `app/api/webhooks` stays an API route (a webhook handler is an
 #: authenticated HTTP route here, not a separate runtime).
+#: Matched before the prefix table: a webhook handler lives under `app/api/`
+#: and would otherwise be classified by position alone.
+_WEBHOOK_RE: Final[re.Pattern[str]] = re.compile(
+    r"^app/api/.*(webhook|callback).*\.py$"
+)
+
 _FAMILY_PREFIXES: Final[tuple[tuple[str, EntryPointFamily], ...]] = (
     ("app/services/events/handlers/", EntryPointFamily.EVENT_HANDLER),
     ("app/services/web_", EntryPointFamily.WEB_PRESENTER),
@@ -154,6 +167,10 @@ _QUERY_TERMINALS: Final[frozenset[str]] = frozenset(
 
 _SET_DML_FUNCTIONS: Final[frozenset[str]] = frozenset({"update", "delete", "insert"})
 
+_SQL_KEYWORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(select|insert|update|delete|from|into|join|truncate)\b", re.IGNORECASE
+)
+
 _RAW_SQL_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(insert\s+into|update|delete\s+from)\s+(?:only\s+)?[\"'`]?(\w+)",
     re.IGNORECASE,
@@ -183,6 +200,8 @@ class CohortWriteSite:
 def family_for(relative_path: str) -> EntryPointFamily:
     """Classify a repository-relative path into an entry-point family."""
 
+    if _WEBHOOK_RE.match(relative_path):
+        return EntryPointFamily.WEBHOOK_HANDLER
     for prefix, family in _FAMILY_PREFIXES:
         if relative_path.startswith(prefix):
             return family
@@ -473,6 +492,74 @@ def cohort_write_counts(*, project_root: Path = PROJECT_ROOT) -> dict[str, int]:
     }
 
 
+def _names_a_cohort_table(value: str, tables: frozenset[str]) -> bool:
+    """Whether a string literal names a cohort table.
+
+    Two shapes, and the second one needs the SQL guard. An exact match is the
+    common case — a table name passed to a helper. A *substring* match is how
+    raw statements name their table, and matching a bare word anywhere would
+    sweep in every docstring containing "parties" or "addresses"; requiring a
+    SQL keyword in the same literal keeps the census measuring code rather
+    than prose.
+    """
+
+    lowered = value.lower()
+    if lowered in tables:
+        return True
+    if not _SQL_KEYWORD_RE.search(lowered):
+        return False
+    return any(re.search(rf"\b{re.escape(table)}\b", lowered) for table in tables)
+
+
+@cache
+def cohort_reference_sites(
+    *, project_root: Path = PROJECT_ROOT
+) -> tuple[tuple[str, str], ...]:
+    """Return `(family, path)` for every file that so much as names a cohort table.
+
+    The reader half of the inventory. Writers are the set a cutover has to
+    displace; references are the set a cutover has to *not surprise* — reports,
+    projections, exporters, list screens, importers. It is deliberately a
+    coarse measure (a model name or a table name anywhere in the module) and is
+    reported as a bounded reach rather than a precise dependency graph, because
+    overstating precision here would invite someone to treat it as a complete
+    impact analysis.
+    """
+
+    models = cohort_model_names()
+    tables = frozenset(name.lower() for name in cohort_table_names())
+    found: list[tuple[str, str]] = []
+    for path in _scan_paths(project_root):
+        relative = path.relative_to(project_root).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - lint gate
+            continue
+        for node in ast.walk(tree):
+            named = (
+                (isinstance(node, ast.Name) and node.id in models)
+                or (isinstance(node, ast.Attribute) and node.attr in models)
+                or (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and _names_a_cohort_table(node.value, tables)
+                )
+            )
+            if named:
+                found.append((str(family_for(relative)), relative))
+                break
+    return tuple(sorted(found))
+
+
+def reference_counts_by_family(*, project_root: Path = PROJECT_ROOT) -> Counter[str]:
+    """Per-family counts of files referencing cohort state at all."""
+
+    totals: Counter[str] = Counter()
+    for family, _ in cohort_reference_sites(project_root=project_root):
+        totals[family] += 1
+    return totals
+
+
 def counts_by_family(*, project_root: Path = PROJECT_ROOT) -> Counter[str]:
     """Return per-family write totals, for the readiness report."""
 
@@ -520,6 +607,9 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "unscanned_python_roots": list(unscanned_python_roots()),
                 "by_family": dict(sorted(counts_by_family().items())),
+                "references_by_family": dict(
+                    sorted(reference_counts_by_family().items())
+                ),
                 "sites": [
                     {
                         "family": site.family,

@@ -37,9 +37,11 @@ import pytest
 from app.migration_source import surfaces
 from scripts.architecture.isp_cohort_writers import (
     EntryPointFamily,
+    cohort_reference_sites,
     cohort_write_counts,
     cohort_write_sites,
     family_for,
+    reference_counts_by_family,
     unscanned_python_roots,
 )
 
@@ -244,6 +246,27 @@ def test_detector_sees_a_new_direct_writer(tmp_path: Path) -> None:
     assert counts.get("service|app/services/brand_new_owner.py") == 1
 
 
+def test_detector_sees_a_webhook_handler_writing_cohort_state(
+    tmp_path: Path,
+) -> None:
+    """An inbound callback that writes the cohort is counted as its own family.
+
+    A foreign system triggering a write to party or customer state is the
+    hardest writer to notice by reading code, because nothing in this
+    repository calls it.
+    """
+
+    _synthetic_tree(
+        tmp_path,
+        "app/api/partner_webhooks.py",
+        "from app.models.party import Party\n"
+        "def receive(db, payload):\n"
+        "    db.add(Party(party_type='person', display_name=payload.name))\n",
+    )
+    counts = _counts(tmp_path)
+    assert counts.get("webhook_handler|app/api/partner_webhooks.py") == 1
+
+
 def test_detector_sees_an_adapter_bypassing_its_owner(tmp_path: Path) -> None:
     """A route that mutates a fetched cohort row is counted as a writer.
 
@@ -338,6 +361,8 @@ def test_stale_baseline_after_writer_removal_is_a_failure(tmp_path: Path) -> Non
     ("path", "expected"),
     [
         ("app/api/customers.py", EntryPointFamily.API_ROUTE),
+        ("app/api/crm_webhooks.py", EntryPointFamily.WEBHOOK_HANDLER),
+        ("app/api/payment_callback.py", EntryPointFamily.WEBHOOK_HANDLER),
         ("app/web/admin/customers.py", EntryPointFamily.WEB_ROUTE),
         ("app/services/web_customer_actions.py", EntryPointFamily.WEB_PRESENTER),
         ("app/services/party.py", EntryPointFamily.SERVICE),
@@ -385,3 +410,42 @@ def test_the_ownership_map_lists_every_production_writer() -> None:
         "docs/ISP_COHORT1_SOURCE_OWNERSHIP.md does not mention these "
         "production writers of cohort-isp-01 state:\n  " + "\n  ".join(missing)
     )
+
+
+def test_every_writer_is_also_a_reader() -> None:
+    """Coherence between the two censuses.
+
+    A file cannot write a cohort table without naming it, so the reference
+    census must contain every writer. If it does not, the reference scan has a
+    gap and its per-family totals understate the reach a cutover has to
+    consider.
+    """
+
+    writers = {site.path for site in cohort_write_sites()}
+    referenced = {path for _, path in cohort_reference_sites()}
+    missing = sorted(writers - referenced)
+    assert not missing, (
+        "these files write cohort state and the reference census does not see "
+        "them naming it:\n  " + "\n  ".join(missing)
+    )
+
+
+def test_the_reader_reach_is_wider_than_the_writer_surface() -> None:
+    """The reference census must actually be measuring something wider.
+
+    Not a numeric assertion — the count moves with any unrelated file that
+    mentions `Subscriber`. What is asserted is the shape: many more readers
+    than writers, across more entry-point families. A reference census that
+    collapsed to the writer set would be reporting the wrong thing while
+    looking healthy.
+    """
+
+    reference_families = set(reference_counts_by_family())
+    writer_families = {site.family for site in cohort_write_sites()}
+    assert writer_families <= reference_families
+    assert len(reference_families) > len(writer_families), (
+        "the reference census sees no entry-point family the writer census "
+        "does not; readers reach further than writers and the scan should "
+        "show it"
+    )
+    assert len(cohort_reference_sites()) > 5 * len(cohort_write_sites())
