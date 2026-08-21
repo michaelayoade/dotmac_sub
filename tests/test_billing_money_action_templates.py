@@ -139,4 +139,4 @@ def test_payment_detail_correction_action_uses_reversal_preview_and_permission_g
     assert "reversal_capability.allowed and payment_correction_action.allowed" in detail
     assert 'label: str = "Correct accepted payment"' in web_service
     assert "payment_correction_action.preview_url" in detail
-    assert "has_permission(auth, db, \"billing:payment:update\")" in route
+    assert 'has_permission(auth, db, "billing:payment:update")' in route
