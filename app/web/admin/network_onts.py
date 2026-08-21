@@ -824,9 +824,12 @@ def ont_configure_submit(
             wan_service_port_index=wan_sp_value,
         )
 
+    submitted_idempotency_key = (
+        idempotency_key.strip() if isinstance(idempotency_key, str) else ""
+    )
     resolved_idempotency_key = (
-        idempotency_key.strip()
-        if idempotency_key and idempotency_key.strip()
+        submitted_idempotency_key
+        if submitted_idempotency_key
         else f"ont-config:{ont_id}:{section.value}:{uuid.uuid4()}"
     )
     auth = getattr(request.state, "auth", {}) or {}
