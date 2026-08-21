@@ -46,7 +46,11 @@
     </dl>
 
     {% if lifecycle.waiting_reason %}
-    <p class="mt-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">Waiting: {{ lifecycle.waiting_reason | replace('_', ' ') }}</p>
+    {% set waiting_message = lifecycle.waiting_reason | replace('_', ' ') %}
+    {% if lifecycle.waiting_reason == 'awaiting_acs_task_drain' %}
+    {% set waiting_message = 'ACS accepted the LAN/DHCP task. Waiting for the ONT to Inform, or force an OLT ONT reset to drain it.' %}
+    {% endif %}
+    <p class="mt-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">Waiting: {{ waiting_message }}</p>
     {% endif %}
     {% if lifecycle.failure_message %}
     <p class="mt-2 rounded px-2 py-1.5 text-xs {% if phase == 'delivered_unverified' %}bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300{% else %}bg-rose-50 text-rose-800 dark:bg-rose-900/20 dark:text-rose-300{% endif %}">{{ lifecycle.failure_message }}{% if lifecycle.failure_code %} <span class="font-mono">({{ lifecycle.failure_code }})</span>{% endif %}</p>
