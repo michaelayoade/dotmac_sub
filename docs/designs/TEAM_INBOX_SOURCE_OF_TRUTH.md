@@ -55,10 +55,10 @@ Campaign materialization remains the flush-only
 `communications.team_inbox_campaigns` participant under the campaign and
 outbound-intent owners.
 
-The Inbox **All** status filter includes every lifecycle status, including
-resolved conversations. The separate **Active** shortcut is the operational
-non-resolved cohort. Explicit status filters still narrow the queue to one
-status.
+The Inbox default queue is the operational active cohort and excludes resolved
+conversations. The explicit **All** view (`view=all`) includes every lifecycle
+status, including resolved conversations, for history review. Explicit status
+filters still narrow the queue to one status.
 
 ## Inbound flow and idempotency
 

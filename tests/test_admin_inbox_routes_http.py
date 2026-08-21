@@ -171,6 +171,11 @@ def test_has_ticket_false_is_distinct_from_absent(captured_request):
     assert captured_request("").has_ticket is None
 
 
+def test_all_view_reaches_the_projection_owner(captured_request):
+    assert captured_request("?view=all").view == "all"
+    assert captured_request("").view is None
+
+
 def test_queue_requests_exact_total_for_numbered_pagination(captured_request):
     assert captured_request("?page=7").include_total_count is True
 
