@@ -172,7 +172,7 @@ def test_queue_notification_sends_changed_position_update_once(db_session, monke
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=6),
+            now=now + timedelta(minutes=11),
         ),
     )
     assert changed.sent + changed.failed == 1
@@ -191,7 +191,7 @@ def test_queue_notification_sends_changed_position_update_once(db_session, monke
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=6),
+            now=now + timedelta(minutes=11),
         ),
     )
     assert duplicate.sent == 0
