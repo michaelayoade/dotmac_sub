@@ -1667,13 +1667,20 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_observations",
             module="app.services.team_inbox_observations",
-            owns=("normalized inbound provider observation ledger",),
+            owns=(
+                "normalized inbound provider observation ledger",
+                "provider observation identity collision quarantine",
+            ),
             depends_on=("integration.inbox",),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_observations",
                 concerns=(
                     (
                         "normalized inbound provider observation ledger",
+                        OwnerRole.OBSERVATION_COLLECTOR,
+                    ),
+                    (
+                        "provider observation identity collision quarantine",
                         OwnerRole.OBSERVATION_COLLECTOR,
                     ),
                 ),
@@ -1698,6 +1705,8 @@ DOMAIN = DomainSOT(
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_observations.invalid_location",
+                    "communications.team_inbox_observations.invalid_observation",
+                    "communications.team_inbox_observations.provider_event_identity_collision",
                 ),
                 event_types=("team_inbox.provider_observation_recorded.v1",),
             ),

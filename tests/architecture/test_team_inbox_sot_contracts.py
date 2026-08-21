@@ -43,6 +43,28 @@ def test_team_inbox_owner_family_has_complete_typed_contracts() -> None:
         assert service.contract.test_refs
 
 
+def test_observation_owner_contracts_collision_quarantine() -> None:
+    service = service_relationship("communications.team_inbox_observations")
+
+    assert "provider observation identity collision quarantine" in service.owns
+    assert service.contract is not None
+    assert (
+        "communications.team_inbox_observations.provider_event_identity_collision"
+        in service.contract.errors.domain_codes
+    )
+
+    model = (ROOT / "app/models/team_inbox.py").read_text(encoding="utf-8")
+    owner = (ROOT / "app/services/team_inbox_observations.py").read_text(
+        encoding="utf-8"
+    )
+    smtp = (ROOT / "app/services/team_inbox_smtp_inbound.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class InboxProviderObservationCollision" in model
+    assert "SEMANTIC_FINGERPRINT_VERSION = 2" in owner
+    assert "ObservationCollisionPolicy.quarantine" in smtp
+
+
 def test_legacy_catch_all_is_retired() -> None:
     baseline = (
         ROOT / "tests/architecture/sot_manifest_legacy_baseline.txt"
