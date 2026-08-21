@@ -646,6 +646,26 @@ class SalesProjectLifecycleError(ValueError):
         self.kind = kind
 
 
+def _ensure_vendor_assignment_scope_for_project(
+    db: Session, *, project: Project, context: CommandContext
+) -> None:
+    if project.project_template_id is None or project.subscriber_id is None:
+        return
+    template = db.get(ProjectTemplate, project.project_template_id)
+    if template is None or not template.creates_vendor_assignment_scope:
+        return
+
+    from app.services import installation_projects
+
+    installation_projects.ensure_for_project(
+        db,
+        project_id=project.id,
+        subscriber_id=project.subscriber_id,
+        actor_id=context.actor,
+        created_by_person_id=project.created_by_person_id,
+    )
+
+
 class ProjectServiceError(DomainError):
     """Transport-neutral Projects boundary error."""
 
@@ -3038,25 +3058,9 @@ class Projects(ListResponseMixin):
         project = Project(**data)
         db.add(project)
         db.flush()
-        vendor_scope_template = (
-            db.get(ProjectTemplate, project.project_template_id)
-            if project.project_template_id
-            else None
+        _ensure_vendor_assignment_scope_for_project(
+            db, project=project, context=context
         )
-        if (
-            vendor_scope_template is not None
-            and vendor_scope_template.creates_vendor_assignment_scope
-            and project.subscriber_id is not None
-        ):
-            from app.services import installation_projects
-
-            installation_projects.ensure_for_project(
-                db,
-                project_id=project.id,
-                subscriber_id=project.subscriber_id,
-                actor_id=context.actor,
-                created_by_person_id=project.created_by_person_id,
-            )
         _sync_project_sla_clock(db, project)
         db.flush()
         db.refresh(project)
@@ -3477,6 +3481,9 @@ class Projects(ListResponseMixin):
         _sync_project_sla_clock(db, project)
         db.flush()
         db.refresh(project)
+        _ensure_vendor_assignment_scope_for_project(
+            db, project=project, context=context
+        )
         if {
             "owner_person_id",
             "manager_person_id",

@@ -53,10 +53,16 @@ The vendor operations queue separates inventory and accounts-payable authority:
 
 - material rows require `inventory:read` to view and `inventory:write` to act;
 - advance rows require `finance:ap:read` to view and `finance:ap:write` to act.
+- staff reach those rows through the `materials` and `advances` queue filters
+  on `/admin/vendors/operations`; the active filter and search query are kept
+  in the URL so refresh and shared links preserve the selected work.
 
-Approve and reject are important actions. Each action first issues a ten-minute
-signed preview bound to the staff actor, record, action, reason, and exact state
-fingerprint. Confirmation:
+Approve, reject, material issue, and advance disbursement are important
+actions. Material issue is available only after Dotmac approval. Staff use one
+form to choose `dotmac_store` or `erp`, optionally enter the issue reference,
+enter issued quantities for the approved lines, and confirm. Each action first
+issues a ten-minute signed preview bound to the staff actor, record, action,
+reason or issue input, and exact state fingerprint. Confirmation:
 
 1. opens one owner-command transaction;
 2. locks the material release or advance;
@@ -66,8 +72,9 @@ fingerprint. Confirmation:
 6. stores stable result evidence and commits atomically.
 
 Rejection requires a reason. Approval may carry an optional note. A changed
-status, release line, amount, quote allowance, committed total, vendor/project
-binding, or review reason invalidates the preview.
+status, release line, issue source, issue reference, issued quantity, amount,
+quote allowance, committed total, vendor/project binding, or review reason
+invalidates the preview.
 
 ## Freshness, drift, and repair
 

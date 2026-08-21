@@ -23,7 +23,7 @@ combined Inbox/Support workspace.
 
 | Concern | Canonical owner | Responsibility |
 | --- | --- | --- |
-| Inbound provider facts and deduplication | `communications.team_inbox_observations` | Commits one normalized, fingerprinted provider observation before consequences |
+| Inbound provider facts, deduplication, and identity-collision quarantine | `communications.team_inbox_observations` | Commits one normalized provider observation before consequences and durably quarantines conflicting SMTP candidates |
 | Consequence coordination | `communications.team_inbox_processing` | Locks a committed observation and invokes the relevant participants once |
 | Conversation identity and threading | `communications.team_inbox_threads` | Resolves provider message/thread identity and writes conversations/messages |
 | Contact, subscriber, reseller, and reviewed context | `communications.team_inbox_contact_resolution` | Produces explicit matched, ambiguous, suppressed, or unmatched outcomes and owns reviewed links |
@@ -68,13 +68,29 @@ status.
    preserves validated latitude and longitude plus optional place name and
    address; it is not treated as downloadable media.
 2. `InboxProviderObservation` is committed using the unique
-   `(provider, provider_account_scope, provider_event_id)` identity and a
-   fingerprint of normalized evidence. Exact retries replay the observation;
-   the same identity with different evidence fails closed.
-3. A separate processing owner locks the observation. It resolves threading,
+   `(provider, provider_account_scope, provider_event_id)` identity. It retains
+   an exact normalized-evidence fingerprint and a separately versioned semantic
+   fingerprint. Semantic v2 uses an explicit field contract, treats legacy
+   HTML-in-`body` and the current `html_body` plus readable-`body` shape as the
+   same evidence, and excludes SMTP authentication and relay-hop evidence.
+   Those transport fields remain in persisted normalized evidence but do not
+   turn the same upstream message into a collision.
+3. A semantic retry replays the observation. A true SMTP semantic mismatch is
+   committed to `InboxProviderObservationCollision` with the first normalized
+   candidate evidence, candidate fingerprints, bounded changed-field names,
+   and retry count. It never overwrites or processes the admitted observation.
+   SMTP returns success only after that quarantine transaction commits, ending
+   deterministic redelivery; transient parsing, database, and processing
+   failures remain retryable. Other provider adapters retain fail-closed
+   rejection until they deliberately adopt a transport disposition.
+4. A separate processing owner locks the observation. It resolves threading,
    contact and routing, then stores the consequence identity on the observation.
-4. A processed observation is a no-op on retry. Existing message and thread
+5. A processed observation is a no-op on retry. Existing message and thread
    constraints provide a second idempotency boundary.
+
+Rows written before semantic v2 are ratcheted lazily when an equivalent retry
+arrives. This avoids a speculative bulk rewrite while still proving equivalence
+from the stored normalized evidence before assigning the v2 fingerprint.
 
 An inbound email that references an active thread joins it. If the exact
 referenced thread is resolved, the message opens a new active conversation and
@@ -166,11 +182,13 @@ resolution, cancellation or assignment stops further queue updates.
 
 ## Outbound flow
 
-An operator reply command accepts one typed `ReplyCommand`. It performs pure and
+An operator reply command accepts one typed `ReplyCommand`, including a typed
+email copy-recipient value object for optional CC and BCC addresses. It performs pure and
 provider-template preparation before acquiring the conversation row, then takes
 a late PostgreSQL `NOWAIT` lock for the bounded database-only write phase. Under
 that lock it rechecks active state and the stable per-conversation idempotency
-key, then records the communication intent, durable notification/outbox row,
+key, including normalized copy recipients in the replay fingerprint, then records
+the communication intent, durable notification/outbox row,
 Inbox outbound-attempt projection, attachments, and macro consequence in one
 owner transaction. Exact key retries replay the existing message; changed input
 under the same key fails closed. SQLSTATE `55P03` rolls back completely and maps
@@ -255,10 +273,13 @@ The admin CRM-replication controls use these existing owners:
   points win over compatibility rows, shared normalized numbers are omitted as
   ambiguous, and manual numbers normalize using the selected country. The
   fallback is retired after the Party/contact convergence audit reaches zero.
-- Email CC/BCC is limited to opening a conversation. The command validates,
-  lowercases and deduplicates each list, then stores both on internal intent
-  metadata. SMTP places CC in the MIME header, never emits a BCC header, and
-  sends the primary, CC and BCC addresses in the envelope.
+- Email CC/BCC is available when opening a conversation and when replying to an
+  existing email thread. The command validates, lowercases and deduplicates each
+  list, rejects copy recipients on non-email channels, and stores both on
+  internal intent metadata. SMTP places CC in the MIME header, never emits a BCC
+  header, and sends the primary, CC and BCC addresses in the envelope. The
+  permission-scoped staff projection shows From, To, CC and BCC for each email
+  message; customer-facing rendering never exposes BCC.
 - Fiber-website inquiries are inbound-only. The projection and outbound owner
   explicitly reject replies until a reviewed reply transport and prospect
   destination policy are approved.

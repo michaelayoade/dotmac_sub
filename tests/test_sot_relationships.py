@@ -38,6 +38,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "vpn_remote_access",
         "geospatial",
         "sales_referrals",
+        "migration_source",
     ]
 
 

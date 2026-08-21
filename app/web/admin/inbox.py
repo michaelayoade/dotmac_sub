@@ -1515,6 +1515,8 @@ def team_inbox_reply(
     send_after: str | None = Form(default=None),
     idempotency_key: str | None = Form(default=None),
     reply_to_message_id: str | None = Form(default=None),
+    cc: str | None = Form(default=None),
+    bcc: str | None = Form(default=None),
     whatsapp_template_name: str | None = Form(default=None),
     whatsapp_template_language: str | None = Form(default=None),
     whatsapp_template_components: str | None = Form(default=None),
@@ -1543,6 +1545,10 @@ def team_inbox_reply(
                 idempotency_key=_query_text(idempotency_key),
                 reply_to_message_id=_optional_uuid_field(
                     reply_to_message_id, message="Quoted message is invalid."
+                ),
+                email_copy_recipients=team_inbox_commands.EmailCopyRecipients(
+                    cc=team_inbox_commands.split_email_recipients(_query_text(cc)),
+                    bcc=team_inbox_commands.split_email_recipients(_query_text(bcc)),
                 ),
                 whatsapp_template_name=_query_text(whatsapp_template_name),
                 whatsapp_template_language=_query_text(whatsapp_template_language),
@@ -2392,6 +2398,16 @@ def team_inbox_merge_contact(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except team_inbox_commands.InboxContactMergeConflict as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="errors/409.html",
+            context={
+                "message": exc.message,
+                "request_id": getattr(request.state, "request_id", None),
+            },
+            status_code=409,
+        )
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_contact_links.ContactLinkError,
@@ -2896,8 +2912,8 @@ def team_inbox_ai_intake_policy_draft_update(
     queue_position_update_template: str | None = Form(default=None),
     queue_heartbeat_template: str | None = Form(default=None),
     queue_handoff_template: str | None = Form(default=None),
-    queue_position_update_minutes: int = Form(default=5),
-    queue_heartbeat_minutes: int = Form(default=15),
+    queue_position_update_minutes: int = Form(default=10),
+    queue_heartbeat_minutes: int = Form(default=30),
     data_cleanup_prompt: str | None = Form(default=None),
     data_cleanup_gender_choices_json: str | None = Form(default=None),
     data_cleanup_dob_formats: str | None = Form(default=None),

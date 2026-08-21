@@ -19,6 +19,7 @@ from app.services.network.ont_service_configuration import (
     LanConfigurationChange,
     OntConfigurationSection,
 )
+from app.services.web_network_ont_actions import context_builders
 from app.services.web_network_operations import ProvisionOperationProgress
 from app.web.admin import network_onts
 from app.web.templates import templates
@@ -235,6 +236,98 @@ def test_configure_submit_queues_typed_section_and_returns_operation_toast(
     assert isinstance(command.change, LanConfigurationChange)
     assert command.change.block_prefix is IpBlockPrefix.p29
     assert toast == {"message": "Configuration queued.", "type": "success"}
+
+
+def test_configure_submit_generates_idempotency_key_when_ui_omits_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    ont_id = uuid.uuid4()
+    operation_id = uuid.uuid4()
+
+    def fake_configure(_db: object, command: object) -> ConfigureOntServiceOutcome:
+        captured["command"] = command
+        return ConfigureOntServiceOutcome(
+            ont_unit_id=ont_id,
+            assignment_id=uuid.uuid4(),
+            configuration_head_id=uuid.uuid4(),
+            revision=1,
+            operation_id=operation_id,
+            phase=OntServiceConfigurationPhase.queued,
+            replayed=False,
+            message="Configuration queued.",
+        )
+
+    monkeypatch.setattr(network_onts, "configure_ont_service", fake_configure)
+    monkeypatch.setattr(network_onts, "has_permission", lambda *_args: True)
+    monkeypatch.setattr(network_onts, "finish_read_transaction", lambda *_args: None)
+    monkeypatch.setattr(network_onts, "_base_context", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        network_onts, "_ont_configuration_form_context", lambda *_args: {}
+    )
+    monkeypatch.setattr(
+        network_onts.templates,
+        "TemplateResponse",
+        lambda *_args, **_kwargs: HTMLResponse("updated"),
+    )
+    monkeypatch.setattr(network_onts, "_log_ont_action_result", lambda **_kwargs: None)
+    values = _submit_values("lan")
+    values.pop("idempotency_key")
+
+    network_onts.ont_configure_submit(
+        request=_request_with_auth(),
+        ont_id=str(ont_id),
+        db=MagicMock(),
+        **values,
+    )
+
+    command = captured["command"]
+    idempotency_key = command.context.idempotency_key
+    assert idempotency_key.startswith(f"ont-config:{ont_id}:lan:")
+    uuid.UUID(idempotency_key.rsplit(":", maxsplit=1)[1])
+
+
+def test_service_recovery_enables_olt_fallback_when_acs_hides_ppp_wan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ScalarResult:
+        def first(self) -> None:
+            return None
+
+    class ReadOnlyDb:
+        def scalars(self, _statement: object) -> ScalarResult:
+            return ScalarResult()
+
+    monkeypatch.setattr(
+        "app.services.web_network_service_ports._resolve_ont_olt_context",
+        lambda *_args, **_kwargs: (object(), object(), "0/2/1", 13),
+    )
+    ont_id = uuid.uuid4()
+
+    context = context_builders._service_recovery_context(
+        ReadOnlyDb(),
+        SimpleNamespace(id=ont_id, tr069_last_snapshot={"raw_device": {}}),
+        desired_wan={
+            "wan_mode": "pppoe",
+            "wan_vlan": "203",
+            "pppoe_username": "100000010",
+        },
+        service_ports_context={"service_ports": [], "deferred": True},
+        olt_status={"deferred": True},
+        has_tr069_device=True,
+    )
+
+    service_recovery = context["service_recovery"]
+    bind_row = next(
+        row for row in service_recovery["rows"] if row["label"] == "LAN/WiFi bind"
+    )
+    assert service_recovery["ppp_object_present"] is False
+    assert service_recovery["olt_fallback_bind_available"] is True
+    assert service_recovery["bind_action_enabled"] is True
+    assert (
+        service_recovery["recovery_stage"]["title"] == "Internet WAN is hidden from ACS"
+    )
+    assert bind_row["status"] == "warn"
 
 
 def _provision_template_context() -> dict[str, object]:

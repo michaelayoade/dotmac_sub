@@ -297,17 +297,55 @@ def apply_provider_outcome(
             "outcome_not_applicable",
             "Only an approved release can carry a provider outcome.",
         )
+    records_issue = (support_status or "").strip().lower() in {
+        "issued",
+        "completed",
+        "delivered",
+    }
+    if records_issue:
+        active_items = {str(item.id): item for item in release.items if item.is_active}
+        if issued_quantities:
+            unknown_items = set(issued_quantities) - set(active_items)
+            if unknown_items:
+                raise _error(
+                    "invalid_quantity",
+                    "Issued quantity references an unknown material line.",
+                )
+            total_issued = 0
+            for item_id, issued_quantity in issued_quantities.items():
+                try:
+                    issued = int(issued_quantity)
+                except (TypeError, ValueError) as exc:
+                    raise _error(
+                        "invalid_quantity",
+                        "Issued quantity must be a whole number.",
+                    ) from exc
+                item = active_items[item_id]
+                if issued < 0 or issued > item.quantity:
+                    raise _error(
+                        "invalid_quantity",
+                        (
+                            "Issued quantity must be between zero and the "
+                            "requested quantity."
+                        ),
+                    )
+                total_issued += issued
+            if total_issued <= 0:
+                raise _error(
+                    "invalid_quantity",
+                    "At least one material line must have an issued quantity.",
+                )
     release.support_system = support_system
     release.support_reference = support_reference
     release.support_status = support_status
     release.support_observed_at = _now()
-    if (support_status or "").strip().lower() in {"issued", "completed", "delivered"}:
+    if records_issue:
         release.status = VendorMaterialReleaseStatus.issued.value
         if issued_quantities:
             for item in release.items:
-                issued = issued_quantities.get(str(item.id))
-                if issued is not None:
-                    item.issued_quantity = int(issued)
+                issued_for_item = issued_quantities.get(str(item.id))
+                if issued_for_item is not None:
+                    item.issued_quantity = int(issued_for_item)
         emit_event(
             db,
             EventType.vendor_material_release_issued,

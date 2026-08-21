@@ -1890,7 +1890,12 @@ SERVICES: tuple[SOTService, ...] = (
                     "operations.vendor_supply_review_confirmation.advance_not_reviewable",
                     "operations.vendor_supply_review_confirmation.reason_required",
                     "operations.vendor_supply_review_confirmation.reason_too_long",
+                    "operations.vendor_supply_review_confirmation.issue_details_required",
+                    "operations.vendor_supply_review_confirmation.issue_reference_too_long",
                     "operations.vendor_supply_review_confirmation.not_reviewable",
+                    "operations.vendor_supply_review_confirmation.material_not_issuable",
+                    "operations.vendor_supply_review_confirmation.invalid_issue_quantity",
+                    "operations.vendor_supply_review_confirmation.invalid_quantity",
                     "operations.vendor_supply_review_confirmation.invalid_command_context",
                     "operations.vendor_supply_review_confirmation.command_contract_violation",
                     "operations.vendor_supply_review_confirmation.nested_owner_command",
@@ -1907,6 +1912,7 @@ SERVICES: tuple[SOTService, ...] = (
             events=EventContract(
                 event_types=(
                     "vendor_material_release.reviewed",
+                    "vendor_material_release.issued",
                     "vendor_advance.reviewed",
                 ),
                 schema_version=1,

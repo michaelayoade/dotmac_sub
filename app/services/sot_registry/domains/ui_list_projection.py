@@ -1630,7 +1630,7 @@ DOMAIN = DomainSOT(
             module="app.services.vendor_supply_views",
             owns=(
                 "vendor project supply workspace projection",
-                "staff vendor supply review queues and impact previews",
+                "staff vendor supply review and issue queues and impact previews",
                 "latest active vendor supply record selection",
                 "material provider issue observation presentation",
                 "advance payables observation presentation",
@@ -1663,12 +1663,16 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     ConcernContract(
-                        name="staff vendor supply review queues and impact previews",
+                        name=(
+                            "staff vendor supply review and issue queues "
+                            "and impact previews"
+                        ),
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "canonical vendor material release decisions",
                             "canonical vendor advance decisions",
                             "canonical vendor project records",
+                            "material issue source, reference, and quantities",
                             "staff vendor supply review capabilities",
                         ),
                     ),
@@ -1737,6 +1741,16 @@ DOMAIN = DomainSOT(
                         source="inventory and finance accounts-payable read/write results",
                     ),
                     AuthorityInput(
+                        name="material issue source, reference, and quantities",
+                        owner="ui.vendor_supply_projection",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "staff-selected issue source, optional issue reference, "
+                            "and exact material line issue quantities signed into "
+                            "the confirmation preview"
+                        ),
+                    ),
+                    AuthorityInput(
                         name="canonical vendor supply status presentation",
                         owner="ui.status_presentation",
                         kind=AuthorityKind.DERIVED_PROJECTION,
@@ -1781,7 +1795,11 @@ DOMAIN = DomainSOT(
                         "ui.vendor_supply_projection.unsupported_action",
                         "ui.vendor_supply_projection.reason_required",
                         "ui.vendor_supply_projection.reason_too_long",
+                        "ui.vendor_supply_projection.issue_reference_too_long",
                         "ui.vendor_supply_projection.material_not_reviewable",
+                        "ui.vendor_supply_projection.material_not_issuable",
+                        "ui.vendor_supply_projection.material_issue_requires_issue_input",
+                        "ui.vendor_supply_projection.invalid_issue_quantity",
                         "ui.vendor_supply_projection.advance_not_reviewable",
                     ),
                     mapping_owner=(
