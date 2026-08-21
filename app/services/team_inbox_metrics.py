@@ -468,9 +468,8 @@ def agent_performance_metrics(
             {
                 assignment.conversation_id
                 for assignment in assignments
-                if (
-                    conversation := conversations.get(assignment.conversation_id)
-                ) is not None
+                if (conversation := conversations.get(assignment.conversation_id))
+                is not None
                 and conversation.status == InboxConversationStatus.resolved.value
             }
         ),
@@ -651,9 +650,8 @@ def agent_performance_report(
                 {
                     assignment.conversation_id
                     for assignment in agent_assignments
-                    if (
-                        conversation := conversations.get(assignment.conversation_id)
-                    ) is not None
+                    if (conversation := conversations.get(assignment.conversation_id))
+                    is not None
                     and conversation.status == InboxConversationStatus.resolved.value
                 }
             ),
