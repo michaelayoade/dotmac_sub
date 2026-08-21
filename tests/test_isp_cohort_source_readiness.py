@@ -163,82 +163,157 @@ def test_an_exclusion_without_a_reason_is_refused() -> None:
 
 
 # --------------------------------------------------------------------------
-# the surface classification
+# the three classification axes
 # --------------------------------------------------------------------------
 
 
-def test_an_undeclared_module_cannot_be_called_an_authoritative_writer() -> None:
+def _surface(**overrides: object) -> surfaces.SourceSurface:
+    """A minimal legal surface, so each test varies exactly one thing."""
+
+    payload: dict[str, object] = {
+        "path": "app/services/party.py",
+        "family": surfaces.EntryPointFamily.SERVICE,
+        "authority": surfaces.AuthorityRole.DECLARED_OWNER,
+        "boundary": surfaces.BoundaryRole.PERSISTS,
+        "reachability": surfaces.Reachability.INTERNAL_ONLY,
+        "disposition": surfaces.Disposition.RETIRE_AFTER_CUTOVER,
+        "entity_types": (cohort.CohortEntityType.PARTY,),
+        "owning_service": "party.registry",
+        "registry_declared": True,
+        "open_question": None,
+        "note": "the declared native identity owner",
+    }
+    payload.update(overrides)
+    return surfaces.SourceSurface.model_validate(payload)
+
+
+def test_a_legal_surface_constructs() -> None:
+    """The acceptance case every rejection below is measured against."""
+
+    surface = _surface()
+    assert surface.writes
+    assert surface.production_runtime
+    assert surface.classification is (
+        surfaces.SurfaceClassification.AUTHORITATIVE_WRITER
+    )
+
+
+def test_an_undeclared_module_cannot_be_called_a_declared_owner() -> None:
     with pytest.raises(ValidationError) as caught:
-        surfaces.SourceSurface(
-            path="app/services/whatever.py",
-            family=surfaces.EntryPointFamily.SERVICE,
-            classification=surfaces.SurfaceClassification.AUTHORITATIVE_WRITER,
-            entity_types=(cohort.CohortEntityType.PARTY,),
-            owning_service="party.registry",
-            registry_declared=False,
-            production_runtime=True,
-            note="claims to own party identity",
-        )
+        _surface(registry_declared=False)
     assert "flattering name" in str(caught.value)
 
 
-def test_a_declared_module_may_be_an_authoritative_writer() -> None:
-    """The acceptance half: the rule admits a real owner."""
+def test_a_reachable_writer_cannot_disclaim_all_authority() -> None:
+    """Writing IS authority, whether or not anybody granted it."""
 
-    surface = surfaces.SourceSurface(
-        path="app/services/party.py",
-        family=surfaces.EntryPointFamily.SERVICE,
-        classification=surfaces.SurfaceClassification.AUTHORITATIVE_WRITER,
-        entity_types=(cohort.CohortEntityType.PARTY,),
-        owning_service="party.registry",
-        registry_declared=True,
-        production_runtime=True,
-        note="the declared native identity owner",
+    with pytest.raises(ValidationError) as caught:
+        _surface(
+            authority=surfaces.AuthorityRole.NO_AUTHORITY,
+            registry_declared=False,
+            owning_service=None,
+        )
+    assert "say which" in str(caught.value)
+
+
+def test_a_disposable_database_writer_may_disclaim_authority() -> None:
+    """The acceptance half: a fixture seeder writes real rows and owns nothing."""
+
+    surface = _surface(
+        path="scripts/seed/seed_test_fixtures.py",
+        family=surfaces.EntryPointFamily.CLI_SCRIPT,
+        authority=surfaces.AuthorityRole.NO_AUTHORITY,
+        reachability=surfaces.Reachability.NON_PRODUCTION,
+        disposition=surfaces.Disposition.NON_PRODUCTION_NO_ACTION,
+        registry_declared=False,
+        owning_service=None,
+        note="a fixture seeder for test databases",
     )
     assert surface.writes
+    assert not surface.production_runtime
 
 
-def test_an_unknown_surface_may_not_name_an_owner() -> None:
+def test_a_non_writer_cannot_hold_a_writer_authority() -> None:
     with pytest.raises(ValidationError) as caught:
-        surfaces.SourceSurface(
+        _surface(boundary=surfaces.BoundaryRole.READS)
+    assert "without writing" in str(caught.value)
+
+
+def test_an_applied_migration_has_only_the_schema_lineage_authority() -> None:
+    with pytest.raises(ValidationError) as caught:
+        _surface(
+            path="alembic/versions/999_thing.py",
+            family=surfaces.EntryPointFamily.MIGRATION,
+            reachability=surfaces.Reachability.APPLIED_ONCE,
+            disposition=surfaces.Disposition.HISTORICAL_NO_ACTION,
+        )
+    assert "schema lineage and nothing else" in str(caught.value)
+
+
+def test_an_undetermined_axis_may_not_name_an_owner() -> None:
+    with pytest.raises(ValidationError) as caught:
+        _surface(
             path="app/services/mystery.py",
-            family=surfaces.EntryPointFamily.SERVICE,
-            classification=surfaces.SurfaceClassification.UNKNOWN,
-            entity_types=(cohort.CohortEntityType.PARTY,),
-            owning_service="party.registry",
-            registry_declared=True,
-            production_runtime=True,
-            note="ownership was not established",
+            authority=surfaces.AuthorityRole.UNDETERMINED,
+            registry_declared=False,
         )
     assert "neither may be guessed" in str(caught.value)
 
 
-def test_an_unknown_surface_without_an_owner_is_accepted() -> None:
-    surface = surfaces.SourceSurface(
+def test_an_undetermined_axis_without_an_owner_is_accepted() -> None:
+    surface = _surface(
         path="app/services/mystery.py",
-        family=surfaces.EntryPointFamily.SERVICE,
-        classification=surfaces.SurfaceClassification.UNKNOWN,
-        entity_types=(cohort.CohortEntityType.PARTY,),
-        owning_service=None,
+        authority=surfaces.AuthorityRole.UNDETERMINED,
         registry_declared=False,
-        production_runtime=True,
-        note="ownership was looked for in the registry and not established",
+        owning_service=None,
+        note="authority was looked for in the registry and not established",
     )
     assert surface.classification is surfaces.SurfaceClassification.UNKNOWN
 
 
 def test_a_surface_without_a_rationale_is_refused() -> None:
     with pytest.raises(ValidationError):
-        surfaces.SourceSurface(
-            path="app/services/party.py",
-            family=surfaces.EntryPointFamily.SERVICE,
-            classification=surfaces.SurfaceClassification.READ_ONLY_CONSUMER,
-            entity_types=(cohort.CohortEntityType.PARTY,),
-            owning_service=None,
-            registry_declared=False,
-            production_runtime=True,
-            note="   ",
-        )
+        _surface(note="   ")
+
+
+def test_the_three_axes_are_orthogonal() -> None:
+    """Knowing one axis must not determine another, or they are one axis.
+
+    Asserted over the real inventory rather than over the enum definitions: an
+    orthogonality claim is about the data, and three vocabularies that always
+    move together are one vocabulary written three times. If this ever fails,
+    the honest fix is to merge the collapsed axes — not to invent a surface
+    that keeps them apart.
+    """
+
+    axes = {
+        "authority": [surface.authority for surface in surfaces.COHORT_SURFACES],
+        "boundary": [surface.boundary for surface in surfaces.COHORT_SURFACES],
+        "reachability": [surface.reachability for surface in surfaces.COHORT_SURFACES],
+    }
+    collapsed: list[str] = []
+    for first, first_values in axes.items():
+        for second, second_values in axes.items():
+            if first == second:
+                continue
+            observed: dict[object, set[object]] = {}
+            for left, right in zip(first_values, second_values, strict=True):
+                observed.setdefault(left, set()).add(right)
+            if all(len(options) == 1 for options in observed.values()):
+                collapsed.append(f"{first} determines {second}")
+    assert not collapsed, (
+        "these axes are not independent in the inventory, so they are one "
+        "classification wearing three names:\n  " + "\n  ".join(collapsed)
+    )
+
+
+def test_the_derived_classification_covers_every_surface() -> None:
+    """The retained eight-member view must answer for all 45 rows."""
+
+    grouped = surfaces.surfaces_by_classification()
+    assert sum(len(paths) for paths in grouped.values()) == len(
+        surfaces.COHORT_SURFACES
+    )
 
 
 def test_no_inventoried_surface_is_left_unknown() -> None:
@@ -254,6 +329,153 @@ def test_no_inventoried_surface_is_left_unknown() -> None:
     assert unknown == ()
 
 
+def test_nothing_observes_into_the_cohort_and_that_is_a_finding() -> None:
+    """`OBSERVES` is empty, and the reason is recorded rather than implied.
+
+    Provider payloads terminate in the Integration Inbox, which is outside
+    this cohort. If a surface ever starts collecting an observation directly
+    into a cohort table, this fails and the finding in
+    `docs/ISP_COHORT1_SOURCE_OWNERSHIP.md` has to be rewritten rather than
+    silently outgrown.
+    """
+
+    assert surfaces.surfaces_by_boundary()[surfaces.BoundaryRole.OBSERVES] == ()
+
+
+# --------------------------------------------------------------------------
+# dispositions
+# --------------------------------------------------------------------------
+
+
+def test_the_disposition_vocabulary_has_no_do_nothing_member() -> None:
+    """Every member must name a change, or it becomes the way to avoid one.
+
+    `HISTORICAL_NO_ACTION` and `NON_PRODUCTION_NO_ACTION` are the two that
+    name inaction, and both are constrained by a cross-axis rule — an applied
+    migration and a disposable-database writer respectively — so neither can
+    be reached by a production surface that simply has not been thought about.
+    """
+
+    # `remains_in_sub` is named as a string rather than a member because it
+    # deliberately is not one any more. If it comes back, this catches it.
+    inaction_spellings = ("no_action", "remains_in_sub", "unchanged", "keep")
+    reachable_inaction = {
+        member
+        for member in surfaces.Disposition
+        if any(spelling in member.value for spelling in inaction_spellings)
+    }
+    assert reachable_inaction == {
+        surfaces.Disposition.HISTORICAL_NO_ACTION,
+        surfaces.Disposition.NON_PRODUCTION_NO_ACTION,
+    }, (
+        "the disposition vocabulary gained a member meaning 'nothing happens' "
+        "that is not pinned to a spent reachability; that is the member "
+        "somebody uses instead of deciding"
+    )
+
+
+def test_a_no_action_disposition_requires_a_spent_reachability() -> None:
+    """Inaction is only legal where the surface cannot act again."""
+
+    inaction = {
+        surfaces.Disposition.HISTORICAL_NO_ACTION,
+        surfaces.Disposition.NON_PRODUCTION_NO_ACTION,
+    }
+    wrong = sorted(
+        surface.path
+        for surface in surfaces.COHORT_SURFACES
+        if surface.disposition in inaction and surface.production_runtime
+    )
+    assert not wrong, (
+        "these surfaces can still write production and are dispositioned as "
+        "needing no action:\n  " + "\n  ".join(wrong)
+    )
+
+
+def test_every_surface_carries_a_disposition() -> None:
+    grouped = surfaces.surfaces_by_disposition()
+    assert sum(len(paths) for paths in grouped.values()) == len(
+        surfaces.COHORT_SURFACES
+    )
+
+
+def test_an_undecided_disposition_must_state_its_question() -> None:
+    with pytest.raises(ValidationError) as caught:
+        _surface(disposition=surfaces.Disposition.UNDECIDED)
+    assert "indistinguishable from an unfinished row" in str(caught.value)
+
+
+def test_a_decided_disposition_may_not_carry_a_question() -> None:
+    """The other direction: a decided surface hiding a live doubt."""
+
+    with pytest.raises(ValidationError) as caught:
+        _surface(open_question="but is this really settled, or did we assume it?")
+    assert "hiding a live doubt" in str(caught.value)
+
+
+def test_an_undecided_surface_with_a_real_question_is_accepted() -> None:
+    surface = _surface(
+        disposition=surfaces.Disposition.UNDECIDED,
+        open_question=(
+            "Does this fact migrate with the cohort or stay in Sub as history?"
+        ),
+    )
+    assert surface.disposition is surfaces.Disposition.UNDECIDED
+
+
+def test_a_token_open_question_is_refused() -> None:
+    with pytest.raises(ValidationError) as caught:
+        _surface(
+            disposition=surfaces.Disposition.UNDECIDED,
+            open_question="unclear",
+        )
+    assert "too short to act on" in str(caught.value)
+
+
+def test_the_undecided_surfaces_are_the_ones_we_expect() -> None:
+    """Three today. Named, so shrinking or growing the set is a reviewed diff."""
+
+    assert [surface.path for surface in surfaces.undecided_surfaces()] == [
+        "app/services/customer_location_requests.py",
+        "app/services/mrr_snapshot.py",
+        "app/services/web_system_restore_tool.py",
+    ]
+
+
+def test_every_displaced_writer_has_a_disposition_that_removes_it() -> None:
+    """A displaced writer must carry a disposition that actually removes it.
+
+    `ctl-isp-009` ratchets the displaced set to zero. A surface in that set
+    whose disposition leaves it in place is a contradiction, and it would be
+    discovered when the ratchet refuses to reach zero rather than here.
+    """
+
+    removing = {
+        surfaces.Disposition.RETIRE_AFTER_CUTOVER,
+        surfaces.Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        surfaces.Disposition.UNDECIDED,
+    }
+    displaced = set(surfaces.displaced_writer_paths())
+    contradictions = sorted(
+        surface.path
+        for surface in surfaces.COHORT_SURFACES
+        if surface.path in displaced and surface.disposition not in removing
+    )
+    assert not contradictions, "\n  ".join(contradictions)
+
+
+def test_surfaces_that_only_read_are_never_marked_for_retirement() -> None:
+    """A reader is repointed or kept; retiring it would delete working code."""
+
+    misfiled = sorted(
+        surface.path
+        for surface in surfaces.COHORT_SURFACES
+        if not surface.writes
+        and surface.disposition is surfaces.Disposition.RETIRE_AFTER_CUTOVER
+    )
+    assert not misfiled, "\n  ".join(misfiled)
+
+
 def test_tables_with_no_counted_writer_state_what_was_searched() -> None:
     recorded = {entry.table for entry in surfaces.TABLES_WITH_NO_COUNTED_WRITER}
     assert recorded == {"organizations", "organization_memberships"}
@@ -263,8 +485,8 @@ def test_tables_with_no_counted_writer_state_what_was_searched() -> None:
     ), "an empty result has to say how hard it looked, or it reads as a conclusion"
 
 
-def test_production_writers_exclude_fixture_and_rehearsal_tooling() -> None:
-    production = set(surfaces.production_writer_paths())
+def test_displaced_writers_exclude_fixture_and_rehearsal_tooling() -> None:
+    production = set(surfaces.displaced_writer_paths())
     assert "scripts/seed/seed_test_fixtures.py" not in production
     assert "scripts/migration/kernel_lineage_rehearsal_canaries.py" not in production
     assert "app/services/party.py" in production

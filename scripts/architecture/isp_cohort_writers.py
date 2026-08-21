@@ -70,6 +70,13 @@ class EntryPointFamily(StrEnum):
     """The executable families a cohort write can arrive from."""
 
     API_ROUTE = "api_route"
+    #: An inbound HTTP handler for another system's callback. Positionally an
+    #: API route, split out because "does anything a foreign system can
+    #: trigger write our cohort?" is a question worth answering on its own —
+    #: and because the brief for this census names webhook handlers as a
+    #: family in their own right, so a coverage claim that quietly folded
+    #: them into `api_route` would be unverifiable.
+    WEBHOOK_HANDLER = "webhook_handler"
     WEB_ROUTE = "web_route"
     #: `app/services/web_*.py`. Positionally a service module, but the
     #: repository's own convention (see `scripts/architecture/sot_debt.py`)
@@ -99,6 +106,12 @@ class EntryPointFamily(StrEnum):
 #: first so `app/services/events/handlers` is an event handler rather than a
 #: service, and `app/api/webhooks` stays an API route (a webhook handler is an
 #: authenticated HTTP route here, not a separate runtime).
+#: Matched before the prefix table: a webhook handler lives under `app/api/`
+#: and would otherwise be classified by position alone.
+_WEBHOOK_RE: Final[re.Pattern[str]] = re.compile(
+    r"^app/api/.*(webhook|callback).*\.py$"
+)
+
 _FAMILY_PREFIXES: Final[tuple[tuple[str, EntryPointFamily], ...]] = (
     ("app/services/events/handlers/", EntryPointFamily.EVENT_HANDLER),
     ("app/services/web_", EntryPointFamily.WEB_PRESENTER),
@@ -154,6 +167,10 @@ _QUERY_TERMINALS: Final[frozenset[str]] = frozenset(
 
 _SET_DML_FUNCTIONS: Final[frozenset[str]] = frozenset({"update", "delete", "insert"})
 
+_SQL_KEYWORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(select|insert|update|delete|from|into|join|truncate)\b", re.IGNORECASE
+)
+
 _RAW_SQL_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(insert\s+into|update|delete\s+from)\s+(?:only\s+)?[\"'`]?(\w+)",
     re.IGNORECASE,
@@ -183,6 +200,8 @@ class CohortWriteSite:
 def family_for(relative_path: str) -> EntryPointFamily:
     """Classify a repository-relative path into an entry-point family."""
 
+    if _WEBHOOK_RE.match(relative_path):
+        return EntryPointFamily.WEBHOOK_HANDLER
     for prefix, family in _FAMILY_PREFIXES:
         if relative_path.startswith(prefix):
             return family
@@ -466,11 +485,93 @@ def cohort_write_sites(
 
 
 def cohort_write_counts(*, project_root: Path = PROJECT_ROOT) -> dict[str, int]:
-    """Return `{family|path: count}`, the shape the baseline stores."""
+    """Return `{family|path: count}` — the magnitude ratchet's input."""
 
     return {
         site.key: site.count for site in cohort_write_sites(project_root=project_root)
     }
+
+
+def cohort_writer_files(*, project_root: Path = PROJECT_ROOT) -> tuple[str, ...]:
+    """Return the sorted `family|path` keys — the membership ratchet's input.
+
+    Deliberately count-free. Membership and magnitude are different events
+    with different remedies: a writer appearing is a design question, a writer
+    growing from three sites to four is usually a refactor. One baseline
+    holding both cannot say which happened without the reader diffing it by
+    hand, and the whole value of a ratchet is that its failure message is the
+    diagnosis.
+    """
+
+    return tuple(site.key for site in cohort_write_sites(project_root=project_root))
+
+
+def _names_a_cohort_table(value: str, tables: frozenset[str]) -> bool:
+    """Whether a string literal names a cohort table.
+
+    Two shapes, and the second one needs the SQL guard. An exact match is the
+    common case — a table name passed to a helper. A *substring* match is how
+    raw statements name their table, and matching a bare word anywhere would
+    sweep in every docstring containing "parties" or "addresses"; requiring a
+    SQL keyword in the same literal keeps the census measuring code rather
+    than prose.
+    """
+
+    lowered = value.lower()
+    if lowered in tables:
+        return True
+    if not _SQL_KEYWORD_RE.search(lowered):
+        return False
+    return any(re.search(rf"\b{re.escape(table)}\b", lowered) for table in tables)
+
+
+@cache
+def cohort_reference_sites(
+    *, project_root: Path = PROJECT_ROOT
+) -> tuple[tuple[str, str], ...]:
+    """Return `(family, path)` for every file that so much as names a cohort table.
+
+    The reader half of the inventory. Writers are the set a cutover has to
+    displace; references are the set a cutover has to *not surprise* — reports,
+    projections, exporters, list screens, importers. It is deliberately a
+    coarse measure (a model name or a table name anywhere in the module) and is
+    reported as a bounded reach rather than a precise dependency graph, because
+    overstating precision here would invite someone to treat it as a complete
+    impact analysis.
+    """
+
+    models = cohort_model_names()
+    tables = frozenset(name.lower() for name in cohort_table_names())
+    found: list[tuple[str, str]] = []
+    for path in _scan_paths(project_root):
+        relative = path.relative_to(project_root).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - lint gate
+            continue
+        for node in ast.walk(tree):
+            named = (
+                (isinstance(node, ast.Name) and node.id in models)
+                or (isinstance(node, ast.Attribute) and node.attr in models)
+                or (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and _names_a_cohort_table(node.value, tables)
+                )
+            )
+            if named:
+                found.append((str(family_for(relative)), relative))
+                break
+    return tuple(sorted(found))
+
+
+def reference_counts_by_family(*, project_root: Path = PROJECT_ROOT) -> Counter[str]:
+    """Per-family counts of files referencing cohort state at all."""
+
+    totals: Counter[str] = Counter()
+    for family, _ in cohort_reference_sites(project_root=project_root):
+        totals[family] += 1
+    return totals
 
 
 def counts_by_family(*, project_root: Path = PROJECT_ROOT) -> Counter[str]:
@@ -482,23 +583,51 @@ def counts_by_family(*, project_root: Path = PROJECT_ROOT) -> Counter[str]:
     return totals
 
 
-def render_baseline(*, project_root: Path = PROJECT_ROOT) -> str:
-    """Render the ratchet baseline file body."""
+def render_file_baseline(*, project_root: Path = PROJECT_ROOT) -> str:
+    """Render the membership baseline: which files write cohort state."""
 
     lines = [
-        "# cohort-isp-01 source-surface writer baseline.",
+        "# cohort-isp-01 source-surface writer FILE baseline — membership only.",
         "#",
-        "# Format: `<count> <family>|<path>`. Generated by",
-        "# `python -m scripts.architecture.isp_cohort_writers --baseline`.",
+        "# Format: `<family>|<path>`. Generated by",
+        "# `python -m scripts.architecture.isp_cohort_writers --baseline files`.",
         "#",
-        "# This is a two-directional ratchet. A new or grown writer fails the",
-        "# guard; so does a removed writer whose line was not lowered in the",
-        "# same change. Lower a line only in the pull request that actually",
-        "# retires the writer, after the cohort's sealed authority switch.",
+        "# Two-directional. A file that starts writing cohort state fails the",
+        "# guard; so does a baselined file that stopped, until its line is",
+        "# deleted in the same change. Delete a line only in the pull request",
+        "# that actually removes the writer, after the sealed authority switch.",
+        "#",
+        "# Counts live in isp_cohort1_write_sites_baseline.txt. This file says",
+        "# nothing about how much a writer writes, on purpose.",
         "",
     ]
-    for site in cohort_write_sites(project_root=project_root):
-        lines.append(f"{site.count} {site.key}")
+    lines.extend(cohort_writer_files(project_root=project_root))
+    return "\n".join(lines) + "\n"
+
+
+def render_site_baseline(*, project_root: Path = PROJECT_ROOT) -> str:
+    """Render the magnitude baseline: how many write sites each file holds."""
+
+    sites = cohort_write_sites(project_root=project_root)
+    lines = [
+        "# cohort-isp-01 source-surface WRITE SITE baseline — magnitude only.",
+        "#",
+        "# Format: `<count> <family>|<path>`, plus one `TOTAL <n>` line.",
+        "# Generated by",
+        "# `python -m scripts.architecture.isp_cohort_writers --baseline sites`.",
+        "#",
+        "# Two-directional, and compared only for files present on BOTH sides:",
+        "# membership is the file baseline's job, so a failure here always",
+        "# means an existing writer grew or shrank rather than appeared.",
+        "#",
+        "# TOTAL is exact. It catches the one case per-file counts cannot: a",
+        "# write moved between files nets to zero per file only if both sides",
+        "# were already baselined, and the total proves the aggregate did not",
+        "# drift while the per-file diff looked innocent.",
+        "",
+    ]
+    lines.extend(f"{site.count} {site.key}" for site in sites)
+    lines.append(f"TOTAL {sum(site.count for site in sites)}")
     return "\n".join(lines) + "\n"
 
 
@@ -508,18 +637,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--baseline",
-        action="store_true",
-        help="print the ratchet baseline body instead of JSON",
+        choices=("files", "sites"),
+        help="print one ratchet baseline body instead of JSON",
     )
     arguments = parser.parse_args(argv)
-    if arguments.baseline:
-        print(render_baseline(), end="")
+    if arguments.baseline == "files":
+        print(render_file_baseline(), end="")
+        return 0
+    if arguments.baseline == "sites":
+        print(render_site_baseline(), end="")
         return 0
     print(
         json.dumps(
             {
                 "unscanned_python_roots": list(unscanned_python_roots()),
                 "by_family": dict(sorted(counts_by_family().items())),
+                "references_by_family": dict(
+                    sorted(reference_counts_by_family().items())
+                ),
                 "sites": [
                     {
                         "family": site.family,

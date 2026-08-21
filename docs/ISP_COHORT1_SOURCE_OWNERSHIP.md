@@ -74,8 +74,22 @@ matrix. It is not a plan, an approval, or a claim that any module is released.
 ## Writer census
 
 Counted mechanically across every entry-point family by
-`scripts/architecture/isp_cohort_writers.py` and frozen in
-`tests/architecture/isp_cohort1_writer_baseline.txt`.
+`scripts/architecture/isp_cohort_writers.py` and frozen by **two** baselines,
+because membership and magnitude are different events wanting different
+remedies:
+
+- `tests/architecture/isp_cohort1_writer_files_baseline.txt` — *which files*
+  write cohort state. A file that starts writing is a design decision somebody
+  has to defend.
+- `tests/architecture/isp_cohort1_write_sites_baseline.txt` — *how much* each
+  writes, plus an exact `TOTAL`. An existing writer going from three sites to
+  four is usually a refactor.
+
+Both are two-directional. The magnitude ratchet compares only files present on
+both sides, so it never reports an appearance or a removal — membership is the
+other guard's job, and each stays silent about the other's business. The exact
+total catches the one case per-file counts cannot: a write moved between two
+already-baselined files looks like an ordinary shrink-and-grow pair.
 
 | Family | Files | Write sites |
 |---|---|---|
@@ -85,34 +99,158 @@ Counted mechanically across every entry-point family by
 | `migration` | 6 | 8 |
 | **total** | **34** | **101** |
 
-`api_route`, `web_route`, `task_worker`, `scheduled_job`, `event_handler`,
-`websocket`, `importer`, `poller`, `app_module` and `repository_root` produce
-**zero** counted writes. That is a real property of this repository rather
-than a gap in the scan: the thin-adapter rule already keeps routes and tasks
-out of direct persistence, and the census's sensitivity tests prove it would
-count a route that started writing.
+`api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
+`event_handler`, `websocket`, `importer`, `poller`, `app_module` and
+`repository_root` produce **zero** counted writes. That is a real property of
+this repository rather than a gap in the scan: the thin-adapter rule already
+keeps routes and tasks out of direct persistence, and the census's sensitivity
+tests prove it would count a route — or a webhook — that started writing.
 
-### Classification
+`webhook_handler` is worth stating on its own, because it is the family whose
+writers are hardest to notice by reading code: nothing in this repository calls
+an inbound callback. Sub has eight of them under `app/api/`, and **none writes
+or even directly references** a cohort-1 model or table. `crm_webhooks.py`, the
+one that carries customer identity, hands its payload to
+`crm_customers.observe_customer` — an observation, delegated to a service, which
+is the boundary the SOT registry already declares.
 
-| Classification | Files |
+### Classification on three axes
+
+One enum kept forcing dishonest answers — an applied migration is not an
+"authorized adapter", and a fixture seeder writes real rows while owning
+nothing. Those were three independent questions being asked at once, so the
+inventory now answers them separately.
+
+**Authority** — what say the surface has over the fact:
+
+| `AuthorityRole` | Files |
 |---|---|
-| `AUTHORITATIVE_WRITER` | 6 |
-| `DERIVED_PROJECTION` | 2 |
+| `PARALLEL_WRITER` | 18 |
+| `NO_AUTHORITY` | 13 |
+| `DECLARED_OWNER` | 6 |
+| `SCHEMA_LINEAGE` | 6 |
+| `PROJECTION_WRITER` | 2 |
+| `UNDETERMINED` | 0 |
+
+**Boundary** — what it does there:
+
+| `BoundaryRole` | Files |
+|---|---|
+| `PERSISTS` | 34 |
+| `DELEGATES` | 8 |
+| `READS` | 2 |
+| `TRANSPORTS` | 1 |
+| `OBSERVES` | 0 |
+| `UNDETERMINED` | 0 |
+
+**Reachability** — how it can still be reached against production:
+
+| `Reachability` | Files |
+|---|---|
+| `INTERNAL_ONLY` | 21 |
+| `ONLINE_REQUEST` | 9 |
+| `APPLIED_ONCE` | 6 |
+| `OPERATOR_COMMAND` | 4 |
+| `BACKGROUND_JOB` | 3 |
+| `NON_PRODUCTION` | 2 |
+| `UNDETERMINED` | 0 |
+
+The three are genuinely independent, and
+`test_the_three_axes_are_orthogonal` proves it over the real inventory rather
+than asserting it: for every ordered pair, knowing one value leaves at least
+two possibilities open on the other. `PERSISTS` appears with all five writing
+authorities; `NO_AUTHORITY` appears with five different boundary roles;
+`INTERNAL_ONLY` appears with four different authorities. If that ever
+collapses, the axes should be merged rather than kept apart for appearances.
+
+Of the 34 writing surfaces, **26 can write production again**. The other eight
+cannot: two touch only disposable databases and six are applied migrations
+Alembic will not re-run. All eight stay in the ratchet, because a *new* one is
+exactly what the guard should catch; none counts as something a cutover has to
+displace, because none can be retired.
+
+### Derived classification
+
+The original eight-member vocabulary survives as a *computed* view over the
+axes, so every document and control record written against it still means what
+it meant — and there is no second place to edit, so the two cannot disagree.
+
+| `SurfaceClassification` | Files |
+|---|---|
 | `LEGACY_PARALLEL_WRITER` | 26 |
 | `AUTHORIZED_ADAPTER` | 8 |
-| `READ_ONLY_CONSUMER` | 1 |
+| `AUTHORITATIVE_WRITER` | 6 |
+| `DERIVED_PROJECTION` | 2 |
+| `READ_ONLY_CONSUMER` | 2 |
+| `TRANSPORT` | 1 |
 | `OBSERVATION_COLLECTOR` | 0 |
-| `TRANSPORT` | 0 |
 | `UNKNOWN` | 0 |
 
-Of the 34 writing surfaces, **26 are production runtime**. The other eight
-cannot write the production database again: `scripts/seed/seed_test_fixtures.py`
-and `scripts/migration/kernel_lineage_rehearsal_canaries.py` touch only
-disposable databases, and the six applied migrations below are applied —
-Alembic will not re-run them against a migrated database. All eight stay in the
-ratchet, because a *new* one is exactly what the guard should catch; none of
-them counts as something a cutover has to displace, because none of them can
-be retired.
+`OBSERVATION_COLLECTOR` and `BoundaryRole.OBSERVES` are both zero, and that is
+a finding rather than an oversight: **nothing collects an external observation
+directly into a cohort-1 table**. Provider payloads terminate in the
+Integration Inbox, which is outside this cohort, and
+`app/services/crm_customers.py` only *interprets* a verified observation by
+matching it to an existing account through exact retained provenance. The one
+inbound callback carrying customer identity, `app/api/crm_webhooks.py`, is
+inventoried as `TRANSPORTS` for the same reason.
+
+### Disposition — what happens to each surface
+
+Classification says what a surface is; it does not say what becomes of it, and
+that is the question a cutover actually needs answered. Every surface carries
+one, **including the adapters and readers that write nothing**: a route that
+reads a customer account has to read it from somewhere once that account lives
+in another application.
+
+| `Disposition` | Files | Meaning |
+|---|---|---|
+| `ROUTE_THROUGH_OWNER_FIRST` | 12 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
+| `RETIRE_AFTER_CUTOVER` | 11 | Displaced by the target; must reach zero for `ctl-isp-009` |
+| `REPOINT_TO_TARGET_API` | 11 | Reads or forwards a cohort fact; after the switch it must reach the target through a versioned contract |
+| `HISTORICAL_NO_ACTION` | 6 | An applied migration; nothing to retire |
+| `UNDECIDED` | 3 | Needs a decision, and says which one |
+| `NON_PRODUCTION_NO_ACTION` | 2 | Writes only disposable databases |
+
+There is deliberately no "stays as it is" disposition. Every surface here
+touches cohort-1 state — that is the inclusion criterion — and once that state
+lives in another application, no such touch survives unchanged. A member
+meaning "nothing happens" would be the one anybody reached for to avoid
+deciding.
+
+**Every counted writer has an individual disposition; the readers take a
+declared default.** 386 files reference cohort state and 45 are inventoried
+here. Assigning an individual disposition to the other 343 would be fabrication
+at scale — the reference census is a bounded reach, not an impact analysis, and
+many of those files only mention a model in a type hint.
+
+The default is `REPOINT_TO_TARGET_API`, and it is an answer rather than a gap
+because only one shape is available: ADR 0012 gives the two applications
+separate databases, sessions and transactions, so after the switch a file that
+reads a cohort fact either reaches the target through a versioned contract or
+stops reading it. What the default may never cover is a **writer** — "displace
+this" is a decision about a specific line of code, and a guard fails the build
+if a counted writer ever falls through to it.
+
+The disposition is about the surface's **cohort-1 touch**, not the whole file.
+`account_lifecycle.py` keeps owning subscription lifecycle long after its
+Subscriber projection writes are displaced.
+
+`ROUTE_THROUGH_OWNER_FIRST` is the one that gates `ctl-isp-007` rather than
+`ctl-isp-009`: a shadow comparison run against a source with two writers cannot
+tell drift from the second writer, so those twelve have to be routed through
+their owners before a comparison means anything.
+
+### The three undecided surfaces
+
+Enumerable through `surfaces.undecided_surfaces()`, because a question that
+lives only in prose is one somebody answers by accident.
+
+| Surface | Open question |
+|---|---|
+| `app/services/mrr_snapshot.py` | Does `subscribers.mrr_total` migrate, or does the target recompute it and the column simply not cross? Nobody owns it on either side today. |
+| `app/services/customer_location_requests.py` | `addresses` has no declared owner, so there is no service to route this through. Which owner takes customer addresses before the cohort can be shadowed? |
+| `app/services/web_system_restore_tool.py` | Account recovery has no counterpart in the target. Does restore move with the cohort, stay in Sub against migrated-away rows, or retire? |
 
 ### Declared owners
 
@@ -211,6 +349,56 @@ which is what `db.commit()` in a route means here.
 | `app/web/customer/routes.py` | `web_route` | authenticated customer session |
 | `app/web/customer/location.py` | `web_route` | authenticated customer session |
 | `app/tasks/nin_tasks.py` | `task_worker` | worker context; writes verification rows outside this cohort |
+| `app/api/crm_webhooks.py` | `webhook_handler` | provider signature verification; hands the payload to a service and writes no cohort row |
+| `app/services/crm_customers.py` | `service` | reads accounts by exact CRM provenance; creates and updates nothing |
+
+## Reader reach and downstream consequences
+
+Writers are the set a cutover has to displace. Readers are the set it has to
+not surprise, and they are an order of magnitude larger: **386 files** name a
+cohort-1 model or table somewhere in their body — measured by
+`scripts/architecture/isp_cohort_writers.py --json`, on the commit that
+introduced this document.
+
+| Family | Files referencing cohort state |
+|---|---|
+| `service` | 213 |
+| `web_presenter` | 48 |
+| `migration` | 45 |
+| `cli_script` | 43 |
+| `app_module` | 20 |
+| `web_route` | 9 |
+| `event_handler` | 3 |
+| `api_route` | 3 |
+| `task_worker` | 2 |
+| `webhook_handler` | 0 |
+
+This is a deliberately coarse measure — a mapped-class name anywhere in the
+module, or a table name in a string that also contains a SQL keyword — and it
+is a **bounded reach, not an impact analysis**. Overstating its
+precision would invite someone to treat it as complete, and it is not: a
+module that reads a cohort fact through a service helper, without naming a
+model, does not appear.
+
+### External projections
+
+Cohort-1 facts leave Sub through several transports. None of them owns the
+fact, and every one of them will need reconciling after a later cutover:
+
+| Transport | What of the cohort it carries |
+|---|---|
+| RADIUS (`app/services/radius*.py`) | Account identity and lifecycle projected into access state and credentials |
+| CRM (`app/services/crm_*.py`) | Customer identity in both directions — inbound as observation, outbound as views and reporting |
+| ERP (`app/services/erp_*.py`) | Account references on billing and domain synchronisation |
+| UISP (`app/services/topology/uisp_sync.py`) | Subscriber references on network device synchronisation |
+| Team inbox (`app/services/team_inbox_projection.py`, `team_inbox_contact_links.py`) | Contact-to-conversation links built from `subscriber_contacts` and party relationships |
+| `customer_identity_index` | A local, rebuildable search index over identity — a cache, never a source |
+| Notification delivery | Addressed from contact points and account contact columns |
+
+Every one of these is a **transport or a projection**, not an authority. That
+is the existing SOT position and this document does not change it; it records
+them here because "who reads this after the switch" is the question a cutover
+checklist forgets until something stops being delivered.
 
 ## Deliberate exclusions
 

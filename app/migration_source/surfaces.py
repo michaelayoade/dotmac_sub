@@ -1,35 +1,72 @@
 """Who writes, adapts and consumes cohort-isp-01 source state today.
 
 The writer *census* is mechanical — `scripts/architecture/isp_cohort_writers.py`
-counts it from the AST, and a two-directional ratchet freezes the result. This
-module is the other half: what each counted surface **is**, which no static
-scan can decide. A file that assigns `subscriber.status` and a file that
-assigns `subscriber.metadata_` are the same shape to a parser and completely
-different facts to a migration.
+counts it from the AST, and two ratchets freeze the result. This module is the
+other half: what each counted surface **is**, which no static scan can decide.
+A file that assigns `subscriber.status` and a file that assigns
+`subscriber.metadata_` are the same shape to a parser and completely different
+facts to a migration.
+
+## Three questions, three vocabularies
+
+The first version of this inventory answered all of it with one enum, and the
+enum kept forcing dishonest answers. An applied migration is not an
+"authorized adapter", but calling it a "legacy parallel writer" reads as
+something a cutover could retire. A fixture seeder writes real rows and has no
+authority at all. Those are not edge cases in one classification — they are
+three independent questions being asked at once:
+
+- **`AuthorityRole`** — what say does this surface have over the fact?
+- **`BoundaryRole`** — what does it actually do at the boundary?
+- **`Reachability`** — how can it still be reached against production?
+
+They are genuinely orthogonal, and
+`tests/test_isp_cohort_source_readiness.py::test_the_three_axes_are_orthogonal`
+proves it rather than asserting it: for every ordered pair of axes, knowing one
+value must leave at least two possibilities open on the other. If a future
+inventory collapses to where one axis determines another, that test fails and
+the axes should be merged rather than quietly kept apart.
+
+`SurfaceClassification` survives as a *derived* view over the axes, so the
+original eight-member vocabulary — and every document written against it —
+still means what it meant.
+
+## A disposition, for every surface
+
+Classification says what a surface is. It does not say what happens to it, and
+"what happens to it" is the question a cutover actually needs answered. Every
+surface therefore carries a `Disposition`, including the adapters and readers
+that write nothing: a route that reads a customer account has to come from
+somewhere after that account lives in another application.
+
+`Disposition.UNDECIDED` is a real state and carries a required `open_question`.
+Three surfaces hold one today. They are enumerable through
+`undecided_surfaces()` precisely so they cannot be lost between here and
+`ctl-isp-006`.
 
 ## The classification is a finding, not a plan
 
-`LEGACY_PARALLEL_WRITER` here does not schedule anything. It records that a
-second path writes a fact some other owner is declared to own, so the cutover
-sequence knows what has to be displaced before authority can move. Nothing in
-this module retires, disables or reroutes a writer; Sub remains the sole
-production writer for this cohort until a separately authorised sealed switch.
+`PARALLEL_WRITER` here does not schedule anything. It records that a second
+path writes a fact some other owner is declared to own, so the cutover sequence
+knows what has to be displaced before authority can move. Nothing in this
+module retires, disables or reroutes a writer; Sub remains the sole production
+writer for this cohort until a separately authorised sealed switch.
 
-## UNKNOWN means unknown
+## UNDETERMINED means undetermined
 
-`SurfaceClassification.UNKNOWN` is reserved for a surface whose ownership was
+Each axis has an `UNDETERMINED` member reserved for a surface whose answer was
 looked for and not established. It is never a synonym for "none found" and
-never a placeholder for "probably fine" — an UNKNOWN row is an open question
-carried into the cutover gate, and the validator below refuses one that does
-not say what is unknown about it.
+never a placeholder for "probably fine" — an undetermined axis is an open
+question carried into the cutover gate, and the validators below refuse one
+that does not say what is unknown about it.
 
-The inverse matters just as much. `organizations` and
-`organization_memberships` have **no** counted writer, and that is a searched
-result rather than an absence of effort: no construction, no tracked mutation,
-no set-based DML and no raw statement names them anywhere under `app/`,
-`scripts/` or the executable migration lineage. That is recorded as a stated
-finding in `TABLES_WITH_NO_COUNTED_WRITER`, with the census's blind spots named
-alongside it, so nobody later reads the empty result as UNKNOWN or as proof.
+The inverse matters just as much. `organizations` and `organization_memberships`
+have **no** counted writer, and that is a searched result rather than an
+absence of effort: no construction, no tracked mutation, no set-based DML and
+no raw statement names them anywhere under `app/`, `scripts/` or the executable
+migration lineage. That is recorded as a stated finding in
+`TABLES_WITH_NO_COUNTED_WRITER`, with the census's blind spots named alongside
+it, so nobody later reads the empty result as undetermined or as proof.
 """
 
 from __future__ import annotations
@@ -42,25 +79,108 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from app.migration_source.cohort import CohortEntityType
 
 
-class SurfaceClassification(StrEnum):
-    """What one surface is allowed to be, relative to the cohort's facts."""
+class AuthorityRole(StrEnum):
+    """What say a surface has over the cohort fact it touches."""
 
-    #: The declared owner of the fact it writes.
-    AUTHORITATIVE_WRITER = "authoritative_writer"
-    #: Validates, authorises and delegates to an owner; owns the transaction
-    #: but decides nothing. Writes no cohort column itself.
-    AUTHORIZED_ADAPTER = "authorized_adapter"
-    #: Writes a value derived from another owner's decision onto a cohort row.
-    DERIVED_PROJECTION = "derived_projection"
+    #: The SOT registry declares it the owner of this fact.
+    DECLARED_OWNER = "declared_owner"
+    #: Writes a value derived from a decision owned elsewhere.
+    PROJECTION_WRITER = "projection_writer"
+    #: Writes a fact another owner is declared to own.
+    PARALLEL_WRITER = "parallel_writer"
+    #: Writes under Alembic's deployed-schema authority rather than a
+    #: service's. Real authority, exercised once, at deploy time.
+    SCHEMA_LINEAGE = "schema_lineage"
+    #: Decides nothing about the fact.
+    NO_AUTHORITY = "no_authority"
+    #: Authority was looked for and not established.
+    UNDETERMINED = "undetermined"
+
+
+class BoundaryRole(StrEnum):
+    """What a surface does at the boundary, independent of its authority."""
+
+    #: Issues the write itself.
+    PERSISTS = "persists"
+    #: Validates, authorises and calls an owner. Owns the transaction and
+    #: decides nothing — which is what `db.commit()` in a route means here.
+    DELEGATES = "delegates"
     #: Records an external fact as an observation, deciding nothing.
-    OBSERVATION_COLLECTOR = "observation_collector"
-    #: Carries data between systems; holds no authority over it.
-    TRANSPORT = "transport"
+    OBSERVES = "observes"
+    #: Carries a payload between systems and holds none of it.
+    TRANSPORTS = "transports"
     #: Reads cohort state and never writes it.
+    READS = "reads"
+    #: The boundary behaviour was looked for and not established.
+    UNDETERMINED = "undetermined"
+
+
+class Reachability(StrEnum):
+    """How a surface can still be reached against the production database."""
+
+    #: A live request path — HTTP or WebSocket.
+    ONLINE_REQUEST = "online_request"
+    #: A task, worker or scheduled job.
+    BACKGROUND_JOB = "background_job"
+    #: A command a human runs on a host.
+    OPERATOR_COMMAND = "operator_command"
+    #: Reached only from other application code.
+    INTERNAL_ONLY = "internal_only"
+    #: An applied migration. The lineage will not run it again.
+    APPLIED_ONCE = "applied_once"
+    #: Disposable databases only.
+    NON_PRODUCTION = "non_production"
+    #: Reachability was looked for and not established.
+    UNDETERMINED = "undetermined"
+
+
+class Disposition(StrEnum):
+    """What happens to this surface's cohort-1 touch when authority moves.
+
+    About the surface's *cohort-1 touch*, not the whole file.
+    `account_lifecycle.py` keeps owning subscription lifecycle long after its
+    Subscriber projection writes are displaced.
+
+    There is deliberately no "stays as it is" member. Every surface here
+    touches cohort-1 state — that is the inclusion criterion — and once that
+    state lives in another application, no such touch can survive unchanged.
+    A member meaning "nothing happens" would be the one anybody reached for to
+    avoid deciding, and this vocabulary exists to force the decision.
+    """
+
+    #: Displaced by the target. Must reach zero for `ctl-isp-009`.
+    RETIRE_AFTER_CUTOVER = "retire_after_cutover"
+    #: Must stop bypassing its declared owner *before* the cohort can be
+    #: shadowed — a comparison against a source with two writers cannot
+    #: distinguish drift from the second writer.
+    ROUTE_THROUGH_OWNER_FIRST = "route_through_owner_first"
+    #: Reads or forwards a cohort fact, so after the switch it must reach the
+    #: target through a versioned contract. ADR 0012 permits no other shape:
+    #: the two applications share no tables, sessions or transactions.
+    REPOINT_TO_TARGET_API = "repoint_to_target_api"
+    #: An applied migration. There is nothing to retire.
+    HISTORICAL_NO_ACTION = "historical_no_action"
+    #: Writes only disposable databases.
+    NON_PRODUCTION_NO_ACTION = "non_production_no_action"
+    #: Needs a decision. Carries a required `open_question`.
+    UNDECIDED = "undecided"
+
+
+class SurfaceClassification(StrEnum):
+    """The original single vocabulary, retained as a derived view.
+
+    Every document and control record written against these eight names keeps
+    meaning what it meant. `SourceSurface.classification` computes it from the
+    axes, so the two can never disagree — there is no second place to edit.
+    """
+
+    AUTHORITATIVE_WRITER = "authoritative_writer"
+    AUTHORIZED_ADAPTER = "authorized_adapter"
+    DERIVED_PROJECTION = "derived_projection"
+    OBSERVATION_COLLECTOR = "observation_collector"
+    TRANSPORT = "transport"
     READ_ONLY_CONSUMER = "read_only_consumer"
-    #: A second path writing a fact another owner is declared to own.
     LEGACY_PARALLEL_WRITER = "legacy_parallel_writer"
-    #: Ownership was looked for and not established. Carried into the gate.
     UNKNOWN = "unknown"
 
 
@@ -74,6 +194,7 @@ class EntryPointFamily(StrEnum):
     """
 
     API_ROUTE = "api_route"
+    WEBHOOK_HANDLER = "webhook_handler"
     WEB_ROUTE = "web_route"
     WEB_PRESENTER = "web_presenter"
     SERVICE = "service"
@@ -89,14 +210,57 @@ class EntryPointFamily(StrEnum):
     REPOSITORY_ROOT = "repository_root"
 
 
-_WRITING_CLASSIFICATIONS: Final[frozenset[SurfaceClassification]] = frozenset(
+#: Authority roles that mean the surface decides something about what it wrote.
+_WRITING_AUTHORITY: Final[frozenset[AuthorityRole]] = frozenset(
     {
-        SurfaceClassification.AUTHORITATIVE_WRITER,
-        SurfaceClassification.DERIVED_PROJECTION,
-        SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        SurfaceClassification.OBSERVATION_COLLECTOR,
+        AuthorityRole.DECLARED_OWNER,
+        AuthorityRole.PROJECTION_WRITER,
+        AuthorityRole.PARALLEL_WRITER,
+        AuthorityRole.SCHEMA_LINEAGE,
     }
 )
+
+#: Reachability values that cannot touch the production database again.
+_SPENT_REACHABILITY: Final[frozenset[Reachability]] = frozenset(
+    {Reachability.APPLIED_ONCE, Reachability.NON_PRODUCTION}
+)
+
+_DERIVED_CLASSIFICATION: Final[dict[AuthorityRole, SurfaceClassification]] = {
+    AuthorityRole.DECLARED_OWNER: SurfaceClassification.AUTHORITATIVE_WRITER,
+    AuthorityRole.PROJECTION_WRITER: SurfaceClassification.DERIVED_PROJECTION,
+    AuthorityRole.PARALLEL_WRITER: SurfaceClassification.LEGACY_PARALLEL_WRITER,
+    AuthorityRole.SCHEMA_LINEAGE: SurfaceClassification.LEGACY_PARALLEL_WRITER,
+    AuthorityRole.NO_AUTHORITY: SurfaceClassification.LEGACY_PARALLEL_WRITER,
+}
+
+_BOUNDARY_CLASSIFICATION: Final[dict[BoundaryRole, SurfaceClassification]] = {
+    BoundaryRole.DELEGATES: SurfaceClassification.AUTHORIZED_ADAPTER,
+    BoundaryRole.OBSERVES: SurfaceClassification.OBSERVATION_COLLECTOR,
+    BoundaryRole.TRANSPORTS: SurfaceClassification.TRANSPORT,
+    BoundaryRole.READS: SurfaceClassification.READ_ONLY_CONSUMER,
+}
+
+
+#: The disposition every *referencing* file falls under unless this inventory
+#: gives it one individually.
+#:
+#: 386 files name a cohort model or table; 45 are inventoried here. Assigning
+#: an individual disposition to the other 343 would be fabrication at scale —
+#: the reference census is a bounded reach, not an impact analysis, and many of
+#: those files only mention a model in a type hint.
+#:
+#: A class default is still an answer rather than a gap, because there is only
+#: one shape available to them. ADR 0012 gives the two applications separate
+#: databases, sessions and transactions, so after the switch a file that reads
+#: a cohort fact either reaches the target through a versioned contract or
+#: stops reading it. Nothing else is permitted, so nothing else can be
+#: defaulted to.
+#:
+#: What the default may NEVER cover is a writer.
+#: `test_no_counted_writer_relies_on_the_default_disposition` fails the build
+#: if one appears, because "displace this writer" is a decision about a
+#: specific line of code and a blanket rule cannot make it.
+DEFAULT_CALLER_DISPOSITION: Final[Disposition] = Disposition.REPOINT_TO_TARGET_API
 
 
 class SourceSurface(BaseModel):
@@ -107,7 +271,10 @@ class SourceSurface(BaseModel):
     #: Repository-relative path, matching the census key exactly.
     path: str
     family: EntryPointFamily
-    classification: SurfaceClassification
+    authority: AuthorityRole
+    boundary: BoundaryRole
+    reachability: Reachability
+    disposition: Disposition
     #: Cohort entity types this surface touches.
     entity_types: tuple[CohortEntityType, ...]
     #: The owner this surface acts as or bypasses. A SOT registry service name
@@ -116,13 +283,10 @@ class SourceSurface(BaseModel):
     owning_service: str | None
     #: Whether `app/services/sot_registry/` declares this module as a service.
     registry_declared: bool
-    #: False for a surface that cannot write the production database again:
-    #: fixture seeders, rehearsal canaries against disposable databases, and
-    #: applied migrations Alembic will not re-run. They still count in the
-    #: ratchet — a *new* one is exactly what the guard should catch — but
-    #: folding them into the production writer count would overstate what a
-    #: cutover has to displace, and none of them can be "retired".
-    production_runtime: bool
+    #: Required exactly when the disposition is `UNDECIDED`, and forbidden
+    #: otherwise. A surface nobody has decided about must say what the
+    #: decision is, or it reads as one somebody merely forgot to fill in.
+    open_question: str | None
     #: Why this classification, in one sentence a reviewer can disagree with.
     note: str
 
@@ -136,37 +300,410 @@ class SourceSurface(BaseModel):
             )
         if len(set(self.entity_types)) != len(self.entity_types):
             raise ValueError(f"{self.path} repeats an entity type")
+
+        writes = self.boundary is BoundaryRole.PERSISTS
+        if writes and self.authority is AuthorityRole.NO_AUTHORITY:
+            if self.reachability not in _SPENT_REACHABILITY:
+                raise ValueError(
+                    f"{self.path} persists cohort state against a reachable "
+                    "database while claiming no authority over it. A surface "
+                    "that writes has authority over what it wrote whether or "
+                    "not anybody granted it — say which."
+                )
+        if not writes and self.authority in _WRITING_AUTHORITY:
+            raise ValueError(
+                f"{self.path} claims the authority of a writer without "
+                f"writing; {self.authority} is only available to a surface "
+                "whose boundary role is PERSISTS"
+            )
+        if self.reachability is Reachability.APPLIED_ONCE and (
+            self.authority is not AuthorityRole.SCHEMA_LINEAGE
+        ):
+            raise ValueError(
+                f"{self.path} is reachable only as an applied migration, so "
+                "its authority is the schema lineage and nothing else"
+            )
         if (
-            self.classification is SurfaceClassification.AUTHORITATIVE_WRITER
+            self.authority is AuthorityRole.DECLARED_OWNER
             and not self.registry_declared
         ):
             raise ValueError(
-                f"{self.path} is called an authoritative writer but the SOT "
-                "registry does not declare it. An owner nobody declared is a "
-                "parallel writer with a flattering name."
+                f"{self.path} is called a declared owner and the SOT registry "
+                "does not declare it. An owner nobody declared is a parallel "
+                "writer with a flattering name."
             )
-        if self.classification is SurfaceClassification.UNKNOWN and (
-            self.owning_service is not None
+        undetermined = (
+            self.authority is AuthorityRole.UNDETERMINED
+            or self.boundary is BoundaryRole.UNDETERMINED
+            or self.reachability is Reachability.UNDETERMINED
+        )
+        if undetermined and self.owning_service is not None:
+            raise ValueError(
+                f"{self.path} leaves an axis undetermined yet names an owner; "
+                "one of the two statements is wrong and neither may be guessed"
+            )
+        if (self.disposition is Disposition.UNDECIDED) != (
+            self.open_question is not None
         ):
             raise ValueError(
-                f"{self.path} is UNKNOWN yet names an owner; one of the two "
-                "statements is wrong and neither may be guessed"
+                f"{self.path} must carry an open question exactly when its "
+                "disposition is UNDECIDED — an undecided surface with no "
+                "stated question is indistinguishable from an unfinished row, "
+                "and a decided one with a question is hiding a live doubt"
             )
+        if self.open_question is not None and len(self.open_question.split()) < 8:
+            raise ValueError(f"{self.path} states an open question too short to act on")
         return self
 
     @property
     def writes(self) -> bool:
         """Whether this surface mutates cohort state."""
 
-        return self.classification in _WRITING_CLASSIFICATIONS
+        return self.boundary is BoundaryRole.PERSISTS
+
+    @property
+    def production_runtime(self) -> bool:
+        """Whether it can write the production database again.
+
+        False for applied migrations and disposable-database tooling. They
+        still count in the ratchet — a *new* one is exactly what the guard
+        should catch — but folding them into the production writer count would
+        overstate what a cutover has to displace, and none of them can be
+        "retired".
+        """
+
+        return self.reachability not in _SPENT_REACHABILITY
+
+    @property
+    def classification(self) -> SurfaceClassification:
+        """The original eight-member vocabulary, derived from the axes."""
+
+        if (
+            self.authority is AuthorityRole.UNDETERMINED
+            or self.boundary is BoundaryRole.UNDETERMINED
+        ):
+            return SurfaceClassification.UNKNOWN
+        if self.boundary is BoundaryRole.PERSISTS:
+            return _DERIVED_CLASSIFICATION[self.authority]
+        return _BOUNDARY_CLASSIFICATION[self.boundary]
 
 
 COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
-    # ---- declared owners --------------------------------------------------
+    SourceSurface(
+        path="app/api/crm_webhooks.py",
+        family=EntryPointFamily.WEBHOOK_HANDLER,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.TRANSPORTS,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service=None,
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "The one inbound provider callback carrying customer identity. It "
+            "terminates the request, verifies it, and hands the payload to "
+            "`crm_customers.observe_customer`; it names no cohort model and writes no "
+            "cohort row. Inventoried because a webhook writer is the hardest kind to "
+            "notice by reading code — nothing in this repository calls one."
+        ),
+    ),
+    SourceSurface(
+        path="app/api/me.py",
+        family=EntryPointFamily.API_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "The authenticated self-service API; reads the account and delegates "
+            "writes."
+        ),
+    ),
+    SourceSurface(
+        path="app/api/reseller.py",
+        family=EntryPointFamily.API_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "The reseller-scoped API; reaches accounts only through owning services."
+        ),
+    ),
+    SourceSurface(
+        path="app/api/subscribers.py",
+        family=EntryPointFamily.API_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "The JSON account API. Imports the model for typing and delegates every "
+            "mutation."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/account_deletion.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Writes the account's `metadata` blob directly rather than through "
+            "customer.accounts."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/account_lifecycle.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PROJECTION_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="access.subscription_lifecycle",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "Writes the Subscriber lifecycle projection and its override columns. The "
+            "customer_context registry already names this a projection of canonical "
+            "subscription lifecycle state, so the account row is downstream of a "
+            "decision made elsewhere — the export must carry it as derived, never as "
+            "the account's own status."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/billing_cleanup_remediation.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "A billing remediation path sets `subscribers.billing_mode` without the "
+            "account owner."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/brand_profiles.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.BRAND_PROFILE,),
+        owning_service="customer.branding",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "The declared owner of platform, reseller and organization brand profiles."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/crm_customer_name_repair.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.name_remediation",
+        registry_declared=True,
+        open_question=None,
+        note=("Declared owner of the reviewed legacy customer-name repair manifest."),
+    ),
+    SourceSurface(
+        path="app/services/crm_customers.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.READS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service=None,
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Interprets a verified CRM observation by matching it to an existing "
+            "account through exact retained provenance. It reads `Subscriber`, "
+            "creates and updates nothing, and completes no transaction — its own "
+            "docstring says so and the census agrees."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/crm_portal.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="party.registry",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Stamps `subscribers.crm_subscriber_id` in place. External "
+            "identity-reference provenance is declared to party.registry and belongs "
+            "in `party_external_references`, so this is a second provenance store on "
+            "the authoritative row."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/crm_ticket_pull.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.BACKGROUND_JOB,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="party.registry",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "A ticket importer that also writes the customer account's CRM provenance "
+            "id. Collecting an observation is legitimate; writing it onto the "
+            "authoritative row is what makes it parallel."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/customer_location_requests.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.UNDECIDED,
+        entity_types=(
+            CohortEntityType.CUSTOMER_ACCOUNT,
+            CohortEntityType.CUSTOMER_ADDRESS,
+        ),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=(
+            "`addresses` has no declared owner, so there is no service to route this "
+            "through. Which owner takes customer addresses before the cohort can be "
+            "shadowed — customer.accounts, or a new one?"
+        ),
+        note=(
+            "Constructs `Address` rows and writes the account `metadata` blob from an "
+            "undeclared module. Addresses have no declared owner at all, which is why "
+            "this one is debt rather than a bypass of someone."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/customer_portal_contacts.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_CONTACT,),
+        owning_service="party.registry",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Creates and edits legacy `subscriber_contacts` rows from the customer "
+            "portal. party.registry owns the canonical contact-point lifecycle these "
+            "rows are projected into."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/customer_portal_notifications.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "Declared as communications.customer_read_state, and stores that read "
+            "state inside the customer account's `metadata` blob. A declared owner "
+            "writing another owner's row is still a parallel writer of that row."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/mrr_snapshot.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PROJECTION_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.BACKGROUND_JOB,
+        disposition=Disposition.UNDECIDED,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service=None,
+        registry_declared=False,
+        open_question=(
+            "Does `subscribers.mrr_total` migrate, or does the target recompute it "
+            "from its own subscriptions and the column simply not cross? Nobody owns "
+            "it on either side today, so neither answer is available to assume."
+        ),
+        note=(
+            "Writes `subscribers.mrr_total`, a money figure derived from subscription "
+            "state, from a module the registry does not declare. A derived money "
+            "column with no named owner is exactly the shape that survives a "
+            "migration as an authoritative-looking number, so the export carries it "
+            "as derived and the target must recompute rather than trust it."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/network_subscriber_bridge.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Constructs `Subscriber` rows from a provisioning bridge instead of the "
+            "account owner."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/nin_verifications.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=("Writes NIN verification outcome into the account `metadata` blob."),
+    ),
     SourceSurface(
         path="app/services/party.py",
         family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.AUTHORITATIVE_WRITER,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
         entity_types=(
             CohortEntityType.PARTY,
             CohortEntityType.PARTY_ROLE,
@@ -179,251 +716,74 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
         owning_service="party.registry",
         registry_declared=True,
-        production_runtime=True,
+        open_question=None,
         note=(
-            "The declared native identity owner. Its writes to `subscribers` "
-            "and `subscriber_contacts` are the canonical Party binding "
-            "columns, not the legacy identity columns beside them."
+            "The declared native identity owner. Its writes to `subscribers` and "
+            "`subscriber_contacts` are the canonical Party binding columns, not the "
+            "legacy identity columns beside them."
         ),
     ),
     SourceSurface(
         path="app/services/subscriber.py",
         family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.AUTHORITATIVE_WRITER,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
         entity_types=(
             CohortEntityType.CUSTOMER_ACCOUNT,
             CohortEntityType.CUSTOMER_ADDRESS,
         ),
         owning_service="customer.accounts",
         registry_declared=True,
-        production_runtime=True,
+        open_question=None,
         note=(
-            "The declared owner of Subscriber account creation. Its own SOT "
-            "note already records that existing direct writers elsewhere are "
-            "shrink-only migration debt."
-        ),
-    ),
-    SourceSurface(
-        path="app/services/brand_profiles.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.AUTHORITATIVE_WRITER,
-        entity_types=(CohortEntityType.BRAND_PROFILE,),
-        owning_service="customer.branding",
-        registry_declared=True,
-        production_runtime=True,
-        note="The declared owner of platform, reseller and organization brand profiles.",
-    ),
-    SourceSurface(
-        path="app/services/web_customer_actions.py",
-        family=EntryPointFamily.WEB_PRESENTER,
-        classification=SurfaceClassification.AUTHORITATIVE_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.profile_commands",
-        registry_declared=True,
-        production_runtime=True,
-        note=(
-            "Named like a presenter, declared as an owner. Kept in the "
-            "`web_presenter` family because that is where it lives and how a "
-            "reader will find it, and classified as an owner because the "
-            "registry says so — family is location, classification is "
-            "authority, and conflating them is how a real owner gets "
-            "mistaken for a stray adapter."
+            "The declared owner of Subscriber account creation. Its own SOT note "
+            "already records that existing direct writers elsewhere are shrink-only "
+            "migration debt."
         ),
     ),
     SourceSurface(
         path="app/services/subscriber_profile_cleanup.py",
         family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.AUTHORITATIVE_WRITER,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.profile_cleanup",
         registry_declared=True,
-        production_runtime=True,
-        note="Declared owner of evidence-bound gender and date-of-birth repair.",
-    ),
-    SourceSurface(
-        path="app/services/crm_customer_name_repair.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.AUTHORITATIVE_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.name_remediation",
-        registry_declared=True,
-        production_runtime=True,
-        note="Declared owner of the reviewed legacy customer-name repair manifest.",
-    ),
-    # ---- projections ------------------------------------------------------
-    SourceSurface(
-        path="app/services/account_lifecycle.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.DERIVED_PROJECTION,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="access.subscription_lifecycle",
-        registry_declared=True,
-        production_runtime=True,
-        note=(
-            "Writes the Subscriber lifecycle projection and its override "
-            "columns. The customer_context registry already names this a "
-            "projection of canonical subscription lifecycle state, so the "
-            "account row is downstream of a decision made elsewhere — the "
-            "export must carry it as derived, never as the account's own "
-            "status."
-        ),
-    ),
-    SourceSurface(
-        path="app/services/mrr_snapshot.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.DERIVED_PROJECTION,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service=None,
-        registry_declared=False,
-        production_runtime=True,
-        note=(
-            "Writes `subscribers.mrr_total`, a money figure derived from "
-            "subscription state, from a module the registry does not declare. "
-            "A derived money column with no named owner is exactly the shape "
-            "that survives a migration as an authoritative-looking number, so "
-            "the export carries it as derived and the target must recompute "
-            "rather than trust it."
-        ),
-    ),
-    # ---- parallel writers -------------------------------------------------
-    SourceSurface(
-        path="app/services/account_deletion.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="Writes the account's `metadata` blob directly rather than through customer.accounts.",
-    ),
-    SourceSurface(
-        path="app/services/billing_cleanup_remediation.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="A billing remediation path sets `subscribers.billing_mode` without the account owner.",
-    ),
-    SourceSurface(
-        path="app/services/crm_portal.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="party.registry",
-        registry_declared=False,
-        production_runtime=True,
-        note=(
-            "Stamps `subscribers.crm_subscriber_id` in place. External "
-            "identity-reference provenance is declared to party.registry and "
-            "belongs in `party_external_references`, so this is a second "
-            "provenance store on the authoritative row."
-        ),
-    ),
-    SourceSurface(
-        path="app/services/crm_ticket_pull.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="party.registry",
-        registry_declared=False,
-        production_runtime=True,
-        note=(
-            "A ticket importer that also writes the customer account's CRM "
-            "provenance id. Collecting an observation is legitimate; writing "
-            "it onto the authoritative row is what makes it parallel."
-        ),
-    ),
-    SourceSurface(
-        path="app/services/customer_location_requests.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(
-            CohortEntityType.CUSTOMER_ACCOUNT,
-            CohortEntityType.CUSTOMER_ADDRESS,
-        ),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note=(
-            "Constructs `Address` rows and writes the account `metadata` blob "
-            "from an undeclared module. Addresses have no declared owner at "
-            "all, which is why this one is debt rather than a bypass of "
-            "someone."
-        ),
-    ),
-    SourceSurface(
-        path="app/services/customer_portal_contacts.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_CONTACT,),
-        owning_service="party.registry",
-        registry_declared=False,
-        production_runtime=True,
-        note=(
-            "Creates and edits legacy `subscriber_contacts` rows from the "
-            "customer portal. party.registry owns the canonical contact-point "
-            "lifecycle these rows are projected into."
-        ),
-    ),
-    SourceSurface(
-        path="app/services/customer_portal_notifications.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=True,
-        production_runtime=True,
-        note=(
-            "Declared as communications.customer_read_state, and stores that "
-            "read state inside the customer account's `metadata` blob. A "
-            "declared owner writing another owner's row is still a parallel "
-            "writer of that row."
-        ),
-    ),
-    SourceSurface(
-        path="app/services/network_subscriber_bridge.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="Constructs `Subscriber` rows from a provisioning bridge instead of the account owner.",
-    ),
-    SourceSurface(
-        path="app/services/nin_verifications.py",
-        family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="Writes NIN verification outcome into the account `metadata` blob.",
+        open_question=None,
+        note=("Declared owner of evidence-bound gender and date-of-birth repair."),
     ),
     SourceSurface(
         path="app/services/team_inbox_commands.py",
         family=EntryPointFamily.SERVICE,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
         entity_types=(CohortEntityType.PARTY_RELATIONSHIP,),
         owning_service="party.registry",
         registry_declared=True,
-        production_runtime=True,
+        open_question=None,
         note=(
-            "Constructs `PartyRelationship` rows from the team inbox. "
-            "party.registry is declared to own directional relationships and "
-            "their effective-date contract."
+            "Constructs `PartyRelationship` rows from the team inbox. party.registry "
+            "is declared to own directional relationships and their effective-date "
+            "contract."
         ),
     ),
     SourceSurface(
         path="app/services/web_admin_resellers.py",
         family=EntryPointFamily.WEB_PRESENTER,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=True,
-        production_runtime=True,
+        open_question=None,
         note=(
             "Declared as ui.reseller_list_projection — a list projection — and "
             "assigns `subscribers.reseller_id`. Account ownership is not a "
@@ -431,84 +791,215 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
     ),
     SourceSurface(
+        path="app/services/web_customer_actions.py",
+        family=EntryPointFamily.WEB_PRESENTER,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.profile_commands",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "Named like a presenter, declared as an owner. Kept in the "
+            "`web_presenter` family because that is where it lives and how a reader "
+            "will find it, and classified as an owner because the registry says so — "
+            "family is location, classification is authority, and conflating them is "
+            "how a real owner gets mistaken for a stray adapter."
+        ),
+    ),
+    SourceSurface(
         path="app/services/web_customer_details.py",
         family=EntryPointFamily.WEB_PRESENTER,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
-        production_runtime=True,
-        note="An undeclared detail presenter initialises the account `metadata` blob in place.",
+        open_question=None,
+        note=(
+            "An undeclared detail presenter initialises the account `metadata` blob "
+            "in place."
+        ),
     ),
     SourceSurface(
         path="app/services/web_system_import_wizard.py",
         family=EntryPointFamily.WEB_PRESENTER,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
-        production_runtime=True,
-        note="An admin import wizard constructs `Subscriber` rows directly.",
+        open_question=None,
+        note=("An admin import wizard constructs `Subscriber` rows directly."),
     ),
     SourceSurface(
         path="app/services/web_system_restore_tool.py",
         family=EntryPointFamily.WEB_PRESENTER,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.UNDECIDED,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
-        production_runtime=True,
+        open_question=(
+            "Account recovery has no counterpart in the target. Does restore move "
+            "with the cohort, stay in Sub against migrated-away rows, or retire?"
+        ),
         note=(
-            "A restore tool reactivates accounts and rewrites their `metadata` "
-            "blob. Recovery tooling still has to reach the same owner, or the "
-            "restored row can disagree with the owner that will be migrated."
+            "A restore tool reactivates accounts and rewrites their `metadata` blob. "
+            "Recovery tooling still has to reach the same owner, or the restored row "
+            "can disagree with the owner that will be migrated."
         ),
     ),
-    # ---- one-off and fixture writers -------------------------------------
+    SourceSurface(
+        path="app/tasks/nin_tasks.py",
+        family=EntryPointFamily.TASK_WORKER,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.BACKGROUND_JOB,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service=None,
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "The NIN verification worker. It persists verification rows, which are "
+            "outside this cohort, and reaches account state only through "
+            "`nin_verifications`."
+        ),
+    ),
+    SourceSurface(
+        path="app/web/admin/billing_payments.py",
+        family=EntryPointFamily.WEB_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.READS,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service=None,
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Reads account rows to render payment screens; writes billing rows only."
+        ),
+    ),
+    SourceSurface(
+        path="app/web/admin/customers.py",
+        family=EntryPointFamily.WEB_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=("The admin customer portal; owns the transaction, decides nothing."),
+    ),
+    SourceSurface(
+        path="app/web/admin/system.py",
+        family=EntryPointFamily.WEB_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Admin system tooling; delegates account changes to presenters and "
+            "services."
+        ),
+    ),
+    SourceSurface(
+        path="app/web/customer/location.py",
+        family=EntryPointFamily.WEB_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(
+            CohortEntityType.CUSTOMER_ACCOUNT,
+            CohortEntityType.CUSTOMER_ADDRESS,
+        ),
+        owning_service="customer.location_capture",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Portal location confirmation; calls location capture and owns only the "
+            "commit."
+        ),
+    ),
+    SourceSurface(
+        path="app/web/customer/routes.py",
+        family=EntryPointFamily.WEB_ROUTE,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.DELEGATES,
+        reachability=Reachability.ONLINE_REQUEST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=("The customer portal shell; delegates every account mutation."),
+    ),
     SourceSurface(
         path="scripts/migration/backfill_crm_subscriber_links.py",
         family=EntryPointFamily.CLI_SCRIPT,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.OPERATOR_COMMAND,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
-        production_runtime=True,
-        note="A one-off backfill issuing raw DML against `subscribers`.",
+        open_question=None,
+        note=("A one-off backfill issuing raw DML against `subscribers`."),
     ),
     SourceSurface(
         path="scripts/migration/backfill_party_status.py",
         family=EntryPointFamily.CLI_SCRIPT,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT, CohortEntityType.PARTY),
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.OPERATOR_COMMAND,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(
+            CohortEntityType.CUSTOMER_ACCOUNT,
+            CohortEntityType.PARTY,
+        ),
         owning_service="party.registry",
         registry_declared=False,
-        production_runtime=True,
-        note="A one-off backfill issuing raw DML against party and account rows.",
+        open_question=None,
+        note=("A one-off backfill issuing raw DML against party and account rows."),
     ),
     SourceSurface(
         path="scripts/migration/import_crm_phase3.py",
         family=EntryPointFamily.CLI_SCRIPT,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.OPERATOR_COMMAND,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
-        production_runtime=True,
-        note="A CRM import phase writing `subscribers` directly.",
-    ),
-    SourceSurface(
-        path="scripts/one_off/backfill_crm_subscriber_ids.py",
-        family=EntryPointFamily.CLI_SCRIPT,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="A one-off script stamping CRM provenance ids onto account rows.",
+        open_question=None,
+        note=("A CRM import phase writing `subscribers` directly."),
     ),
     SourceSurface(
         path="scripts/migration/kernel_lineage_rehearsal_canaries.py",
         family=EntryPointFamily.CLI_SCRIPT,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.NON_PRODUCTION,
+        disposition=Disposition.NON_PRODUCTION_NO_ACTION,
         entity_types=(
             CohortEntityType.PARTY,
             CohortEntityType.PARTY_ROLE,
@@ -516,74 +1007,104 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
         owning_service=None,
         registry_declared=False,
-        production_runtime=False,
+        open_question=None,
         note=(
             "Builds synthetic canaries inside a disposable rehearsal database. "
-            "Counted so the ratchet still sees it, marked non-production so it "
-            "does not inflate the writer surface a cutover has to displace."
+            "Counted so the ratchet still sees it, marked non-production so it does "
+            "not inflate the writer surface a cutover has to displace."
         ),
+    ),
+    SourceSurface(
+        path="scripts/one_off/backfill_crm_subscriber_ids.py",
+        family=EntryPointFamily.CLI_SCRIPT,
+        authority=AuthorityRole.PARALLEL_WRITER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.OPERATOR_COMMAND,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.accounts",
+        registry_declared=False,
+        open_question=None,
+        note=("A one-off script stamping CRM provenance ids onto account rows."),
     ),
     SourceSurface(
         path="scripts/seed/seed_test_fixtures.py",
         family=EntryPointFamily.CLI_SCRIPT,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.NON_PRODUCTION,
+        disposition=Disposition.NON_PRODUCTION_NO_ACTION,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service=None,
         registry_declared=False,
-        production_runtime=False,
-        note="A fixture seeder for test databases; same treatment as the rehearsal canaries.",
+        open_question=None,
+        note=(
+            "A fixture seeder for test databases; same treatment as the rehearsal "
+            "canaries."
+        ),
     ),
-    # ---- applied migrations ----------------------------------------------
     SourceSurface(
         path="alembic/versions/045_contact_channels_without_name.py",
         family=EntryPointFamily.MIGRATION,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
         entity_types=(CohortEntityType.CUSTOMER_CONTACT,),
         owning_service="alembic migration lineage",
         registry_declared=False,
-        production_runtime=False,
+        open_question=None,
         note=(
-            "An applied data migration wrote contact rows outside the owning "
-            "service. Alembic owns the deployed schema, so this ran under a "
-            "real authority — but it wrote a fact a service owns, and it "
-            "cannot run again against a migrated database, which is why it is "
-            "counted and not counted as production."
+            "An applied data migration wrote contact rows outside the owning service. "
+            "Alembic owns the deployed schema, so this ran under a real authority — "
+            "but it wrote a fact a service owns, and it cannot run again against a "
+            "migrated database, which is why it is counted and not counted as "
+            "production."
         ),
     ),
     SourceSurface(
         path="alembic/versions/116_add_billing_accounts.py",
         family=EntryPointFamily.MIGRATION,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="alembic migration lineage",
         registry_declared=False,
-        production_runtime=False,
+        open_question=None,
         note=(
-            "An applied data migration over `subscribers`; applied, so it "
-            "cannot run again."
+            "An applied data migration over `subscribers`; applied, so it cannot run "
+            "again."
         ),
     ),
     SourceSurface(
         path="alembic/versions/208_map_karu_customers_to_bts.py",
         family=EntryPointFamily.MIGRATION,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="alembic migration lineage",
         registry_declared=False,
-        production_runtime=False,
+        open_question=None,
         note=(
-            "An applied one-off remap of a named customer cohort; applied, so "
-            "it cannot run again."
+            "An applied one-off remap of a named customer cohort; applied, so it "
+            "cannot run again."
         ),
     ),
     SourceSurface(
         path="alembic/versions/267_brand_profiles.py",
         family=EntryPointFamily.MIGRATION,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
         entity_types=(CohortEntityType.BRAND_PROFILE,),
         owning_service="alembic migration lineage",
         registry_declared=False,
-        production_runtime=False,
+        open_question=None,
         note=(
             "The migration that created and seeded `brand_profiles`, before "
             "`customer.branding` existed to own them."
@@ -592,125 +1113,33 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
     SourceSurface(
         path="alembic/versions/277_lifecycle_communications_sot.py",
         family=EntryPointFamily.MIGRATION,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="alembic migration lineage",
         registry_declared=False,
-        production_runtime=False,
+        open_question=None,
         note=(
-            "An applied lifecycle-communications migration touching account "
-            "rows; applied, so it cannot run again."
+            "An applied lifecycle-communications migration touching account rows; "
+            "applied, so it cannot run again."
         ),
     ),
     SourceSurface(
         path="alembic/versions/383_replaceable_backoffice_boundary.py",
         family=EntryPointFamily.MIGRATION,
-        classification=SurfaceClassification.LEGACY_PARALLEL_WRITER,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
         entity_types=(CohortEntityType.ORGANIZATION,),
         owning_service="alembic migration lineage",
         registry_declared=False,
-        production_runtime=False,
+        open_question=None,
         note=(
             "An applied migration writing back-office reference columns on "
             "`organizations`; applied, so it cannot run again."
-        ),
-    ),
-    # ---- adapters that reach the cohort but write none of it --------------
-    SourceSurface(
-        path="app/api/subscribers.py",
-        family=EntryPointFamily.API_ROUTE,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="The JSON account API. Imports the model for typing and delegates every mutation.",
-    ),
-    SourceSurface(
-        path="app/api/me.py",
-        family=EntryPointFamily.API_ROUTE,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="The authenticated self-service API; reads the account and delegates writes.",
-    ),
-    SourceSurface(
-        path="app/api/reseller.py",
-        family=EntryPointFamily.API_ROUTE,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="The reseller-scoped API; reaches accounts only through owning services.",
-    ),
-    SourceSurface(
-        path="app/web/admin/customers.py",
-        family=EntryPointFamily.WEB_ROUTE,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="The admin customer portal; owns the transaction, decides nothing.",
-    ),
-    SourceSurface(
-        path="app/web/admin/system.py",
-        family=EntryPointFamily.WEB_ROUTE,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="Admin system tooling; delegates account changes to presenters and services.",
-    ),
-    SourceSurface(
-        path="app/web/admin/billing_payments.py",
-        family=EntryPointFamily.WEB_ROUTE,
-        classification=SurfaceClassification.READ_ONLY_CONSUMER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service=None,
-        registry_declared=False,
-        production_runtime=True,
-        note="Reads account rows to render payment screens; writes billing rows only.",
-    ),
-    SourceSurface(
-        path="app/web/customer/routes.py",
-        family=EntryPointFamily.WEB_ROUTE,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="customer.accounts",
-        registry_declared=False,
-        production_runtime=True,
-        note="The customer portal shell; delegates every account mutation.",
-    ),
-    SourceSurface(
-        path="app/web/customer/location.py",
-        family=EntryPointFamily.WEB_ROUTE,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(
-            CohortEntityType.CUSTOMER_ACCOUNT,
-            CohortEntityType.CUSTOMER_ADDRESS,
-        ),
-        owning_service="customer.location_capture",
-        registry_declared=False,
-        production_runtime=True,
-        note="Portal location confirmation; calls location capture and owns only the commit.",
-    ),
-    SourceSurface(
-        path="app/tasks/nin_tasks.py",
-        family=EntryPointFamily.TASK_WORKER,
-        classification=SurfaceClassification.AUTHORIZED_ADAPTER,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service=None,
-        registry_declared=False,
-        production_runtime=True,
-        note=(
-            "The NIN verification worker. It persists verification rows, which "
-            "are outside this cohort, and reaches account state only through "
-            "`nin_verifications`."
         ),
     ),
 )
@@ -843,7 +1272,7 @@ TABLES_WITH_NO_COUNTED_WRITER: Final[tuple[NoCountedWriter, ...]] = (
 
 
 def surfaces_by_classification() -> dict[SurfaceClassification, tuple[str, ...]]:
-    """Group inventoried paths by what they were classified as."""
+    """Group inventoried paths by the derived eight-member classification."""
 
     grouped: dict[SurfaceClassification, list[str]] = {
         classification: [] for classification in SurfaceClassification
@@ -856,12 +1285,68 @@ def surfaces_by_classification() -> dict[SurfaceClassification, tuple[str, ...]]
     }
 
 
-def production_writer_paths() -> tuple[str, ...]:
-    """Paths that mutate cohort state in a production runtime.
+def surfaces_by_authority() -> dict[AuthorityRole, tuple[str, ...]]:
+    """Group inventoried paths by what say they have over the fact."""
 
-    The number a cutover cares about. Fixture seeders and rehearsal canaries
-    write too, and are excluded here rather than reclassified, so both counts
-    stay available and neither has to be reconstructed later.
+    grouped: dict[AuthorityRole, list[str]] = {role: [] for role in AuthorityRole}
+    for surface in COHORT_SURFACES:
+        grouped[surface.authority].append(surface.path)
+    return {role: tuple(sorted(paths)) for role, paths in grouped.items()}
+
+
+def surfaces_by_boundary() -> dict[BoundaryRole, tuple[str, ...]]:
+    """Group inventoried paths by what they do at the boundary."""
+
+    grouped: dict[BoundaryRole, list[str]] = {role: [] for role in BoundaryRole}
+    for surface in COHORT_SURFACES:
+        grouped[surface.boundary].append(surface.path)
+    return {role: tuple(sorted(paths)) for role, paths in grouped.items()}
+
+
+def surfaces_by_reachability() -> dict[Reachability, tuple[str, ...]]:
+    """Group inventoried paths by how they can still be reached."""
+
+    grouped: dict[Reachability, list[str]] = {reach: [] for reach in Reachability}
+    for surface in COHORT_SURFACES:
+        grouped[surface.reachability].append(surface.path)
+    return {reach: tuple(sorted(paths)) for reach, paths in grouped.items()}
+
+
+def surfaces_by_disposition() -> dict[Disposition, tuple[str, ...]]:
+    """Group inventoried paths by what happens to them when authority moves."""
+
+    grouped: dict[Disposition, list[str]] = {
+        disposition: [] for disposition in Disposition
+    }
+    for surface in COHORT_SURFACES:
+        grouped[surface.disposition].append(surface.path)
+    return {disposition: tuple(sorted(paths)) for disposition, paths in grouped.items()}
+
+
+def undecided_surfaces() -> tuple[SourceSurface, ...]:
+    """Every surface whose disposition is still an open question.
+
+    Enumerable on purpose. These are inputs to `ctl-isp-006`, and a question
+    that lives only in prose is one somebody answers by accident.
+    """
+
+    return tuple(
+        sorted(
+            (
+                surface
+                for surface in COHORT_SURFACES
+                if surface.disposition is Disposition.UNDECIDED
+            ),
+            key=lambda surface: surface.path,
+        )
+    )
+
+
+def displaced_writer_paths() -> tuple[str, ...]:
+    """Production writers a cohort cutover has to displace.
+
+    The number `ctl-isp-009` ratchets to zero: everything that persists cohort
+    state and can still reach the production database.
     """
 
     return tuple(
@@ -873,6 +1358,16 @@ def production_writer_paths() -> tuple[str, ...]:
     )
 
 
+def production_writer_paths() -> tuple[str, ...]:
+    """Retained name for `displaced_writer_paths`.
+
+    Documents and an earlier control record cite this name; keeping it as an
+    alias costs one line and avoids a rename that means nothing.
+    """
+
+    return displaced_writer_paths()
+
+
 def inventoried_paths() -> frozenset[str]:
     """Every path this inventory classifies."""
 
@@ -881,14 +1376,25 @@ def inventoried_paths() -> frozenset[str]:
 
 __all__ = [
     "COHORT_SURFACES",
+    "DEFAULT_CALLER_DISPOSITION",
     "TABLES_WITH_NO_COUNTED_WRITER",
     "UNMAPPED_ADJACENT_TABLES",
+    "AuthorityRole",
+    "BoundaryRole",
+    "Disposition",
     "EntryPointFamily",
     "NoCountedWriter",
+    "Reachability",
     "SourceSurface",
     "SurfaceClassification",
     "UnmappedAdjacentTable",
+    "displaced_writer_paths",
     "inventoried_paths",
     "production_writer_paths",
+    "surfaces_by_authority",
+    "surfaces_by_boundary",
     "surfaces_by_classification",
+    "surfaces_by_disposition",
+    "surfaces_by_reachability",
+    "undecided_surfaces",
 ]
