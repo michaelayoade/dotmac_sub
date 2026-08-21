@@ -409,7 +409,6 @@ def invoice_credit_application_reversal_preview(
         if str(preview.invoice_id) != str(invoice_id):
             raise ValueError("Credit application does not belong to this invoice")
     except Exception as exc:
-        db.rollback()
         detail_data = web_billing_invoices_service.load_invoice_detail_data(
             db,
             invoice_id=str(invoice_id),
@@ -474,7 +473,6 @@ def invoice_credit_application_reversal(
             idempotency_key=idempotency_key,
         )
     except Exception as exc:
-        db.rollback()
         detail_data = web_billing_invoices_service.load_invoice_detail_data(
             db,
             invoice_id=str(invoice_id),

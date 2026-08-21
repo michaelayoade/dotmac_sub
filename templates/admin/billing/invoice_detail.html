@@ -346,7 +346,7 @@
                     <input type="hidden" name="idempotency_key" value="{{ credit_application_reversal_idempotency_key }}">
                     <div>
                         <label class="block text-xs font-medium text-amber-800 dark:text-amber-200 mb-1">Reverse Applied Credit Note</label>
-                        <select name="application_path" required
+                        <select name="application_path" required data-form-consumer="client"
                                 onchange="this.form.action=this.value"
                                 class="block w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 dark:border-amber-700 dark:bg-slate-700 dark:text-white">
                             {% for option in credit_application_reversal_options %}
