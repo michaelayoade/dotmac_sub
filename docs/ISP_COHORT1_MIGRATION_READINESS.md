@@ -255,32 +255,35 @@ agent-authored assertion is not evidence.
 
 ## Open source-side questions
 
-These belong to `ctl-isp-006` and none of them has an answer yet. The first
-three are carried as `Disposition.UNDECIDED` on a specific surface and are
-enumerable through `surfaces.undecided_surfaces()`, so they cannot be lost
-between here and the control:
+Governance answered five decisions on 2026-08-21 (`d91a87f`), and the three
+that were carried as `Disposition.UNDECIDED` on specific surfaces are now
+closed. What remains for `ctl-isp-006` is **work created by those answers**,
+plus the two dispositions that were always going to need one:
 
+- **`addresses` has no Sub owner.** dec-isp-007 names a product-first
+  `dotmac-addresses` owner for the target; product-first extraction needs a
+  proven Sub implementation to extract from. Sub must grow that owner before
+  `customer_location_requests.py` can be routed and before the cohort can be
+  shadowed.
+- **The account-recovery cascade must be decomposed.** Customers owns recovery
+  intent, but one restore currently touches invoices, payments, credentials,
+  RADIUS, IP assignments and ONT assignments in the same pass. Only the account
+  rows are cohort 1, and the pass has to be separable before they can move.
+- **`subscribers.metadata` has seven writers and no declared shape.** Decided:
+  it crosses as an opaque key inventory plus a digest until an owner declares
+  its keys. That is a standing rule, not a pending question — but the seven
+  writers still have to route through `customer.accounts`.
 - **`organizations` and `organization_memberships` have no counted writer.**
   Historical B2B account records with no live owner. Do they migrate, stay in
-  Sub as history, or retire with evidence?
-- **`subscribers.metadata` has seven writers and no declared shape.** Either an
-  owner declares its keys — after which a later schema version can carry them
-  typed — or it crosses permanently as an opaque inventory.
-- **`subscribers.mrr_total` has no declared owner.** Confirm the target
-  recomputes it and the column does not migrate.
-  (`app/services/mrr_snapshot.py`, `UNDECIDED`.)
-- **`addresses` has no declared owner at all**, so
-  `app/services/customer_location_requests.py` has no service to route through
-  before the cohort can be shadowed. (`UNDECIDED`.)
-- **Account recovery has no counterpart in the target.** Does
-  `app/services/web_system_restore_tool.py` move with the cohort, stay in Sub
-  against migrated-away rows, or retire? (`UNDECIDED`.)
-- **`subscriber_nin_verifications` is excluded from the contract.** Regulatory
-  identity evidence with its own retention rules; it needs a disposition
-  decision of its own before any export carries it.
-- **Ten cohort-adjacent tables are deliberately unmapped.** Each is recorded in
-  `surfaces.UNMAPPED_ADJACENT_TABLES` with its reason; each still needs a
-  disposition before the cohort can claim every source row is accounted for.
+  Sub as history, or retire with evidence? Still open.
+- **`subscriber_nin_verifications`.** Decided: a Compliance/Records retention
+  disposition rather than a cohort-1 migration one. It stays out of the export
+  and is governed by retention policy; the cohort carries only a presence flag
+  on the account.
+- **Nine other cohort-adjacent tables are deliberately unmapped.** Each is
+  recorded in `surfaces.UNMAPPED_ADJACENT_TABLES` with its reason; each still
+  needs a disposition before the cohort can claim every source row is
+  accounted for.
 
 ## Operating the export
 
