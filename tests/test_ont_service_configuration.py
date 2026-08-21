@@ -907,6 +907,11 @@ def test_lan_worker_treats_acs_connection_request_failure_as_pending_drain(
             "lan.dhcp_end": "198.51.100.6",
         },
     )
+    operation.input_payload = {
+        "ont_id": str(ont.id),
+        "configuration_head_id": str(head.id),
+        "configuration_revision": revision.revision,
+    }
     db_session.commit()
 
     def reconciled(*_args, **_kwargs):
