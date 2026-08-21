@@ -200,6 +200,7 @@ def test_configuration_admission_commits_intent_operation_and_dispatch_atomicall
     assert intent is not None and intent.s_vlan == 321
     assert operation.operation_type is NetworkOperationType.ont_service_config
     assert dispatch is not None
+    assert dispatch.queue is None
     assert head.phase is OntServiceConfigurationPhase.queued
 
 
