@@ -397,6 +397,45 @@ def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subsc
     assert ticket.assigned_to_person_id != loaded_person_id
 
 
+def test_ticket_update_deduplicates_manual_and_auto_assignee(db_session, monkeypatch):
+    from app.services.ticket_assignment import engine as assignment_engine
+
+    ticket = Ticket(title="Assignment collision", status=TicketStatus.open.value)
+    assignee_id = uuid4()
+    db_session.add(ticket)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        support_service.Tickets,
+        "_auto_assignment_enabled",
+        staticmethod(lambda _db: True),
+    )
+    monkeypatch.setattr(
+        assignment_engine,
+        "auto_assign_ticket",
+        lambda _db, ticket_id, **_kwargs: assignment_engine.AssignmentResult(
+            assigned=True,
+            ticket_id=ticket_id,
+            assignment_target="technician",
+            assignee_person_id=str(assignee_id),
+            reason="assigned",
+        ),
+    )
+
+    support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(assignee_person_ids=[assignee_id]),
+    )
+
+    assignees = (
+        db_session.query(TicketAssignee)
+        .filter(TicketAssignee.ticket_id == ticket.id)
+        .all()
+    )
+    assert [row.person_id for row in assignees] == [assignee_id]
+
+
 def test_link_and_merge_form_reject_invalid_target_uuid(db_session):
     with pytest.raises(ValueError, match="valid ticket UUID"):
         web_support_tickets_service.link_ticket_from_form(
