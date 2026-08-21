@@ -551,6 +551,47 @@ def test_lan_operator_prefix_does_not_require_catalog_entitlement(
     assert outcome.phase is OntServiceConfigurationPhase.queued
 
 
+def test_lan_dhcp_admission_does_not_require_ppp_authoritative_credential(
+    db_session, monkeypatch, olt_device, subscription, subscriber
+):
+    ont_id, _assignment_id = _admission_scope(
+        db_session,
+        monkeypatch,
+        olt_device=olt_device,
+        subscription=subscription,
+        subscriber=subscriber,
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_service_configuration.resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "config_pack": {"id": "test-pack"},
+            "values": {"wan_mode": "pppoe", "wan_vlan": 321},
+        },
+    )
+
+    outcome = configure_ont_service(
+        db_session,
+        _configure_command(
+            ont_id,
+            idempotency_key="lan-dhcp-no-ppp-credential",
+            section=OntConfigurationSection.lan,
+            change=LanConfigurationChange(
+                gateway_ip="198.51.100.1",
+                block_prefix=IpBlockPrefix.p29,
+                dhcp_enabled=True,
+                dhcp_start="198.51.100.2",
+                dhcp_end="198.51.100.6",
+            ),
+        ),
+    )
+
+    desired_lan = db_session.get(OntUnit, ont_id).desired_config["lan"]
+    assert desired_lan["dhcp_enabled"] is True
+    assert desired_lan["dhcp_start"] == "198.51.100.2"
+    assert desired_lan["dhcp_end"] == "198.51.100.6"
+    assert outcome.phase is OntServiceConfigurationPhase.queued
+
+
 def _lifecycle(
     db_session,
     ont: OntUnit,
@@ -769,6 +810,74 @@ def test_lan_worker_forces_write_and_reports_exact_readback_unavailable(
     assert calls[-1]["force_lan_config"] is True
     assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
     assert revision.verified_at is None
+    assert head.failure_code == "exact_lan_readback_unavailable"
+    assert operation.status is NetworkOperationStatus.succeeded
+
+
+def test_lan_worker_ignores_unrelated_ppp_residual_drift_after_delivery(
+    db_session, monkeypatch
+):
+    ont = OntUnit(serial_number=f"LANPPP-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="lan-ppp-residual",
+        section=OntConfigurationSection.lan,
+        desired_change_evidence={
+            "lan.ip": "198.51.100.1",
+            "lan.subnet": "255.255.255.248",
+            "lan.block_prefix": "/29",
+            "lan.dhcp_enabled": True,
+            "lan.dhcp_start": "198.51.100.2",
+            "lan.dhcp_end": "198.51.100.6",
+        },
+    )
+    db_session.commit()
+
+    def reconciled(*_args, **_kwargs):
+        return SimpleNamespace(
+            success=True,
+            sync_status="out_of_sync",
+            drift_after=(
+                SimpleNamespace(field="ppp_delivery[AcsSetPppoe]", surface="acs"),
+            ),
+            failure=None,
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+    command_id = uuid.uuid4()
+    ont_id = ont.id
+    operation_id = operation.id
+    head_id = head.id
+    revision_number = revision.revision
+    db_session_adapter.release_read_transaction(db_session)
+
+    outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test forced LAN delivery",
+                command_id=command_id,
+                correlation_id=operation_id,
+                idempotency_key="lan-delivery-with-ppp-residual",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+        ),
+    )
+
+    assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
     assert head.failure_code == "exact_lan_readback_unavailable"
     assert operation.status is NetworkOperationStatus.succeeded
 
