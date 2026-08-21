@@ -87,7 +87,10 @@ from app.services.owner_commands import (
 )
 
 if TYPE_CHECKING:
-    from app.services.network.reconcile.state import OntWifiDeliveryScope, ReconcileResult
+    from app.services.network.reconcile.state import (
+        OntWifiDeliveryScope,
+        ReconcileResult,
+    )
 
 OWNER = "network.ont_service_configuration"
 _COORDINATION_CONCERN = "atomic ONT service configuration coordination"
