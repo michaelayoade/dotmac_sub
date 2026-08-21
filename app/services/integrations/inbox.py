@@ -93,7 +93,14 @@ def receive_verified(
     payload: dict[str, Any],
     headers: dict[str, str] | None = None,
 ) -> tuple[IntegrationInbox, bool]:
-    binding = db.get(IntegrationCapabilityBinding, capability_binding_id)
+    # The binding is the stable parent aggregate for receipt identity. Locking
+    # it serializes the check/insert sequence so the database uniqueness rule
+    # remains an arbiter instead of becoming a webhook-facing exception.
+    binding = db.scalars(
+        select(IntegrationCapabilityBinding)
+        .where(IntegrationCapabilityBinding.id == capability_binding_id)
+        .with_for_update()
+    ).one_or_none()
     if binding is None:
         raise InboxError("capability binding not found")
     normalized_event_id = provider_event_id.strip()
@@ -171,7 +178,7 @@ def receive_and_claim_verified(
 
 
 def claim_for_processing(receipt: IntegrationInbox) -> bool:
-    if receipt.state == "processed":
+    if receipt.state in {"processing", "processed"}:
         return False
     if (
         receipt.state == "retryable"
