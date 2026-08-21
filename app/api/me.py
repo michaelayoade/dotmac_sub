@@ -1580,6 +1580,16 @@ def my_create_ticket(
                 entity_type=web_support_tickets.TicketAttachmentEntityType.ticket,
                 actor_id=UUID(subscriber_id),
             )
+        except web_support_tickets.TicketAttachmentValidationError as exc:
+            raise HTTPException(
+                status_code=(
+                    413
+                    if exc.kind
+                    is web_support_tickets.TicketAttachmentValidationKind.too_large
+                    else 422
+                ),
+                detail={"code": exc.code, "message": exc.message},
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,
@@ -1648,6 +1658,16 @@ def my_add_ticket_comment(
                 entity_type=web_support_tickets.TicketAttachmentEntityType.comment,
                 actor_id=UUID(subscriber_id),
             )
+        except web_support_tickets.TicketAttachmentValidationError as exc:
+            raise HTTPException(
+                status_code=(
+                    413
+                    if exc.kind
+                    is web_support_tickets.TicketAttachmentValidationKind.too_large
+                    else 422
+                ),
+                detail={"code": exc.code, "message": exc.message},
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,

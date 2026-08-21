@@ -497,7 +497,7 @@ def handle_ticket_create(
             support_service.Tickets.add_attachments(db, str(ticket.id), uploaded)
         _record_ticket_created_portal_notification(db, ticket)
         return {"success": True, "ticket": _ticket_to_dict(ticket)}
-    except ValueError as e:
+    except (web_support_tickets.WebSupportTicketInputError, ValueError) as e:
         # Attachment validation (type/size) — surface the specific reason.
         logger.info("Rejected portal ticket attachment: %s", e)
         return {"success": False, "error": str(e)}
@@ -566,7 +566,7 @@ def handle_ticket_comment(
             actor_id=None,
         )
         return {"success": True}
-    except ValueError as e:
+    except (web_support_tickets.WebSupportTicketInputError, ValueError) as e:
         # Attachment validation (type/size) — surface the specific reason.
         logger.info("Rejected portal ticket comment attachment: %s", e)
         return {"success": False, "error": str(e)}

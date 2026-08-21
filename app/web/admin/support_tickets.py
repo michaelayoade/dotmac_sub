@@ -487,8 +487,14 @@ def ticket_create(
                 },
             }
         )
+        response_status = (
+            413
+            if isinstance(exc, support_web_service.TicketAttachmentValidationError)
+            and exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
+            else 400
+        )
         return templates.TemplateResponse(
-            "admin/support/tickets/new.html", context, status_code=400
+            "admin/support/tickets/new.html", context, status_code=response_status
         )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket.id}", status_code=303)
 
@@ -711,16 +717,40 @@ def ticket_add_comment(
     db: Session = Depends(get_db),
 ):
     actor_id = _actor_id(request)
-    support_web_service.add_ticket_comment_from_form(
-        db,
-        request=request,
-        ticket_id=str(ticket_id),
-        actor_id=actor_id,
-        body=body,
-        is_internal=not reply_to_customer,
-        mentions=mentions,
-        attachments=attachments,
-    )
+    try:
+        support_web_service.add_ticket_comment_from_form(
+            db,
+            request=request,
+            ticket_id=str(ticket_id),
+            actor_id=actor_id,
+            body=body,
+            is_internal=not reply_to_customer,
+            mentions=mentions,
+            attachments=attachments,
+        )
+    except support_web_service.TicketAttachmentValidationError as exc:
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_detail_context(
+                db,
+                ticket_lookup=str(ticket_id),
+                actor_id=actor_id,
+                can_read_material_requests=can(
+                    request, "operations:material_request:read"
+                ),
+            )
+        )
+        context["action_error"] = exc.message
+        response_status = (
+            413
+            if exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
+            else 422
+        )
+        return templates.TemplateResponse(
+            "admin/support/tickets/detail.html",
+            context,
+            status_code=response_status,
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 

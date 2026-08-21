@@ -184,6 +184,27 @@ class WebSupportTicketInputError(DomainError):
     """Transport-neutral validation error from the admin Ticket adapter service."""
 
 
+class TicketAttachmentValidationKind(str, Enum):
+    too_large = "too_large"
+    unsupported_type = "unsupported_type"
+
+
+class TicketAttachmentValidationError(WebSupportTicketInputError):
+    def __init__(
+        self,
+        *,
+        kind: TicketAttachmentValidationKind,
+        filename: str,
+        message: str,
+    ) -> None:
+        super().__init__(
+            code=f"support.ticket_attachment.{kind.value}",
+            message=message,
+            details={"filename": filename, "kind": kind.value},
+        )
+        self.kind = kind
+
+
 ALLOWED_ATTACHMENT_TYPES = {
     "image/png",
     "image/jpeg",
@@ -574,12 +595,20 @@ def upload_ticket_attachments(
                 continue
             if len(payload) > MAX_ATTACHMENT_BYTES:
                 max_mb = max(1, MAX_ATTACHMENT_BYTES // 1048576)
-                raise ValueError(f"{filename}: max file size is {max_mb} MB")
+                raise TicketAttachmentValidationError(
+                    kind=TicketAttachmentValidationKind.too_large,
+                    filename=filename,
+                    message=f"{filename}: max file size is {max_mb} MB",
+                )
             content_type = (
                 getattr(attachment, "content_type", None) or "application/octet-stream"
             ).lower()
             if content_type not in ALLOWED_ATTACHMENT_TYPES:
-                raise ValueError(f"{filename}: unsupported file type")
+                raise TicketAttachmentValidationError(
+                    kind=TicketAttachmentValidationKind.unsupported_type,
+                    filename=filename,
+                    message=f"{filename}: unsupported file type",
+                )
 
             record = file_uploads.stage_upload(
                 db=db,
