@@ -345,7 +345,9 @@ def vendor_project_detail(
     # _project_detail_response resolves route_geojson through
     # build_vendor_project_route_geojson and gates can_propose_closure with
     # vendor_capabilities.AS_BUILT_WRITE. It supplies
-    # "vendor_route_authoring_layer_filters" for the route authoring map.
+    # "vendor_route_authoring_layer_filters", "vendor_route_authoring_poi_filters",
+    # "vendor_route_authoring_radius_options", and
+    # "vendor_route_authoring_status_filters" for the route authoring map.
     return _project_detail_response(
         request,
         db,
