@@ -737,6 +737,21 @@ def _service_recovery_context(
             pending_message="ACS has not shown the WAN VLAN yet.",
         ),
     ]
+    radius_stmt = select(RadiusActiveSession).where(False)
+    if expected_username:
+        radius_stmt = select(RadiusActiveSession).where(
+            RadiusActiveSession.username == expected_username
+        )
+    active_radius = db.scalars(
+        radius_stmt.order_by(
+            RadiusActiveSession.last_update.desc().nullslast(),
+            RadiusActiveSession.session_start.desc(),
+        )
+    ).first()
+    olt_radius_ppp_connected = bool(
+        active_radius and expected_wan_vlan and expected_wan_vlan in observed_vlans
+    )
+    ppp_connected_for_bind = ppp_connected or olt_radius_ppp_connected
     if bool(olt_status.get("deferred")):
         drift_rows.append(
             _drift_state_row(
@@ -778,6 +793,19 @@ def _service_recovery_context(
                 detail=f"user={ppp_username or 'unknown'}, vlan={ppp_vlan or 'unknown'}",
             )
         )
+    elif olt_radius_ppp_connected:
+        rows.append(
+            _recovery_row(
+                "PPP WAN",
+                "warn",
+                "Internet WAN is not visible in ACS, but OLT/RADIUS shows PPPoE is online.",
+                detail=(
+                    f"user={expected_username or 'unknown'}, "
+                    f"vlan={expected_wan_vlan or 'unknown'}, "
+                    f"ip={active_radius.framed_ip_address or 'unknown'}"
+                ),
+            )
+        )
     elif ppp_data:
         rows.append(
             _recovery_row(
@@ -797,17 +825,6 @@ def _service_recovery_context(
             )
         )
 
-    radius_stmt = select(RadiusActiveSession).where(False)
-    if expected_username:
-        radius_stmt = select(RadiusActiveSession).where(
-            RadiusActiveSession.username == expected_username
-        )
-    active_radius = db.scalars(
-        radius_stmt.order_by(
-            RadiusActiveSession.last_update.desc().nullslast(),
-            RadiusActiveSession.session_start.desc(),
-        )
-    ).first()
     if active_radius:
         counters = int(active_radius.bytes_in or 0) + int(active_radius.bytes_out or 0)
         radius_detail = (
@@ -845,7 +862,16 @@ def _service_recovery_context(
         for label in bind_labels
         if _truthy_acs_int(_tr069_value(lanbind, f"{label}Enable"))
     ]
-    if not ppp_data and olt_fallback_bind_available:
+    if not ppp_data and olt_radius_ppp_connected:
+        rows.append(
+            _recovery_row(
+                "LAN/WiFi bind",
+                "warn",
+                "ACS cannot check WAN bind, but Huawei OLT fallback bind is available.",
+                detail="Use Bind Internet WAN to attach the active PPPoE service to SSID1 and LAN ports.",
+            )
+        )
+    elif not ppp_data and olt_fallback_bind_available:
         rows.append(
             _recovery_row(
                 "LAN/WiFi bind",
@@ -891,7 +917,9 @@ def _service_recovery_context(
         (str(row["status"]) for row in drift_rows),
         key=lambda s: severity_rank[s],
     )
-    bind_action_enabled = ppp_connected
+    bind_action_enabled = ppp_connected_for_bind or (
+        not ppp_object_present and olt_fallback_bind_available
+    )
     bind_action_reason = "Select SSID/LAN ports, then bind the connected internet WAN."
     recovery_stage = {
         "title": "No recovery action needed",
@@ -901,7 +929,25 @@ def _service_recovery_context(
         "tone": "ok",
     }
 
-    if not ppp_object_present and olt_fallback_bind_available:
+    if not ppp_object_present and olt_radius_ppp_connected:
+        bind_action_reason = (
+            "ACS does not expose the PPP WAN object; Bind Internet WAN will use "
+            "Huawei OLT policy-route readback instead."
+        )
+        recovery_stage = {
+            "title": "Internet WAN hidden from ACS",
+            "message": (
+                "ACS does not expose WANPPPConnection for this ONT, but OLT service-port "
+                "and RADIUS evidence show the PPPoE internet service is active."
+            ),
+            "action_label": "Bind Internet WAN",
+            "action_hint": (
+                "Select SSID1 and the required LAN ports; the bind will be verified "
+                "through the Huawei OLT fallback path."
+            ),
+            "tone": "warn",
+        }
+    elif not ppp_object_present and olt_fallback_bind_available:
         bind_action_enabled = True
         bind_action_reason = (
             "ACS does not show the PPP WAN; this will use the Huawei OLT "
@@ -937,7 +983,7 @@ def _service_recovery_context(
             ),
             "tone": "fail",
         }
-    elif not ppp_connected:
+    elif not ppp_connected_for_bind:
         bind_action_enabled = False
         bind_action_reason = "Disabled because the PPP WAN exists but is not connected."
         recovery_stage = {
@@ -1024,6 +1070,7 @@ def _service_recovery_context(
             "ppp_object_present": ppp_object_present,
             "ppp_connected": ppp_connected,
             "olt_fallback_bind_available": olt_fallback_bind_available,
+            "ppp_connected_for_bind": ppp_connected_for_bind,
             "drift_rows": drift_rows,
             "drift_status": drift_worst,
             "pppoe_username": expected_username,
