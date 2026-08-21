@@ -91,6 +91,8 @@ def _create_quote_command(installation, vendor_id, user_id):
 
 def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_session):
     installation, _vendor, user = _chain(db_session)
+    installation_id = str(installation.id)
+    user_id = str(user.id)
     naive_close = (datetime.now(UTC) + timedelta(days=1)).replace(tzinfo=None)
     db_session_adapter.release_read_transaction(db_session)
 
@@ -98,11 +100,11 @@ def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_sessi
         db_session,
         ConfigureVendorProcurementCommand(
             context=_context(
-                actor=str(user.id),
-                scope=str(installation.id),
+                actor=user_id,
+                scope=installation_id,
                 reason="test bidding procurement",
             ),
-            project_id=str(installation.id),
+            project_id=installation_id,
             mode=VendorAssignmentType.bidding.value,
             bidding_close_at=naive_close,
         ),

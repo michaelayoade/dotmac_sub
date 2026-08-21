@@ -344,7 +344,8 @@ def vendor_project_detail(
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
     # _project_detail_response resolves route_geojson through
     # build_vendor_project_route_geojson and gates can_propose_closure with
-    # vendor_capabilities.AS_BUILT_WRITE.
+    # vendor_capabilities.AS_BUILT_WRITE. It supplies
+    # "vendor_route_authoring_layer_filters" for the route authoring map.
     return _project_detail_response(
         request,
         db,
@@ -746,6 +747,8 @@ def vendor_create_route_revision(
             )
         )
     except HTTPException as exc:
+        if exc.status_code == 403:
+            raise
         return _project_action_error_response(
             request, db, auth=auth, project_id=project_id, exc=exc
         )
@@ -784,6 +787,8 @@ def vendor_submit_route_revision(
             )
         )
     except HTTPException as exc:
+        if exc.status_code == 403:
+            raise
         return _project_action_error_response(
             request, db, auth=auth, project_id=project_id, exc=exc
         )
