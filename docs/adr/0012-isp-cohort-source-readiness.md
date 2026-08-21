@@ -141,6 +141,40 @@ restores the previous state exactly. There is no data change to reverse. The
 only durable consequence of a mistake is a wrong classification, which is a
 forward-fix in the same file.
 
+## Amendment — 2026-08-21: three axes and a disposition
+
+The inventory's single `SurfaceClassification` was answering three independent
+questions at once, and the collisions were not edge cases. An applied migration
+is not an "authorized adapter"; calling it a "legacy parallel writer" reads as
+something a cutover could retire. A fixture seeder writes real rows and holds
+no authority at all. Both had to be fudged.
+
+The inventory now classifies on three orthogonal axes — `AuthorityRole` (what
+say it has over the fact), `BoundaryRole` (what it does there), and
+`Reachability` (how it can still be reached against production) — and
+`SurfaceClassification` survives as a *derived* view, so every document and
+control record written against the original eight names still means what it
+meant, with no second place to edit.
+
+Orthogonality is proved rather than asserted: for every ordered pair of axes,
+knowing one value must leave at least two possibilities open on the other,
+measured over the real inventory. If that ever collapses, the honest fix is to
+merge the axes, not to invent a surface that keeps them apart.
+
+Every surface — including the adapters and readers that write nothing — now
+also carries a `Disposition`: what becomes of its cohort-1 touch when authority
+moves. `UNDECIDED` is a real state with a required `open_question`, and three
+surfaces hold one. They are enumerable, because a question that lives only in
+prose is one somebody answers by accident.
+
+Two cross-axis invariants are worth naming because they were the fudges:
+
+- a surface that persists cohort state against a reachable database cannot
+  claim `NO_AUTHORITY` — writing is authority whether or not anybody granted
+  it — but one that persists only to a disposable database can;
+- a surface reachable only as an applied migration holds the schema lineage's
+  authority and nothing else.
+
 ## Amendment — 2026-08-21: no online export adapter
 
 The export is reachable through one adapter, `scripts/migration/
