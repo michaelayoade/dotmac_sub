@@ -1032,17 +1032,15 @@ class VendorPortalOperations:
                 project.assignment_type = VendorAssignmentType.direct.value
                 project.status = InstallationProjectStatus.assigned.value
             elif command.mode == VendorAssignmentType.bidding.value:
-                if (
-                    command.bidding_close_at is None
-                    or command.bidding_close_at <= _now()
-                ):
+                bidding_close_at = _as_utc(command.bidding_close_at)
+                if bidding_close_at is None or bidding_close_at <= _now():
                     raise _error(
                         "bidding_window_required", "Choose a future bid closing time."
                     )
                 project.assigned_vendor_id = None
                 project.assignment_type = VendorAssignmentType.bidding.value
                 project.bidding_open_at = _now()
-                project.bidding_close_at = command.bidding_close_at
+                project.bidding_close_at = bidding_close_at
                 project.status = InstallationProjectStatus.open_for_bidding.value
             else:
                 raise _error(

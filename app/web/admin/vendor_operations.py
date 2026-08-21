@@ -126,7 +126,12 @@ def _staff_confirmation_context(
 
 def _quote_error(exc: DomainError) -> HTTPException:
     suffix = exc.code.rsplit(".", 1)[-1]
-    status_code = 404 if suffix.endswith("not_found") else 409
+    if suffix.endswith("not_found"):
+        status_code = 404
+    elif suffix in {"bidding_window_required", "invalid_procurement_mode"}:
+        status_code = 422
+    else:
+        status_code = 409
     return HTTPException(status_code=status_code, detail=exc.message)
 
 
