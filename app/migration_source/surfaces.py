@@ -593,22 +593,24 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         authority=AuthorityRole.PARALLEL_WRITER,
         boundary=BoundaryRole.PERSISTS,
         reachability=Reachability.INTERNAL_ONLY,
-        disposition=Disposition.UNDECIDED,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
         entity_types=(
             CohortEntityType.CUSTOMER_ACCOUNT,
             CohortEntityType.CUSTOMER_ADDRESS,
         ),
         owning_service="customer.accounts",
         registry_declared=False,
-        open_question=(
-            "`addresses` has no declared owner, so there is no service to route this "
-            "through. Which owner takes customer addresses before the cohort can be "
-            "shadowed — customer.accounts, or a new one?"
-        ),
+        open_question=None,
         note=(
             "Constructs `Address` rows and writes the account `metadata` blob from an "
-            "undeclared module. Addresses have no declared owner at all, which is why "
-            "this one is debt rather than a bypass of someone."
+            "undeclared module. Decided 2026-08-21 (Governance dec-isp-007): a "
+            "product-first `dotmac-addresses` owner takes normalized address, "
+            "geospatial data and verification history, and Customers, Services and "
+            "Billing hold typed purpose links rather than copies. Product-first means "
+            "the target owner is extracted from a proven Sub implementation, so Sub "
+            "needs that address owner before this write can be routed and before the "
+            "cohort can be shadowed. The account `metadata` half routes through "
+            "customer.accounts independently."
         ),
     ),
     SourceSurface(
@@ -651,21 +653,20 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         authority=AuthorityRole.PROJECTION_WRITER,
         boundary=BoundaryRole.PERSISTS,
         reachability=Reachability.BACKGROUND_JOB,
-        disposition=Disposition.UNDECIDED,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service=None,
         registry_declared=False,
-        open_question=(
-            "Does `subscribers.mrr_total` migrate, or does the target recompute it "
-            "from its own subscriptions and the column simply not cross? Nobody owns "
-            "it on either side today, so neither answer is available to assume."
-        ),
+        open_question=None,
         note=(
             "Writes `subscribers.mrr_total`, a money figure derived from subscription "
-            "state, from a module the registry does not declare. A derived money "
-            "column with no named owner is exactly the shape that survives a "
-            "migration as an authoritative-looking number, so the export carries it "
-            "as derived and the target must recompute rather than trust it."
+            "state, from a module the registry does not declare. Decided 2026-08-21: "
+            "the column does NOT migrate — the target recomputes monthly recurring "
+            "revenue from its own Subscriptions — so this writer is displaced with "
+            "the rest of cohort 1 rather than reproduced. The export still carries "
+            "the value as a declared derived field, because a reconciliation that "
+            "cannot see it cannot explain a difference; carrying it is not the same "
+            "as migrating it."
         ),
     ),
     SourceSurface(
@@ -844,18 +845,20 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         authority=AuthorityRole.PARALLEL_WRITER,
         boundary=BoundaryRole.PERSISTS,
         reachability=Reachability.INTERNAL_ONLY,
-        disposition=Disposition.UNDECIDED,
+        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
-        open_question=(
-            "Account recovery has no counterpart in the target. Does restore move "
-            "with the cohort, stay in Sub against migrated-away rows, or retire?"
-        ),
+        open_question=None,
         note=(
             "A restore tool reactivates accounts and rewrites their `metadata` blob. "
-            "Recovery tooling still has to reach the same owner, or the restored row "
-            "can disagree with the owner that will be migrated."
+            "Decided 2026-08-21: Customers owns recovery INTENT and the existing "
+            "cross-domain cascade is decomposed, so this tool stops reaching into "
+            "account rows and asks the account owner to restore instead. Decomposing "
+            "the cascade is what makes the cohort-1 half separable at all — today one "
+            "restore touches invoices, payments, credentials, RADIUS, IP assignments "
+            "and ONT assignments in the same pass, and only the account rows are "
+            "cohort 1."
         ),
     ),
     SourceSurface(
@@ -1193,8 +1196,11 @@ UNMAPPED_ADJACENT_TABLES: Final[tuple[UnmappedAdjacentTable, ...]] = (
     UnmappedAdjacentTable(
         table="subscriber_nin_verifications",
         reason=(
-            "Regulatory identity-verification evidence with its own retention "
-            "rules; it needs a disposition decision before any export carries it."
+            "Regulatory identity-verification evidence. Decided 2026-08-21: it "
+            "takes a Compliance/Records retention disposition rather than a "
+            "cohort-1 migration one, so it stays out of this export and is "
+            "governed by retention policy. The cohort exports only a presence "
+            "flag on the account; the evidence itself never crosses."
         ),
     ),
     UnmappedAdjacentTable(
