@@ -393,6 +393,23 @@ implementation.
   activity and routes each row to the exact prior Inbox conversation.
   Assignment does not narrow this customer history.
 
+## Inbox Email Recipient And Copy Contract
+
+- Authority: `communications.team_inbox_commands` validates reply copy-recipient
+  input, `communications.team_inbox_outbound_intents` owns the durable delivery
+  attempt, and `communications.team_inbox_projection` owns the staff recipient
+  presentation. The route and templates are adapters.
+- The reply composer exposes optional CC and BCC only for email conversations.
+  Invalid, ambiguous, or over-limit recipient input blocks the send; non-email
+  channels reject copy recipients.
+- Each email message in the permission-scoped staff thread renders all
+  recorded From, To, CC, and BCC addresses. Unknown lists remain absent rather
+  than being inferred from conversation identity.
+- BCC is internal delivery evidence. It is included in the SMTP envelope but
+  never in MIME headers or customer-facing projections.
+- Mobile layouts wrap long addresses without hiding recipients or displacing
+  the message body and primary Send action.
+
 ## ONT Configure Page Contract
 
 - Audience and task: authorized network staff submit one customer-service

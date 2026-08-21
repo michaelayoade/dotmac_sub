@@ -3164,6 +3164,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "Inbox list detail metrics response cohort unread and action projection",
                 "Inbox outbound message sender identity projection",
+                "Inbox email recipient envelope projection",
                 "Inbox media browser presentation projection",
                 "Inbox structured location browser presentation projection",
             ),
@@ -3189,6 +3190,10 @@ DOMAIN = DomainSOT(
                         OwnerRole.RESOLVER,
                     ),
                     (
+                        "Inbox email recipient envelope projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
                         "Inbox media browser presentation projection",
                         OwnerRole.RESOLVER,
                     ),
@@ -3202,7 +3207,10 @@ DOMAIN = DomainSOT(
                         name="conversation records",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Current conversation/message chronology and lifecycle.",
+                        source=(
+                            "Current conversation/message chronology, lifecycle, and "
+                            "recorded From, To, CC, and internal BCC delivery evidence."
+                        ),
                     ),
                     AuthorityInput(
                         name="contact projection",
@@ -3276,6 +3284,7 @@ DOMAIN = DomainSOT(
                     "Inbox queue detail metrics response cohorts actions and unread cohorts",
                     "Exact-message and filter-aware single-row Inbox UI fragments",
                     "Outbound message sender display name initials and provenance source",
+                    "Permission-scoped email From To CC and BCC recipient presentation",
                     "MIME-allowlisted inline image or download-only attachment presentation",
                     "Google Maps link presentation for a validated structured location attachment",
                 ),

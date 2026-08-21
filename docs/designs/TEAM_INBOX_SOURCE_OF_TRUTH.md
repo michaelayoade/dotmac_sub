@@ -182,11 +182,13 @@ resolution, cancellation or assignment stops further queue updates.
 
 ## Outbound flow
 
-An operator reply command accepts one typed `ReplyCommand`. It performs pure and
+An operator reply command accepts one typed `ReplyCommand`, including a typed
+email copy-recipient value object for optional CC and BCC addresses. It performs pure and
 provider-template preparation before acquiring the conversation row, then takes
 a late PostgreSQL `NOWAIT` lock for the bounded database-only write phase. Under
 that lock it rechecks active state and the stable per-conversation idempotency
-key, then records the communication intent, durable notification/outbox row,
+key, including normalized copy recipients in the replay fingerprint, then records
+the communication intent, durable notification/outbox row,
 Inbox outbound-attempt projection, attachments, and macro consequence in one
 owner transaction. Exact key retries replay the existing message; changed input
 under the same key fails closed. SQLSTATE `55P03` rolls back completely and maps
@@ -271,10 +273,13 @@ The admin CRM-replication controls use these existing owners:
   points win over compatibility rows, shared normalized numbers are omitted as
   ambiguous, and manual numbers normalize using the selected country. The
   fallback is retired after the Party/contact convergence audit reaches zero.
-- Email CC/BCC is limited to opening a conversation. The command validates,
-  lowercases and deduplicates each list, then stores both on internal intent
-  metadata. SMTP places CC in the MIME header, never emits a BCC header, and
-  sends the primary, CC and BCC addresses in the envelope.
+- Email CC/BCC is available when opening a conversation and when replying to an
+  existing email thread. The command validates, lowercases and deduplicates each
+  list, rejects copy recipients on non-email channels, and stores both on
+  internal intent metadata. SMTP places CC in the MIME header, never emits a BCC
+  header, and sends the primary, CC and BCC addresses in the envelope. The
+  permission-scoped staff projection shows From, To, CC and BCC for each email
+  message; customer-facing rendering never exposes BCC.
 - Fiber-website inquiries are inbound-only. The projection and outbound owner
   explicitly reject replies until a reviewed reply transport and prospect
   destination policy are approved.
