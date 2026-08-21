@@ -1,7 +1,10 @@
 """Celery tasks for catalog/subscription operations."""
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+from uuid import UUID
 
 from app.celery_app import celery_app
 from app.services.catalog import subscriptions as subscriptions_service
@@ -25,6 +28,18 @@ from app.services.customer_service_state import (
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.models.catalog import Subscription
+
+
+@dataclass(frozen=True, slots=True)
+class ExpiryReminderCandidate:
+    """A subscription and the boundary this reminder is about."""
+
+    subscription: "Subscription"
+    boundary: datetime
+    source: str
 
 
 @celery_app.task(name="app.tasks.catalog.expire_subscriptions")
@@ -74,9 +89,9 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
     Emits subscription_expiring event for each matching subscription,
     which triggers the notification handler to queue emails/SMS.
     """
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
 
-    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
     from app.services.events import emit_event
     from app.services.events.types import EventType
 
@@ -95,7 +110,8 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
         now = datetime.now(UTC)
         cutoff = now + timedelta(days=days_before)
 
-        # Find active subscriptions expiring within the window
+        # For prepaid services, the renewal/access boundary is next_billing_at.
+        # end_at remains a contract-end fallback for rows without a renewal anchor.
         from sqlalchemy.orm import joinedload
 
         stmt = (
@@ -103,24 +119,43 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
             .options(joinedload(Subscription.offer))
             .where(
                 Subscription.status == SubscriptionStatus.active,
-                Subscription.end_at.isnot(None),
-                Subscription.end_at <= cutoff,
-                Subscription.end_at > now,
+                or_(
+                    (
+                        (Subscription.billing_mode == BillingMode.prepaid)
+                        & Subscription.next_billing_at.isnot(None)
+                        & (Subscription.next_billing_at <= cutoff)
+                        & (Subscription.next_billing_at > now)
+                    ),
+                    (
+                        Subscription.end_at.isnot(None)
+                        & (Subscription.end_at <= cutoff)
+                        & (Subscription.end_at > now)
+                    ),
+                ),
             )
         )
-        expiring = session.scalars(stmt).unique().all()
+        subscriptions = session.scalars(stmt).unique().all()
+        expiring = _expiry_reminder_candidates(subscriptions, now=now, cutoff=cutoff)
+        reminded_periods = _subscription_expiring_reminder_periods(
+            session,
+            {candidate.subscription.id for candidate in expiring},
+        )
         suppressed_subscriber_ids = _subscribers_with_open_infrastructure_down_tickets(
             session,
-            {sub.subscriber_id for sub in expiring},
+            {candidate.subscription.subscriber_id for candidate in expiring},
         )
         outage_subscription_ids = _subscription_ids_under_active_outage(
-            session, expiring
+            session, [candidate.subscription for candidate in expiring]
         )
 
         reminded = 0
         suppressed = 0
         suppressed_outage = 0
-        for sub in expiring:
+        duplicate_periods = 0
+        for candidate in expiring:
+            sub = candidate.subscription
+            boundary = candidate.boundary
+            boundary_key = boundary.isoformat()
             try:
                 if sub.subscriber_id in suppressed_subscriber_ids:
                     suppressed += 1
@@ -138,19 +173,30 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
                         sub.id,
                     )
                     continue
-                end_at = _as_utc(sub.end_at)
-                days_left = max(0, (end_at - now).days) if end_at else 0
+                if boundary_key in reminded_periods.get(sub.id, set()):
+                    duplicate_periods += 1
+                    logger.info(
+                        "Skipped duplicate expiry reminder for subscription %s "
+                        "boundary %s",
+                        sub.id,
+                        boundary_key,
+                    )
+                    continue
+                days_left = max(0, (boundary - now).days)
                 emit_event(
                     session,
                     EventType.subscription_expiring,
                     {
                         "days_remaining": str(days_left),
-                        "end_date": end_at.strftime("%b %d, %Y") if end_at else "",
+                        "end_date": boundary.strftime("%b %d, %Y"),
                         "plan_name": sub.offer.name if sub.offer else "your plan",
+                        "reminder_boundary": boundary_key,
+                        "reminder_boundary_source": candidate.source,
                     },
                     subscription_id=sub.id,
                     account_id=sub.subscriber_id,
                 )
+                reminded_periods.setdefault(sub.id, set()).add(boundary_key)
                 reminded += 1
             except Exception as exc:
                 logger.warning("Failed to send expiry reminder for %s: %s", sub.id, exc)
@@ -158,17 +204,76 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
         session.commit()
         logger.info(
             "Sent %d expiry reminders; suppressed %d for infrastructure-down "
-            "tickets, %d for active outage incidents",
+            "tickets, %d for active outage incidents, skipped %d duplicate periods",
             reminded,
             suppressed,
             suppressed_outage,
+            duplicate_periods,
         )
     return {
         "reminded": reminded,
         "suppressed_infrastructure_down": suppressed,
         "suppressed_active_outage": suppressed_outage,
+        "duplicate_periods": duplicate_periods,
         "total_expiring": len(expiring),
     }
+
+
+def _expiry_reminder_candidates(
+    subscriptions: list["Subscription"],
+    *,
+    now: datetime,
+    cutoff: datetime,
+) -> list[ExpiryReminderCandidate]:
+    from app.models.catalog import BillingMode
+
+    candidates: list[ExpiryReminderCandidate] = []
+    for subscription in subscriptions:
+        source = "end_at"
+        boundary = _as_utc(subscription.end_at)
+        next_billing_at = _as_utc(subscription.next_billing_at)
+        if subscription.billing_mode == BillingMode.prepaid and next_billing_at:
+            source = "next_billing_at"
+            boundary = next_billing_at
+        if boundary is None or boundary <= now or boundary > cutoff:
+            continue
+        candidates.append(
+            ExpiryReminderCandidate(
+                subscription=subscription,
+                boundary=boundary,
+                source=source,
+            )
+        )
+    return candidates
+
+
+def _subscription_expiring_reminder_periods(
+    session,
+    subscription_ids: set[UUID],
+) -> dict[UUID, set[str]]:
+    if not subscription_ids:
+        return {}
+
+    from sqlalchemy import select
+
+    from app.models.event_store import EventStore
+    from app.services.events.types import EventType
+
+    rows = session.execute(
+        select(EventStore.subscription_id, EventStore.payload).where(
+            EventStore.event_type == EventType.subscription_expiring.value,
+            EventStore.subscription_id.in_(subscription_ids),
+        )
+    ).all()
+    periods: dict[UUID, set[str]] = {}
+    for subscription_id, payload in rows:
+        if subscription_id is None or not isinstance(payload, dict):
+            continue
+        boundary = payload.get("reminder_boundary")
+        if not isinstance(boundary, str) or not boundary:
+            continue
+        periods.setdefault(subscription_id, set()).add(boundary)
+    return periods
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
