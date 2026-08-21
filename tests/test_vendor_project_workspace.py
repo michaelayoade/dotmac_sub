@@ -19,6 +19,7 @@ from app.models.vendor_routes import (
     ProposedRouteRevision,
     ProposedRouteRevisionStatus,
     Vendor,
+    VendorAssignmentType,
 )
 from app.schemas.vendor_portal import (
     VendorQuoteCreate,
@@ -30,6 +31,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_operations import (
     AddVendorQuoteLineCommand,
+    ConfigureVendorProcurementCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
     ReviewVendorQuoteCommand,
@@ -85,6 +87,32 @@ def _create_quote_command(installation, vendor_id, user_id):
         vendor_id=str(vendor_id),
         user_id=str(user_id),
     )
+
+
+def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_session):
+    installation, _vendor, user = _chain(db_session)
+    naive_close = (datetime.now(UTC) + timedelta(days=1)).replace(tzinfo=None)
+    db_session_adapter.release_read_transaction(db_session)
+
+    result = vendor_portal_operations.configure_procurement(
+        db_session,
+        ConfigureVendorProcurementCommand(
+            context=_context(
+                actor=str(user.id),
+                scope=str(installation.id),
+                reason="test bidding procurement",
+            ),
+            project_id=str(installation.id),
+            mode=VendorAssignmentType.bidding.value,
+            bidding_close_at=naive_close,
+        ),
+    )
+
+    db_session.refresh(installation)
+    assert result["status"] == InstallationProjectStatus.open_for_bidding.value
+    assert installation.status == InstallationProjectStatus.open_for_bidding.value
+    assert installation.assignment_type == VendorAssignmentType.bidding.value
+    assert installation.bidding_close_at is not None
 
 
 def test_a_vendor_cannot_quote_a_project_assigned_to_another_vendor(db_session):
@@ -442,3 +470,33 @@ def test_quote_review_updates_project_in_the_same_transaction(db_session):
     event = db_session.query(EventStore).one()
     assert event.event_type == "vendor_quote.changed"
     assert event.payload["action"] == "approved"
+
+
+def test_quote_revision_request_requires_review_note(db_session):
+    installation, vendor, user = _chain(db_session)
+    quote = ProjectQuote(
+        project_id=installation.id,
+        vendor_id=vendor.id,
+        status=ProjectQuoteStatus.submitted.value,
+    )
+    db_session.add(quote)
+    db_session.commit()
+    command = ReviewVendorQuoteCommand(
+        context=_context(
+            actor=str(user.id),
+            scope=str(quote.id),
+            reason="test quote revision request",
+        ),
+        quote_id=str(quote.id),
+        reviewer_id=str(user.id),
+        approve=False,
+        notes="  ",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(VendorProjectWorkspaceError) as exc:
+        vendor_portal_operations.review_quote(db_session, command)
+
+    assert exc.value.code.endswith(".quote_revision_note_required")
+    db_session.refresh(quote)
+    assert quote.status == ProjectQuoteStatus.submitted.value

@@ -34,7 +34,13 @@ the evidence required for a decision.
 
 - Audience: inventory and accounts-payable staff.
 - Job: find records awaiting a decision.
-- First view: project/vendor identity, record version/number, current state,
+- First view: a tabbed queue filter with counts for procurement, quotes,
+  routes, as-built evidence, materials, advances, invoices, and verification.
+  Only the selected work queue is shown.
+- Search persists in the URL as `q` with the selected `view`, filters the
+  selected queue by visible project, vendor, and invoice identifiers, and
+  states which queue is being searched.
+- Queue rows show project/vendor identity, record version/number, current state,
   amount or evidence size, submitted time, and one exact detail link.
 - Permissions: inventory sections require `inventory:read`; purchase invoices
   require `finance:ap:read`.

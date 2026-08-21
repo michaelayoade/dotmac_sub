@@ -1,5 +1,4 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import submit_button %}
 {% block title %}{{ form_title }} - Admin{% endblock %}
 
 {% block content %}
@@ -89,7 +88,7 @@
         </div>
         <div class="flex items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-800/50">
             <a href="/admin/vendors" class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
-            {{ submit_button(submit_label, loading_label="Saving...") }}
+            <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900">{{ submit_label }}</button>
         </div>
     </form>
 </div>
