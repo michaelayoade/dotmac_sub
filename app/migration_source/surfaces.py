@@ -140,6 +140,12 @@ class Disposition(StrEnum):
     About the surface's *cohort-1 touch*, not the whole file.
     `account_lifecycle.py` keeps owning subscription lifecycle long after its
     Subscriber projection writes are displaced.
+
+    There is deliberately no "stays as it is" member. Every surface here
+    touches cohort-1 state — that is the inclusion criterion — and once that
+    state lives in another application, no such touch can survive unchanged.
+    A member meaning "nothing happens" would be the one anybody reached for to
+    avoid deciding, and this vocabulary exists to force the decision.
     """
 
     #: Displaced by the target. Must reach zero for `ctl-isp-009`.
@@ -152,8 +158,6 @@ class Disposition(StrEnum):
     #: target through a versioned contract. ADR 0012 permits no other shape:
     #: the two applications share no tables, sessions or transactions.
     REPOINT_TO_TARGET_API = "repoint_to_target_api"
-    #: Keeps working against Sub-owned state that is not cohort-1.
-    REMAINS_IN_SUB = "remains_in_sub"
     #: An applied migration. There is nothing to retire.
     HISTORICAL_NO_ACTION = "historical_no_action"
     #: Writes only disposable databases.
@@ -235,6 +239,28 @@ _BOUNDARY_CLASSIFICATION: Final[dict[BoundaryRole, SurfaceClassification]] = {
     BoundaryRole.TRANSPORTS: SurfaceClassification.TRANSPORT,
     BoundaryRole.READS: SurfaceClassification.READ_ONLY_CONSUMER,
 }
+
+
+#: The disposition every *referencing* file falls under unless this inventory
+#: gives it one individually.
+#:
+#: 386 files name a cohort model or table; 45 are inventoried here. Assigning
+#: an individual disposition to the other 343 would be fabrication at scale —
+#: the reference census is a bounded reach, not an impact analysis, and many of
+#: those files only mention a model in a type hint.
+#:
+#: A class default is still an answer rather than a gap, because there is only
+#: one shape available to them. ADR 0012 gives the two applications separate
+#: databases, sessions and transactions, so after the switch a file that reads
+#: a cohort fact either reaches the target through a versioned contract or
+#: stops reading it. Nothing else is permitted, so nothing else can be
+#: defaulted to.
+#:
+#: What the default may NEVER cover is a writer.
+#: `test_no_counted_writer_relies_on_the_default_disposition` fails the build
+#: if one appears, because "displace this writer" is a decision about a
+#: specific line of code and a blanket rule cannot make it.
+DEFAULT_CALLER_DISPOSITION: Final[Disposition] = Disposition.REPOINT_TO_TARGET_API
 
 
 class SourceSurface(BaseModel):
@@ -1350,6 +1376,7 @@ def inventoried_paths() -> frozenset[str]:
 
 __all__ = [
     "COHORT_SURFACES",
+    "DEFAULT_CALLER_DISPOSITION",
     "TABLES_WITH_NO_COUNTED_WRITER",
     "UNMAPPED_ADJACENT_TABLES",
     "AuthorityRole",

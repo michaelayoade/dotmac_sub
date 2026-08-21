@@ -74,8 +74,22 @@ matrix. It is not a plan, an approval, or a claim that any module is released.
 ## Writer census
 
 Counted mechanically across every entry-point family by
-`scripts/architecture/isp_cohort_writers.py` and frozen in
-`tests/architecture/isp_cohort1_writer_baseline.txt`.
+`scripts/architecture/isp_cohort_writers.py` and frozen by **two** baselines,
+because membership and magnitude are different events wanting different
+remedies:
+
+- `tests/architecture/isp_cohort1_writer_files_baseline.txt` — *which files*
+  write cohort state. A file that starts writing is a design decision somebody
+  has to defend.
+- `tests/architecture/isp_cohort1_write_sites_baseline.txt` — *how much* each
+  writes, plus an exact `TOTAL`. An existing writer going from three sites to
+  four is usually a refactor.
+
+Both are two-directional. The magnitude ratchet compares only files present on
+both sides, so it never reports an appearance or a removal — membership is the
+other guard's job, and each stays silent about the other's business. The exact
+total catches the one case per-file counts cannot: a write moved between two
+already-baselined files looks like an ordinary shrink-and-grow pair.
 
 | Family | Files | Write sites |
 |---|---|---|
@@ -197,7 +211,26 @@ in another application.
 | `HISTORICAL_NO_ACTION` | 6 | An applied migration; nothing to retire |
 | `UNDECIDED` | 3 | Needs a decision, and says which one |
 | `NON_PRODUCTION_NO_ACTION` | 2 | Writes only disposable databases |
-| `REMAINS_IN_SUB` | 0 | Keeps working against Sub-owned state outside cohort 1 |
+
+There is deliberately no "stays as it is" disposition. Every surface here
+touches cohort-1 state — that is the inclusion criterion — and once that state
+lives in another application, no such touch survives unchanged. A member
+meaning "nothing happens" would be the one anybody reached for to avoid
+deciding.
+
+**Every counted writer has an individual disposition; the readers take a
+declared default.** 386 files reference cohort state and 45 are inventoried
+here. Assigning an individual disposition to the other 343 would be fabrication
+at scale — the reference census is a bounded reach, not an impact analysis, and
+many of those files only mention a model in a type hint.
+
+The default is `REPOINT_TO_TARGET_API`, and it is an answer rather than a gap
+because only one shape is available: ADR 0012 gives the two applications
+separate databases, sessions and transactions, so after the switch a file that
+reads a cohort fact either reaches the target through a versioned contract or
+stops reading it. What the default may never cover is a **writer** — "displace
+this" is a decision about a specific line of code, and a guard fails the build
+if a counted writer ever falls through to it.
 
 The disposition is about the surface's **cohort-1 touch**, not the whole file.
 `account_lifecycle.py` keeps owning subscription lifecycle long after its
