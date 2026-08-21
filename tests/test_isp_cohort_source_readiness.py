@@ -347,6 +347,51 @@ def test_nothing_observes_into_the_cohort_and_that_is_a_finding() -> None:
 # --------------------------------------------------------------------------
 
 
+def test_the_disposition_vocabulary_has_no_do_nothing_member() -> None:
+    """Every member must name a change, or it becomes the way to avoid one.
+
+    `HISTORICAL_NO_ACTION` and `NON_PRODUCTION_NO_ACTION` are the two that
+    name inaction, and both are constrained by a cross-axis rule — an applied
+    migration and a disposable-database writer respectively — so neither can
+    be reached by a production surface that simply has not been thought about.
+    """
+
+    # `remains_in_sub` is named as a string rather than a member because it
+    # deliberately is not one any more. If it comes back, this catches it.
+    inaction_spellings = ("no_action", "remains_in_sub", "unchanged", "keep")
+    reachable_inaction = {
+        member
+        for member in surfaces.Disposition
+        if any(spelling in member.value for spelling in inaction_spellings)
+    }
+    assert reachable_inaction == {
+        surfaces.Disposition.HISTORICAL_NO_ACTION,
+        surfaces.Disposition.NON_PRODUCTION_NO_ACTION,
+    }, (
+        "the disposition vocabulary gained a member meaning 'nothing happens' "
+        "that is not pinned to a spent reachability; that is the member "
+        "somebody uses instead of deciding"
+    )
+
+
+def test_a_no_action_disposition_requires_a_spent_reachability() -> None:
+    """Inaction is only legal where the surface cannot act again."""
+
+    inaction = {
+        surfaces.Disposition.HISTORICAL_NO_ACTION,
+        surfaces.Disposition.NON_PRODUCTION_NO_ACTION,
+    }
+    wrong = sorted(
+        surface.path
+        for surface in surfaces.COHORT_SURFACES
+        if surface.disposition in inaction and surface.production_runtime
+    )
+    assert not wrong, (
+        "these surfaces can still write production and are dispositioned as "
+        "needing no action:\n  " + "\n  ".join(wrong)
+    )
+
+
 def test_every_surface_carries_a_disposition() -> None:
     grouped = surfaces.surfaces_by_disposition()
     assert sum(len(paths) for paths in grouped.values()) == len(
@@ -398,11 +443,11 @@ def test_the_undecided_surfaces_are_the_ones_we_expect() -> None:
 
 
 def test_every_displaced_writer_has_a_disposition_that_removes_it() -> None:
-    """A writer a cutover displaces cannot be left as `REMAINS_IN_SUB`.
+    """A displaced writer must carry a disposition that actually removes it.
 
     `ctl-isp-009` ratchets the displaced set to zero. A surface in that set
-    whose disposition says it stays is a contradiction that would be
-    discovered when the ratchet refuses to reach zero.
+    whose disposition leaves it in place is a contradiction, and it would be
+    discovered when the ratchet refuses to reach zero rather than here.
     """
 
     removing = {
