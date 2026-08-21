@@ -21,6 +21,7 @@
 
 {% if lifecycle %}
 {% set phase = lifecycle.phase.value if lifecycle.phase else 'not_submitted' %}
+{% set is_lan_acs_task_drain = lifecycle.waiting_reason == 'awaiting_acs_task_drain' %}
 <section class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-800" aria-label="Current ONT configuration lifecycle">
     <div class="flex flex-wrap items-start justify-between gap-2">
         <div>
@@ -47,7 +48,7 @@
 
     {% if lifecycle.waiting_reason %}
     {% set waiting_message = lifecycle.waiting_reason | replace('_', ' ') %}
-    {% if lifecycle.waiting_reason == 'awaiting_acs_task_drain' %}
+    {% if is_lan_acs_task_drain %}
     {% set waiting_message = 'ACS accepted the LAN/DHCP task. Waiting for the ONT to Inform, or force an OLT ONT reset to drain it.' %}
     {% endif %}
     <p class="mt-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">Waiting: {{ waiting_message }}</p>
@@ -55,11 +56,13 @@
     {% if lifecycle.failure_message %}
     <p class="mt-2 rounded px-2 py-1.5 text-xs {% if phase == 'delivered_unverified' %}bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300{% else %}bg-rose-50 text-rose-800 dark:bg-rose-900/20 dark:text-rose-300{% endif %}">{{ lifecycle.failure_message }}{% if lifecycle.failure_code %} <span class="font-mono">({{ lifecycle.failure_code }})</span>{% endif %}</p>
     {% endif %}
-    {% if phase in ['saved', 'queued', 'applying', 'readback_pending'] %}
+    {% if is_lan_acs_task_drain %}
+    <p class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">Do not retry this LAN configuration while the ACS task is queued. Wait for the ONT to Inform, or force an OLT ONT reset to drain the queued task.</p>
+    {% elif phase in ['saved', 'queued', 'applying', 'readback_pending'] %}
     <p class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">This revision is not configured until current-revision device readback verifies it.</p>
     {% endif %}
 
-    {% if lifecycle.next_action.value == 'retry_current_configuration' and lifecycle.configuration_head_id and lifecycle.revision %}
+    {% if lifecycle.next_action.value == 'retry_current_configuration' and not is_lan_acs_task_drain and lifecycle.configuration_head_id and lifecycle.revision %}
     <form class="mt-3" hx-post="/admin/network/onts/{{ ont_id }}/configure/retry" hx-target="#configure-content" hx-swap="innerHTML">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="configuration_head_id" value="{{ lifecycle.configuration_head_id }}">

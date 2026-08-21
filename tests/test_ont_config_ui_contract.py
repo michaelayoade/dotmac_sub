@@ -152,7 +152,7 @@ def test_configure_form_explains_acs_task_drain_waiting_state() -> None:
             waiting_reason="awaiting_acs_task_drain",
             failure_message=None,
             failure_code=None,
-            next_action=SimpleNamespace(value="wait"),
+            next_action=SimpleNamespace(value="retry_current_configuration"),
             configuration_head_id=uuid.uuid4(),
             current_events=(),
         ),
@@ -160,6 +160,8 @@ def test_configure_form_explains_acs_task_drain_waiting_state() -> None:
 
     assert "ACS accepted the LAN/DHCP task" in html
     assert "force an OLT ONT reset to drain it" in html
+    assert "Do not retry this LAN configuration" in html
+    assert "Retry current configuration" not in html
     assert "awaiting acs task drain" not in html
 
 
