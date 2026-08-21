@@ -834,6 +834,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "comprehensive network map typed projection",
                 "dispatch plant-subset map projection",
+                "vendor route-planning plant projection",
                 "isolated network map V2 parity projection",
                 "customer access-session map presentation",
                 "network map customer drill-down projection",
@@ -880,6 +881,14 @@ DOMAIN = DomainSOT(
                             "canonical network inventory and geometry",
                             "validated fiber route geometry",
                             "binary device operation verdict",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="vendor route-planning plant projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical network inventory and geometry",
+                            "validated fiber route geometry",
                         ),
                     ),
                     ConcernContract(
@@ -1021,7 +1030,7 @@ DOMAIN = DomainSOT(
                 ),
                 errors=ErrorContract(
                     domain_codes=(),
-                    mapping_owner="app.web.admin.network",
+                    mapping_owner=("app.web.admin.network and app.web.vendor_portal"),
                 ),
                 projections=(
                     ProjectionContract(
@@ -1106,6 +1115,32 @@ DOMAIN = DomainSOT(
                         ),
                         repair_owner="ui.network_map_projection",
                     ),
+                    ProjectionContract(
+                        name="vendor route-planning plant projection",
+                        input_names=(
+                            "canonical network inventory and geometry",
+                            "validated fiber route geometry",
+                        ),
+                        writer="ui.network_map_projection",
+                        freshness=(
+                            "Recomputed for each vendor project read from the same "
+                            "canonical plant projection used by Network Admin."
+                        ),
+                        stale_behavior=(
+                            "Missing coordinates or validated route geometry omit "
+                            "only that feature; no inferred location or line is "
+                            "created."
+                        ),
+                        drift_signal=(
+                            "Typed vendor-safe projection and adapter/frontend "
+                            "boundary tests."
+                        ),
+                        rebuild_operation=(
+                            "Recompute on read from canonical plant state; the "
+                            "projection persists nothing."
+                        ),
+                        repair_owner="ui.network_map_projection",
+                    ),
                 ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.COMPLETE,
@@ -1145,6 +1180,7 @@ DOMAIN = DomainSOT(
                     "tests/test_network_map_v2.py",
                     "tests/js/network_map_v2.test.js",
                     "tests/architecture/test_network_map_projection_boundary.py",
+                    "tests/test_vendor_route_revision_authoring.py",
                 ),
             ),
         ),
@@ -1684,6 +1720,156 @@ DOMAIN = DomainSOT(
                 "customer.branding owns the concrete color behind each tone. "
                 "Clients render the tone through brand/theme tokens and do not "
                 "keep local tone-to-color maps."
+            ),
+        ),
+        SOTService(
+            name="ui.network_device_status_presentation",
+            module="app.services.network_device_status_presentation",
+            owns=("network device worklist lifecycle-aware status presentation",),
+            depends_on=(
+                "network.device_state",
+                "network.monitoring_inventory",
+                "network.core_device_archive",
+            ),
+            notes=(
+                "The worklist retains binary operation and administrative "
+                "lifecycle as separate inputs. Archived presents as "
+                "Decommissioned and inactive as Inactive before active-device "
+                "reachability presents as Online or Offline."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "network device worklist lifecycle-aware status "
+                            "presentation"
+                        ),
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "binary device operational verdict",
+                            "monitoring admission lifecycle",
+                            "core device retirement lifecycle",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="binary device operational verdict",
+                        owner="network.device_state",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "DeviceProjection.operational_status constrained to "
+                            "working or not_working"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="monitoring admission lifecycle",
+                        owner="network.monitoring_inventory",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "NetworkDevice.is_active projected as active or inactive "
+                            "when no archive tombstone exists"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="core device retirement lifecycle",
+                        owner="network.core_device_archive",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "NetworkDevice archive tombstone projected as archived "
+                            "in DeviceProjection.lifecycle_state"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "The typed resolver transforms supplied projection values "
+                        "without opening or completing a transaction."
+                    ),
+                    locking="Pure presentation resolution acquires no locks.",
+                    idempotency=(
+                        "The same typed operational and lifecycle inputs always "
+                        "produce the same value, label, tone, and icon."
+                    ),
+                    retries="Pure presentation resolution is safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner=(
+                        "app.services.device_projection_views and "
+                        "app.services.web_network_core_devices_forms"
+                    ),
+                    fail_closed_on=(
+                        "an operational or lifecycle value outside its closed enum",
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name=(
+                            "network device worklist lifecycle-aware status "
+                            "presentation"
+                        ),
+                        input_names=(
+                            "binary device operational verdict",
+                            "monitoring admission lifecycle",
+                            "core device retirement lifecycle",
+                        ),
+                        writer="ui.network_device_status_presentation",
+                        freshness=(
+                            "Computed on read from the exact persisted device "
+                            "projection row; it inherits that row's refreshed_at "
+                            "without inventing another freshness state."
+                        ),
+                        stale_behavior=(
+                            "Lifecycle remains visible; the raw binary operational "
+                            "fact and projection freshness remain available for "
+                            "diagnostics and never override Decommissioned."
+                        ),
+                        drift_signal=(
+                            "Presentation contract tests compare every lifecycle and "
+                            "operational combination with rendered list behavior."
+                        ),
+                        rebuild_operation=(
+                            "Recompute on read after the canonical device projection "
+                            "reconciler rebuilds its row."
+                        ),
+                        repair_owner="ui.network_device_status_presentation",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "binary-only network_device_list_status_presentation in "
+                        "ui.status_presentation plus template-local Archived badges"
+                    ),
+                    new_owner="ui.network_device_status_presentation",
+                    verification=(
+                        "Typed presentation, projection-read, action-contract, "
+                        "template-boundary, and browser lifecycle tests."
+                    ),
+                    cutover_gate=(
+                        "The unified list and core detail consume the typed combined "
+                        "presentation while retaining raw operation and lifecycle."
+                    ),
+                    fallback_retirement=(
+                        "The binary-only list presenter and primary Offline rendering "
+                        "for archived or inactive devices are removed."
+                    ),
+                ),
+                steward="network operations UI",
+                design_refs=(
+                    "docs/designs/CORE_DEVICE_ARCHIVE.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_status_presentation.py",
+                    "tests/test_device_projection_views.py",
+                    "tests/architecture/test_binary_device_operational_lifecycle.py",
+                    "tests/architecture/test_core_device_archive_boundary.py",
+                    "tests/playwright/e2e/test_core_device_archive.py",
+                ),
             ),
         ),
     ),
