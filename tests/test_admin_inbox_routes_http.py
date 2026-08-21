@@ -371,18 +371,29 @@ def test_reply_htmx_request_returns_typed_completion_event_without_redirect():
 
     with (
         patch("app.web.admin.inbox._prepare_mutation"),
-        patch("app.services.team_inbox_commands.reply", return_value=outcome),
+        patch(
+            "app.services.team_inbox_commands.reply", return_value=outcome
+        ) as reply_mock,
         patch("app.services.web_admin.get_actor_id", return_value=None),
     ):
         response = client.post(
             f"/inbox/{conversation_id}/reply",
-            data={"body_text": "We are checking this now."},
+            data={
+                "body_text": "We are checking this now.",
+                "cc": "copy@example.com; second@example.com",
+                "bcc": "audit@example.com",
+            },
             headers={"HX-Request": "true"},
             follow_redirects=False,
         )
 
     assert response.status_code == 204
     assert "location" not in response.headers
+    command = reply_mock.call_args.kwargs["command"]
+    assert command.email_copy_recipients == team_inbox_commands.EmailCopyRecipients(
+        cc=("copy@example.com", "second@example.com"),
+        bcc=("audit@example.com",),
+    )
     event = json.loads(response.headers["HX-Trigger"])["inbox-reply-completed"]
     assert event == {
         "conversation_id": str(conversation_id),
@@ -399,12 +410,13 @@ def test_message_fragment_route_renders_one_authoritative_message():
     message = team_inbox_read.InboxTimelineMessage(
         id=str(message_id),
         channel_type="email",
-        direction="internal",
+        direction="outbound",
         subject=None,
         body="Targeted fragment body",
-        from_address=None,
-        to_addresses=[],
-        cc_addresses=[],
+        from_address="support@example.test",
+        to_addresses=["customer@example.test"],
+        cc_addresses=["copy@example.test"],
+        bcc_addresses=["audit@example.test"],
         sent_at=None,
         received_at=None,
         created_at=datetime.now(UTC),
@@ -429,6 +441,11 @@ def test_message_fragment_route_renders_one_authoritative_message():
     assert response.headers["Cache-Control"] == "private, no-store"
     assert f'data-inbox-message-id="{message_id}"' in response.text
     assert "Targeted fragment body" in response.text
+    assert "support@example.test" in response.text
+    assert "customer@example.test" in response.text
+    assert "copy@example.test" in response.text
+    assert "audit@example.test" in response.text
+    assert "Email recipients" in response.text
 
 
 def test_queue_row_route_deletes_a_row_that_no_longer_matches_filters():

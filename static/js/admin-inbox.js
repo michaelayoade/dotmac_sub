@@ -2139,6 +2139,9 @@
       replyLifecycleCleanup: null,
       idempotencyKey: "",
       replyTo: null,
+      copyRecipientsOpen: false,
+      ccRecipients: "",
+      bccRecipients: "",
       scheduled: false,
       scheduledAt: "",
       typingTimer: null,
@@ -2446,6 +2449,8 @@
           this.draft.trim() ||
             this.files.length ||
             this.replyTo ||
+            this.ccRecipients.trim() ||
+            this.bccRecipients.trim() ||
             this.scheduled ||
             this.polishSuggestion ||
             this.aiDraftResult,
@@ -2514,6 +2519,9 @@
         this.draft = "";
         this.files = [];
         this.replyTo = null;
+        this.copyRecipientsOpen = false;
+        this.ccRecipients = "";
+        this.bccRecipients = "";
         this.scheduled = false;
         this.scheduledAt = "";
         this.macroId = "";
