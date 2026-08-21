@@ -1,6 +1,6 @@
 """Add Team Inbox observation semantic fingerprints and quarantine.
 
-Revision ID: 548_team_inbox_observation_quarantine
+Revision ID: 548_inbox_observation_quarantine
 Revises: 547_inbox_thread_continuation
 Create Date: 2026-08-21
 """
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "548_team_inbox_observation_quarantine"
+revision: str = "548_inbox_observation_quarantine"
 down_revision: str | None = "547_inbox_thread_continuation"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

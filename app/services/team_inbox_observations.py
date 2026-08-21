@@ -381,6 +381,8 @@ def _semantic_payload(
         # stable HTML evidence so that schema evolution is replay-equivalent
         # without treating genuinely changed markup as the same message.
         semantic_body = html_body
+    raw_attachments = payload.get("attachments")
+    attachments = raw_attachments if isinstance(raw_attachments, list) else []
     result: dict[str, object] = {
         "contact_address": payload.get("contact_address"),
         "body": semantic_body,
@@ -388,9 +390,7 @@ def _semantic_payload(
         "cc_addresses": payload.get("cc_addresses") or [],
         "smtp_probe": bool(payload.get("smtp_probe", False)),
         "campaign_attributed": bool(payload.get("campaign_attributed", False)),
-        "attachments": [
-            _semantic_attachment(item) for item in payload.get("attachments") or []
-        ],
+        "attachments": [_semantic_attachment(item) for item in attachments],
     }
     result.update({field: payload.get(field) for field in _INBOUND_OPTIONAL_FIELDS})
     return result
