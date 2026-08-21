@@ -19,6 +19,7 @@ from app.models.billing import (
 from app.models.idempotency import IdempotencyKey
 from app.schemas.billing import (
     CreditNoteApplicationPreviewRequest,
+    CreditNoteApplicationReversalRequest,
     CreditNoteApplyRequest,
     CreditNoteCreate,
     CreditNoteIssueConfirmation,
@@ -223,6 +224,92 @@ def test_credit_note_apply_reduces_invoice_balance(db_session, subscriber_accoun
     )
     assert refreshed_credit_note.applied_total == Decimal("30.00")
     assert refreshed_credit_note.status == CreditNoteStatus.partially_applied
+
+
+def test_credit_note_application_reversal_releases_invoice_and_credit(
+    db_session, subscriber_account
+):
+    credit_note, invoice = _issued_credit_note_and_invoice(
+        db_session,
+        subscriber_account.id,
+        amount=Decimal("80.00"),
+    )
+    applied = billing_service.credit_notes.apply(
+        db_session,
+        str(credit_note.id),
+        _confirmed_apply_request(
+            db_session,
+            credit_note,
+            invoice,
+            amount=Decimal("30.00"),
+        ),
+    )
+
+    preview = billing_service.credit_notes.preview_application_reversal(
+        db_session,
+        str(applied.id),
+    )
+    result = billing_service.credit_notes.reverse_application_with_evidence(
+        db_session,
+        CreditNoteApplicationReversalRequest(
+            application_id=applied.id,
+            memo="Wrong invoice",
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=uuid4().hex,
+        ),
+    )
+
+    db_session.refresh(invoice)
+    db_session.refresh(credit_note)
+    assert result.reversal_application.amount == Decimal("-30.00")
+    assert result.ledger_entry.reversal_of_entry_id == applied.ledger_entry_id
+    assert result.consumption_ledger_entry is not None
+    assert (
+        result.consumption_ledger_entry.reversal_of_entry_id
+        == applied.consumption_ledger_entry_id
+    )
+    assert invoice.balance_due == Decimal("80.00")
+    assert credit_note.applied_total == Decimal("0.00")
+    assert credit_note.status == CreditNoteStatus.issued
+
+
+def test_credit_note_application_reversal_is_idempotent(db_session, subscriber_account):
+    credit_note, invoice = _issued_credit_note_and_invoice(
+        db_session,
+        subscriber_account.id,
+        amount=Decimal("80.00"),
+    )
+    applied = billing_service.credit_notes.apply(
+        db_session,
+        str(credit_note.id),
+        _confirmed_apply_request(db_session, credit_note, invoice),
+    )
+    preview = billing_service.credit_notes.preview_application_reversal(
+        db_session,
+        str(applied.id),
+    )
+    request = CreditNoteApplicationReversalRequest(
+        application_id=applied.id,
+        memo="Wrong invoice",
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=uuid4().hex,
+    )
+
+    first = billing_service.credit_notes.reverse_application_with_evidence(
+        db_session, request
+    )
+    second = billing_service.credit_notes.reverse_application_with_evidence(
+        db_session, request
+    )
+
+    assert second.idempotent_replay is True
+    assert second.reversal_application.id == first.reversal_application.id
+    assert (
+        db_session.query(CreditNoteApplication)
+        .filter(CreditNoteApplication.credit_note_id == credit_note.id)
+        .count()
+        == 2
+    )
 
 
 def test_credit_note_apply_without_lines_uses_total(db_session, subscriber_account):
@@ -478,6 +565,52 @@ def test_web_credit_application_audit_names_exact_result_and_ledger(
     assert event.metadata_["ledger_entry_id"] == metadata["ledger_entry_id"]
     assert event.metadata_["invoice_receivable_before"] == "80.00"
     assert event.metadata_["invoice_receivable_after"] == "50.00"
+
+
+def test_web_credit_application_reversal_audit_names_exact_result_and_ledger(
+    db_session, subscriber_account
+):
+    credit_note, invoice = _issued_credit_note_and_invoice(
+        db_session, subscriber_account.id, amount=Decimal("80.00")
+    )
+    applied = billing_service.credit_notes.apply(
+        db_session,
+        str(credit_note.id),
+        _confirmed_apply_request(
+            db_session,
+            credit_note,
+            invoice,
+            amount=Decimal("30.00"),
+        ),
+    )
+    preview = billing_service.credit_notes.preview_application_reversal(
+        db_session, str(applied.id)
+    )
+
+    metadata = web_billing_invoices.reverse_credit_note_application_web(
+        db_session,
+        request=None,
+        actor_id=None,
+        application_id=str(applied.id),
+        memo="Wrong invoice",
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=uuid4().hex,
+    )
+
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "credit_note")
+        .filter(AuditEvent.entity_id == str(credit_note.id))
+        .filter(AuditEvent.action == "reverse_application")
+        .one()
+    )
+    assert event.metadata_["application_id"] == str(applied.id)
+    assert (
+        event.metadata_["reversal_application_id"]
+        == metadata["reversal_application_id"]
+    )
+    assert event.metadata_["ledger_entry_id"] == metadata["ledger_entry_id"]
+    assert event.metadata_["amount"] == "30.00"
 
 
 def test_credit_note_line_inclusive_tax_extracts_tax(

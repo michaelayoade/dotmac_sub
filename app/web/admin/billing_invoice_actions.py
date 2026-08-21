@@ -387,6 +387,116 @@ def invoice_apply_credit(
     )
 
 
+@router.post(
+    "/invoices/{invoice_id:uuid}/credit-applications/{application_id:uuid}/"
+    "reversal/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_credit_application_reversal_preview(
+    request: Request,
+    invoice_id: UUID,
+    application_id: UUID,
+    memo: str | None = Form(None),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        preview = web_billing_invoices_service.preview_credit_note_application_reversal(
+            db,
+            application_id=str(application_id),
+        )
+        if str(preview.invoice_id) != str(invoice_id):
+            raise ValueError("Credit application does not belong to this invoice")
+    except Exception as exc:
+        db.rollback()
+        detail_data = web_billing_invoices_service.load_invoice_detail_data(
+            db,
+            invoice_id=str(invoice_id),
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        return templates.TemplateResponse(
+            "admin/billing/invoice_detail.html",
+            {
+                "request": request,
+                **(detail_data or {}),
+                "error": str(exc),
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/credit_application_reversal_confirm.html",
+        {
+            "request": request,
+            "preview": preview,
+            "memo": memo.strip() if memo else None,
+            "idempotency_key": idempotency_key,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/credit-applications/{application_id:uuid}/reversal",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_credit_application_reversal(
+    request: Request,
+    invoice_id: UUID,
+    application_id: UUID,
+    memo: str | None = Form(None),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        preview = web_billing_invoices_service.preview_credit_note_application_reversal(
+            db,
+            application_id=str(application_id),
+        )
+        if str(preview.invoice_id) != str(invoice_id):
+            raise ValueError("Credit application does not belong to this invoice")
+        web_billing_invoices_service.reverse_credit_note_application_web(
+            db,
+            request=request,
+            actor_id=_actor_id(request),
+            application_id=str(application_id),
+            memo=memo,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as exc:
+        db.rollback()
+        detail_data = web_billing_invoices_service.load_invoice_detail_data(
+            db,
+            invoice_id=str(invoice_id),
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        return templates.TemplateResponse(
+            "admin/billing/invoice_detail.html",
+            {
+                "request": request,
+                **(detail_data or {}),
+                "error": str(exc),
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
+    )
+
+
 @router.get(
     "/invoices/{invoice_id:uuid}/pdf",
     response_class=HTMLResponse,
