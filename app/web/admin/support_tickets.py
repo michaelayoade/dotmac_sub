@@ -489,11 +489,8 @@ def ticket_create(
         )
         response_status = (
             413
-            if isinstance(
-                exc, support_web_service.TicketAttachmentValidationError
-            )
-            and exc.kind
-            is support_web_service.TicketAttachmentValidationKind.too_large
+            if isinstance(exc, support_web_service.TicketAttachmentValidationError)
+            and exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
             else 400
         )
         return templates.TemplateResponse(
@@ -732,7 +729,6 @@ def ticket_add_comment(
             attachments=attachments,
         )
     except support_web_service.TicketAttachmentValidationError as exc:
-        db.rollback()
         context = _ctx(request, db)
         context.update(
             support_web_service.build_ticket_detail_context(
@@ -747,8 +743,7 @@ def ticket_add_comment(
         context["action_error"] = exc.message
         response_status = (
             413
-            if exc.kind
-            is support_web_service.TicketAttachmentValidationKind.too_large
+            if exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
             else 422
         )
         return templates.TemplateResponse(

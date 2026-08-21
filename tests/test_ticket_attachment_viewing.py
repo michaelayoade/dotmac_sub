@@ -149,9 +149,7 @@ def test_oversized_comment_attachment_raises_typed_validation_error(
         file=io.BytesIO(b"x" * (web_support_tickets.MAX_ATTACHMENT_BYTES + 1)),
     )
 
-    with pytest.raises(
-        web_support_tickets.TicketAttachmentValidationError
-    ) as exc_info:
+    with pytest.raises(web_support_tickets.TicketAttachmentValidationError) as exc_info:
         web_support_tickets.upload_ticket_attachments(
             db_session,
             ticket_id=ticket.id,
