@@ -882,6 +882,81 @@ def test_lan_worker_ignores_unrelated_ppp_residual_drift_after_delivery(
     assert operation.status is NetworkOperationStatus.succeeded
 
 
+def test_lan_worker_treats_acs_connection_request_failure_as_pending_drain(
+    db_session, monkeypatch
+):
+    ont = OntUnit(serial_number=f"LANCR-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="lan-cr-pending",
+        section=OntConfigurationSection.lan,
+        desired_change_evidence={
+            "lan.ip": "198.51.100.1",
+            "lan.subnet": "255.255.255.248",
+            "lan.block_prefix": "/29",
+            "lan.dhcp_enabled": True,
+            "lan.dhcp_start": "198.51.100.2",
+            "lan.dhcp_end": "198.51.100.6",
+        },
+    )
+    db_session.commit()
+
+    def reconciled(*_args, **_kwargs):
+        return SimpleNamespace(
+            success=False,
+            sync_status="out_of_sync",
+            drift_after=("lan.dhcp_enabled",),
+            failure=SimpleNamespace(
+                reason="acs_cr_failed",
+                message=(
+                    "setParameterValues queued but Connection Request failed: "
+                    "Connection request error: Unexpected status code 401."
+                ),
+                evidence=None,
+            ),
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+    command_id = uuid.uuid4()
+    ont_id = ont.id
+    operation_id = operation.id
+    head_id = head.id
+    revision_number = revision.revision
+    db_session_adapter.release_read_transaction(db_session)
+
+    outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test LAN CR pending",
+                command_id=command_id,
+                correlation_id=operation_id,
+                idempotency_key="lan-cr-pending",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+        ),
+    )
+
+    assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+    assert "accepted by ACS" in outcome.message
+    assert head.waiting_reason == "awaiting_acs_task_drain"
+    assert head.failure_code is None
+    assert operation.status is NetworkOperationStatus.waiting
+
+
 def test_inventory_retirement_clears_only_current_projection_and_keeps_history(
     db_session, monkeypatch
 ):

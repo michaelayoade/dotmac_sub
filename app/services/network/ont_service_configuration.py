@@ -1208,6 +1208,17 @@ def _only_ppp_delivery_residual_drift(result: ReconcileResult) -> bool:
     )
 
 
+def _lan_connection_request_pending(
+    revision: OntServiceConfigurationRevision, result: ReconcileResult
+) -> bool:
+    failure = result.failure
+    return (
+        _force_lan_delivery(revision)
+        and failure is not None
+        and failure.reason == "acs_cr_failed"
+    )
+
+
 def _execution_locked(
     db: Session, command: ExecuteOntServiceConfigurationCommand
 ) -> ExecuteOntServiceConfigurationOutcome:
@@ -1379,6 +1390,7 @@ def _execution_locked(
             and isinstance(failure.evidence, dict)
             and failure.evidence.get("readback_pending")
         )
+        lan_cr_pending = _lan_connection_request_pending(revision, result)
         if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
             next_attempt = command.verification_attempt + 1
             head.phase = OntServiceConfigurationPhase.readback_pending
@@ -1408,6 +1420,40 @@ def _execution_locked(
             )
             phase = OntServiceConfigurationPhase.readback_pending
             message = "Configuration applied; fresh readback is pending."
+        elif lan_cr_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
+            next_attempt = command.verification_attempt + 1
+            pending_message = (
+                "The LAN configuration was accepted by ACS, but the ONT rejected "
+                "the immediate Connection Request. The queued ACS task will drain "
+                "on the next Inform or after an OLT ONT reset."
+            )
+            head.phase = OntServiceConfigurationPhase.readback_pending
+            revision.phase = OntServiceConfigurationPhase.readback_pending
+            head.waiting_reason = "awaiting_acs_task_drain"
+            head.failure_code = None
+            head.failure_message = None
+            network_operations.mark_waiting(db, str(operation.id), head.waiting_reason)
+            stage_dispatch(
+                db,
+                operation,
+                NetworkOperationCommand.ont_service_config_apply_v1,
+                dispatch_key=f"verify:{next_attempt}",
+                not_before=datetime.now(UTC) + timedelta(seconds=30 * next_attempt),
+            )
+            _record_execution_event(
+                db,
+                ont=ont,
+                assignment=assignment,
+                head=head,
+                revision=revision,
+                operation_id=operation.id,
+                phase=OntServiceConfigurationPhase.readback_pending,
+                message=pending_message,
+                success=False,
+                waiting=True,
+            )
+            phase = OntServiceConfigurationPhase.readback_pending
+            message = pending_message
         else:
             head.phase = OntServiceConfigurationPhase.failed
             revision.phase = OntServiceConfigurationPhase.failed
