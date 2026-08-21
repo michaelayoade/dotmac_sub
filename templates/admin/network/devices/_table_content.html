@@ -1,0 +1,24 @@
+<div class="overflow-x-auto">
+    <table class="min-w-full">
+        <thead>
+            <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/40">
+                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Device</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Type</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">IP Address</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Subscriber</th>
+                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Last Seen</th>
+                <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="devices-table-body" class="divide-y divide-slate-100 dark:divide-slate-700/50">
+            {% include "admin/network/devices/_table_rows.html" %}
+        </tbody>
+    </table>
+</div>
+
+{% if pagination %}
+<div class="border-t border-slate-200 px-4 py-3 dark:border-slate-800 sm:px-6">
+    {% include "components/data/table_pagination.html" %}
+</div>
+{% endif %}
