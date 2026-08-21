@@ -141,6 +141,32 @@ restores the previous state exactly. There is no data change to reverse. The
 only durable consequence of a mistake is a wrong classification, which is a
 forward-fix in the same file.
 
+## Amendment — 2026-08-21: no online export adapter
+
+The export is reachable through one adapter, `scripts/migration/
+export_isp_cohort_snapshot.py`, and deliberately not through an HTTP route.
+
+An authenticated `/api/v1` export endpoint would be a standing, network-
+reachable egress surface for the customer identity data of the whole cohort.
+It would have no consumer: `ctl-isp-002` is open, so no destination is named
+and no deployment owner exists. Permanent exposure against zero current use is
+the wrong trade, and "we will need it eventually" is not a reason to open it
+now.
+
+The operator CLI has the properties an online route would have to re-earn:
+access is host access rather than a bearer token, the full snapshot writes a
+0600 file and refuses a terminal, the default mode carries no field values at
+all, and every invocation is a deliberate act on a host somebody already had
+to reach.
+
+Conditions for revisiting, all of which must hold together: `ctl-isp-002`
+verified with a named destination and deployment owner; the destination
+authenticating as a specific principal rather than a shared token; a dedicated
+permission no seeded role carries by default; egress restricted to the
+destination; and per-export audit carrying contract version, checkpoint and
+requesting principal. `docs/ISP_COHORT1_MIGRATION_READINESS.md` § "Why there
+is no online export endpoint" is the operative statement.
+
 ## Review and retirement
 
 - Review date: when `dec-isp-002` and `dec-isp-003` are decided in Governance,

@@ -85,12 +85,20 @@ Counted mechanically across every entry-point family by
 | `migration` | 6 | 8 |
 | **total** | **34** | **101** |
 
-`api_route`, `web_route`, `task_worker`, `scheduled_job`, `event_handler`,
-`websocket`, `importer`, `poller`, `app_module` and `repository_root` produce
-**zero** counted writes. That is a real property of this repository rather
-than a gap in the scan: the thin-adapter rule already keeps routes and tasks
-out of direct persistence, and the census's sensitivity tests prove it would
-count a route that started writing.
+`api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
+`event_handler`, `websocket`, `importer`, `poller`, `app_module` and
+`repository_root` produce **zero** counted writes. That is a real property of
+this repository rather than a gap in the scan: the thin-adapter rule already
+keeps routes and tasks out of direct persistence, and the census's sensitivity
+tests prove it would count a route — or a webhook — that started writing.
+
+`webhook_handler` is worth stating on its own, because it is the family whose
+writers are hardest to notice by reading code: nothing in this repository calls
+an inbound callback. Sub has eight of them under `app/api/`, and **none writes
+or even directly references** a cohort-1 model or table. `crm_webhooks.py`, the
+one that carries customer identity, hands its payload to
+`crm_customers.observe_customer` — an observation, delegated to a service, which
+is the boundary the SOT registry already declares.
 
 ### Classification
 
@@ -100,10 +108,18 @@ count a route that started writing.
 | `DERIVED_PROJECTION` | 2 |
 | `LEGACY_PARALLEL_WRITER` | 26 |
 | `AUTHORIZED_ADAPTER` | 8 |
-| `READ_ONLY_CONSUMER` | 1 |
+| `READ_ONLY_CONSUMER` | 2 |
+| `TRANSPORT` | 1 |
 | `OBSERVATION_COLLECTOR` | 0 |
-| `TRANSPORT` | 0 |
 | `UNKNOWN` | 0 |
+
+`OBSERVATION_COLLECTOR` is zero, and that is a finding rather than an
+oversight: **nothing collects an external observation directly into a cohort-1
+table**. Provider payloads terminate in the Integration Inbox, which is outside
+this cohort, and `app/services/crm_customers.py` only *interprets* a verified
+observation by matching it to an existing account through exact retained
+provenance. The one inbound callback carrying customer identity,
+`app/api/crm_webhooks.py`, is inventoried as `TRANSPORT` for the same reason.
 
 Of the 34 writing surfaces, **26 are production runtime**. The other eight
 cannot write the production database again: `scripts/seed/seed_test_fixtures.py`
@@ -211,6 +227,56 @@ which is what `db.commit()` in a route means here.
 | `app/web/customer/routes.py` | `web_route` | authenticated customer session |
 | `app/web/customer/location.py` | `web_route` | authenticated customer session |
 | `app/tasks/nin_tasks.py` | `task_worker` | worker context; writes verification rows outside this cohort |
+| `app/api/crm_webhooks.py` | `webhook_handler` | provider signature verification; hands the payload to a service and writes no cohort row |
+| `app/services/crm_customers.py` | `service` | reads accounts by exact CRM provenance; creates and updates nothing |
+
+## Reader reach and downstream consequences
+
+Writers are the set a cutover has to displace. Readers are the set it has to
+not surprise, and they are an order of magnitude larger: **386 files** name a
+cohort-1 model or table somewhere in their body — measured by
+`scripts/architecture/isp_cohort_writers.py --json`, on the commit that
+introduced this document.
+
+| Family | Files referencing cohort state |
+|---|---|
+| `service` | 213 |
+| `web_presenter` | 48 |
+| `migration` | 45 |
+| `cli_script` | 43 |
+| `app_module` | 20 |
+| `web_route` | 9 |
+| `event_handler` | 3 |
+| `api_route` | 3 |
+| `task_worker` | 2 |
+| `webhook_handler` | 0 |
+
+This is a deliberately coarse measure — a mapped-class name anywhere in the
+module, or a table name in a string that also contains a SQL keyword — and it
+is a **bounded reach, not an impact analysis**. Overstating its
+precision would invite someone to treat it as complete, and it is not: a
+module that reads a cohort fact through a service helper, without naming a
+model, does not appear.
+
+### External projections
+
+Cohort-1 facts leave Sub through several transports. None of them owns the
+fact, and every one of them will need reconciling after a later cutover:
+
+| Transport | What of the cohort it carries |
+|---|---|
+| RADIUS (`app/services/radius*.py`) | Account identity and lifecycle projected into access state and credentials |
+| CRM (`app/services/crm_*.py`) | Customer identity in both directions — inbound as observation, outbound as views and reporting |
+| ERP (`app/services/erp_*.py`) | Account references on billing and domain synchronisation |
+| UISP (`app/services/topology/uisp_sync.py`) | Subscriber references on network device synchronisation |
+| Team inbox (`app/services/team_inbox_projection.py`, `team_inbox_contact_links.py`) | Contact-to-conversation links built from `subscriber_contacts` and party relationships |
+| `customer_identity_index` | A local, rebuildable search index over identity — a cache, never a source |
+| Notification delivery | Addressed from contact points and account contact columns |
+
+Every one of these is a **transport or a projection**, not an authority. That
+is the existing SOT position and this document does not change it; it records
+them here because "who reads this after the switch" is the question a cutover
+checklist forgets until something stops being delivered.
 
 ## Deliberate exclusions
 
