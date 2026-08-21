@@ -457,6 +457,8 @@ def test_conversation_timeline_returns_teams_assignments_and_messages(db_session
                 body="Checking.",
                 from_address="support@dotmac.io",
                 to_addresses=["customer@example.com"],
+                cc_addresses=["copy@example.com"],
+                metadata_={"bcc": ["audit@example.com"]},
                 sent_at=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
             ),
         ]
@@ -479,6 +481,9 @@ def test_conversation_timeline_returns_teams_assignments_and_messages(db_session
     assert timeline.messages[1].sender is not None
     assert timeline.messages[1].sender.display_name == "Support agent"
     assert timeline.messages[1].sender.initials == "AG"
+    assert timeline.messages[1].to_addresses == ["customer@example.com"]
+    assert timeline.messages[1].cc_addresses == ["copy@example.com"]
+    assert timeline.messages[1].bcc_addresses == ["audit@example.com"]
     assert (
         timeline.messages[1].sender.source
         is team_inbox_read.InboxTimelineSenderSource.fallback

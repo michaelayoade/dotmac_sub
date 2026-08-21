@@ -921,7 +921,7 @@ On failure:
 
 ### Exact scope
 
-In the source inbox, CC and BCC fields are part of the “Start a new conversation” email form. They are not currently shown in the existing-conversation reply composer.
+In the source inbox, CC and BCC fields are available in both the “Start a new conversation” email form and the existing-conversation email reply composer. Staff who can access the conversation also see the recorded From, To, CC, and BCC addresses on each email message.
 
 Replicate that boundary unless the target platform intentionally expands the feature.
 
@@ -944,6 +944,11 @@ BCC: audit@company.com, manager@company.com
 
 Hide CC/BCC for WhatsApp, Facebook and Instagram.
 
+For an existing email conversation, keep the primary recipient owned by the
+thread and provide an **Add CC/BCC** disclosure in the reply composer. Each
+email message in the staff thread shows its recorded From, To, CC, and BCC
+addresses.
+
 ### Submitted form
 
 ```text
@@ -959,6 +964,17 @@ cc_addresses=person1@example.com, person2@example.com
 bcc_addresses=audit@example.com; manager@example.com
 message=Message text
 _csrf_token=...
+```
+
+Existing-thread replies submit the same copy-recipient text through the reply
+endpoint:
+
+```text
+POST /admin/inbox/{conversation_id}/reply
+
+body_text=Message text
+cc=person1@example.com, person2@example.com
+bcc=audit@example.com; manager@example.com
 ```
 
 ### Parsing and validation
@@ -1065,6 +1081,7 @@ On failure:
 - Store a safe error/debug record.
 - Retry only transient failures through the normal outbound retry policy.
 - Show a visible start-conversation error.
+- Show a visible reply-composer error for an existing-thread failure.
 - Never display the message as sent merely because a local record exists.
 
 ### Privacy rules
@@ -1086,18 +1103,22 @@ On failure:
 - Primary, CC and BCC addresses all appear in the SMTP envelope recipients.
 - Connector SMTP and fallback SMTP both receive CC/BCC arrays.
 - CC/BCC are stored with the CRM message.
+- Staff message history shows recorded From, To, CC and BCC addresses.
 - Failed SMTP delivery marks the message failed.
 
 ### Source references
 
-- `templates/admin/crm/inbox.html`
-- `app/web/admin/crm_inbox_start.py`
-- `app/services/crm/inbox/admin_ui.py`
-- `app/services/crm/inbox/outbound.py`
+- `templates/admin/inbox/_overlays.html`
+- `templates/admin/inbox/_conversation.html`
+- `templates/components/ui/triage.html`
+- `app/web/admin/inbox.py`
+- `app/services/team_inbox_commands.py`
+- `app/services/team_inbox_outbound.py`
+- `app/services/team_inbox_read.py`
 - `app/services/email.py`
-- `app/schemas/crm/inbox.py`
-- `tests/test_inbox_bcc_support.py`
-- `tests/test_crm_inbox_services.py`
+- `tests/test_team_inbox_commands.py`
+- `tests/test_team_inbox_outbound.py`
+- `tests/test_admin_inbox_routes_http.py`
 
 ---
 
