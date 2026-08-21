@@ -10,7 +10,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from app.models.notification import Notification
 from app.models.party import Party, PartyType
-from app.models.sales import Lead, LeadOriginCapture
+from app.models.sales import Lead, LeadOriginCapture, LeadStatus
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import (
@@ -1147,3 +1147,38 @@ def test_merge_contact_to_customer_captures_and_attaches_lead(db_session):
     assert (
         conversation.metadata_["lead_capture"]["merge"]["target_type"] == "subscriber"
     )
+
+
+def test_merge_contact_rejects_existing_open_lead_without_unique_violation(db_session):
+    conversation_id = _conversation(db_session)
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Existing Lead",
+        email="ada-existing-lead@example.test",
+        status=SubscriberStatus.active,
+        is_active=True,
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    existing_lead = Lead(
+        subscriber_id=subscriber.id,
+        status=LeadStatus.new.value,
+        is_active=True,
+    )
+    db_session.add(existing_lead)
+    db_session.commit()
+
+    with pytest.raises(team_inbox_commands.InboxContactMergeConflict) as exc_info:
+        team_inbox_commands.merge_contact(
+            db_session,
+            conversation_id=conversation_id,
+            target_type="subscriber",
+            target_query="ada-existing-lead@example.test",
+            actor_person_id=uuid.uuid4(),
+        )
+
+    assert exc_info.value.code.endswith(".contact_merge_conflict")
+    assert exc_info.value.details["conflicting_lead_id"] == str(existing_lead.id)
+    assert db_session.query(Lead).count() == 1
+    conversation = db_session.get(InboxConversation, conversation_id)
+    assert conversation.subscriber_id is None

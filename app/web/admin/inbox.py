@@ -2392,6 +2392,16 @@ def team_inbox_merge_contact(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
+    except team_inbox_commands.InboxContactMergeConflict as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="errors/409.html",
+            context={
+                "message": exc.message,
+                "request_id": getattr(request.state, "request_id", None),
+            },
+            status_code=409,
+        )
     except (
         team_inbox_commands.InboxCommandError,
         team_inbox_contact_links.ContactLinkError,

@@ -33,7 +33,7 @@ from app.models.party import (
     PartyRoleType,
     PartyType,
 )
-from app.models.sales import Lead, LeadCaptureMethod, LeadSourcePlatform
+from app.models.sales import Lead, LeadCaptureMethod, LeadSourcePlatform, LeadStatus
 from app.models.service_team import ServiceTeamMember
 from app.models.subscriber import Reseller, Subscriber
 from app.models.system_user import SystemUser
@@ -135,6 +135,19 @@ class InboxCommandRejected(InboxCommandError):
             else None,
         )
         self.conversation_id = str(conversation_id) if conversation_id else None
+
+
+class InboxContactMergeConflict(InboxCommandError):
+    def __init__(self, *, conversation_id: UUID, conflicting_lead_id: UUID) -> None:
+        super().__init__(
+            "This customer already has an open lead in the same pipeline. "
+            "Review and consolidate that lead before merging this conversation.",
+            suffix="contact_merge_conflict",
+            details={
+                "conversation_id": str(conversation_id),
+                "conflicting_lead_id": str(conflicting_lead_id),
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -1657,6 +1670,62 @@ def _record_lead_merge(
     conversation.metadata_ = conversation_metadata
 
 
+_OPEN_LEAD_STATUSES = tuple(
+    status.value
+    for status in (
+        LeadStatus.new,
+        LeadStatus.contacted,
+        LeadStatus.qualified,
+        LeadStatus.proposal,
+        LeadStatus.negotiation,
+    )
+)
+
+
+def _locked_subscriber_without_open_lead_conflict(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    lead: Lead,
+    subscriber_id: UUID,
+) -> Subscriber:
+    """Serialize a reviewed merge and reject the open-Lead invariant explicitly."""
+
+    subscriber = (
+        db.query(Subscriber)
+        .filter(Subscriber.id == subscriber_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if subscriber is None:
+        raise InboxCommandRejected(
+            "The selected customer was not found.",
+            conversation_id=conversation.id,
+        )
+
+    identity_filters = [Lead.subscriber_id == subscriber.id]
+    if subscriber.party_id is not None:
+        identity_filters.append(Lead.party_id == subscriber.party_id)
+    query = (
+        db.query(Lead)
+        .filter(Lead.id != lead.id)
+        .filter(Lead.is_active.is_(True))
+        .filter(Lead.status.in_(_OPEN_LEAD_STATUSES))
+        .filter(or_(*identity_filters))
+    )
+    if lead.pipeline_id is None:
+        query = query.filter(Lead.pipeline_id.is_(None))
+    else:
+        query = query.filter(Lead.pipeline_id == lead.pipeline_id)
+    conflict = query.order_by(Lead.created_at.desc()).first()
+    if conflict is not None:
+        raise InboxContactMergeConflict(
+            conversation_id=conversation.id,
+            conflicting_lead_id=conflict.id,
+        )
+    return subscriber
+
+
 def _merge_conversation_lead_uncommitted(
     db: Session,
     *,
@@ -1677,6 +1746,12 @@ def _merge_conversation_lead_uncommitted(
     if target_type == "subscriber":
         if subscriber is None:
             raise InboxCommandRejected("Choose a customer to merge this lead into.")
+        subscriber = _locked_subscriber_without_open_lead_conflict(
+            db,
+            conversation=conversation,
+            lead=lead,
+            subscriber_id=subscriber.id,
+        )
         account_conversion.stage_lead_account_conversion(
             db,
             lead_id=lead.id,

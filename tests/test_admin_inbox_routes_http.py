@@ -84,6 +84,30 @@ def test_start_conversation_passes_selected_subscriber_to_owner(db_session):
     assert start.call_args.kwargs["subscriber_id"] == str(selected_subscriber_id)
 
 
+def test_merge_contact_conflict_returns_operator_facing_409(db_session):
+    conversation_id = uuid.uuid4()
+    conflict = team_inbox_commands.InboxContactMergeConflict(
+        conversation_id=conversation_id,
+        conflicting_lead_id=uuid.uuid4(),
+    )
+    with (
+        patch(
+            "app.web.admin.inbox.team_inbox_commands.merge_contact",
+            side_effect=conflict,
+        ),
+        patch("app.web.admin.inbox._prepare_mutation"),
+        patch("app.web.admin.inbox._actor_id_from_request", return_value=None),
+    ):
+        response = _client(db_session).post(
+            f"/inbox/{conversation_id}/merge-contact",
+            data={"target_type": "subscriber", "target_query": "customer@example.com"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 409
+    assert conflict.message in response.text
+
+
 @pytest.fixture
 def captured_request(db_session):
     """Drive the queue route and capture the `InboxQueueRequest` it builds."""
