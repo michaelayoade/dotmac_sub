@@ -42,6 +42,7 @@ class InboxAgentPerformanceMetrics:
     service_team_id: str
     active_assignment_count: int
     handled_conversation_count: int
+    resolved_conversation_count: int
     average_first_response_seconds: float | None
     average_queue_wait_seconds: float | None
 
@@ -463,6 +464,16 @@ def agent_performance_metrics(
         handled_conversation_count=len(
             {assignment.conversation_id for assignment in assignments}
         ),
+        resolved_conversation_count=len(
+            {
+                assignment.conversation_id
+                for assignment in assignments
+                if (
+                    conversation := conversations.get(assignment.conversation_id)
+                ) is not None
+                and conversation.status == InboxConversationStatus.resolved.value
+            }
+        ),
         average_first_response_seconds=_avg(first_response_values),
         average_queue_wait_seconds=_avg(queue_wait_values),
     )
@@ -635,6 +646,15 @@ def agent_performance_report(
             ),
             handled_conversation_count=len(
                 {assignment.conversation_id for assignment in agent_assignments}
+            ),
+            resolved_conversation_count=len(
+                {
+                    assignment.conversation_id
+                    for assignment in agent_assignments
+                    if (conversation := conversations.get(assignment.conversation_id))
+                    is not None
+                    and conversation.status == InboxConversationStatus.resolved.value
+                }
             ),
             average_first_response_seconds=_avg(
                 response_seconds_by_agent.get((team.id, user.id), [])

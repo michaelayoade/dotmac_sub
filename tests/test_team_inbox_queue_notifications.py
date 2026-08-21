@@ -91,16 +91,16 @@ def test_queue_notification_sweep_uses_next_due_and_sends_heartbeat_once(
     )
     assert early.sent == 0
 
-    five_minutes = team_inbox_queue_notifications.sweep_queue_notifications(
+    ten_minutes = team_inbox_queue_notifications.sweep_queue_notifications(
         db_session,
         team_inbox_queue_notifications.QueueNotificationSweepCommand(
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=5),
+            now=now + timedelta(minutes=10),
         ),
     )
-    assert five_minutes.sent == 0
+    assert ten_minutes.sent == 0
     assert db_session.query(InboxQueueNotification).count() == 1
     db_session.commit()
 
@@ -110,7 +110,7 @@ def test_queue_notification_sweep_uses_next_due_and_sends_heartbeat_once(
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=16),
+            now=now + timedelta(minutes=31),
         ),
     )
     assert heartbeat.sent + heartbeat.failed == 1
@@ -128,7 +128,7 @@ def test_queue_notification_sweep_uses_next_due_and_sends_heartbeat_once(
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=16),
+            now=now + timedelta(minutes=31),
         ),
     )
     assert duplicate.sent == 0
@@ -307,7 +307,7 @@ def test_terminal_queue_state_cancels_due_notification(db_session):
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=5),
+            now=now + timedelta(minutes=10),
         ),
     )
 
