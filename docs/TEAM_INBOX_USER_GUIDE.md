@@ -115,6 +115,7 @@ Use **Reply** for customer-visible communication. The composer supports:
 - AI drafting and AI polish where enabled
 - Voice transcription where enabled
 - Scheduled sending
+- Email CC and BCC copy recipients
 - Approved WhatsApp templates when required
 
 After Send, watch the message status:
@@ -193,13 +194,11 @@ can place the message into a retry schedule.
 
 ### Email
 
-New email conversations support recipient, subject, message, attachments, CC,
-and BCC. Separate multiple CC/BCC addresses with commas, semicolons, or line
-breaks. Any invalid address blocks the send.
-
-CC and BCC are available when starting a conversation; they are not currently
-shown in the existing-conversation reply composer. BCC recipients are never
-placed in the visible email headers.
+New email conversations and replies support CC and BCC. Use **Add CC/BCC** in
+the reply composer, and separate multiple addresses with commas, semicolons, or
+line breaks. Any invalid address blocks the send. Each email message in the
+staff thread shows its recorded From, To, CC, and BCC addresses. BCC recipients
+are never placed in the visible email headers or shown to customer recipients.
 
 ### Facebook and Instagram direct messages
 
@@ -432,7 +431,6 @@ or channel policy rather than a UI error.
 ## Current limitations
 
 - Fiber-website inquiries are inbound-only.
-- Email CC/BCC are limited to starting a conversation.
 - WhatsApp template fields support the implemented numeric-variable contract;
   named-variable support is not established.
 - Meta free-form replies require a qualifying inbound message within the
