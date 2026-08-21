@@ -460,6 +460,7 @@ def test_failed_message_fragment_renders_retry_form_with_request_context():
         from_address=None,
         to_addresses=["customer@example.test"],
         cc_addresses=[],
+        bcc_addresses=[],
         sent_at=None,
         received_at=None,
         created_at=datetime.now(UTC),
