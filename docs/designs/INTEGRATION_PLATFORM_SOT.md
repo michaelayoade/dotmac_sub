@@ -267,8 +267,9 @@ fail closed during callback verification.
 1. A generic installation endpoint resolves an enabled ingress binding.
 2. The gateway enforces method, content type, body size, rate, and timeout.
 3. Provider-specific signature verification runs synchronously.
-4. A verified provider event is inserted with a unique identity and payload
-   digest. Duplicate receipt returns the existing state.
+4. Receipt admission locks the enabled capability binding, then inserts the
+   verified provider event with a unique identity and payload digest. Duplicate
+   receipt returns the existing state without starting a second consequence.
 5. Asynchronous processing normalizes the receipt into a typed observation.
 6. The relevant domain resolver and command owner decide and persist the
    consequence idempotently.
