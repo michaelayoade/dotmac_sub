@@ -82,6 +82,11 @@ class CohortComponent(StrEnum):
     PARTY = "dotmac-party"
     CUSTOMERS = "dotmac-customers"
     BRAND_PROFILES = "dotmac-brand-profiles"
+    #: Added by Governance dec-isp-007 (2026-08-21). Addresses had no owner on
+    #: either side; a product-first `dotmac-addresses` owner takes normalized
+    #: address, geospatial data and verification history, and Customers,
+    #: Services and Billing hold typed purpose links rather than copies.
+    ADDRESSES = "dotmac-addresses"
 
 
 class CohortTable(BaseModel):
@@ -195,8 +200,11 @@ COHORT_TABLES: Final[tuple[CohortTable, ...]] = (
         table="addresses",
         model_class="Address",
         model_module="app.models.subscriber",
+        # Still None: dec-isp-007 names the TARGET owner, and product-first
+        # extraction needs a Sub owner to extract from. Creating it is the
+        # follow-up this decision unblocks, not something the decision did.
         owning_service=None,
-        expected_target_component=CohortComponent.CUSTOMERS,
+        expected_target_component=CohortComponent.ADDRESSES,
     ),
     CohortTable(
         entity_type=CohortEntityType.ORGANIZATION,

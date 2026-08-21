@@ -299,9 +299,15 @@ def stage_review_quote(db: Session, command: ReviewVendorQuoteCommand) -> dict:
         ProjectQuoteStatus.under_review.value,
     }:
         raise _error("quote_not_reviewable", "Quote is not reviewable.")
+    normalized_notes = (command.notes or "").strip() or None
+    if not command.approve and normalized_notes is None:
+        raise _error(
+            "quote_revision_note_required",
+            "A review note is required when requesting a quote revision.",
+        )
     quote.reviewed_at = _now()
     quote.reviewed_by_person_id = coerce_uuid(command.reviewer_id)
-    quote.review_notes = (command.notes or "").strip() or None
+    quote.review_notes = normalized_notes
     action = "approved" if command.approve else "revision_requested"
     if command.approve:
         quote.status = ProjectQuoteStatus.approved.value

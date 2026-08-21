@@ -174,6 +174,74 @@ def test_vendor_scope_template_without_subscriber_remains_unscoped(db_session):
     )
 
 
+def test_adding_subscriber_to_vendor_scope_project_creates_assignment(
+    db_session, subscriber
+):
+    template = ProjectTemplate(
+        name="Vendor-scoped late subscriber",
+        project_type=ProjectType.cable_rerun.value,
+        creates_vendor_assignment_scope=True,
+    )
+    db_session.add(template)
+    db_session.commit()
+    project = projects.create(
+        db_session,
+        ProjectCreate(
+            name="Cable rerun without initial customer",
+            project_type=ProjectType.cable_rerun,
+            project_template_id=template.id,
+        ),
+    )
+
+    projects.update(
+        db_session,
+        str(project.id),
+        ProjectUpdate(subscriber_id=subscriber.id),
+    )
+
+    installation = (
+        db_session.query(InstallationProject)
+        .filter(InstallationProject.project_id == project.id)
+        .one()
+    )
+    assert installation.subscriber_id == subscriber.id
+    assert installation.status == InstallationProjectStatus.draft.value
+
+
+def test_adding_vendor_scope_template_to_subscriber_project_creates_assignment(
+    db_session, subscriber
+):
+    template = ProjectTemplate(
+        name="Vendor-scoped late template",
+        project_type=ProjectType.cable_rerun.value,
+        creates_vendor_assignment_scope=True,
+    )
+    db_session.add(template)
+    db_session.commit()
+    project = projects.create(
+        db_session,
+        ProjectCreate(
+            name="Cable rerun without initial vendor scope",
+            project_type=ProjectType.cable_rerun,
+            subscriber_id=subscriber.id,
+        ),
+    )
+
+    projects.update(
+        db_session,
+        str(project.id),
+        ProjectUpdate(project_template_id=template.id),
+    )
+
+    installation = (
+        db_session.query(InstallationProject)
+        .filter(InstallationProject.project_id == project.id)
+        .one()
+    )
+    assert installation.subscriber_id == subscriber.id
+    assert installation.status == InstallationProjectStatus.draft.value
+
+
 def test_cable_rerun_without_vendor_scope_template_remains_unscoped(
     db_session, subscriber
 ):

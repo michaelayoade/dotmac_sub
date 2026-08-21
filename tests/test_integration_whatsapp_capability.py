@@ -208,3 +208,29 @@ def test_inbox_deduplicates_and_quarantines_identity_collision(db_session) -> No
             payload={"entry": [{"id": "different"}]},
         )
     assert receive_binding.installation.state == "quarantined"
+
+
+def test_inbox_replay_does_not_reclaim_a_processing_receipt(db_session) -> None:
+    _installation, bindings = install_whatsapp(db_session)
+    receive_binding = bindings[WHATSAPP_RECEIVE_CAPABILITY]
+
+    first, should_process = inbox.receive_and_claim_verified(
+        db_session,
+        capability_binding_id=receive_binding.id,
+        provider_event_id="meta:processing-replay",
+        event_type="whatsapp.meta.webhook",
+        payload={"entry": [{"id": "one"}]},
+    )
+    replay, replay_should_process = inbox.receive_and_claim_verified(
+        db_session,
+        capability_binding_id=receive_binding.id,
+        provider_event_id="meta:processing-replay",
+        event_type="whatsapp.meta.webhook",
+        payload={"entry": [{"id": "one"}]},
+    )
+
+    assert should_process is True
+    assert replay_should_process is False
+    assert replay.id == first.id
+    assert replay.state == "processing"
+    assert replay.attempt_count == 1

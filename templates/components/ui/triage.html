@@ -211,11 +211,11 @@
                 {% if message.bcc_addresses %}<dt class="font-semibold">BCC</dt><dd class="break-all">{{ message.bcc_addresses | join(', ') }}</dd>{% endif %}
             </dl>
             {% endif %}
-            {% if metadata.get('reply_to') %}
-            {% set reply = metadata.get('reply_to') %}
+            {% if message.reply_to %}
+            {% set reply = message.reply_to %}
             <div class="mb-2 rounded-lg border-l-4 border-amber-400 bg-white/70 px-2.5 py-2 text-[11px] text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">
-                <p class="font-semibold">{{ reply.get('author') or "Previous message" }}</p>
-                <p class="line-clamp-2">{{ reply.get('excerpt') or "" }}</p>
+                <p class="font-semibold">{{ reply.author or "Previous message" }}</p>
+                <p class="line-clamp-2">{{ reply.excerpt or "" }}</p>
             </div>
             {% endif %}
             <p class="whitespace-pre-wrap break-words">{{ message.body or "—" }}</p>

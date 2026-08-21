@@ -1,6 +1,6 @@
 """Invoice settlement state-machine guards (review #A3/#A6).
 
-- A void invoice must never be resurrected to paid (recalc + allocation).
+- A terminal invoice must never be resurrected to paid (recalc + allocation).
 - Manual status transitions must follow the allow-list.
 """
 
@@ -70,13 +70,14 @@ def test_recalc_does_not_advance_draft(db_session, subscriber):
     assert inv.status == InvoiceStatus.draft
 
 
-def test_allocatable_guard_rejects_void_and_draft(db_session, subscriber):
+def test_allocatable_guard_rejects_terminal_and_draft(db_session, subscriber):
     void_inv = _invoice(db_session, subscriber, InvoiceStatus.void)
+    written_off_inv = _invoice(db_session, subscriber, InvoiceStatus.written_off)
     draft_inv = _invoice(db_session, subscriber, InvoiceStatus.draft)
     issued_inv = _invoice(
         db_session, subscriber, InvoiceStatus.issued, balance="100.00"
     )
-    for bad in (void_inv, draft_inv):
+    for bad in (void_inv, written_off_inv, draft_inv):
         with pytest.raises(HTTPException) as e:
             _assert_invoice_allocatable(bad)
         assert e.value.status_code == 400

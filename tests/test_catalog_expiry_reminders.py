@@ -7,7 +7,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from app.models.catalog import SubscriptionStatus
+from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.event_store import EventStatus, EventStore
 from app.models.network_monitoring import NetworkDevice, OutageIncident
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketStatus
@@ -26,7 +27,10 @@ def _expiring_subscription(
     subscriber,
     *,
     name: str = "Unlimited Expiry Reminder",
+    next_billing_at: datetime | None = None,
+    end_at: datetime | None = None,
 ):
+    renewal_boundary = next_billing_at or datetime.now(UTC) + timedelta(days=3)
     offer = _make_offer(
         db_session,
         name=name,
@@ -37,10 +41,10 @@ def _expiring_subscription(
         db_session,
         subscriber,
         offer,
-        next_billing_at=datetime.now(UTC) + timedelta(days=3),
+        next_billing_at=renewal_boundary,
         start_at=datetime.now(UTC) - timedelta(days=27),
     )
-    subscription.end_at = datetime.now(UTC) + timedelta(days=3)
+    subscription.end_at = end_at
     db_session.commit()
     db_session.refresh(subscription)
     return subscription
@@ -64,6 +68,11 @@ def _run_with_test_session(monkeypatch, db_session):
         "session",
         lambda: _use_test_session(db_session),
     )
+
+
+def _expected_boundary(value: datetime | None) -> str:
+    assert value is not None
+    return catalog_tasks._reminder_boundary_key(value)
 
 
 def test_send_expiry_reminders_suppresses_open_infrastructure_down_ticket(
@@ -93,6 +102,7 @@ def test_send_expiry_reminders_suppresses_open_infrastructure_down_ticket(
         "reminded": 0,
         "suppressed_infrastructure_down": 1,
         "suppressed_active_outage": 0,
+        "duplicate_periods": 0,
         "total_expiring": 1,
     }
     assert events == []
@@ -127,13 +137,89 @@ def test_send_expiry_reminders_ignores_non_infrastructure_tickets(
         "reminded": 1,
         "suppressed_infrastructure_down": 0,
         "suppressed_active_outage": 0,
+        "duplicate_periods": 0,
         "total_expiring": 1,
     }
     assert len(events) == 1
     args, kwargs = events[0]
     assert args[1] == EventType.subscription_expiring
+    assert args[2]["reminder_boundary"] == _expected_boundary(
+        subscription.next_billing_at
+    )
+    assert args[2]["reminder_boundary_source"] == "next_billing_at"
     assert kwargs["subscription_id"] == subscription.id
     assert kwargs["account_id"] == subscriber.id
+
+
+def test_send_expiry_reminders_uses_end_at_when_renewal_anchor_missing(
+    db_session, subscriber, monkeypatch
+):
+    subscription = _expiring_subscription(
+        db_session,
+        subscriber,
+        next_billing_at=datetime.now(UTC) + timedelta(days=30),
+        end_at=datetime.now(UTC) + timedelta(days=3),
+    )
+    subscription.next_billing_at = None
+    subscription.billing_mode = BillingMode.postpaid
+    db_session.commit()
+    _run_with_test_session(monkeypatch, db_session)
+    events = []
+    monkeypatch.setattr(
+        "app.services.events.emit_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+
+    result = catalog_tasks.send_expiry_reminders(days_before=7)
+
+    assert result == {
+        "reminded": 1,
+        "suppressed_infrastructure_down": 0,
+        "suppressed_active_outage": 0,
+        "duplicate_periods": 0,
+        "total_expiring": 1,
+    }
+    assert len(events) == 1
+    args, _kwargs = events[0]
+    assert args[2]["reminder_boundary"] == _expected_boundary(subscription.end_at)
+    assert args[2]["reminder_boundary_source"] == "end_at"
+
+
+def test_send_expiry_reminders_dedupes_same_renewal_period(
+    db_session, subscriber, monkeypatch
+):
+    subscription = _expiring_subscription(db_session, subscriber)
+    db_session.add(
+        EventStore(
+            event_id=uuid4(),
+            event_type=EventType.subscription_expiring.value,
+            status=EventStatus.completed,
+            subscription_id=subscription.id,
+            account_id=subscriber.id,
+            payload={
+                "reminder_boundary": subscription.next_billing_at.isoformat(),
+                "reminder_boundary_source": "next_billing_at",
+            },
+        )
+    )
+    db_session.commit()
+    _run_with_test_session(monkeypatch, db_session)
+    events = []
+    monkeypatch.setattr(
+        "app.services.events.emit_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+
+    result = catalog_tasks.send_expiry_reminders(days_before=7)
+
+    assert result == {
+        "reminded": 0,
+        "suppressed_infrastructure_down": 0,
+        "suppressed_active_outage": 0,
+        "duplicate_periods": 1,
+        "total_expiring": 1,
+    }
+    assert events == []
 
 
 def test_send_expiry_reminders_batches_infrastructure_ticket_lookup(
@@ -174,6 +260,7 @@ def test_send_expiry_reminders_batches_infrastructure_ticket_lookup(
         "reminded": 1,
         "suppressed_infrastructure_down": 1,
         "suppressed_active_outage": 0,
+        "duplicate_periods": 0,
         "total_expiring": 2,
     }
     assert calls == [{subscriber.id, other_subscriber.id}]
@@ -255,6 +342,7 @@ def test_send_expiry_reminders_suppresses_active_outage(
         "reminded": 0,
         "suppressed_infrastructure_down": 0,
         "suppressed_active_outage": 1,
+        "duplicate_periods": 0,
         "total_expiring": 1,
     }
     assert events == []
@@ -289,6 +377,7 @@ def test_send_expiry_reminders_sends_when_outage_resolved(
         "reminded": 1,
         "suppressed_infrastructure_down": 0,
         "suppressed_active_outage": 0,
+        "duplicate_periods": 0,
         "total_expiring": 1,
     }
     assert len(events) == 1
@@ -326,6 +415,7 @@ def test_send_expiry_reminders_outage_only_suppresses_covered_subscriptions(
         "reminded": 1,
         "suppressed_infrastructure_down": 0,
         "suppressed_active_outage": 1,
+        "duplicate_periods": 0,
         "total_expiring": 2,
     }
     assert len(events) == 1

@@ -5,6 +5,7 @@ import importlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -34,12 +35,27 @@ except ModuleNotFoundError:
     SMTPController = None
 
 
+class SmtpInboundKind(StrEnum):
+    received = "received"
+    duplicate = "duplicate"
+    skipped = "skipped"
+    quarantined = "quarantined"
+    failed = "failed"
+
+
+class SmtpInboundReason(StrEnum):
+    recipient_not_allowed = "recipient_not_allowed"
+    self_sender = "self_sender"
+    provider_identity_collision = "provider_identity_collision"
+    processing_error = "processing_error"
+
+
 @dataclass(frozen=True)
 class SmtpInboundResult:
-    kind: str
+    kind: SmtpInboundKind
     conversation_id: str | None = None
     message_id: str | None = None
-    reason: str | None = None
+    reason: SmtpInboundReason | None = None
 
 
 def normalize_recipient_set(
@@ -75,11 +91,17 @@ def handle_smtp_message(
     fallback_service_team_id: str | None = None,
 ) -> SmtpInboundResult:
     if not envelope_matches_allowed_recipients(rcpt_to, allowed_recipients):
-        return SmtpInboundResult(kind="skipped", reason="recipient_not_allowed")
+        return SmtpInboundResult(
+            kind=SmtpInboundKind.skipped,
+            reason=SmtpInboundReason.recipient_not_allowed,
+        )
 
     normalized_sender = team_inbox_routing.normalize_email_address(mail_from)
     if allowed_recipients and normalized_sender in allowed_recipients:
-        return SmtpInboundResult(kind="skipped", reason="self_sender")
+        return SmtpInboundResult(
+            kind=SmtpInboundKind.skipped,
+            reason=SmtpInboundReason.self_sender,
+        )
 
     try:
         parsed = team_inbox_rfc822.parse_rfc822_email(
@@ -154,8 +176,24 @@ def handle_smtp_message(
                         for item in parsed.attachments
                     ),
                 ),
+                collision_policy=(
+                    team_inbox_observations.ObservationCollisionPolicy.quarantine
+                ),
             ),
         )
+        if (
+            recorded.outcome
+            is team_inbox_observations.ObservationProcessingOutcome.quarantined
+        ):
+            logger.warning(
+                "team_inbox_smtp_message_quarantined observation_id=%s collision_id=%s",
+                recorded.observation_id,
+                recorded.collision_id,
+            )
+            return SmtpInboundResult(
+                kind=SmtpInboundKind.quarantined,
+                reason=SmtpInboundReason.provider_identity_collision,
+            )
         result = team_inbox_processing.process_provider_observation(
             db,
             observation_id=recorded.observation_id,
@@ -167,7 +205,11 @@ def handle_smtp_message(
             ),
         )
         return SmtpInboundResult(
-            kind=result.consequence_kind or "duplicate",
+            kind=(
+                SmtpInboundKind.received
+                if result.consequence_kind == SmtpInboundKind.received.value
+                else SmtpInboundKind.duplicate
+            ),
             conversation_id=str(result.conversation_id)
             if result.conversation_id
             else None,
@@ -175,7 +217,10 @@ def handle_smtp_message(
         )
     except Exception:
         logger.exception("team_inbox_smtp_message_failed")
-        return SmtpInboundResult(kind="failed", reason="processing_error")
+        return SmtpInboundResult(
+            kind=SmtpInboundKind.failed,
+            reason=SmtpInboundReason.processing_error,
+        )
 
 
 class TeamInboxSMTPHandler:
@@ -208,7 +253,7 @@ class TeamInboxSMTPHandler:
                 allowed_recipients=self.allowed_recipients,
                 fallback_service_team_id=self.fallback_service_team_id,
             )
-            if result.kind == "failed":
+            if result.kind is SmtpInboundKind.failed:
                 return "451 Temporary local processing error"
             return "250 OK"
         finally:

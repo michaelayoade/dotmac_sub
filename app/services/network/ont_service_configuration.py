@@ -87,7 +87,10 @@ from app.services.owner_commands import (
 )
 
 if TYPE_CHECKING:
-    from app.services.network.reconcile.state import OntWifiDeliveryScope
+    from app.services.network.reconcile.state import (
+        OntWifiDeliveryScope,
+        ReconcileResult,
+    )
 
 OWNER = "network.ont_service_configuration"
 _COORDINATION_CONCERN = "atomic ONT service configuration coordination"
@@ -898,7 +901,10 @@ def _admit(
     effective_vlan: int | None = None
     vlan_source: WanVlanSource | None = None
     masked_username: str | None = None
-    if not isinstance(command, ConfigureCustomerWifiCommand):
+    if (
+        not isinstance(command, ConfigureCustomerWifiCommand)
+        and section is OntConfigurationSection.wan
+    ):
         resolved_effective = resolve_effective_ont_config(db, ont, olt=_olt)
         effective = resolved_effective if isinstance(resolved_effective, dict) else {}
         config_pack = effective.get("config_pack")
@@ -1193,6 +1199,15 @@ def _force_lan_delivery(revision: OntServiceConfigurationRevision) -> bool:
     )
 
 
+def _only_ppp_delivery_residual_drift(result: ReconcileResult) -> bool:
+    if not result.drift_after:
+        return True
+    return all(
+        str(getattr(drift, "field", "") or "").startswith("ppp_delivery[")
+        for drift in result.drift_after
+    )
+
+
 def _execution_locked(
     db: Session, command: ExecuteOntServiceConfigurationCommand
 ) -> ExecuteOntServiceConfigurationOutcome:
@@ -1282,9 +1297,11 @@ def _execution_locked(
     )
     delivered_without_readback = (
         result.success
-        and result.sync_status == "synced"
-        and not result.drift_after
         and _force_lan_delivery(revision)
+        and (
+            (result.sync_status == "synced" and not result.drift_after)
+            or _only_ppp_delivery_residual_drift(result)
+        )
     )
     if delivered_without_readback:
         head.phase = OntServiceConfigurationPhase.delivered_unverified

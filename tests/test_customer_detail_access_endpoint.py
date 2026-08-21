@@ -141,6 +141,21 @@ def test_cards_tolerate_missing_endpoint_projection():
     assert cards[0]["topology_trace"] is None
 
 
+def test_cards_project_unknown_connection_when_session_snapshot_is_missing():
+    sub = _subscription_stub()
+
+    cards = details._build_network_access_cards([sub], {}, _service_ipv4(sub))
+
+    connection = cards[0]["connection_status"]
+    assert connection["state"] == "unknown"
+    assert connection["status_presentation"] == {
+        "value": "unknown",
+        "label": "Unknown",
+        "tone": "neutral",
+        "icon": "info",
+    }
+
+
 @pytest.mark.parametrize("needle", ["pon_port_label", "access_device_name"])
 def test_template_does_not_compose_the_endpoint_string_itself(needle):
     """endpoint_display is composed in the service so surfaces cannot drift."""

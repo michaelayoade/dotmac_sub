@@ -829,6 +829,7 @@ def _agent_performance(
             item.service_team_name,
             str(item.metrics.active_assignment_count),
             str(item.metrics.handled_conversation_count),
+            str(item.metrics.resolved_conversation_count),
             _text(item.metrics.average_first_response_seconds),
             _text(item.metrics.average_queue_wait_seconds),
         )
@@ -847,12 +848,17 @@ def _agent_performance(
                 "Handled",
                 str(sum(item.metrics.handled_conversation_count for item in report)),
             ),
+            CrmReportMetric(
+                "Resolved",
+                str(sum(item.metrics.resolved_conversation_count for item in report)),
+            ),
         ),
         (
             "Agent",
             "Team",
             "Active assignments",
             "Handled",
+            "Resolved",
             "Avg first response (s)",
             "Avg queue wait (s)",
         ),

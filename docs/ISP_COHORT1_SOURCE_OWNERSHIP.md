@@ -205,12 +205,12 @@ in another application.
 
 | `Disposition` | Files | Meaning |
 |---|---|---|
-| `ROUTE_THROUGH_OWNER_FIRST` | 12 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
-| `RETIRE_AFTER_CUTOVER` | 11 | Displaced by the target; must reach zero for `ctl-isp-009` |
+| `ROUTE_THROUGH_OWNER_FIRST` | 14 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
+| `RETIRE_AFTER_CUTOVER` | 12 | Displaced by the target; must reach zero for `ctl-isp-009` |
 | `REPOINT_TO_TARGET_API` | 11 | Reads or forwards a cohort fact; after the switch it must reach the target through a versioned contract |
 | `HISTORICAL_NO_ACTION` | 6 | An applied migration; nothing to retire |
-| `UNDECIDED` | 3 | Needs a decision, and says which one |
 | `NON_PRODUCTION_NO_ACTION` | 2 | Writes only disposable databases |
+| `UNDECIDED` | 0 | Needs a decision, and says which one |
 
 There is deliberately no "stays as it is" disposition. Every surface here
 touches cohort-1 state — that is the inclusion criterion — and once that state
@@ -241,16 +241,28 @@ Subscriber projection writes are displaced.
 tell drift from the second writer, so those twelve have to be routed through
 their owners before a comparison means anything.
 
-### The three undecided surfaces
+### No undecided surfaces
 
-Enumerable through `surfaces.undecided_surfaces()`, because a question that
-lives only in prose is one somebody answers by accident.
+All three open questions were answered by Governance on 2026-08-21 and
+recorded in `programmes/dotmac-isp-replacement.json` at `d91a87f`:
 
-| Surface | Open question |
+| Surface | Decision |
 |---|---|
-| `app/services/mrr_snapshot.py` | Does `subscribers.mrr_total` migrate, or does the target recompute it and the column simply not cross? Nobody owns it on either side today. |
-| `app/services/customer_location_requests.py` | `addresses` has no declared owner, so there is no service to route this through. Which owner takes customer addresses before the cohort can be shadowed? |
-| `app/services/web_system_restore_tool.py` | Account recovery has no counterpart in the target. Does restore move with the cohort, stay in Sub against migrated-away rows, or retire? |
+| `app/services/mrr_snapshot.py` | `subscribers.mrr_total` does **not** migrate; the target recomputes monthly recurring revenue from its own Subscriptions. The writer is displaced with the rest of cohort 1. The export still carries the value as a declared derived field — a reconciliation that cannot see it cannot explain a difference, and carrying it is not the same as migrating it. |
+| `app/services/customer_location_requests.py` | dec-isp-007: a product-first `dotmac-addresses` owner takes normalized address, geospatial data and verification history; Customers, Services and Billing hold typed purpose links rather than copies. |
+| `app/services/web_system_restore_tool.py` | Customers owns account-recovery **intent**, and the existing cross-domain cascade is decomposed. |
+
+`undecided_surfaces()` now returns empty, and the test asserting that is paired
+with a sensitivity check so it cannot pass by the accessor quietly breaking.
+
+**Two of the three answers create work rather than finishing it.** `addresses`
+still has no *Sub* owner — dec-isp-007 names the target owner, and product-first
+extraction needs a proven Sub implementation to extract from, so Sub must grow
+that owner before the write can be routed and before the cohort can be
+shadowed. And decomposing the recovery cascade is what makes the cohort-1 half
+separable at all: today one restore touches invoices, payments, credentials,
+RADIUS, IP assignments and ONT assignments in the same pass, and only the
+account rows belong to cohort 1.
 
 ### Declared owners
 
@@ -286,7 +298,8 @@ The target recomputes it; it does not trust it.
 Twenty-six files write a cohort fact some other owner is declared to own.
 **Eighteen of them can do it again**, and that eighteen is the set `ctl-isp-009`
 must ratchet to zero; the remaining eight are listed for completeness and
-marked non-production.
+marked non-production. Fourteen now carry `ROUTE_THROUGH_OWNER_FIRST` and
+twelve `RETIRE_AFTER_CUTOVER`, following the 2026-08-21 decisions.
 
 | Path | Bypasses | Entity |
 |---|---|---|

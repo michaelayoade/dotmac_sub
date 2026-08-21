@@ -1,4 +1,4 @@
-{% from "components/ui/triage.html" import message_bubble %}
+{% from "components/ui/triage.html" import message_bubble with context %}
 <div data-inbox-message-id="{{ message.id }}">
     {{ message_bubble(message) }}
 </div>

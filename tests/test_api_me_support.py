@@ -162,3 +162,37 @@ def test_my_add_ticket_comment_forces_public(monkeypatch):
     assert captured["payload"].is_internal is False
     assert captured["payload"].author_type == TicketCommentAuthorType.customer
     assert str(captured["payload"].author_person_id) == principal["subscriber_id"]
+
+
+def test_my_add_ticket_comment_maps_oversized_attachment_to_413(monkeypatch):
+    from app.services import web_support_tickets
+
+    principal = _subscriber_principal()
+    ticket_id = str(uuid.uuid4())
+    ticket = types.SimpleNamespace(subscriber_id=principal["subscriber_id"])
+    monkeypatch.setattr(me_api.support_service.tickets, "get", lambda db, tid: ticket)
+    monkeypatch.setattr(
+        me_api.db_session_adapter, "release_read_transaction", lambda db: None
+    )
+
+    def reject(*_args, **_kwargs):
+        raise web_support_tickets.TicketAttachmentValidationError(
+            kind=web_support_tickets.TicketAttachmentValidationKind.too_large,
+            filename="diagnostic.pdf",
+            message="diagnostic.pdf: max file size is 5 MB",
+        )
+
+    monkeypatch.setattr(web_support_tickets, "upload_ticket_attachments", reject)
+
+    with pytest.raises(HTTPException) as exc_info:
+        me_api.my_add_ticket_comment(
+            ticket_id=ticket_id,
+            request=None,
+            body="See diagnostics",
+            attachments=[types.SimpleNamespace(filename="diagnostic.pdf")],
+            db=None,
+            principal=principal,
+        )
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.detail["code"] == "support.ticket_attachment.too_large"

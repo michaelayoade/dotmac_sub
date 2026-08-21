@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -13,6 +14,8 @@ from app.models.team_inbox import (
     InboxMessage,
     InboxMessageDirection,
     InboxObservationKind,
+    InboxProviderObservation,
+    InboxProviderObservationCollision,
 )
 from app.services import (
     team_inbox_maintenance,
@@ -102,6 +105,97 @@ def test_provider_observation_exact_retry_and_changed_evidence(db_session) -> No
             db_session, _message_observation(body="changed evidence")
         )
     assert exc.value.code.endswith("provider_event_identity_collision")
+
+
+def test_provider_observation_semantic_retry_ignores_transport_and_schema_shape(
+    db_session,
+) -> None:
+    command = _message_observation()
+    first = team_inbox_observations.record_provider_observation(db_session, command)
+    replay_command = replace(
+        command,
+        payload=replace(
+            command.payload,
+            body_text=command.payload.body,
+            authentication={"received": ["different relay hop"]},
+        ),
+    )
+
+    assert team_inbox_observations.observation_fingerprint(
+        command
+    ) != team_inbox_observations.observation_fingerprint(replay_command)
+    replay = team_inbox_observations.record_provider_observation(
+        db_session, replay_command
+    )
+    row = db_session.get(InboxProviderObservation, first.observation_id)
+
+    assert (
+        replay.outcome is team_inbox_observations.ObservationProcessingOutcome.replayed
+    )
+    assert row.semantic_fingerprint_version == 2
+    assert db_session.query(InboxProviderObservationCollision).count() == 0
+
+
+def test_smtp_semantic_retry_normalizes_plain_body_schema_migration(db_session):
+    command = replace(
+        _message_observation(body="<p>Hello <b>team</b></p>"),
+        provider=team_inbox_observations.InboxProvider.smtp,
+        provider_account_scope="support@dotmac.io",
+        provider_event_id="message:<schema@example.com>",
+        channel_type=InboxChannelType.email,
+        external_message_id="<schema@example.com>",
+    )
+    first = team_inbox_observations.record_provider_observation(db_session, command)
+    migrated_command = replace(
+        command,
+        payload=replace(
+            command.payload,
+            body="Hello team",
+            body_text="Hello team",
+            html_body="<p>Hello <b>team</b></p>",
+        ),
+    )
+    assert team_inbox_observations.observation_fingerprint(
+        command
+    ) != team_inbox_observations.observation_fingerprint(migrated_command)
+    replay = team_inbox_observations.record_provider_observation(
+        db_session, migrated_command
+    )
+
+    assert replay.observation_id == first.observation_id
+    assert (
+        replay.outcome is team_inbox_observations.ObservationProcessingOutcome.replayed
+    )
+
+
+def test_provider_observation_quarantines_semantic_collision_durably(
+    db_session,
+) -> None:
+    command = _message_observation()
+    first = team_inbox_observations.record_provider_observation(db_session, command)
+    conflicting = replace(
+        _message_observation(body="changed evidence"),
+        collision_policy=(
+            team_inbox_observations.ObservationCollisionPolicy.quarantine
+        ),
+    )
+
+    outcome = team_inbox_observations.record_provider_observation(
+        db_session, conflicting
+    )
+    retry = team_inbox_observations.record_provider_observation(db_session, conflicting)
+    collision = db_session.get(InboxProviderObservationCollision, outcome.collision_id)
+
+    assert outcome.observation_id == first.observation_id
+    assert (
+        outcome.outcome
+        is team_inbox_observations.ObservationProcessingOutcome.quarantined
+    )
+    assert retry.collision_id == outcome.collision_id
+    assert collision.status == "quarantined"
+    assert collision.attempt_count == 2
+    assert collision.changed_fields == ["payload.body"]
+    assert collision.candidate_evidence["payload"]["body"] == "changed evidence"
 
 
 def _receipt(

@@ -10,7 +10,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from app.models.notification import Notification
 from app.models.party import Party, PartyType
-from app.models.sales import Lead, LeadOriginCapture
+from app.models.sales import Lead, LeadOriginCapture, LeadStatus
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import (
@@ -506,6 +506,73 @@ def test_message_fragment_projects_only_the_confirmed_message(db_session, monkey
     assert projection is not None
     assert projection.message_id == message.id
     assert projection.message.body == "The router replacement is scheduled."
+
+
+@pytest.mark.parametrize("legacy_reply", [[], ["legacy-message-id"]])
+def test_message_projection_ignores_non_mapping_legacy_reply_metadata(
+    db_session, legacy_reply
+):
+    conversation = InboxConversation(
+        channel_type="email",
+        contact_address="customer@example.test",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction="outbound",
+        body="Legacy reply metadata",
+        sent_at=datetime.now(UTC),
+        metadata_={"reply_to": legacy_reply},
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    projection = team_inbox_projection.get_message_fragment_projection(
+        db_session,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
+
+    assert projection is not None
+    assert projection.message.reply_to is None
+
+
+def test_message_projection_exposes_typed_reply_reference(db_session):
+    conversation = InboxConversation(
+        channel_type="email",
+        contact_address="customer@example.test",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction="outbound",
+        body="Quoted reply",
+        sent_at=datetime.now(UTC),
+        metadata_={
+            "reply_to": {
+                "message_id": str(uuid.uuid4()),
+                "author": "Customer",
+                "excerpt": "Original message",
+            }
+        },
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    projection = team_inbox_projection.get_message_fragment_projection(
+        db_session,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
+
+    assert projection is not None
+    assert projection.message.reply_to is not None
+    assert projection.message.reply_to.author == "Customer"
+    assert projection.message.reply_to.excerpt == "Original message"
 
 
 def test_targeted_queue_row_honours_the_active_response_filter(db_session):
@@ -1152,3 +1219,38 @@ def test_merge_contact_to_customer_captures_and_attaches_lead(db_session):
     assert (
         conversation.metadata_["lead_capture"]["merge"]["target_type"] == "subscriber"
     )
+
+
+def test_merge_contact_rejects_existing_open_lead_without_unique_violation(db_session):
+    conversation_id = _conversation(db_session)
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Existing Lead",
+        email="ada-existing-lead@example.test",
+        status=SubscriberStatus.active,
+        is_active=True,
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    existing_lead = Lead(
+        subscriber_id=subscriber.id,
+        status=LeadStatus.new.value,
+        is_active=True,
+    )
+    db_session.add(existing_lead)
+    db_session.commit()
+
+    with pytest.raises(team_inbox_commands.InboxContactMergeConflict) as exc_info:
+        team_inbox_commands.merge_contact(
+            db_session,
+            conversation_id=conversation_id,
+            target_type="subscriber",
+            target_query="ada-existing-lead@example.test",
+            actor_person_id=uuid.uuid4(),
+        )
+
+    assert exc_info.value.code.endswith(".contact_merge_conflict")
+    assert exc_info.value.details["conflicting_lead_id"] == str(existing_lead.id)
+    assert db_session.query(Lead).count() == 1
+    conversation = db_session.get(InboxConversation, conversation_id)
+    assert conversation.subscriber_id is None

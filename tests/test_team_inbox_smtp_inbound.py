@@ -7,7 +7,12 @@ from typing import Any
 
 from app.config import settings
 from app.models.service_team import ServiceTeam, ServiceTeamType
-from app.models.team_inbox import InboxMessage, TeamInboxEmailRoute
+from app.models.team_inbox import (
+    InboxMessage,
+    InboxProviderObservation,
+    InboxProviderObservationCollision,
+    TeamInboxEmailRoute,
+)
 from app.services import team_inbox_smtp_inbound
 
 
@@ -65,22 +70,27 @@ def _route(db_session, team: ServiceTeam, email: str) -> None:
     db_session.flush()
 
 
-def _raw_email(*, to: str = "support@dotmac.io", message_id: str = "msg") -> bytes:
-    return (
-        dedent(
-            f"""\
+def _raw_email(
+    *,
+    to: str = "support@dotmac.io",
+    message_id: str = "msg",
+    body: str = "Hello over SMTP.",
+    received: str | None = None,
+) -> bytes:
+    message = dedent(
+        f"""\
             From: customer@example.com
             To: {to}
             Subject: SMTP inbound
             Message-ID: <{message_id}@example.com>
             Content-Type: text/plain; charset=utf-8
 
-            Hello over SMTP.
+            {body}
             """
-        )
-        .replace("\n", "\r\n")
-        .encode("utf-8")
     )
+    if received:
+        message = message.replace("From:", f"Received: {received}\nFrom:", 1)
+    return message.replace("\n", "\r\n").encode("utf-8")
 
 
 def test_handle_smtp_message_routes_allowed_recipient(db_session):
@@ -158,6 +168,99 @@ def test_smtp_handler_returns_ok_for_accepted_message(db_session, monkeypatch):
 
     assert response == "250 OK"
     assert db_session.query(InboxMessage).count() == 1
+
+
+def test_smtp_relay_header_change_is_a_semantic_replay(db_session):
+    support = _team(db_session, "Support", ServiceTeamType.support.value)
+    _route(db_session, support, "support@dotmac.io")
+    db_session.commit()
+
+    first = team_inbox_smtp_inbound.handle_smtp_message(
+        db_session,
+        mail_from="customer@example.com",
+        rcpt_to=["support@dotmac.io"],
+        data=_raw_email(message_id="relay-retry", received="from relay-one"),
+        allowed_recipients={"support@dotmac.io"},
+    )
+    replay = team_inbox_smtp_inbound.handle_smtp_message(
+        db_session,
+        mail_from="customer@example.com",
+        rcpt_to=["support@dotmac.io"],
+        data=_raw_email(message_id="relay-retry", received="from relay-two"),
+        allowed_recipients={"support@dotmac.io"},
+    )
+
+    assert first.kind is team_inbox_smtp_inbound.SmtpInboundKind.received
+    assert replay.kind is team_inbox_smtp_inbound.SmtpInboundKind.duplicate
+    assert db_session.query(InboxProviderObservation).count() == 1
+    assert db_session.query(InboxProviderObservationCollision).count() == 0
+
+
+def test_smtp_semantic_collision_is_quarantined_and_acknowledged(
+    db_session, monkeypatch
+):
+    support = _team(db_session, "Support", ServiceTeamType.support.value)
+    _route(db_session, support, "support@dotmac.io")
+    db_session.commit()
+    first = team_inbox_smtp_inbound.handle_smtp_message(
+        db_session,
+        mail_from="customer@example.com",
+        rcpt_to=["support@dotmac.io"],
+        data=_raw_email(message_id="reused-id", body="Original content"),
+        allowed_recipients={"support@dotmac.io"},
+    )
+    monkeypatch.setattr(team_inbox_smtp_inbound, "SessionLocal", lambda: db_session)
+    handler = team_inbox_smtp_inbound.TeamInboxSMTPHandler(
+        allowed_recipients={"support@dotmac.io"}
+    )
+
+    response = _run_immediate_coroutine(
+        handler.handle_DATA(
+            None,
+            None,
+            _Envelope(
+                mail_from="customer@example.com",
+                rcpt_tos=["support@dotmac.io"],
+                content=_raw_email(message_id="reused-id", body="Different content"),
+            ),
+        )
+    )
+    collision = db_session.query(InboxProviderObservationCollision).one()
+
+    assert first.kind is team_inbox_smtp_inbound.SmtpInboundKind.received
+    assert response == "250 OK"
+    assert collision.status == "quarantined"
+    assert collision.changed_fields == ["payload.body"]
+    assert db_session.query(InboxMessage).count() == 1
+
+
+def test_smtp_transient_processing_failure_remains_retryable(db_session, monkeypatch):
+    monkeypatch.setattr(team_inbox_smtp_inbound, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        team_inbox_smtp_inbound,
+        "handle_smtp_message",
+        lambda *_args, **_kwargs: team_inbox_smtp_inbound.SmtpInboundResult(
+            kind=team_inbox_smtp_inbound.SmtpInboundKind.failed,
+            reason=team_inbox_smtp_inbound.SmtpInboundReason.processing_error,
+        ),
+    )
+    handler = team_inbox_smtp_inbound.TeamInboxSMTPHandler(
+        allowed_recipients={"support@dotmac.io"}
+    )
+
+    response = _run_immediate_coroutine(
+        handler.handle_DATA(
+            None,
+            None,
+            _Envelope(
+                mail_from="customer@example.com",
+                rcpt_tos=["support@dotmac.io"],
+                content=_raw_email(message_id="transient"),
+            ),
+        )
+    )
+
+    assert response == "451 Temporary local processing error"
 
 
 def test_smtp_runtime_configuration_is_normalized(monkeypatch):
