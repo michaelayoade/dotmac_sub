@@ -1503,9 +1503,7 @@ class Tickets:
             ticket.assigned_to_person_id = deduped[0]
 
     @staticmethod
-    def _assignee_person_ids_in_unit_of_work(
-        db: Session, ticket: Ticket
-    ) -> set[UUID]:
+    def _assignee_person_ids_in_unit_of_work(db: Session, ticket: Ticket) -> set[UUID]:
         """Resolve persisted and staged assignees without triggering autoflush."""
 
         person_ids = {

@@ -397,9 +397,7 @@ def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subsc
     assert ticket.assigned_to_person_id != loaded_person_id
 
 
-def test_ticket_update_deduplicates_manual_and_auto_assignee(
-    db_session, monkeypatch
-):
+def test_ticket_update_deduplicates_manual_and_auto_assignee(db_session, monkeypatch):
     from app.services.ticket_assignment import engine as assignment_engine
 
     ticket = Ticket(title="Assignment collision", status=TicketStatus.open.value)
