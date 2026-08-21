@@ -213,8 +213,17 @@ Not this work, and not this document's to schedule. What the switch needs:
 
 ### 10. Displaced Sub writers are removed and the ratchet is lowered — `ctl-isp-009`
 
-Only after the switch. `tests/architecture/isp_cohort1_writer_baseline.txt`
-holds 34 entries; the 26 production ones are what must reach zero.
+Only after the switch. The ratchet baselines hold 34 entries; the 26 that can
+still write production are what must reach zero — `displaced_writer_paths()`
+is that set, and every one of them carries a disposition that removes it
+(`RETIRE_AFTER_CUTOVER`, `ROUTE_THROUGH_OWNER_FIRST`, or `UNDECIDED`). A
+displaced writer marked to stay would be a contradiction the ratchet could
+never resolve, so a test refuses one.
+
+Twelve of the 26 are `ROUTE_THROUGH_OWNER_FIRST`, and those come **earlier**
+than this step: a shadow comparison run against a source with two writers
+cannot tell drift from the second writer. They gate `ctl-isp-007`, not
+`ctl-isp-009`.
 
 The rule is one direction per change, deliberately: the pull request that
 removes a writer lowers its baseline line in the same commit. Removing a writer
@@ -246,7 +255,10 @@ agent-authored assertion is not evidence.
 
 ## Open source-side questions
 
-These belong to `ctl-isp-006` and none of them has an answer yet:
+These belong to `ctl-isp-006` and none of them has an answer yet. The first
+three are carried as `Disposition.UNDECIDED` on a specific surface and are
+enumerable through `surfaces.undecided_surfaces()`, so they cannot be lost
+between here and the control:
 
 - **`organizations` and `organization_memberships` have no counted writer.**
   Historical B2B account records with no live owner. Do they migrate, stay in
@@ -256,6 +268,13 @@ These belong to `ctl-isp-006` and none of them has an answer yet:
   typed — or it crosses permanently as an opaque inventory.
 - **`subscribers.mrr_total` has no declared owner.** Confirm the target
   recomputes it and the column does not migrate.
+  (`app/services/mrr_snapshot.py`, `UNDECIDED`.)
+- **`addresses` has no declared owner at all**, so
+  `app/services/customer_location_requests.py` has no service to route through
+  before the cohort can be shadowed. (`UNDECIDED`.)
+- **Account recovery has no counterpart in the target.** Does
+  `app/services/web_system_restore_tool.py` move with the cohort, stay in Sub
+  against migrated-away rows, or retire? (`UNDECIDED`.)
 - **`subscriber_nin_verifications` is excluded from the contract.** Regulatory
   identity evidence with its own retention rules; it needs a disposition
   decision of its own before any export carries it.
