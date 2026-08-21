@@ -424,6 +424,44 @@ def test_message_fragment_route_renders_one_authoritative_message():
     assert "Email recipients" in response.text
 
 
+def test_failed_message_fragment_renders_retry_form_with_request_context():
+    conversation_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    message = team_inbox_read.InboxTimelineMessage(
+        id=str(message_id),
+        channel_type="email",
+        direction="outbound",
+        subject=None,
+        body="Failed delivery",
+        from_address=None,
+        to_addresses=["customer@example.test"],
+        cc_addresses=[],
+        sent_at=None,
+        received_at=None,
+        created_at=datetime.now(UTC),
+        metadata={"delivery_status": "failed", "send_error": "SMTP rejected"},
+        attachments=[],
+        sender=None,
+    )
+    projection = team_inbox_projection.InboxMessageFragmentProjection(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        message=message,
+    )
+
+    with patch(
+        "app.web.admin.inbox.team_inbox_projection.get_message_fragment_projection",
+        return_value=projection,
+    ):
+        response = _client(object()).get(
+            f"/inbox/{conversation_id}/messages/{message_id}"
+        )
+
+    assert response.status_code == 200
+    assert 'name="_csrf_token"' in response.text
+    assert f'action="/admin/inbox/messages/{message_id}/retry"' in response.text
+
+
 def test_queue_row_route_deletes_a_row_that_no_longer_matches_filters():
     conversation_id = uuid.uuid4()
     seen: list[team_inbox_projection.InboxQueueRequest] = []
