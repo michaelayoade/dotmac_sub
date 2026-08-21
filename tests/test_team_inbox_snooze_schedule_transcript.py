@@ -157,13 +157,18 @@ def test_scheduling_a_reply_does_not_send_it(db_session):
         db_session,
         conversation=conversation,
         payload=team_inbox_outbound.InboxReplyPayload(
-            body_html="<p>later</p>", body_text="later"
+            body_html="<p>later</p>",
+            body_text="later",
+            cc_addresses=("copy@example.com",),
+            bcc_addresses=("audit@example.com",),
         ),
         send_after=datetime.now(UTC) + timedelta(hours=2),
     )
 
     assert message.sent_at is None
     assert (message.metadata_ or {})["delivery_status"] == "scheduled"
+    assert message.cc_addresses == ["copy@example.com"]
+    assert (message.metadata_ or {})["bcc"] == ["audit@example.com"]
 
 
 def test_a_past_send_time_is_refused(db_session):

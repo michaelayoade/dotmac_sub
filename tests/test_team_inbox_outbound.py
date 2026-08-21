@@ -145,6 +145,8 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
         payload=team_inbox_outbound.InboxReplyPayload(
             body_html="<p>We are checking.</p>",
             body_text="We are checking.",
+            cc_addresses=("copy@example.com",),
+            bcc_addresses=("audit@example.com",),
             sent_by_person_id=uuid4(),
         ),
         now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
@@ -161,9 +163,13 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
     assert notification.recipient == "customer@example.com"
     assert notification.subject == "Re: Router offline"
     assert notification.metadata_["activity"] == "support_ticket"
+    assert notification.metadata_["cc"] == ["copy@example.com"]
+    assert notification.metadata_["bcc"] == ["audit@example.com"]
     assert message.direction == InboxMessageDirection.outbound.value
     assert message.from_address == "support@dotmac.io"
     assert message.to_addresses == ["customer@example.com"]
+    assert message.cc_addresses == ["copy@example.com"]
+    assert message.metadata_["bcc"] == ["audit@example.com"]
     assert message.metadata_["sender_key"] == "support"
     assert message.notification_id == notification.id
     assert message.metadata_["delivery_status"] == "queued"
