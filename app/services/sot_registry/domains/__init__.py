@@ -21,6 +21,9 @@ from app.services.sot_registry.domains.geospatial import DOMAIN as GEOSPATIAL
 from app.services.sot_registry.domains.integration_control_plane import (
     DOMAIN as INTEGRATION_CONTROL_PLANE,
 )
+from app.services.sot_registry.domains.migration_source import (
+    DOMAIN as MIGRATION_SOURCE,
+)
 from app.services.sot_registry.domains.network import DOMAIN as NETWORK
 from app.services.sot_registry.domains.network_access_control_plane import (
     DOMAIN as NETWORK_ACCESS_CONTROL_PLANE,
@@ -106,4 +109,5 @@ DOMAIN_DECLARATIONS = (
     VPN_REMOTE_ACCESS,
     GEOSPATIAL,
     SALES_REFERRALS,
+    MIGRATION_SOURCE,
 )
