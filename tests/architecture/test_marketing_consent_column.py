@@ -36,6 +36,13 @@ DISPLAY_CRUD_ALLOWLIST = {
     "app/services/web_subscriber_actions.py",
     "app/services/table_config.py",
     "app/services/smart_defaults.py",
+    # The cohort-isp-01 export contract and its owner. Both *serialise* the
+    # flag into a read-only migration snapshot; neither gates a send. The
+    # destination re-derives its own marketing consent from the value it
+    # imports, which is why the flag has to cross at all — dropping it would
+    # silently opt every migrated customer back in.
+    "app/migration_source/snapshot.py",
+    "app/services/migration_source_export.py",
 }
 
 # Shrink-only debt: modules that gate a marketing send on the column directly

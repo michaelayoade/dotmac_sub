@@ -1515,6 +1515,8 @@ def team_inbox_reply(
     send_after: str | None = Form(default=None),
     idempotency_key: str | None = Form(default=None),
     reply_to_message_id: str | None = Form(default=None),
+    cc: str | None = Form(default=None),
+    bcc: str | None = Form(default=None),
     whatsapp_template_name: str | None = Form(default=None),
     whatsapp_template_language: str | None = Form(default=None),
     whatsapp_template_components: str | None = Form(default=None),
@@ -1543,6 +1545,10 @@ def team_inbox_reply(
                 idempotency_key=_query_text(idempotency_key),
                 reply_to_message_id=_optional_uuid_field(
                     reply_to_message_id, message="Quoted message is invalid."
+                ),
+                email_copy_recipients=team_inbox_commands.EmailCopyRecipients(
+                    cc=team_inbox_commands.split_email_recipients(_query_text(cc)),
+                    bcc=team_inbox_commands.split_email_recipients(_query_text(bcc)),
                 ),
                 whatsapp_template_name=_query_text(whatsapp_template_name),
                 whatsapp_template_language=_query_text(whatsapp_template_language),
