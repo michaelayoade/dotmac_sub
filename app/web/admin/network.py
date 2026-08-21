@@ -228,7 +228,10 @@ def devices_list(
         offset=offset,
         limit=limit,
     )
-    page_data = web_network_core_devices_service.devices_list_page_data(db, list_query)
+    page_data = web_network_core_devices_service.devices_list_page_data(
+        db=db,
+        list_query=list_query,
+    )
     context = _base_context(request, db, active_page="devices")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/devices/index.html", context)
@@ -256,10 +259,13 @@ def devices_search(
         offset=offset,
         limit=limit,
     )
-    devices = web_network_core_devices_service.devices_search_data(db, list_query)
+    page_data = web_network_core_devices_service.devices_list_page_data(
+        db=db,
+        list_query=list_query,
+    )
     return templates.TemplateResponse(
-        "admin/network/devices/_table_rows.html",
-        {"request": request, "devices": devices},
+        "admin/network/devices/_table_content.html",
+        {"request": request, **page_data},
     )
 
 
@@ -294,10 +300,13 @@ def devices_filter(
         offset=offset,
         limit=limit,
     )
-    devices = web_network_core_devices_service.devices_filter_data(db, list_query)
+    page_data = web_network_core_devices_service.devices_list_page_data(
+        db=db,
+        list_query=list_query,
+    )
     return templates.TemplateResponse(
-        "admin/network/devices/_table_rows.html",
-        {"request": request, "devices": devices},
+        "admin/network/devices/_table_content.html",
+        {"request": request, **page_data},
     )
 
 

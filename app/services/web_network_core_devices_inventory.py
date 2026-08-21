@@ -874,25 +874,9 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
         "page": list_query.page,
         "per_page": per_page,
         "htmx_url": "/admin/network/devices/filter",
-        "htmx_target": "devices-table-body",
+        "htmx_target": "devices-content",
         "htmx_include": "#devices-filter-form",
     }
-
-
-def devices_search_data(db: Session, list_query: ListQuery) -> list[dict]:
-    """Return one page of matching devices for the HTMX search/filter partial."""
-    devices, _total = _query_page(db, list_query)
-    for device in devices:
-        device["actions"] = _device_row_actions(device)
-    return devices
-
-
-def devices_filter_data(db: Session, list_query: ListQuery) -> list[dict]:
-    """Return one page of filtered devices for the HTMX filter partial."""
-    devices, _total = _query_page(db, list_query)
-    for device in devices:
-        device["actions"] = _device_row_actions(device)
-    return devices
 
 
 def olts_list_page_data(
