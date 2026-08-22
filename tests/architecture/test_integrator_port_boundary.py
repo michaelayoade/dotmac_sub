@@ -262,3 +262,158 @@ def test_both_scopes_are_seeded():
     seeded = {key for key, _description in DEFAULT_PERMISSIONS}
     assert INTEGRATOR_OBSERVATION_SCOPE in seeded
     assert INTEGRATOR_MIRROR_SCOPE in seeded
+
+
+MAIN = PROJECT_ROOT / "app/main.py"
+PORT_MODULE = "app.api.integrator_observations"
+
+
+def _spec_lists(name: str) -> list[tuple[str, ...]]:
+    """The router specs assigned to `name` in app/main.py, read statically."""
+
+    tree = ast.parse(_source(MAIN))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if name not in targets or not isinstance(node.value, ast.List):
+            continue
+        specs: list[tuple[str, ...]] = []
+        for element in node.value.elts:
+            if isinstance(element, ast.Tuple):
+                specs.append(
+                    tuple(
+                        part.value
+                        for part in element.elts
+                        if isinstance(part, ast.Constant)
+                    )
+                )
+        return specs
+    raise AssertionError(f"app/main.py no longer assigns {name}")
+
+
+def _literal_prefix_of_joined_string(module_path: Path, variable: str) -> str:
+    """The constant leading text of an f-string assigned to `variable`."""
+
+    tree = ast.parse(_source(module_path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(t.id == variable for t in node.targets if isinstance(t, ast.Name)):
+            continue
+        value = node.value
+        if isinstance(value, ast.JoinedStr) and value.values:
+            head = value.values[0]
+            if isinstance(head, ast.Constant) and isinstance(head.value, str):
+                return head.value
+    raise AssertionError(f"{module_path.name} no longer builds {variable} literally")
+
+
+def test_the_receiver_is_a_core_router_so_a_mount_failure_cannot_be_swallowed():
+    """`enabled` must be impossible while the receiver is not actually mounted.
+
+    The descriptor's `activation_state` is derived from two database columns. It
+    cannot see whether the route it advertises is being served, so what stops it
+    claiming `enabled` at a dead path is WHERE the router is mounted.
+
+    `_include_core_routers` calls `_apply_router_spec` with no exception
+    handling: a core router that fails to import or mount aborts the boot. The
+    deferred loader deliberately does the opposite — it logs and continues, so
+    the rest of the surface survives one bad module. That is right for a
+    deferred router and fatal for this one: a swallowed failure would leave Sub
+    answering the descriptor from an earlier worker while the delivery path
+    404s, which is precisely the dishonest `enabled` the activation gate exists
+    to prevent.
+
+    Moving this spec into the deferred list would be a one-line change that
+    looks like a startup-latency improvement and silently removes the guarantee.
+    """
+
+    core = {spec[0] for spec in _spec_lists("_CORE_ROUTER_SPECS")}
+    deferred = {spec[0] for spec in _spec_lists("_DEFERRED_API_ROUTER_SPECS")}
+
+    assert PORT_MODULE in core, (
+        f"{PORT_MODULE} must stay in _CORE_ROUTER_SPECS: only the core loader "
+        "is fail-fast, so only there does a mount failure stop the boot instead "
+        "of leaving the descriptor advertising a path nothing serves"
+    )
+    assert PORT_MODULE not in deferred
+    # The premise is only enforceable while the two loaders still differ.
+    assert deferred, "the deferred list is empty; this guard's premise is gone"
+
+
+def test_the_descriptor_and_the_receiver_are_served_by_the_same_router():
+    """Mounting is all-or-nothing, so activation cannot outlive the receiver.
+
+    Both routes are declared on one `APIRouter` in one module. That is what
+    makes "the descriptor answered, therefore the receiver is mounted" true by
+    construction rather than by coincidence — a reader who split the descriptor
+    into its own module would create exactly the state this port must never
+    reach: a readable descriptor claiming `enabled` for a receiver that was
+    never mounted.
+    """
+
+    tree = ast.parse(_source(PORT))
+    routes: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            call = decorator if isinstance(decorator, ast.Call) else None
+            if call is None or not isinstance(call.func, ast.Attribute):
+                continue
+            router = call.func.value
+            if isinstance(router, ast.Name):
+                routes[node.name] = router.id
+
+    assert routes.get("read_product_port_descriptor") == "router"
+    assert routes.get("receive_integrator_observation") == "router"
+    assert routes["read_product_port_descriptor"] == (
+        routes["receive_integrator_observation"]
+    )
+
+
+def test_the_advertised_delivery_path_is_built_from_the_mounted_prefixes():
+    """What the descriptor publishes must be where the receiver actually is.
+
+    `delivery_path` is a literal in the descriptor service, while the real path
+    is `_mount_router`'s api prefix plus the port's own `APIRouter(prefix=...)`.
+    Three independent strings that have to agree, and nothing today makes them:
+    renaming the router prefix leaves the descriptor advertising the old path,
+    and the reconciler would faithfully bind a destination that 404s.
+    """
+
+    advertised = _literal_prefix_of_joined_string(DESCRIPTOR, "delivery_path")
+
+    main_tree = ast.parse(_source(MAIN))
+    api_prefixes = {
+        keyword.value.value
+        for node in ast.walk(main_tree)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "prefix"
+        and isinstance(keyword.value, ast.Constant)
+        and isinstance(keyword.value.value, str)
+        and keyword.value.value.startswith("/api")
+    }
+    assert api_prefixes, "app/main.py no longer mounts an /api prefix literally"
+
+    port_tree = ast.parse(_source(PORT))
+    router_prefixes = {
+        keyword.value.value
+        for node in ast.walk(port_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "APIRouter"
+        for keyword in node.keywords
+        if keyword.arg == "prefix" and isinstance(keyword.value, ast.Constant)
+    }
+    assert len(router_prefixes) == 1, "the port declares no single router prefix"
+    router_prefix = router_prefixes.pop()
+
+    expected = {f"{api}{router_prefix}/" for api in api_prefixes}
+    assert advertised in expected, (
+        f"the descriptor advertises {advertised!r}, but the receiver is mounted "
+        f"at one of {sorted(expected)!r} — a descriptor that names a path "
+        "nothing serves is a binding to a dead destination"
+    )
