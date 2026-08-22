@@ -352,6 +352,10 @@ class AcsObservedFields:
     acs_observed_wan_wcd_index: int | None
     acs_observed_wan_instance_index: int | None
     acs_observed_wan_ppp_locations: tuple[tuple[int, int], ...]
+    acs_observed_lan_gateway_ip: str | None = None
+    acs_observed_dhcp_pool_min: str | None = None
+    acs_observed_dhcp_pool_max: str | None = None
+    acs_observed_dhcp_subnet_mask: str | None = None
     acs_data_model_root: str | None = None
     acs_observed_ipv6_enabled: bool | None = None
     acs_observed_wan_ip_enable: bool | None = None
