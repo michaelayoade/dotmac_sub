@@ -5,7 +5,7 @@ and ADR-0006's extraction amendment: inventory the fleet's existing
 implementations before adding shared behaviour, and port a qualifying
 production implementation rather than inventing one.
 
-**Verdict: build it in Sub, product-first. Do not create a shared module yet.**
+**Verdict: extract to a Starter-owned module now, with Sub as consumer one.**
 
 ## The capability
 
@@ -67,21 +67,30 @@ It is therefore the product-first source, and it is also the thing being fixed:
 it stores all of that in `subscribers.metadata`, an unowned JSONB column, and
 serialises the affected resources into `recovery_snapshot`.
 
-## Why a shared module would be premature
+## What product-first actually requires
 
-Rule 22 asks for a qualifying production implementation and a real second
-consumer. There is one implementation, in Sub, and no second consumer: ERP's
-two status flips would not adopt a lifecycle owner, and Starter has no product
-asking for one. Extracting now would mean designing a shared contract from a
-single caller — which is how a module acquires that caller's private
-conventions and calls them a contract.
+An earlier draft of this section concluded "build it in Sub, extract when a
+second consumer exists". **That was wrong**, and the correction matters enough
+to record rather than quietly replace.
 
-The order is: build it in Sub as a Sub-owned service with a typed contract,
-prove it against the real deletion and purge paths, and extract to Starter when
-a second consumer exists. Sub becoming a thin assembly does not change this —
-under the conversion amendment, Sub composes released modules, and a module
-released from one caller's assumptions is the failure that amendment did not
-remove.
+Product-first means Sub supplies the **implementation and the parity tests**.
+It does not mean Sub keeps ownership until someone else asks for it. The
+Starter module becomes the owner, and Sub adopts it **in the same authority
+slice** — one coherent change in which the fact moves to its owner and the
+legacy writer retires, rather than two changes with a period of two writers
+between them.
+
+`dotmac_sub` is **consumer one**. A second consumer is what justifies further
+GENERALISATION — widening a contract, adding a provider seam, admitting a shape
+Sub does not need. It is not a precondition for the initial extraction. Waiting
+for one would leave the fact in an unowned JSONB column indefinitely, since
+nothing else is going to ask for subscriber account lifecycle first.
+
+The risk the earlier draft named is real but differently managed: a module
+designed from one caller can acquire that caller's private conventions. The
+guard against that is the extraction dossier and the typed ports below — the
+module owns lifecycle state and transitions, and everything Sub-specific stays
+behind a port the assembly binds. It is not a delay.
 
 ## The snapshot is not re-homed, it is removed
 
@@ -104,8 +113,13 @@ being purged.
 
 ## Consequences for the extraction
 
-- One new Sub service, `customer.account_lifecycle`, declared in the SOT
-  registry with typed commands.
+- A new **Starter module** owning subscriber account lifecycle, with a complete
+  `EXTRACTION.toml` written from Sub's source and tests.
+- Durable lifecycle state and transitions live in the MODULE.
+- The module exposes **typed ports** for subscriptions, orders, devices and
+  every other affected owner, and imports no sibling module.
+- The Sub assembly keeps only thin port binding and orchestration, and declares
+  `customer.account_lifecycle` in the SOT registry as the local owner name.
 - Both deletion lineages move to it: `account_deletion`'s
   `account_deletion_requested_at`/`_reason` and the restore tool's
   `recovery_deleted_at`/`_by`/`_purge_due_at`/`_purged_at`/`_last_restored_at`/
