@@ -44,11 +44,14 @@ from pydantic import BaseModel, ConfigDict, model_validator
 #: reader can find the record; Sub never writes to it.
 GOVERNANCE_REPOSITORY: Final[str] = "https://github.com/michaelayoade/dotmac_governance"
 
-#: `docs(programme): accept Dotmac ISP replacement programme (#21)` — the
-#: revision at which ADR 0012 is `Accepted`, the programme is `accepted`, and
-#: `ctl-isp-001` is `verified`. Pinned as a literal because the whole point of
-#: this file is that the pin cannot move without a reviewed diff.
-ACCEPTED_REVISION: Final[str] = "68c7a62e2aafd9c236662a5a69d410ea002b4cdb"
+#: `feat(programme): record resolved decisions and answer dec-isp-003 through
+#: dec-isp-007 (#25)`. Pinned as a literal because the whole point of this file
+#: is that the pin cannot move without a reviewed diff.
+#:
+#: Repinned 2026-08-22 from `68c7a62e…`, which accepted the programme. That
+#: revision predates five answered decisions and a sixth cohort-1 component, so
+#: a binding still pointing at it described a cohort that no longer exists.
+ACCEPTED_REVISION: Final[str] = "d91a87f6823bfd2afa6c2025bdb1af644331fa39"
 
 PROGRAMME_ID: Final[str] = "pgm-dotmac-isp-replacement"
 PROGRAMME_RECORD_PATH: Final[str] = "programmes/dotmac-isp-replacement.json"
@@ -143,6 +146,10 @@ class GovernanceBinding(BaseModel):
     #: Governance `open_decisions` that still gate this cohort. Recorded so the
     #: readiness report names the real blocker instead of implying none exists.
     unresolved_decision_ids: tuple[str, ...]
+    #: Governance `resolved_decisions` bearing on this cohort. Sub's view could
+    #: previously only say what was still open, so an answered decision left no
+    #: trace here and the binding read as though nothing had been settled.
+    resolved_decision_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _check(self) -> GovernanceBinding:
@@ -167,6 +174,11 @@ class GovernanceBinding(BaseModel):
                 "no control names Sub as an evidence producer, so this binding "
                 "cannot explain why source-readiness work exists at all"
             )
+        both = set(self.unresolved_decision_ids) & set(self.resolved_decision_ids)
+        if both:
+            raise GovernanceBindingError(
+                "a decision is open or answered, never both; " + ", ".join(sorted(both))
+            )
         return self
 
     @property
@@ -181,9 +193,15 @@ class GovernanceBinding(BaseModel):
 
 
 #: The accepted first cohort, transcribed from the record at
-#: `ACCEPTED_REVISION`. Its membership is Governance's, not Sub's: the five
+#: `ACCEPTED_REVISION`. Its membership is Governance's, not Sub's: the six
 #: components are kernel and UI (reuse), `dotmac-party` (release),
-#: `dotmac-brand-profiles` (adopt) and `dotmac-customers` (build).
+#: `dotmac-brand-profiles` (adopt), `dotmac-customers` (build) and
+#: `dotmac-addresses` (build).
+#:
+#: `dotmac-addresses` joined on 2026-08-21 by dec-isp-007, which gave customer
+#: addresses a named owner for the first time — they had none on either side,
+#: which is why `addresses` is the one cohort-1 table Sub still cannot route
+#: through an owner.
 COHORT_ID: Final[str] = "cohort-isp-01"
 COHORT_SEQUENCE: Final[int] = 1
 COHORT_NAME: Final[str] = "Foundation party and customer"
@@ -257,7 +275,14 @@ BINDING: Final[GovernanceBinding] = GovernanceBinding(
             sub_supplies_evidence=True,
         ),
     ),
-    unresolved_decision_ids=("dec-isp-002", "dec-isp-003"),
+    unresolved_decision_ids=("dec-isp-002",),
+    resolved_decision_ids=(
+        "dec-isp-003",
+        "dec-isp-004",
+        "dec-isp-005",
+        "dec-isp-006",
+        "dec-isp-007",
+    ),
 )
 
 #: What this repository's readiness slice is entitled to say it achieved.

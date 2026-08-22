@@ -15,14 +15,14 @@ implements.
 | | |
 |---|---|
 | Programme | `pgm-dotmac-isp-replacement` |
-| Accepted revision | `68c7a62e2aafd9c236662a5a69d410ea002b4cdb` |
+| Accepted revision | `d91a87f6823bfd2afa6c2025bdb1af644331fa39` |
 | Record | `programmes/dotmac-isp-replacement.json` in `dotmac_governance` |
 | Decision | `docs/adr/0012-dotmac-isp-replacement-programme.md` (Accepted) |
 | Source assembly | `asm-dotmac-sub-legacy` — **source-authoritative** |
 | Target assembly | `asm-dotmac-isp` — candidate, independent database |
 | Track | `track-isp-sub-cutover` |
 | Cohort | `cohort-isp-01`, sequence 1, state **blocked** |
-| Components | kernel (reuse), UI (reuse), `dotmac-party` (release), `dotmac-brand-profiles` (adopt), `dotmac-customers` (build) |
+| Components | kernel (reuse), UI (reuse), `dotmac-party` (release), `dotmac-brand-profiles` (adopt), `dotmac-customers` (build), `dotmac-addresses` (build) |
 
 Sub's readiness work produces inputs for `ctl-isp-006` (source dispositions and
 idempotent replay), `ctl-isp-007` (zero-unexplained-drift shadow) and
