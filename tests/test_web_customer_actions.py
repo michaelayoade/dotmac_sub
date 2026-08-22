@@ -475,7 +475,7 @@ def test_update_person_rejects_blank_name(db_session, subscriber):
             tax_rate_id=None,
             withholding_tax_enabled=None,
             payment_method=None,
-            )
+        )
 
 
 def _update_person(db, subscriber, **overrides):
