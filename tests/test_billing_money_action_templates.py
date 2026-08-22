@@ -128,3 +128,15 @@ def test_payment_refund_requires_owner_preview_and_confirmation():
     assert "Exact evidence and access consequence" in confirmation
     assert 'name="preview_fingerprint"' in confirmation
     assert 'name="idempotency_key"' in confirmation
+
+
+def test_payment_detail_correction_action_uses_reversal_preview_and_permission_gate():
+    detail = _template("templates/admin/billing/payment_detail.html")
+    route = _template("app/web/admin/billing_payments.py")
+    web_service = _template("app/services/web_billing_payments.py")
+
+    assert "payment_correction_action.allowed" in detail
+    assert "reversal_capability.allowed and payment_correction_action.allowed" in detail
+    assert 'label: str = "Correct accepted payment"' in web_service
+    assert "payment_correction_action.preview_url" in detail
+    assert 'has_permission(auth, db, "billing:payment:update")' in route
