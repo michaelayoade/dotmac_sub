@@ -100,6 +100,19 @@ def _point(db, table, row_id) -> tuple[float, float, int]:
     ).one()
 
 
+def _geom_is_null(db, table, row_id) -> bool:
+    """Ask the database, not the identity map.
+
+    Reading `row.geom` in Python returns whatever was last assigned to the
+    attribute, so it cannot distinguish "written" from "never written". Both
+    defects this canary pins are about what reached the column.
+    """
+
+    return bool(
+        db.execute(select(table.geom.is_(None)).where(table.id == row_id)).scalar_one()
+    )
+
+
 def _projection(db, address: Address) -> GeoLocation:
     return db.query(GeoLocation).filter(GeoLocation.address_id == address.id).one()
 
@@ -221,10 +234,16 @@ def test_an_existing_projection_is_updated_not_duplicated(db_session):
     assert _point(db_session, GeoLocation, fresh_projection.id) == _point(
         db_session, GeoLocation, stale_projection.id
     )
-    assert stale_projection.geom is not None, (
+    # Both, and asked of the database. Comparing the two to each other is not
+    # enough on its own: if neither branch wrote `geom` they would agree at
+    # NULL == NULL, which is exactly the state the sweep used to leave behind.
+    assert not _geom_is_null(db_session, GeoLocation, stale_projection.id), (
         "the pre-existing branch left `geom` NULL, which is the defect the "
         "full sweep wrote into every address it touched"
     )
+    assert not _geom_is_null(db_session, GeoLocation, fresh_projection.id)
+    assert not _geom_is_null(db_session, Address, fresh.id)
+    assert not _geom_is_null(db_session, Address, stale.id)
     assert stale_projection.is_active is True
     assert stale_projection.location_type is fresh_projection.location_type
 
@@ -316,7 +335,14 @@ def test_neither_owner_operation_commits_or_rolls_back(db_session, monkeypatch):
     )
 
     address = _address(db_session, subscriber)
+    # Both branches, because they are separate code paths and a commit
+    # injected into either one is a defect. An earlier version of this test
+    # drove only the create branch; a `db.commit()` planted in the update
+    # branch survived it.
     project_address_point(db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON)
+    project_address_point(
+        db_session, address, latitude=ABUJA_LAT_2, longitude=ABUJA_LON_2
+    )
 
     assert calls == [], (
         "a composable owner operation must leave the transaction to its "
