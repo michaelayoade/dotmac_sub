@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TypedDict
@@ -22,6 +23,7 @@ from app.models.billing import (
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
     CreditNoteApplicationPreviewRequest,
+    CreditNoteApplicationReversalRequest,
     CreditNoteApplyRequest,
     InvoiceClosureConfirm,
     InvoiceLineCreate,
@@ -40,6 +42,10 @@ from app.services.audit_helpers import (
     extract_changes,
     format_changes,
     log_audit_event,
+)
+from app.services.billing.credit_notes import (
+    CreditApplicationReversalOption,
+    CreditApplicationReversalPreview,
 )
 from app.services.billing.invoices import verified_draft_issuance
 from app.services.db_session_adapter import db_session_adapter
@@ -757,6 +763,71 @@ def load_credit_application_options(db: Session, *, invoice_id: str):
     return billing_service.credit_notes.list_application_options(db, invoice_id)
 
 
+def load_credit_application_reversal_options(
+    db: Session, *, invoice_id: str
+) -> Sequence[CreditApplicationReversalOption]:
+    return billing_service.credit_notes.list_reversible_applications(db, invoice_id)
+
+
+def preview_credit_note_application_reversal(
+    db: Session, *, application_id: str
+) -> CreditApplicationReversalPreview:
+    return billing_service.credit_notes.preview_application_reversal(db, application_id)
+
+
+def reverse_credit_note_application_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    application_id: str,
+    memo: str | None,
+    preview_fingerprint: str,
+    idempotency_key: str,
+) -> dict[str, object]:
+    payload = CreditNoteApplicationReversalRequest(
+        application_id=UUID(application_id),
+        memo=memo.strip() if memo else None,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+    )
+    result = billing_service.credit_notes.reverse_application_with_evidence(
+        db, payload, stage_audit=False
+    )
+    preview = result.preview
+    metadata_payload: dict[str, object] = {
+        "application_id": str(result.application.id),
+        "reversal_application_id": str(result.reversal_application.id),
+        "credit_note_id": str(result.application.credit_note_id),
+        "invoice_id": str(result.application.invoice_id),
+        "ledger_entry_id": str(result.ledger_entry.id),
+        "consumption_ledger_entry_id": (
+            str(result.consumption_ledger_entry.id)
+            if result.consumption_ledger_entry
+            else None
+        ),
+        "amount": str(abs(result.reversal_application.amount)),
+        "currency": result.ledger_entry.currency,
+        "preview_fingerprint": preview_fingerprint,
+        "access_consequence": (
+            preview.access_consequence
+            if preview
+            else "recheck_after_credit_application_reversal"
+        ),
+    }
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="reverse_application",
+            entity_type="credit_note",
+            entity_id=str(result.application.credit_note_id),
+            actor_id=actor_id,
+            metadata=metadata_payload,
+        )
+    return metadata_payload
+
+
 def build_invoice_activities(db: Session, *, invoice_id: str) -> list[dict]:
     audit_events = audit_service.audit_events.list(
         db=db,
@@ -835,6 +906,10 @@ def load_invoice_detail_data(
         "credit_application_options": load_credit_application_options(
             db, invoice_id=invoice_id
         ),
+        "credit_application_reversal_options": (
+            load_credit_application_reversal_options(db, invoice_id=invoice_id)
+        ),
+        "credit_application_reversal_idempotency_key": secrets.token_urlsafe(24),
         "credit_application_idempotency_key": secrets.token_urlsafe(24),
         "invoice_void_capability": billing_service.invoices.void_capability(
             db, invoice_id

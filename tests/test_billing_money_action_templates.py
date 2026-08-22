@@ -95,6 +95,23 @@ def test_credit_application_requires_owner_preview_and_exact_confirmation():
     assert "restoration is not inferred from this credit" in confirmation
 
 
+def test_credit_application_reversal_requires_owner_preview_and_exact_confirmation():
+    invoice_detail = _template("templates/admin/billing/invoice_detail.html")
+    confirmation = _template(
+        "templates/admin/billing/credit_application_reversal_confirm.html"
+    )
+    route = _template("app/web/admin/billing_invoice_actions.py")
+
+    assert "credit_application_reversal_options" in invoice_detail
+    assert "/credit-applications/{{ option.application_id }}/reversal/preview" in (
+        invoice_detail
+    )
+    assert "Confirm credit application reversal" in confirmation
+    assert 'name="preview_fingerprint"' in confirmation
+    assert 'name="idempotency_key"' in confirmation
+    assert "billing:invoice:update" in route
+
+
 def test_invoice_detail_exposes_draft_issue_action():
     invoice_detail = _template("templates/admin/billing/invoice_detail.html")
 
@@ -109,6 +126,7 @@ def test_credit_application_templates_compile():
 
     env.get_template("admin/billing/invoice_detail.html")
     env.get_template("admin/billing/credit_apply_confirm.html")
+    env.get_template("admin/billing/credit_application_reversal_confirm.html")
     env.get_template("admin/billing/credit_issue_confirm.html")
     env.get_template("admin/billing/payment_refund_confirm.html")
     env.get_template("admin/billing/invoice_closure_confirm.html")
