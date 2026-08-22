@@ -13,6 +13,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import func
@@ -183,6 +184,17 @@ class AiSessionContext:
     session: AiIntakeSession
     policy: AiIntakePolicy | None
     version: AiIntakePolicyVersion | None
+
+
+@dataclass(slots=True)
+class _PreviewConversation:
+    id: UUID
+    channel_type: str
+    status: str
+    metadata_: dict[str, object]
+    subscriber_id: UUID | None = None
+    contact_address: str | None = None
+    external_thread_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -601,6 +613,12 @@ def _next_policy_version_number(db: Session, policy_id: UUID) -> int:
     return int(latest) + 1
 
 
+def _mapping_dict(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
 def _copy_version_payload(
     base: AiIntakePolicyVersion | None,
     command: AiPolicyVersionDraftCommand,
@@ -688,6 +706,7 @@ def _create_or_update_draft_policy_version_locked(
     payload = _copy_version_payload(base, command)
     version = existing_draft
     if version is None:
+        payload_metadata = _mapping_dict(payload.pop("metadata_", {}))
         version = AiIntakePolicyVersion(
             policy_id=policy.id,
             version_number=_next_policy_version_number(db, policy.id),
@@ -695,7 +714,7 @@ def _create_or_update_draft_policy_version_locked(
             is_active=False,
             created_by_person_id=None,
             metadata_={
-                **dict(payload.pop("metadata_") or {}),
+                **payload_metadata,
                 "created_reason": command.context.reason,
                 "base_version_id": str(base.id) if base is not None else None,
             },
@@ -706,7 +725,7 @@ def _create_or_update_draft_policy_version_locked(
         for field, value in payload.items():
             if field == "metadata_":
                 version.metadata_ = {
-                    **dict(value or {}),
+                    **_mapping_dict(value),
                     "updated_reason": command.context.reason,
                 }
             else:
@@ -1052,20 +1071,23 @@ def preview_policy_version(
     if preview_mode not in {"simulation", "live_read_only"}:
         raise ValueError("AI intake preview mode is invalid")
     channel = command.channel_type or policy.channel_type
-    metadata = (
+    version_metadata = (
         dict(version.metadata_ or {}) if isinstance(version.metadata_, Mapping) else {}
     )
-    raw_conversation_policy = metadata.get("conversation_policy")
+    raw_conversation_policy = version_metadata.get("conversation_policy")
     conversation_policy = (
         dict(raw_conversation_policy)
         if isinstance(raw_conversation_policy, Mapping)
         else {}
     )
-    conversation = InboxConversation(
-        id=uuid4(),
-        channel_type=channel,
-        status=InboxConversationStatus.pending.value,
-        metadata_={},
+    conversation = cast(
+        InboxConversation,
+        _PreviewConversation(
+            id=uuid4(),
+            channel_type=channel,
+            status=InboxConversationStatus.pending.value,
+            metadata_={},
+        ),
     )
     session = AiIntakeSession(
         id=uuid4(),
@@ -1111,7 +1133,7 @@ def preview_policy_version(
             classification=classification,
             tool_mode=preview_mode,
         )
-    metadata: dict[str, object] = {
+    routing_metadata: dict[str, object] = {
         "ai_intake_status": "classified",
         "ai_intent": decision.state.current_intent,
         "ai_category": decision.state.category,
@@ -1124,7 +1146,7 @@ def preview_policy_version(
         provider=policy.provider,
         account_scope=policy.account_scope,
         fallback_service_team_id=policy.fallback_team_id,
-        metadata=metadata,
+        metadata=routing_metadata,
     )
     destination_name = None
     if routing.primary_service_team_id:

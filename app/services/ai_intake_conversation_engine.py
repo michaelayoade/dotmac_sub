@@ -34,7 +34,7 @@ PHONE_RE = re.compile(r"(?:\+?234|0)?[789][01]\d{8}\b")
 OUTAGE_CONTEXT_RE = re.compile(r"\b(?:since|for)\s+([a-z0-9][a-z0-9\s-]{0,60})", re.I)
 PORTAL_RE = re.compile(
     r"\b(?:portal(?:\s+id)?|customer\s+id|account\s+(?:id|number)|acct)\s*"
-    r"[:#-]?\s*([A-Z0-9][A-Z0-9_-]{2,31})\b",
+    r"(?:is|=|[:#-])?\s*([A-Z0-9][A-Z0-9_-]{2,31})\b",
     re.I,
 )
 HUMAN_RE = re.compile(
@@ -519,7 +519,13 @@ def extract_facts(text: str) -> dict[str, object]:
     outage_context = OUTAGE_CONTEXT_RE.search(value)
     if outage_context:
         facts["outage_context"] = outage_context.group(0).strip()[:80]
-    if "router is on" in lowered or "router on" in lowered or "powered on" in lowered:
+    if (
+        "router is on" in lowered
+        or "router on" in lowered
+        or "powered on" in lowered
+        or "router is powered" in lowered
+        or "router powered" in lowered
+    ):
         facts["router_powered"] = True
     if "los" in lowered and "red" in lowered:
         facts["los_red"] = True
@@ -798,21 +804,22 @@ def _identify_customer(
 def _record_tool_result(
     state: ConversationalState, key: str, result: dict[str, object]
 ) -> None:
-    entry = {
+    result_payload: dict[str, object] = {
+        item_key: item_value
+        for item_key, item_value in result.items()
+        if item_key not in {"email", "phone"}
+    }
+    entry: dict[str, object] = {
         "tool": key,
         "status": result.get("status"),
         "at": datetime.now(UTC).isoformat(),
-        "result": {
-            item_key: item_value
-            for item_key, item_value in result.items()
-            if item_key not in {"email", "phone"}
-        },
+        "result": result_payload,
     }
     state.tool_executions.append(entry)
     if result.get("status") in {"unavailable", "unauthorized"}:
         state.tool_errors.append(entry)
     if key == "subscriber_monitoring" and result.get("status") == "available":
-        state.monitoring_results.append(entry["result"])
+        state.monitoring_results.append(result_payload)
 
 
 def _requires_identity_before_tools(
@@ -1023,7 +1030,7 @@ def _compare_value(value: object, condition: dict[str, object]) -> bool:
 
 def _compare_number(value: int, condition: dict[str, object]) -> bool:
     try:
-        expected = int(condition.get("turn_count", condition.get("value", 0)))
+        expected = int(str(condition.get("turn_count", condition.get("value", 0))))
     except (TypeError, ValueError):
         return False
     operator = str(condition.get("operator") or ">=").strip()
@@ -1285,14 +1292,14 @@ def _text_or_none(value: object) -> str | None:
 
 def _float_or_none(value: object) -> float | None:
     try:
-        return float(value) if value is not None else None
+        return float(str(value)) if value is not None else None
     except (TypeError, ValueError):
         return None
 
 
 def _bounded_int(value: object, *, default: int, low: int, high: int) -> int:
     try:
-        parsed = int(value) if value is not None else int(default)
+        parsed = int(str(value)) if value is not None else int(str(default))
     except (TypeError, ValueError):
-        parsed = int(default)
+        parsed = int(str(default))
     return max(low, min(parsed, high))

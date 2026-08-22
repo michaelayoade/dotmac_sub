@@ -29,9 +29,11 @@ from app.services.owner_commands import CommandContext
 
 
 def _subscriber(db_session, *, email: str | None = None, phone: str | None = None):
-    reseller = Reseller(name=f"Engine House {uuid4()}", is_house=True)
-    db_session.add(reseller)
-    db_session.flush()
+    reseller = db_session.query(Reseller).filter(Reseller.is_house.is_(True)).first()
+    if reseller is None:
+        reseller = Reseller(name=f"Engine House {uuid4()}", is_house=True)
+        db_session.add(reseller)
+        db_session.flush()
     row = Subscriber(
         email=email or f"engine-{uuid4()}@example.test",
         phone=phone,
@@ -261,8 +263,8 @@ def test_rich_first_message_extracts_existing_facts(db_session):
         session=session,
         version=version,
         latest_body=(
-            "My Portal ID is DM-12345. My internet is down and I have "
-            "restarted the router twice."
+            "My Portal ID is DM-12345. My internet is down since yesterday "
+            "and I have restarted the router twice."
         ),
         classification=_classification(),
     )
@@ -477,15 +479,16 @@ def test_turn_limit_and_timeout_escalate(db_session):
         classification=_classification(),
     )
 
+    expired_conversation = _conversation(db_session)
     expired_session = _session(
         db_session,
-        conversation,
+        expired_conversation,
         version,
         expires_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     timed_out = engine.run_conversational_turn(
         db_session,
-        conversation=conversation,
+        conversation=expired_conversation,
         session=expired_session,
         version=version,
         latest_body="Still not working.",

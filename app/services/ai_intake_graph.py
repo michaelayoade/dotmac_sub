@@ -13,7 +13,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict, cast
 
 from sqlalchemy.orm import Session
 
@@ -961,7 +961,8 @@ def _trace(
 ) -> AiIntakeGraphState:
     trace = list(state.get("node_trace") or [])
     trace.append(node)
-    return {**updates, "node_trace": trace[-40:]}
+    merged: dict[str, object] = {**updates, "node_trace": trace[-40:]}
+    return cast(AiIntakeGraphState, merged)
 
 
 def _serialize_recent_messages(
