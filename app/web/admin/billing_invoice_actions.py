@@ -110,6 +110,7 @@ def invoice_detail(
     invoice_id: UUID,
     pdf_notice: str | None = Query(None),
     notice: str | None = Query(None),
+    error: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     detail_data = web_billing_invoices_service.load_invoice_detail_data(
@@ -132,6 +133,7 @@ def invoice_detail(
             **detail_data,
             "pdf_notice": pdf_notice,
             "notice": notice,
+            "error": error,
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
@@ -148,12 +150,10 @@ def invoice_issue_from_detail(invoice_id: UUID, db: Session = Depends(get_db)):
             db,
             invoice_id=invoice_id,
         )
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc.detail)
         return RedirectResponse(
-            url=(
-                f"/admin/billing/invoices/{invoice_id}"
-                f"?error={quote_plus(str(exc.detail))}"
-            ),
+            url=(f"/admin/billing/invoices/{invoice_id}?error={quote_plus(message)}"),
             status_code=303,
         )
     return RedirectResponse(

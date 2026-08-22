@@ -2082,6 +2082,19 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   prepaid settlement path may still correct the documentary period from the typed WAT
   resolver, but its resulting anchor now goes through the canonical locked
   writer and cannot become a parallel mutation path.
+- Prepaid-draft duplicate boundary:
+  `financial.prepaid_draft_reconciliation` remains the only classifier when a
+  draft cycle overlaps funded entitlement. Besides the existing strict
+  prepaid-service-renewal adjustment pair, it may accept exactly one legacy
+  entitlement structurally linked to one active unreversed customer-position
+  service debit with exact account, subscription context where present,
+  currency, and line-or-gross amount. It never infers evidence from memo text.
+  One proven pair may void the pristine draft through `financial.invoices` and
+  allow the current funding-change transaction to continue to invoice-less
+  renewal. Multiple, financially active, reversed, mismatched, or otherwise
+  ambiguous pairs stay blocking and require Finance review. Admin invoice
+  detail and issue handling read this owner preview and only project its action,
+  safe notice, and reason.
 - Walled-account self-heal boundary:
   `financial.walled_account_healing` owns the exact account-bound repair
   lifecycle. Every committed `payment_received` or

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote_plus
 from uuid import UUID
 
 import pytest
@@ -17,12 +18,14 @@ from app.services.prepaid_draft_reconciliation import (
     PrepaidDraftReconciliationPreview,
     PrepaidDraftReconciliationResult,
 )
+from app.services.web_billing_invoices import InvoiceIssueFromDetailError
 from app.web.admin import billing_invoice_actions
 
 INVOICE_ID = UUID("11111111-1111-1111-1111-111111111111")
 ACCOUNT_ID = UUID("22222222-2222-2222-2222-222222222222")
 SUBSCRIPTION_ID = UUID("33333333-3333-3333-3333-333333333333")
 BASELINE_ID = UUID("44444444-4444-4444-4444-444444444444")
+ENTITLEMENT_ID = UUID("66666666-6666-6666-6666-666666666666")
 FINGERPRINT = "a" * 64
 ACTOR = "system_user:55555555-5555-5555-5555-555555555555"
 NOW = datetime(2026, 7, 31, 12, 30, tzinfo=UTC)
@@ -34,6 +37,10 @@ def _preview(
         PrepaidDraftDisposition.reviewed_opening_fundable
     ),
     action: PrepaidDraftAction = PrepaidDraftAction.settle_paid,
+    entitlement_ids: tuple[UUID, ...] = (),
+    reason: str = (
+        "exact payment funding plus reviewed opening funding covers the draft"
+    ),
 ) -> PrepaidDraftReconciliationPreview:
     return PrepaidDraftReconciliationPreview(
         invoice_id=INVOICE_ID,
@@ -52,9 +59,9 @@ def _preview(
         unbacked_credit=Decimal("0.00"),
         shortfall=Decimal("0.00"),
         subscription_ids=(SUBSCRIPTION_ID,),
-        entitlement_ids=(),
+        entitlement_ids=entitlement_ids,
         renewal_adjustment_ids=(),
-        reason="exact payment funding plus reviewed opening funding covers the draft",
+        reason=reason,
         fingerprint=FINGERPRINT,
     )
 
@@ -258,6 +265,43 @@ def test_invoice_action_hint_uses_owner_actionability(monkeypatch):
         is None
     )
 
+    duplicate = _preview(
+        disposition=PrepaidDraftDisposition.already_renewed,
+        action=PrepaidDraftAction.void_duplicate,
+        entitlement_ids=(ENTITLEMENT_ID,),
+        reason="existing entitlement and ledger debit evidence already fund this cycle",
+    )
+    monkeypatch.setattr(
+        web_reconciliation,
+        "preview_prepaid_draft_reconciliation",
+        lambda _db, _invoice_id: duplicate,
+    )
+    projected = web_reconciliation.preview_for_invoice_detail(
+        object(), invoice_id=INVOICE_ID
+    )
+    assert projected is duplicate
+    assert projected.actionable is True
+    assert 'Use "Reconcile prepaid draft"' in projected.invoice_issue_notice
+
+    ambiguous_overlap = _preview(
+        disposition=PrepaidDraftDisposition.manual_review,
+        action=PrepaidDraftAction.none,
+        entitlement_ids=(ENTITLEMENT_ID,),
+        reason="multiple renewal evidence pairs overlap the draft",
+    )
+    monkeypatch.setattr(
+        web_reconciliation,
+        "preview_prepaid_draft_reconciliation",
+        lambda _db, _invoice_id: ambiguous_overlap,
+    )
+    projected = web_reconciliation.preview_for_invoice_detail(
+        object(), invoice_id=INVOICE_ID
+    )
+    assert projected is ambiguous_overlap
+    assert projected.actionable is False
+    assert "Finance review is required" in projected.invoice_issue_notice
+    assert ambiguous_overlap.reason in projected.invoice_issue_notice
+
     unavailable = PrepaidDraftReconciliationError(
         code="financial.prepaid_draft_reconciliation.opening_funding_unavailable",
         message="Reviewed opening funding is unavailable for this invoice.",
@@ -283,6 +327,9 @@ def test_invoice_page_uses_authoritative_permission_gated_action_form():
     assert "prepaid_draft_reconciliation_preview" in detail
     assert "can(request, 'billing:invoice:update')" in detail
     assert "prepaid-draft-reconciliation/preview" in detail
+    assert "prepaid_draft_reconciliation_preview.actionable" in detail
+    assert "prepaid_draft_issue_notice" in detail
+    assert "Classifier reason:" in detail
     assert "prepaid_recovery_settlement" not in detail
     assert "action_form(review.action_form)" in confirmation
     assert "payment_backed_credit" in confirmation
@@ -292,6 +339,36 @@ def test_invoice_page_uses_authoritative_permission_gated_action_form():
     assert "shortfall" in confirmation
     assert "prepaid-draft-reconciliation/confirm" in route
     assert 'require_permission("billing:invoice:update")' in route
+
+
+def test_invoice_issue_conflict_redirects_with_helpful_reconciliation_notice(
+    monkeypatch,
+):
+    message = (
+        "This prepaid draft cannot be issued because this subscription already "
+        'has funded service coverage for the invoice period. Use "Reconcile '
+        'prepaid draft" to review the evidence and close the duplicate draft.'
+    )
+    monkeypatch.setattr(
+        billing_invoice_actions.web_billing_invoices_service,
+        "issue_invoice_from_detail",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            InvoiceIssueFromDetailError(
+                code="admin.invoice.prepaid_coverage_conflict",
+                message=message,
+            )
+        ),
+    )
+
+    response = billing_invoice_actions.invoice_issue_from_detail(
+        INVOICE_ID,
+        db=object(),
+    )
+
+    location = unquote_plus(response.headers["location"])
+    assert response.status_code == 303
+    assert message in location
+    assert "Request conflict" not in location
 
 
 def test_prepaid_draft_review_renders_csrf_action_form_with_request_context(

@@ -233,6 +233,7 @@ class PrepaidDraftReconciliationPreview:
     renewal_adjustment_ids: tuple[UUID, ...]
     reason: str
     fingerprint: str
+    renewal_ledger_entry_ids: tuple[UUID, ...] = ()
 
     @property
     def actionable(self) -> bool:
@@ -240,6 +241,34 @@ class PrepaidDraftReconciliationPreview:
             self.disposition is not PrepaidDraftDisposition.already_reconciled
             and self.recommended_action is not PrepaidDraftAction.none
         )
+
+    @property
+    def blocks_invoice_issue(self) -> bool:
+        """Whether authoritative funded coverage conflicts with draft issue."""
+
+        return bool(self.entitlement_ids) and self.disposition in {
+            PrepaidDraftDisposition.already_renewed,
+            PrepaidDraftDisposition.manual_review,
+        }
+
+    @property
+    def invoice_issue_notice(self) -> str | None:
+        """Safe staff guidance for a funded-coverage issue conflict."""
+
+        if not self.blocks_invoice_issue:
+            return None
+        message = (
+            "This prepaid draft cannot be issued because this subscription already "
+            "has funded service coverage for the invoice period. "
+        )
+        if self.actionable:
+            return (
+                message
+                + 'Use "Reconcile prepaid draft" to review the evidence and close '
+                "the duplicate draft. If the evidence is not exact, escalate to "
+                "Finance for manual review."
+            )
+        return message + f"Finance review is required: {self.reason.rstrip('.')}."
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +297,7 @@ class PrepaidDraftReconciliationResult:
 class FundingChangeDraftResult:
     drafts_found: int
     drafts_settled: int
+    drafts_voided: int
     drafts_blocked: int
     review_exceptions: int
     invoice_ids: tuple[UUID, ...]
@@ -1969,6 +1999,164 @@ def _direct_renewal_evidence(
     return tuple(evidence)
 
 
+@dataclass(frozen=True, slots=True)
+class _LedgerBackedRenewalEvidence:
+    entitlement: ServiceEntitlement
+    ledger_entry: LedgerEntry
+
+
+_SERVICE_RENEWAL_LEDGER_SOURCES = frozenset(
+    {LedgerSource.invoice, LedgerSource.adjustment}
+)
+_SERVICE_RENEWAL_LEDGER_CATEGORIES = frozenset(
+    {
+        None,
+        LedgerCategory.internet_service,
+        LedgerCategory.custom_service,
+        LedgerCategory.voice_service,
+        LedgerCategory.bundle_service,
+    }
+)
+
+
+def _ledger_invoice_matches_subscription(
+    db: Session,
+    *,
+    ledger_entry: LedgerEntry,
+    account_id: UUID,
+    subscription_id: UUID,
+) -> bool:
+    """Validate optional invoice context without inferring it from memo text."""
+
+    if ledger_entry.invoice_id is None:
+        return True
+    linked_invoice = db.get(Invoice, ledger_entry.invoice_id)
+    if linked_invoice is None or linked_invoice.account_id != account_id:
+        return False
+    return (
+        db.scalar(
+            select(InvoiceLine.id)
+            .where(
+                InvoiceLine.invoice_id == linked_invoice.id,
+                InvoiceLine.subscription_id == subscription_id,
+                InvoiceLine.is_active.is_(True),
+                InvoiceLine.amount > Decimal("0.00"),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _ledger_entry_has_reversal(db: Session, ledger_entry: LedgerEntry) -> bool:
+    """Recognize structural and pre-link ledger reversal evidence."""
+
+    structural = db.scalar(
+        select(LedgerEntry.id)
+        .where(LedgerEntry.reversal_of_entry_id == ledger_entry.id)
+        .limit(1)
+    )
+    if structural is not None:
+        return True
+    legacy_reference = f"Reversal of ledger entry {ledger_entry.id}"
+    return (
+        db.scalar(
+            select(LedgerEntry.id)
+            .where(
+                LedgerEntry.account_id == ledger_entry.account_id,
+                LedgerEntry.entry_type == LedgerEntryType.credit,
+                LedgerEntry.reversal_of_entry_id.is_(None),
+                LedgerEntry.memo.ilike(f"%{legacy_reference}%"),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _ledger_backed_entitlement_evidence(
+    db: Session,
+    *,
+    invoice: Invoice,
+    line: InvoiceLine,
+    subscription: Subscription,
+    exclude_entitlement_ids: frozenset[UUID],
+) -> tuple[_LedgerBackedRenewalEvidence, ...]:
+    """Resolve strict legacy wallet-debit entitlement pairs without guessing."""
+
+    if invoice.billing_period_start is None or invoice.billing_period_end is None:
+        return ()
+    invoice_currency = (invoice.currency or "NGN").upper()
+    accepted_amounts = {
+        round_money(to_decimal(line.amount)),
+        round_money(to_decimal(invoice.total)),
+    }
+    entitlements = db.scalars(
+        select(ServiceEntitlement)
+        .where(
+            ServiceEntitlement.account_id == invoice.account_id,
+            ServiceEntitlement.subscription_id == subscription.id,
+            ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            ServiceEntitlement.starts_at < invoice.billing_period_end,
+            ServiceEntitlement.ends_at > invoice.billing_period_start,
+        )
+        .order_by(ServiceEntitlement.id)
+    ).all()
+    evidence: list[_LedgerBackedRenewalEvidence] = []
+    for entitlement in entitlements:
+        if entitlement.id in exclude_entitlement_ids or (
+            entitlement.source_invoice_id is not None
+            or entitlement.source_invoice_line_id is not None
+            or entitlement.source_billing_grant_id is not None
+            or entitlement.source_ledger_entry_id is None
+        ):
+            continue
+        if _utc(entitlement.ends_at) <= _utc(entitlement.starts_at):
+            continue
+        ledger_entry = db.get(LedgerEntry, entitlement.source_ledger_entry_id)
+        if ledger_entry is None:
+            continue
+        # An adjustment-owned row must continue through the existing strict
+        # origin/idempotency evidence path; this branch admits only the older
+        # structurally linked ledger/entitlement form.
+        adjustment_id = db.scalar(
+            select(AccountAdjustment.id)
+            .where(AccountAdjustment.ledger_entry_id == ledger_entry.id)
+            .limit(1)
+        )
+        funded_amount = round_money(to_decimal(entitlement.amount_funded))
+        if (
+            adjustment_id is not None
+            or _ledger_entry_has_reversal(db, ledger_entry)
+            or ledger_entry.account_id != invoice.account_id
+            or ledger_entry.entry_type is not LedgerEntryType.debit
+            or ledger_entry.source not in _SERVICE_RENEWAL_LEDGER_SOURCES
+            or ledger_entry.category not in _SERVICE_RENEWAL_LEDGER_CATEGORIES
+            or not ledger_entry.is_active
+            or not ledger_entry.affects_customer_position
+            or ledger_entry.reversal_of_entry_id is not None
+            or ledger_entry.payment_id is not None
+            or (ledger_entry.currency or "NGN").upper() != invoice_currency
+            or entitlement.currency.upper() != invoice_currency
+            or round_money(to_decimal(ledger_entry.amount)) != funded_amount
+            or funded_amount not in accepted_amounts
+            or not _ledger_invoice_matches_subscription(
+                db,
+                ledger_entry=ledger_entry,
+                account_id=invoice.account_id,
+                subscription_id=subscription.id,
+            )
+        ):
+            continue
+        evidence.append(
+            _LedgerBackedRenewalEvidence(
+                entitlement=entitlement,
+                ledger_entry=ledger_entry,
+            )
+        )
+    return tuple(evidence)
+
+
 def _build_preview(
     *,
     invoice: Invoice,
@@ -1978,6 +2166,7 @@ def _build_preview(
     subscription_ids: tuple[UUID, ...],
     entitlement_ids: tuple[UUID, ...] = (),
     adjustment_ids: tuple[UUID, ...] = (),
+    ledger_entry_ids: tuple[UUID, ...] = (),
     opening: ReviewedOpeningFundingPreview | None = None,
     reason: str,
 ) -> PrepaidDraftReconciliationPreview:
@@ -2014,6 +2203,7 @@ def _build_preview(
         "subscription_ids": subscription_ids,
         "entitlement_ids": entitlement_ids,
         "adjustment_ids": adjustment_ids,
+        "ledger_entry_ids": ledger_entry_ids,
         "reason": reason,
     }
     return PrepaidDraftReconciliationPreview(
@@ -2039,6 +2229,7 @@ def _build_preview(
         renewal_adjustment_ids=adjustment_ids,
         reason=reason,
         fingerprint=_hash(payload),
+        renewal_ledger_entry_ids=ledger_entry_ids,
     )
 
 
@@ -2147,6 +2338,19 @@ def preview_prepaid_draft_reconciliation(
             reason="invoice line is not owned by one matching prepaid subscription",
         )
 
+    overlapping_entitlement_ids = tuple(
+        db.scalars(
+            select(ServiceEntitlement.id)
+            .where(
+                ServiceEntitlement.account_id == invoice.account_id,
+                ServiceEntitlement.subscription_id == subscription.id,
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                ServiceEntitlement.starts_at < invoice.billing_period_end,
+                ServiceEntitlement.ends_at > invoice.billing_period_start,
+            )
+            .order_by(ServiceEntitlement.id)
+        ).all()
+    )
     has_activity = (
         db.scalar(
             select(PaymentAllocation.id)
@@ -2176,6 +2380,7 @@ def preview_prepaid_draft_reconciliation(
             action=PrepaidDraftAction.none,
             funding=funding,
             subscription_ids=(subscription.id,),
+            entitlement_ids=overlapping_entitlement_ids,
             reason="draft already has financial activity",
         )
 
@@ -2185,7 +2390,15 @@ def preview_prepaid_draft_reconciliation(
         line=line,
         subscription=subscription,
     )
-    if len(direct_evidence) == 1:
+    ledger_evidence = _ledger_backed_entitlement_evidence(
+        db,
+        invoice=invoice,
+        line=line,
+        subscription=subscription,
+        exclude_entitlement_ids=frozenset(item[0].id for item in direct_evidence),
+    )
+    evidence_count = len(direct_evidence) + len(ledger_evidence)
+    if evidence_count == 1 and direct_evidence:
         entitlement, adjustment = direct_evidence[0]
         return _build_preview(
             invoice=invoice,
@@ -2198,7 +2411,22 @@ def preview_prepaid_draft_reconciliation(
             adjustment_ids=(adjustment.id,),
             reason="exact direct-renewal debit and entitlement already fund this cycle",
         )
-    if len(direct_evidence) > 1:
+    if evidence_count == 1 and ledger_evidence:
+        ledger_pair = ledger_evidence[0]
+        return _build_preview(
+            invoice=invoice,
+            opening=opening,
+            disposition=PrepaidDraftDisposition.already_renewed,
+            action=PrepaidDraftAction.void_duplicate,
+            funding=funding,
+            subscription_ids=(subscription.id,),
+            entitlement_ids=(ledger_pair.entitlement.id,),
+            ledger_entry_ids=(ledger_pair.ledger_entry.id,),
+            reason=(
+                "existing entitlement and ledger debit evidence already fund this cycle"
+            ),
+        )
+    if evidence_count > 1:
         return _build_preview(
             invoice=invoice,
             opening=opening,
@@ -2206,22 +2434,16 @@ def preview_prepaid_draft_reconciliation(
             action=PrepaidDraftAction.none,
             funding=funding,
             subscription_ids=(subscription.id,),
-            entitlement_ids=tuple(item[0].id for item in direct_evidence),
+            entitlement_ids=tuple(
+                [item[0].id for item in direct_evidence]
+                + [item.entitlement.id for item in ledger_evidence]
+            ),
             adjustment_ids=tuple(item[1].id for item in direct_evidence),
-            reason="multiple direct-renewal evidence pairs overlap the draft",
+            ledger_entry_ids=tuple(item.ledger_entry.id for item in ledger_evidence),
+            reason="multiple renewal evidence pairs overlap the draft",
         )
 
-    other_overlap = db.scalar(
-        select(ServiceEntitlement.id)
-        .where(
-            ServiceEntitlement.subscription_id == subscription.id,
-            ServiceEntitlement.status == ServiceEntitlementStatus.active,
-            ServiceEntitlement.starts_at < invoice.billing_period_end,
-            ServiceEntitlement.ends_at > invoice.billing_period_start,
-        )
-        .limit(1)
-    )
-    if other_overlap is not None:
+    if overlapping_entitlement_ids:
         return _build_preview(
             invoice=invoice,
             opening=opening,
@@ -2229,7 +2451,7 @@ def preview_prepaid_draft_reconciliation(
             action=PrepaidDraftAction.none,
             funding=funding,
             subscription_ids=(subscription.id,),
-            entitlement_ids=(other_overlap,),
+            entitlement_ids=overlapping_entitlement_ids,
             reason="overlapping coverage is not exact direct-renewal evidence",
         )
     if funding.fully_funded:
@@ -2336,6 +2558,9 @@ def _record_metadata(
         "entitlement_ids": [str(value) for value in preview.entitlement_ids],
         "renewal_adjustment_ids": [
             str(value) for value in preview.renewal_adjustment_ids
+        ],
+        "renewal_ledger_entry_ids": [
+            str(value) for value in preview.renewal_ledger_entry_ids
         ],
     }
     invoice.metadata_ = metadata
@@ -2824,6 +3049,9 @@ def _stage_action(
                 "entitlement_ids": [str(value) for value in preview.entitlement_ids],
                 "renewal_adjustment_ids": [
                     str(value) for value in preview.renewal_adjustment_ids
+                ],
+                "renewal_ledger_entry_ids": [
+                    str(value) for value in preview.renewal_ledger_entry_ids
                 ],
             },
         ),
@@ -4632,12 +4860,12 @@ def stage_prepaid_draft_after_funding_change(
     db: Session,
     command: FundingChangeDraftCommand,
 ) -> FundingChangeDraftResult:
-    """Settle one exact existing draft before any invoice-less renewal.
+    """Resolve one exact existing draft before any invoice-less renewal.
 
     This is a flush-only participant for the existing funding-change
-    transaction. Any draft, including an underfunded one, blocks the parallel
-    direct-renewal path. Multiple drafts are intentionally left for reviewed
-    reconciliation.
+    transaction. A strictly proven duplicate is voided so the current funding
+    can continue to direct renewal. Every unresolved or underfunded draft still
+    blocks that path, and multiple drafts remain for reviewed reconciliation.
     """
 
     account_id = command.account_id
@@ -4671,31 +4899,71 @@ def stage_prepaid_draft_after_funding_change(
         )
     )
     if not invoice_ids:
-        return FundingChangeDraftResult(0, 0, 0, 0, ())
+        return FundingChangeDraftResult(
+            drafts_found=0,
+            drafts_settled=0,
+            drafts_voided=0,
+            drafts_blocked=0,
+            review_exceptions=0,
+            invoice_ids=(),
+        )
     if len(invoice_ids) != 1:
         return FundingChangeDraftResult(
-            len(invoice_ids),
-            0,
-            len(invoice_ids),
-            0,
-            invoice_ids,
+            drafts_found=len(invoice_ids),
+            drafts_settled=0,
+            drafts_voided=0,
+            drafts_blocked=len(invoice_ids),
+            review_exceptions=0,
+            invoice_ids=invoice_ids,
         )
 
     preview = preview_prepaid_draft_reconciliation(db, invoice_ids[0])
-    if preview.recommended_action is not PrepaidDraftAction.settle_paid:
-        return FundingChangeDraftResult(1, 0, 1, 0, invoice_ids)
+    if preview.recommended_action not in {
+        PrepaidDraftAction.settle_paid,
+        PrepaidDraftAction.void_duplicate,
+    }:
+        return FundingChangeDraftResult(
+            drafts_found=1,
+            drafts_settled=0,
+            drafts_voided=0,
+            drafts_blocked=1,
+            review_exceptions=0,
+            invoice_ids=invoice_ids,
+        )
     invoice, _applied, _payment_applied, _opening_consumption = _stage_action(
         db,
         preview=preview,
         effective_at=effective_at,
         context=None,
     )
-    if invoice.status != InvoiceStatus.paid:
+    if (
+        preview.recommended_action is PrepaidDraftAction.settle_paid
+        and invoice.status != InvoiceStatus.paid
+    ):
         _error(
             "incomplete_repair",
             "Funding-change draft settlement did not produce a paid invoice.",
         )
-    return FundingChangeDraftResult(1, 1, 0, 0, invoice_ids)
+    if (
+        preview.recommended_action is PrepaidDraftAction.void_duplicate
+        and invoice.status != InvoiceStatus.void
+    ):
+        _error(
+            "incomplete_repair",
+            "Funding-change duplicate closure did not produce a void invoice.",
+        )
+    return FundingChangeDraftResult(
+        drafts_found=1,
+        drafts_settled=(
+            1 if preview.recommended_action is PrepaidDraftAction.settle_paid else 0
+        ),
+        drafts_voided=(
+            1 if preview.recommended_action is PrepaidDraftAction.void_duplicate else 0
+        ),
+        drafts_blocked=0,
+        review_exceptions=0,
+        invoice_ids=invoice_ids,
+    )
 
 
 __all__ = [

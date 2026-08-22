@@ -49,6 +49,7 @@ from app.services.billing.credit_notes import (
 )
 from app.services.billing.invoices import verified_draft_issuance
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.status_presentation import invoice_status_presentation
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
@@ -57,6 +58,10 @@ logger = logging.getLogger(__name__)
 PROFORMA_TAG = invoice_draft_authoring.PROFORMA_TAG
 PROFORMA_PREFIX = invoice_draft_authoring.PROFORMA_PREFIX
 apply_proforma_form_values = invoice_draft_authoring.apply_proforma_form_values
+
+
+class InvoiceIssueFromDetailError(DomainError):
+    """Safe invoice-detail issue rejection for the admin route adapter."""
 
 
 class InvoiceLineItem(TypedDict):
@@ -288,6 +293,22 @@ def issue_invoice_from_detail(db: Session, *, invoice_id: UUID) -> Invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if invoice.status != InvoiceStatus.draft:
         raise HTTPException(status_code=409, detail="Only draft invoices can be issued")
+    prepaid_preview = (
+        web_prepaid_draft_reconciliation_service.preview_for_invoice_detail(
+            db,
+            invoice_id=invoice_id,
+        )
+    )
+    if prepaid_preview is not None and prepaid_preview.invoice_issue_notice is not None:
+        raise InvoiceIssueFromDetailError(
+            code="admin.invoice.prepaid_coverage_conflict",
+            message=prepaid_preview.invoice_issue_notice,
+            details={
+                "invoice_id": str(invoice_id),
+                "reconciliation_actionable": prepaid_preview.actionable,
+                "reconciliation_reason": prepaid_preview.reason,
+            },
+        )
     transition = billing_service.invoices.issue_draft_system(
         db,
         invoice_id_text,
@@ -927,6 +948,11 @@ def load_invoice_detail_data(
             db, currency=invoice.currency
         ),
         "prepaid_draft_reconciliation_preview": (prepaid_draft_reconciliation_preview),
+        "prepaid_draft_issue_notice": (
+            prepaid_draft_reconciliation_preview.invoice_issue_notice
+            if prepaid_draft_reconciliation_preview is not None
+            else None
+        ),
     }
 
 
