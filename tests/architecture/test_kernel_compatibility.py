@@ -23,7 +23,7 @@ What this file proves, with zero skips:
 - the Sub app builds with the kernel installed, and every ``dotmac_kernel``
   module in its import graph is one the ledger allowlist admits OR one the
   kernel reaches for itself (``TRANSITIVE_KERNEL_MODULES``, a reviewed
-  snapshot — twenty-four of them, which is worth knowing) — and no kernel
+  snapshot — twenty-six of them, which is worth knowing) — and no kernel
   middleware is mounted, no kernel route endpoint is served, and the top-level
   route prefix set is exactly the reviewed pin.
 
@@ -44,6 +44,7 @@ import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -56,9 +57,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a81"
-KERNEL_WHEEL_SHA256 = "f3b82ed2f1a12897cf7e9b801c905f0f7018fbbb5f9045aa6bef02a3632665bb"
-KERNEL_SDIST_SHA256 = "2c4fe080d0d2b31271ca0b0c2d435d0ad2d3a2fb81c25c591a1bc0b3774d3810"
+KERNEL_PIN = "0.1.0a90"
+KERNEL_WHEEL_SHA256 = "49add8154708b8f154ecb9a41f3c97e3810f9d381588a7ec55eff4f5c18fa69f"
+KERNEL_SDIST_SHA256 = "7c2e506c909b5dc7c72511cd7e886b9e1b21c814663364f78ac6772a18db875e"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"
@@ -66,7 +67,7 @@ KERNEL_SOURCE = "forgejo"
 #: What the kernel loads FOR ITS OWN USE once `app/` imports the settings
 #: resolver, measured rather than assumed — and larger than anyone expected.
 #:
-#: Consuming one kernel subsystem pulls twenty-four more modules into the process,
+#: Consuming one kernel subsystem pulls twenty-six more modules into the process,
 #: including `audit`, `security`, `identity`, `permissions` and `entitlements`
 #: — precisely the surfaces the adoption ledger keeps out of `app/`. Nothing in
 #: `app/` imports them and the AST guard still refuses one that tries; they are
@@ -80,6 +81,9 @@ KERNEL_SOURCE = "forgejo"
 #: that stopped consent/delivery/idempotency/external-identity importing the
 #: eager kernel database owner just to open a SAVEPOINT. None of them is an
 #: authority Sub consults, and none is reachable from `app/`.
+#: The a81 -> a90 repin adds `machine_auth` and `machine_models`; they are
+#: loaded by the kernel's machine-credential facility but are not direct Sub
+#: imports and mount no runtime surface in `app.main`.
 #:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
@@ -103,6 +107,8 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.external_identity",
         "dotmac_kernel.flags",
         "dotmac_kernel.identity",
+        "dotmac_kernel.machine_auth",
+        "dotmac_kernel.machine_models",
         "dotmac_kernel.models_platform",
         "dotmac_kernel.modules",
         "dotmac_kernel.namespaces",
@@ -284,6 +290,7 @@ def test_money_is_exact_decimal_and_rejects_float() -> None:
 
 
 def test_provisioning_contract_types_construct_and_check_runs() -> None:
+    from dotmac_kernel.cache import TenantScope
     from dotmac_kernel.providers.provisioning import (
         ApplyResult,
         ObserveResult,
@@ -297,7 +304,17 @@ def test_provisioning_contract_types_construct_and_check_runs() -> None:
         check_provisioning_provider_contract,
     )
 
-    request = ProvisioningRequest(intent_id="intent-1", spec={"profile": "basic"})
+    # a89 made `participant_code` and an explicit `Scope` REQUIRED — an
+    # intentional pre-1.0 break, because an ambient/nullable scope and an
+    # unowned provider identity are no longer valid inputs. Naming both here is
+    # the point of a compatibility canary: it fails on the kernel bump rather
+    # than in a caller that quietly kept provisioning without saying for whom.
+    request = ProvisioningRequest(
+        participant_code="participant.canary",
+        scope=TenantScope(tenant_id=uuid4()),
+        intent_id="intent-1",
+        spec={"profile": "basic"},
+    )
     plan = PlanResult(intent_id=request.intent_id, plan_hash="hash-1")
     assert plan.is_noop
     applied = ApplyResult(
