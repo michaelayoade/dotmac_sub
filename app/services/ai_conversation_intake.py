@@ -8,11 +8,12 @@ routing, queueing, assignment and outbound delivery.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -35,6 +36,9 @@ from app.models.team_inbox import (
 )
 from app.schemas.ai_intake import (
     DEFAULT_CLARIFICATION_QUESTIONS,
+    AiIntakeCategory,
+    AiIntakeClassification,
+    AiIntakeIntent,
     AiIntakeOutcome,
     AiIntakeStatus,
     normalize_clarification_questions,
@@ -44,7 +48,14 @@ from app.schemas.ai_operations import (
     AiIntakeConfigUpsert,
     AiIntakeDepartmentMapping,
 )
-from app.services import ai_intake, team_inbox_status
+from app.services import (
+    ai_intake,
+    ai_intake_conversation_engine,
+    ai_intake_graph,
+    team_inbox_operations,
+    team_inbox_routing,
+    team_inbox_status,
+)
 from app.services.integrations import (
     installations,
     meta_social_capability,
@@ -69,6 +80,13 @@ SUPPORTED_CONVERSATIONAL_CHANNELS = frozenset(
         InboxChannelType.whatsapp.value,
         InboxChannelType.facebook_messenger.value,
         InboxChannelType.instagram_dm.value,
+    }
+)
+logger = logging.getLogger(__name__)
+SUPPORTED_CONVERSATION_ENGINE_MODES = frozenset(
+    {
+        ai_intake_graph.CUSTOM_ENGINE_MODE,
+        ai_intake_graph.LANGGRAPH_ENGINE_MODE,
     }
 )
 TERMINAL_SESSION_STATES = frozenset(
@@ -100,6 +118,11 @@ DEFAULT_QUEUE_TEMPLATES = {
     ),
     "handoff": "Thanks for waiting. An agent has joined and will continue from here.",
 }
+APPROVED_QUEUE_TEMPLATE_VARIABLES = frozenset(
+    {"position", "queue_position", "team_name"}
+)
+SUPPORTED_AI_INTENT_KEYS = frozenset(item.value for item in AiIntakeIntent)
+SUPPORTED_AI_CATEGORY_KEYS = frozenset(item.value for item in AiIntakeCategory)
 DEFAULT_DATA_CLEANUP_PROMPT = (
     "For NCC compliance, Dotmac needs your {fields}. You can share only the "
     "missing details, or tell us if you prefer not to disclose."
@@ -178,6 +201,11 @@ class AiPolicyVersionDraftCommand:
     queue_templates: Mapping[str, object] | None = None
     escalation_rules: Mapping[str, object] | None = None
     data_cleanup_policy: Mapping[str, object] | None = None
+    conversational_engine_enabled: bool | None = None
+    conversation_engine_mode: str | None = None
+    permitted_identifiers: tuple[str, ...] = ()
+    tool_config: Mapping[str, object] | None = None
+    conversation_policy: Mapping[str, object] | None = None
     replace_existing_draft: bool = True
 
 
@@ -200,6 +228,11 @@ class AiDraftPolicyCommand:
     queue_templates: Mapping[str, object] | None = None
     escalation_rules: Mapping[str, object] | None = None
     data_cleanup_policy: Mapping[str, object] | None = None
+    conversational_engine_enabled: bool | None = None
+    conversation_engine_mode: str | None = None
+    permitted_identifiers: tuple[str, ...] = ()
+    tool_config: Mapping[str, object] | None = None
+    conversation_policy: Mapping[str, object] | None = None
     replace_existing_draft: bool = False
 
 
@@ -225,6 +258,31 @@ class AiPolicyVersionValidationOutcome:
     version_id: UUID
     valid: bool
     errors: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AiPolicyPreviewCommand:
+    context: CommandContext
+    version_id: UUID
+    customer_message: str
+    channel_type: str | None = None
+    preview_mode: str = "simulation"
+
+
+@dataclass(frozen=True, slots=True)
+class AiPolicyPreviewResult:
+    version_id: UUID
+    interpreted_intent: str | None
+    category: str | None
+    confidence: float | None
+    current_state: dict[str, object]
+    next_action: str
+    response_text: str | None
+    handoff_decision: bool
+    destination_team_id: str | None
+    destination_team_name: str | None
+    tool_executions: tuple[dict[str, object], ...]
+    preview_mode: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +339,13 @@ def _normalize_text(value: str | None, *, field: str, limit: int = 160) -> str:
     if not text:
         raise ValueError(f"AI intake {field} is required")
     return text[:limit]
+
+
+def _normalize_conversation_engine_mode(value: str | None) -> str:
+    mode = str(value or ai_intake_graph.CUSTOM_ENGINE_MODE).strip()
+    if mode not in SUPPORTED_CONVERSATION_ENGINE_MODES:
+        raise ValueError("AI intake conversation engine mode is unsupported")
+    return mode
 
 
 def _provider_scope_key(provider: str, account_scope: str) -> str:
@@ -494,6 +559,11 @@ def create_draft_policy(
                 queue_templates=command.queue_templates,
                 escalation_rules=command.escalation_rules,
                 data_cleanup_policy=command.data_cleanup_policy,
+                conversational_engine_enabled=command.conversational_engine_enabled,
+                conversation_engine_mode=command.conversation_engine_mode,
+                permitted_identifiers=command.permitted_identifiers,
+                tool_config=command.tool_config,
+                conversation_policy=command.conversation_policy,
                 replace_existing_draft=command.replace_existing_draft,
             ),
         )
@@ -539,6 +609,21 @@ def _copy_version_payload(
     if clarification_source is None and base is not None:
         clarification_source = base.clarification_questions
     clarification_questions = normalize_clarification_questions(clarification_source)
+    metadata = dict(base.metadata_ or {}) if base is not None else {}
+    if command.conversational_engine_enabled is not None:
+        metadata["conversational_engine_enabled"] = bool(
+            command.conversational_engine_enabled
+        )
+    if command.conversation_engine_mode is not None:
+        metadata["conversation_engine_mode"] = _normalize_conversation_engine_mode(
+            command.conversation_engine_mode
+        )
+    if command.permitted_identifiers:
+        metadata["permitted_identifiers"] = list(command.permitted_identifiers)
+    if command.tool_config is not None:
+        metadata["tools"] = dict(command.tool_config)
+    if command.conversation_policy is not None:
+        metadata["conversation_policy"] = dict(command.conversation_policy)
     return {
         "display_name": command.display_name
         or (base.display_name if base is not None else DEFAULT_DISPLAY_NAME),
@@ -569,6 +654,7 @@ def _copy_version_payload(
         "data_cleanup_policy": dict(command.data_cleanup_policy or {})
         if command.data_cleanup_policy is not None
         else (dict(base.data_cleanup_policy or {}) if base is not None else None),
+        "metadata_": metadata,
     }
 
 
@@ -609,6 +695,7 @@ def _create_or_update_draft_policy_version_locked(
             is_active=False,
             created_by_person_id=None,
             metadata_={
+                **dict(payload.pop("metadata_") or {}),
                 "created_reason": command.context.reason,
                 "base_version_id": str(base.id) if base is not None else None,
             },
@@ -617,7 +704,13 @@ def _create_or_update_draft_policy_version_locked(
         db.add(version)
     else:
         for field, value in payload.items():
-            setattr(version, field, value)
+            if field == "metadata_":
+                version.metadata_ = {
+                    **dict(value or {}),
+                    "updated_reason": command.context.reason,
+                }
+            else:
+                setattr(version, field, value)
     db.flush()
     return AiPolicyVersionOutcome(
         policy_id=policy.id,
@@ -644,6 +737,188 @@ def create_or_update_draft_policy_version(
     )
 
 
+def _template_variables(template: object) -> set[str]:
+    text = str(template or "")
+    names = set(re.findall(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}", text))
+    names.update(re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", text))
+    names.update(re.findall(r"\$([a-zA-Z_][a-zA-Z0-9_]*)", text))
+    return names
+
+
+def _validate_queue_templates(queue_templates: object) -> None:
+    if queue_templates is None:
+        return
+    if not isinstance(queue_templates, Mapping):
+        raise ValueError("AI intake queue templates must be an object")
+    for key in DEFAULT_QUEUE_TEMPLATES:
+        unknown = _template_variables(queue_templates.get(key)) - (
+            APPROVED_QUEUE_TEMPLATE_VARIABLES
+        )
+        if unknown:
+            raise ValueError(
+                "AI intake queue templates support only "
+                "{{queue_position}}, {{position}} and {{team_name}}"
+            )
+    update_minutes = _bounded_int(
+        queue_templates.get("position_update_minutes"),
+        default=DEFAULT_QUEUE_POSITION_UPDATE_MINUTES,
+        minimum=1,
+        maximum=120,
+    )
+    heartbeat_minutes = _bounded_int(
+        queue_templates.get("heartbeat_minutes"),
+        default=DEFAULT_QUEUE_HEARTBEAT_MINUTES,
+        minimum=5,
+        maximum=240,
+    )
+    if update_minutes < 1 or heartbeat_minutes < 5:
+        raise ValueError("AI intake queue notification minutes are invalid")
+
+
+def _validate_engine_policy(version: AiIntakePolicyVersion) -> None:
+    metadata = (
+        dict(version.metadata_ or {}) if isinstance(version.metadata_, dict) else {}
+    )
+    if not metadata.get("conversational_engine_enabled"):
+        return
+    mode = _normalize_conversation_engine_mode(
+        str(
+            metadata.get("conversation_engine_mode")
+            or ai_intake_graph.CUSTOM_ENGINE_MODE
+        )
+    )
+    if mode == ai_intake_graph.LANGGRAPH_ENGINE_MODE and not (
+        ai_intake_graph.langgraph_available()
+    ):
+        raise ValueError("AI intake LangGraph engine requires the langgraph package")
+    raw_policy = metadata.get("conversation_policy")
+    policy = dict(raw_policy) if isinstance(raw_policy, Mapping) else {}
+    raw_tools = metadata.get("tools")
+    tools = dict(raw_tools) if isinstance(raw_tools, Mapping) else {}
+    permitted = metadata.get("permitted_identifiers") or []
+    if not isinstance(permitted, (list, tuple)):
+        raise ValueError("AI intake permitted identifiers must be a list")
+    unsupported = set(permitted) - {
+        "portal_id",
+        "registered_email",
+        "registered_phone",
+    }
+    if unsupported:
+        raise ValueError("AI intake permitted identifiers include an unsupported value")
+    if not permitted:
+        raise ValueError("AI intake requires at least one permitted identifier")
+    try:
+        raw_max_turns = int(policy.get("max_turns") or 6)
+    except (TypeError, ValueError):
+        raw_max_turns = -1
+    max_turns = _bounded_int(raw_max_turns, default=6, minimum=1, maximum=10)
+    if max_turns != raw_max_turns:
+        raise ValueError("AI intake max conversation turns must be between 1 and 10")
+    for key in tools:
+        if key not in ai_intake_conversation_engine.TOOL_CATALOG:
+            raise ValueError("AI intake tool configuration contains an unknown tool")
+    rules = policy.get("troubleshooting_rules")
+    if rules is not None:
+        if not isinstance(rules, list):
+            raise ValueError("AI intake troubleshooting rules must be a list")
+        for raw in rules:
+            if not isinstance(raw, Mapping):
+                raise ValueError(
+                    "AI intake troubleshooting rule entries must be objects"
+                )
+            condition = raw.get("condition")
+            if not isinstance(condition, Mapping):
+                raise ValueError("AI intake troubleshooting rule condition is required")
+            condition_type = str(condition.get("type") or "").strip()
+            legacy_condition = any(
+                key in condition for key in ("fact", "intent", "category")
+            )
+            if (
+                condition_type
+                and condition_type
+                not in ai_intake_conversation_engine.SUPPORTED_RULE_CONDITIONS
+            ):
+                raise ValueError(
+                    "AI intake troubleshooting rule condition is unsupported"
+                )
+            if not condition_type and not legacy_condition:
+                raise ValueError(
+                    "AI intake troubleshooting rule condition is unsupported"
+                )
+            action = str(raw.get("action") or "").strip()
+            if not action:
+                raise ValueError("AI intake troubleshooting rule action is required")
+            if (
+                action
+                and action not in ai_intake_conversation_engine.SUPPORTED_RULE_ACTIONS
+            ):
+                raise ValueError("AI intake troubleshooting rule action is unsupported")
+            tool_key = str(raw.get("tool") or "").strip()
+            if action in {"execute_tool", "invoke_tool"} and not tool_key:
+                raise ValueError(
+                    "AI intake troubleshooting tool action requires a tool"
+                )
+            if action == "request_field" and not (raw.get("field") or raw.get("tool")):
+                raise ValueError(
+                    "AI intake troubleshooting field request requires a field"
+                )
+            if (
+                action in {"execute_tool", "invoke_tool"}
+                and tool_key
+                and tool_key not in ai_intake_conversation_engine.TOOL_CATALOG
+            ):
+                raise ValueError(
+                    "AI intake troubleshooting rule references an unknown tool"
+                )
+            tool_value = tools.get(tool_key)
+            tool_enabled = (
+                bool(tool_value.get("enabled", False))
+                if isinstance(tool_value, Mapping)
+                else bool(tool_value)
+            )
+            if (
+                action in {"execute_tool", "invoke_tool"}
+                and tool_key
+                and not tool_enabled
+            ):
+                raise ValueError("AI intake troubleshooting references a disabled tool")
+    handoff = policy.get("handoff")
+    if handoff is not None and not isinstance(handoff, Mapping):
+        raise ValueError("AI intake handoff policy must be an object")
+    if isinstance(handoff, Mapping):
+        unknown = _template_variables(handoff.get("summary_template")) - (
+            ai_intake_conversation_engine.APPROVED_HANDOFF_SUMMARY_VARIABLES
+        )
+        if unknown:
+            raise ValueError(
+                "AI intake handoff summary template contains unsupported variables"
+            )
+
+
+def _validate_intent_definitions(version: AiIntakePolicyVersion) -> None:
+    definitions = version.intent_definitions or []
+    if not definitions:
+        return
+    if not isinstance(definitions, list):
+        raise ValueError("AI intake intent definitions must be a list")
+    seen: set[str] = set()
+    for raw in definitions:
+        if not isinstance(raw, Mapping):
+            raise ValueError("AI intake intent definition entries must be objects")
+        key = str(raw.get("key") or "").strip()
+        if key not in SUPPORTED_AI_INTENT_KEYS:
+            raise ValueError("AI intake intent definition key is unsupported")
+        if key in seen:
+            raise ValueError("AI intake intent definition keys must be unique")
+        seen.add(key)
+        category = str(raw.get("category") or "").strip()
+        if category and category not in SUPPORTED_AI_CATEGORY_KEYS:
+            raise ValueError("AI intake intent category is unsupported")
+        for tool_key in raw.get("allowed_tools") or []:
+            if tool_key not in ai_intake_conversation_engine.TOOL_CATALOG:
+                raise ValueError("AI intake intent references an unknown tool")
+
+
 def _validate_activation(
     db: Session, *, policy: AiIntakePolicy, version: AiIntakePolicyVersion
 ) -> None:
@@ -662,6 +937,9 @@ def _validate_activation(
         raise ValueError("AI intake fallback team must be active")
     if not (version.welcome_message or "").strip():
         raise ValueError("AI intake activation requires a welcome message")
+    _validate_queue_templates(version.queue_templates)
+    _validate_intent_definitions(version)
+    _validate_engine_policy(version)
     mappings = version.intent_team_mappings or []
     if not isinstance(mappings, list):
         raise ValueError("AI intake intent mappings must be a list")
@@ -728,6 +1006,143 @@ def validate_policy_version(
         version_id=version.id,
         valid=True,
         errors=(),
+    )
+
+
+def _preview_classification(message: str) -> AiIntakeClassification:
+    facts = ai_intake_conversation_engine.extract_facts(message)
+    if facts.get("slow_internet"):
+        return AiIntakeClassification(
+            intent=AiIntakeIntent.technical_support,
+            category=AiIntakeCategory.slow_internet,
+            confidence=0.86,
+            requires_follow_up=False,
+        )
+    if facts.get("connectivity_problem") or facts.get("los_red"):
+        return AiIntakeClassification(
+            intent=AiIntakeIntent.technical_support,
+            category=AiIntakeCategory.no_internet,
+            confidence=0.86,
+            requires_follow_up=False,
+        )
+    return AiIntakeClassification(
+        intent=AiIntakeIntent.unknown,
+        category=AiIntakeCategory.unknown,
+        confidence=0.35,
+        requires_follow_up=True,
+        follow_up_question=DEFAULT_CLARIFICATION_QUESTIONS[0],
+    )
+
+
+def preview_policy_version(
+    db: Session, command: AiPolicyPreviewCommand
+) -> AiPolicyPreviewResult:
+    """Run a draft/saved policy against one example message without live side effects."""
+
+    version = db.get(AiIntakePolicyVersion, command.version_id)
+    if version is None:
+        raise ValueError("AI intake policy version was not found")
+    policy = db.get(AiIntakePolicy, version.policy_id)
+    if policy is None:
+        raise ValueError("AI intake policy was not found")
+    body = str(command.customer_message or "").strip()
+    if not body:
+        raise ValueError("Enter a customer message to preview")
+    preview_mode = str(command.preview_mode or "simulation").strip()
+    if preview_mode not in {"simulation", "live_read_only"}:
+        raise ValueError("AI intake preview mode is invalid")
+    channel = command.channel_type or policy.channel_type
+    metadata = (
+        dict(version.metadata_ or {}) if isinstance(version.metadata_, Mapping) else {}
+    )
+    raw_conversation_policy = metadata.get("conversation_policy")
+    conversation_policy = (
+        dict(raw_conversation_policy)
+        if isinstance(raw_conversation_policy, Mapping)
+        else {}
+    )
+    conversation = InboxConversation(
+        id=uuid4(),
+        channel_type=channel,
+        status=InboxConversationStatus.pending.value,
+        metadata_={},
+    )
+    session = AiIntakeSession(
+        id=uuid4(),
+        conversation_id=conversation.id,
+        policy_id=policy.id,
+        policy_version_id=version.id,
+        legacy_config_id=policy.legacy_config_id,
+        state="collecting_intent",
+        channel_type=channel,
+        provider=policy.provider,
+        account_scope=policy.account_scope,
+        display_name=version.display_name,
+        turn_count=0,
+        max_turns=_bounded_int(
+            conversation_policy.get("max_turns"),
+            default=6,
+            minimum=1,
+            maximum=10,
+        ),
+        confidence_threshold=0.75,
+        fallback_team_id=policy.fallback_team_id,
+        metadata_={},
+    )
+    classification = _preview_classification(body)
+    if ai_intake_graph.langgraph_engine_enabled(version):
+        decision = ai_intake_graph.run_ai_intake_graph(
+            db,
+            conversation=conversation,
+            session=session,
+            version=version,
+            latest_body=body,
+            classification=classification,
+            recent_messages=(),
+            tool_mode=preview_mode,
+        )
+    else:
+        decision = ai_intake_conversation_engine.run_conversational_turn(
+            db,
+            conversation=conversation,
+            session=session,
+            version=version,
+            latest_body=body,
+            classification=classification,
+            tool_mode=preview_mode,
+        )
+    metadata: dict[str, object] = {
+        "ai_intake_status": "classified",
+        "ai_intent": decision.state.current_intent,
+        "ai_category": decision.state.category,
+        "ai_confidence": decision.state.confidence,
+        "ai_department_team_id": decision.state.destination_team_id,
+    }
+    routing = team_inbox_routing.resolve_channel_routing_decision(
+        db,
+        channel_type=channel,
+        provider=policy.provider,
+        account_scope=policy.account_scope,
+        fallback_service_team_id=policy.fallback_team_id,
+        metadata=metadata,
+    )
+    destination_name = None
+    if routing.primary_service_team_id:
+        team = db.get(ServiceTeam, UUID(str(routing.primary_service_team_id)))
+        destination_name = team.name if team is not None else None
+    return AiPolicyPreviewResult(
+        version_id=version.id,
+        interpreted_intent=decision.state.current_intent,
+        category=decision.state.category,
+        confidence=decision.state.confidence,
+        current_state=decision.state.to_dict(),
+        next_action=decision.action,
+        response_text=decision.response_text,
+        handoff_decision=decision.action == "handoff",
+        destination_team_id=routing.primary_service_team_id,
+        destination_team_name=destination_name,
+        tool_executions=tuple(decision.state.tool_executions),
+        preview_mode=preview_mode,
     )
 
 
@@ -821,9 +1236,35 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         and isinstance(editable_version.data_cleanup_policy, dict)
         else {}
     )
+    version_metadata = (
+        dict(editable_version.metadata_ or {})
+        if editable_version is not None and isinstance(editable_version.metadata_, dict)
+        else {}
+    )
+    conversation_policy = dict(version_metadata.get("conversation_policy") or {})
+    conversation_engine_mode = _normalize_conversation_engine_mode(
+        str(
+            version_metadata.get("conversation_engine_mode")
+            or ai_intake_graph.CUSTOM_ENGINE_MODE
+        )
+    )
+    tool_config = dict(version_metadata.get("tools") or {})
+    permitted_identifiers = version_metadata.get("permitted_identifiers")
+    if not isinstance(permitted_identifiers, list):
+        permitted_identifiers = [
+            "registered_phone",
+            "registered_email",
+            "portal_id",
+        ]
     mapping_json = "[]"
     if editable_version is not None:
         mapping_json = json.dumps(editable_version.intent_team_mappings or [], indent=2)
+    intent_definitions = (
+        list(editable_version.intent_definitions or [])
+        if editable_version is not None
+        and isinstance(editable_version.intent_definitions, list)
+        else []
+    )
     try:
         clarification_questions = normalize_clarification_questions(
             editable_version.clarification_questions
@@ -869,10 +1310,30 @@ def admin_policy_context(db: Session) -> dict[str, object]:
             else "Draft"
         ),
         "ai_intake_mapping_json": mapping_json,
+        "ai_intake_intent_definitions": intent_definitions,
+        "ai_intake_supported_intent_keys": tuple(sorted(SUPPORTED_AI_INTENT_KEYS)),
+        "ai_intake_supported_category_keys": tuple(sorted(SUPPORTED_AI_CATEGORY_KEYS)),
+        "ai_intake_supported_rule_conditions": tuple(
+            sorted(ai_intake_conversation_engine.SUPPORTED_RULE_CONDITIONS)
+        ),
+        "ai_intake_supported_rule_actions": tuple(
+            sorted(ai_intake_conversation_engine.SUPPORTED_RULE_ACTIONS)
+        ),
+        "ai_intake_supported_engine_modes": tuple(
+            sorted(SUPPORTED_CONVERSATION_ENGINE_MODES)
+        ),
         "ai_intake_clarification_questions": clarification_questions,
         "ai_intake_escalation_rules": escalation_rules,
         "ai_intake_queue_templates": queue_templates,
         "ai_intake_data_cleanup_policy": data_cleanup_policy,
+        "ai_intake_engine_metadata": version_metadata,
+        "ai_intake_conversation_engine_mode": conversation_engine_mode,
+        "ai_intake_conversation_policy": conversation_policy,
+        "ai_intake_tool_config": tool_config,
+        "ai_intake_permitted_identifiers": permitted_identifiers,
+        "ai_intake_tool_catalogue": (
+            ai_intake_conversation_engine.tool_catalogue_snapshot()
+        ),
     }
 
 
@@ -918,6 +1379,9 @@ def _sync_active_policy_to_legacy_config(
         dict(version.data_cleanup_policy or {})
         if isinstance(version.data_cleanup_policy, Mapping)
         else {}
+    )
+    version_metadata = (
+        dict(version.metadata_ or {}) if isinstance(version.metadata_, Mapping) else {}
     )
     mappings: list[AiIntakeDepartmentMapping] = []
     for raw in version.intent_team_mappings or []:
@@ -1013,6 +1477,18 @@ def _sync_active_policy_to_legacy_config(
             minimum=5,
             maximum=240,
         ),
+        "conversational_engine_enabled": bool(
+            version_metadata.get("conversational_engine_enabled")
+        ),
+        "conversation_engine_mode": _normalize_conversation_engine_mode(
+            str(
+                version_metadata.get("conversation_engine_mode")
+                or ai_intake_graph.CUSTOM_ENGINE_MODE
+            )
+        ),
+        "conversation_policy": version_metadata.get("conversation_policy") or {},
+        "tools": version_metadata.get("tools") or {},
+        "permitted_identifiers": version_metadata.get("permitted_identifiers") or [],
     }
     policy.legacy_config_id = config.id
     db.flush()
@@ -1809,8 +2285,143 @@ def _process_one_session(
         complete_session(session, state="stopped_human_takeover")
         mark_conversation_ai_metadata(conversation, session=session, active=False)
         return True
+    engine_forced_handoff = False
+    engine_handoff_state: ai_intake_conversation_engine.ConversationalState | None = (
+        None
+    )
+    if ai_intake_conversation_engine.conversational_engine_enabled(version):
+        engine_name = "composable_v1"
+        if ai_intake_graph.langgraph_engine_enabled(version):
+            requested_engine_name = ai_intake_graph.LANGGRAPH_ENGINE_MODE
+            try:
+                decision = ai_intake_graph.run_ai_intake_graph(
+                    db,
+                    conversation=conversation,
+                    session=session,
+                    version=version,
+                    latest_body=str(inbound.body or ""),
+                    classification=outcome.classification,
+                    recent_messages=recent,
+                )
+                engine_name = ai_intake_graph.LANGGRAPH_ENGINE_MODE
+            except ai_intake_graph.LangGraphUnavailableError as exc:
+                logger.warning(
+                    "ai_intake_langgraph_unavailable_falling_back",
+                    extra={
+                        "event": "ai_intake_langgraph_unavailable_falling_back",
+                        "conversation_id": str(conversation.id),
+                        "session_id": str(session.id),
+                        "policy_version_id": str(version.id)
+                        if version is not None
+                        else None,
+                        "requested_engine": requested_engine_name,
+                        "fallback_engine": "composable_v1",
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                decision = ai_intake_conversation_engine.run_conversational_turn(
+                    db,
+                    conversation=conversation,
+                    session=session,
+                    version=version,
+                    latest_body=str(inbound.body or ""),
+                    classification=outcome.classification,
+                )
+                engine_name = "composable_v1_fallback"
+        else:
+            requested_engine_name = "composable_v1"
+            decision = ai_intake_conversation_engine.run_conversational_turn(
+                db,
+                conversation=conversation,
+                session=session,
+                version=version,
+                latest_body=str(inbound.body or ""),
+                classification=outcome.classification,
+            )
+        ai_intake_conversation_engine.persist_state(session, decision.state)
+        metadata["ai_intake_engine_requested"] = requested_engine_name
+        metadata["ai_intake_engine"] = engine_name
+        metadata["ai_intake_engine_action"] = decision.action
+        metadata["ai_intake_engine_reason"] = decision.metadata.get("reason")
+        if decision.state.current_intent:
+            metadata["ai_intent"] = decision.state.current_intent
+        if decision.state.category:
+            metadata["ai_category"] = decision.state.category
+        if decision.state.confidence is not None:
+            metadata["ai_confidence"] = decision.state.confidence
+        if decision.state.destination_team_id:
+            metadata["ai_department_team_id"] = decision.state.destination_team_id
+        inbound.metadata_ = metadata
+        conversation_metadata = dict(conversation.metadata_ or {})
+        intake_metadata = dict(conversation_metadata.get("ai_intake") or {})
+        intake_metadata.update(
+            {
+                "engine": engine_name,
+                "engine_mode": engine_name,
+                "requested_engine": requested_engine_name,
+                "engine_action": decision.action,
+                "engine_reason": decision.metadata.get("reason"),
+                "human_requested": decision.state.human_requested,
+                "current_intent": decision.state.current_intent,
+                "previous_intent": decision.state.previous_intent,
+                "category": decision.state.category,
+                "subscriber_id": decision.state.subscriber_id,
+                "missing_facts": decision.state.missing_facts,
+                "escalation_reason": decision.state.escalation_reason,
+            }
+        )
+        conversation_metadata["ai_intake"] = intake_metadata
+        conversation.metadata_ = conversation_metadata
+        if decision.action == "respond":
+            delivery = team_inbox_outbound.send_ai_intake_message(
+                db,
+                conversation=conversation,
+                body_text=decision.response_text or "",
+                metadata=ai_message_metadata(
+                    session=session,
+                    version=version,
+                    purpose="conversation",
+                ),
+                dedupe_key=f"ai-intake-conversation:{session.id}:{inbound.id}",
+            )
+            generation.outbound_message_id = (
+                UUID(delivery.message_id) if delivery.message_id else None
+            )
+            session.state = "awaiting_customer"
+            transition_conversation_status(
+                db,
+                conversation=conversation,
+                status=InboxConversationStatus.pending,
+                reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
+                source_id=f"ai-intake-conversation:{session.id}:{inbound.id}",
+            )
+            mark_conversation_ai_metadata(conversation, session=session, active=True)
+            return True
+        if decision.action == "handoff":
+            metadata["ai_intake_status"] = "classified"
+            inbound.metadata_ = metadata
+            if decision.response_text:
+                team_inbox_outbound.send_ai_intake_message(
+                    db,
+                    conversation=conversation,
+                    body_text=decision.response_text,
+                    metadata=ai_message_metadata(
+                        session=session,
+                        version=version,
+                        purpose="handoff",
+                    ),
+                    dedupe_key=f"ai-intake-handoff-message:{session.id}:{inbound.id}",
+                )
+            engine_forced_handoff = True
+            engine_handoff_state = decision.state
+        elif decision.action != "continue_classifier":
+            session.state = "failed"
+            complete_session(session, state="failed")
+            mark_conversation_ai_metadata(conversation, session=session, active=False)
+            return True
     if (
-        outcome.status is AiIntakeStatus.awaiting_follow_up
+        not engine_forced_handoff
+        and outcome.status is AiIntakeStatus.awaiting_follow_up
         and outcome.config_id is not None
         and outcome.classification is not None
         and outcome.classification.follow_up_question is not None
@@ -1875,6 +2486,43 @@ def _process_one_session(
     intake_metadata["routing_reason"] = routing.reason
     conversation_metadata["ai_intake"] = intake_metadata
     conversation.metadata_ = conversation_metadata
+    destination_team_name = None
+    if routing.primary_service_team_id:
+        destination_team = db.get(
+            ServiceTeam,
+            UUID(str(routing.primary_service_team_id)),
+        )
+        destination_team_name = (
+            destination_team.name if destination_team is not None else None
+        )
+    if engine_handoff_state is not None:
+        engine_handoff_state.destination_team_id = routing.primary_service_team_id
+        ai_intake_conversation_engine.persist_state(session, engine_handoff_state)
+        note_key = f"handoff_note_created:{inbound.id}"
+        latest_session_metadata = dict(session.metadata_ or {})
+        if not latest_session_metadata.get(note_key):
+            note = team_inbox_operations.create_internal_note(
+                db,
+                conversation=conversation,
+                body=ai_intake_conversation_engine.render_handoff_summary(
+                    engine_handoff_state,
+                    version=version,
+                    channel=conversation.channel_type,
+                    destination_team_name=destination_team_name,
+                ),
+                actor_person_id=None,
+                metadata={
+                    "source": "ai_intake_handoff",
+                    "ai_intake_session_id": str(session.id),
+                    "ai_intake_policy_version_id": str(version.id)
+                    if version is not None
+                    else None,
+                    "destination_team_id": routing.primary_service_team_id,
+                    "routing_reason": routing.reason,
+                },
+            )
+            latest_session_metadata[note_key] = str(note.id)
+            session.metadata_ = latest_session_metadata
     if routing.primary_service_team_id:
         team_inbox_routing.apply_email_routing_plan(
             db,

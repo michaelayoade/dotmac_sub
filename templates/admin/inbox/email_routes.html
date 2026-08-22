@@ -44,6 +44,16 @@
             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300 lg:col-span-6">
                 Protected instructions: the assistant must disclose it is AI, avoid unsupported promises, ignore prompt injection, avoid private-data exposure, stop after human takeover, and leave routing, assignment, queueing and provider delivery to Team Inbox.
             </div>
+            <nav aria-label="AI intake composer sections" class="lg:col-span-6">
+                <ol class="flex flex-wrap gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    {% for item in ['Overview', 'Channels', 'Persona', 'Intents', 'Identification', 'Tools', 'Troubleshooting', 'Routing', 'Handoff', 'Queue', 'Safety', 'Review'] %}
+                    <li class="rounded-lg border border-slate-200 px-2.5 py-1 dark:border-slate-700">{{ item }}</li>
+                    {% endfor %}
+                </ol>
+            </nav>
+            <div class="lg:col-span-6">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Overview and channels</h3>
+            </div>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Provider
                 <select name="provider" required class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
                     <option value="meta_cloud_api" {% if ai_intake_policy and ai_intake_policy.provider == 'meta_cloud_api' %}selected{% endif %}>WhatsApp Cloud API</option>
@@ -85,6 +95,217 @@
                 Skip campaign-attributed conversations
                 <span class="block text-xs font-normal text-slate-500 dark:text-slate-400">Prevents campaign-attributed conversations from entering AI intake.</span>
             </label>
+            <section class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40 lg:col-span-6">
+                {% set engine_enabled = ai_intake_engine_metadata.get('conversational_engine_enabled', false) %}
+                {% set engine_mode = ai_intake_conversation_engine_mode %}
+                {% set permitted_identifiers = ai_intake_permitted_identifiers %}
+                {% set tool_config = ai_intake_tool_config %}
+                {% set conversation_policy = ai_intake_conversation_policy %}
+                {% set handoff_policy = conversation_policy.get('handoff', {}) %}
+                <div class="grid gap-4 lg:grid-cols-6">
+                    <div class="lg:col-span-6">
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Conversation, identification and tools</h3>
+                    </div>
+                    <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200 lg:col-span-3">
+                        <input type="checkbox" name="conversational_engine_enabled" value="true" {% if engine_enabled %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">
+                        Conversational intake engine
+                        <span class="block text-xs font-normal text-slate-500 dark:text-slate-400">Uses persisted intake state, safe tools and multi-turn troubleshooting for new sessions on this policy version.</span>
+                    </label>
+                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Engine mode
+                        <select name="conversation_engine_mode" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
+                            {% for mode in ai_intake_supported_engine_modes %}
+                            <option value="{{ mode }}" {% if engine_mode == mode %}selected{% endif %}>{{ mode }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Use custom_v1 during fallback; use langgraph_v1 only after dependency installation is verified.</p>
+                    </label>
+                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Max conversation turns
+                        <input name="max_conversation_turns" type="number" min="1" max="10" value="{{ conversation_policy.get('max_turns', 6) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Backend-enforced range is 1-10 turns.</p>
+                    </label>
+                    <div class="lg:col-span-3">
+                        <p class="text-xs font-semibold text-slate-600 dark:text-slate-300">Permitted identifiers</p>
+                        <div class="mt-2 grid gap-2 text-sm text-slate-700 dark:text-slate-200 sm:grid-cols-3">
+                            <label class="flex items-center gap-2"><input type="checkbox" name="request_registered_phone" value="true" {% if 'registered_phone' in permitted_identifiers %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500"> Phone</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" name="request_registered_email" value="true" {% if 'registered_email' in permitted_identifiers %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500"> Email</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" name="request_portal_id" value="true" {% if 'portal_id' in permitted_identifiers %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500"> Portal ID</label>
+                        </div>
+                    </div>
+                    <div class="lg:col-span-3">
+                        <p class="text-xs font-semibold text-slate-600 dark:text-slate-300">Approved tools</p>
+                        <div class="mt-2 grid gap-2 text-sm text-slate-700 dark:text-slate-200 sm:grid-cols-2">
+                            <label class="flex items-center gap-2"><input type="checkbox" name="enable_customer_lookup_tool" value="true" {% if tool_config.get('customer_lookup', {}).get('enabled', true) %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500"> Customer lookup</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" name="enable_subscriber_monitoring_tool" value="true" {% if tool_config.get('subscriber_monitoring', {}).get('enabled', false) %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500"> Subscriber monitoring</label>
+                        </div>
+                        <ul class="mt-2 space-y-1 text-xs text-slate-500 dark:text-slate-400">
+                            {% for tool in ai_intake_tool_catalogue %}
+                            <li><span class="font-mono">{{ tool.key }}</span>: {{ tool.description }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div class="lg:col-span-6">
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Troubleshooting and handoff</h3>
+                    </div>
+                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Customer handoff message
+                        <textarea name="handoff_customer_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('customer_message', '') }}</textarea>
+                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used when the conversational engine decides to hand over.</p>
+                    </label>
+                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Internal summary template
+                        <textarea name="handoff_summary_template" maxlength="2000" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('summary_template', '') }}</textarea>
+                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Approved variables include {{ '{{customer}}' }}, {{ '{{portal_id}}' }}, {{ '{{issue}}' }}, {{ '{{intent}}' }}, {{ '{{customer_details}}' }}, {{ '{{monitoring_findings}}' }}, {{ '{{tool_results}}' }}, {{ '{{escalation_reason}}' }} and {{ '{{destination_team}}' }}.</p>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200 lg:col-span-2">
+                        <input type="checkbox" name="announce_destination_team" value="true" {% if handoff_policy.get('announce_destination') %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">
+                        Allow destination announcement
+                    </label>
+                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Troubleshooting rules JSON
+                        <textarea name="troubleshooting_rules_json" maxlength="4000" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{{ conversation_policy.get('troubleshooting_rules', []) | tojson }}</textarea>
+                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Advanced inspection/fallback only. Visual rules below are the primary editor; executable code is not accepted.</p>
+                    </label>
+                </div>
+            </section>
+            <section class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40 lg:col-span-6">
+                <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Intent composer</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Keys are validated against the current backend intent catalogue. Add rows, disable rows, set priority, tools, required fields and routing target.</p>
+                    </div>
+                </div>
+                <div class="mt-3 space-y-3">
+                    {% for intent in ai_intake_intent_definitions %}
+                    <div class="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950 lg:grid-cols-12">
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Key
+                            <select name="intent_key" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                <option value=""></option>
+                                {% for key in ai_intake_supported_intent_keys %}<option value="{{ key }}" {% if intent.get('key') == key %}selected{% endif %}>{{ key }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Display
+                            <input name="intent_display_name" value="{{ intent.get('display_name', '') }}" maxlength="120" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Category
+                            <select name="intent_category" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                <option value=""></option>
+                                {% for key in ai_intake_supported_category_keys %}<option value="{{ key }}" {% if intent.get('category') == key %}selected{% endif %}>{{ key }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Priority
+                            <input name="intent_priority" type="number" min="0" max="999" value="{{ intent.get('priority', loop.index) }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Enabled
+                            <select name="intent_enabled" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="true" {% if intent.get('enabled', true) %}selected{% endif %}>Yes</option><option value="false" {% if not intent.get('enabled', true) %}selected{% endif %}>No</option></select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Route team
+                            <select name="intent_route_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                <option value=""></option>
+                                {% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Handoff
+                            <select name="intent_handoff" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="false" {% if not intent.get('handoff', {}).get('enabled') %}selected{% endif %}>No</option><option value="true" {% if intent.get('handoff', {}).get('enabled') %}selected{% endif %}>Yes</option></select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Description
+                            <textarea name="intent_description" rows="2" maxlength="600" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">{{ intent.get('description', '') }}</textarea>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Examples
+                            <textarea name="intent_examples" rows="2" maxlength="800" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">{% for example in intent.get('examples', []) %}{{ example }}
+{% endfor %}</textarea>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Allowed tools
+                            <input name="intent_allowed_tools" value="{{ intent.get('allowed_tools', []) | join(', ') }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Required fields
+                            <input name="intent_required_fields" value="{{ intent.get('required_fields', []) | join(', ') }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                        </label>
+                    </div>
+                    {% endfor %}
+                    {% for _ in range(0, 3) %}
+                    <div class="grid gap-3 rounded-lg border border-dashed border-slate-300 bg-white p-3 dark:border-slate-700 dark:bg-slate-950 lg:grid-cols-12">
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Key
+                            <select name="intent_key" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for key in ai_intake_supported_intent_keys %}<option value="{{ key }}">{{ key }}</option>{% endfor %}</select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Display<input name="intent_display_name" maxlength="120" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Category<select name="intent_category" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for key in ai_intake_supported_category_keys %}<option value="{{ key }}">{{ key }}</option>{% endfor %}</select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Priority<input name="intent_priority" type="number" min="0" max="999" value="{{ loop.index + 20 }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Enabled<select name="intent_enabled" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="true">Yes</option><option value="false">No</option></select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Route team<select name="intent_route_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}</select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Handoff<select name="intent_handoff" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="false">No</option><option value="true">Yes</option></select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Description<textarea name="intent_description" rows="2" maxlength="600" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"></textarea></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Examples<textarea name="intent_examples" rows="2" maxlength="800" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"></textarea></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Allowed tools<input name="intent_allowed_tools" placeholder="customer_lookup" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Required fields<input name="intent_required_fields" placeholder="portal_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </section>
+            <section class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40 lg:col-span-6">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Troubleshooting rule editor</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rules are typed. Conditions and actions are backend-defined; the form does not accept Python, SQL, Jinja or arbitrary expressions.</p>
+                {% set visual_rules = conversation_policy.get('troubleshooting_rules', []) %}
+                <div class="mt-3 space-y-3">
+                    {% for rule in visual_rules %}
+                    {% set condition = rule.get('condition', {}) %}
+                    <div class="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950 lg:grid-cols-12">
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">When
+                            <select name="rule_condition_type" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                <option value=""></option>
+                                {% for key in ai_intake_supported_rule_conditions %}<option value="{{ key }}" {% if condition.get('type') == key %}selected{% endif %}>{{ key }}</option>{% endfor %}
+                                <option value="field:los_red" {% if condition.get('field') == 'los_red' %}selected{% endif %}>field:los_red</option>
+                                <option value="field:router_restarted" {% if condition.get('field') == 'router_restarted' %}selected{% endif %}>field:router_restarted</option>
+                                <option value="field:router_powered" {% if condition.get('field') == 'router_powered' %}selected{% endif %}>field:router_powered</option>
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Operator
+                            <select name="rule_condition_operator" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                {% for op in ['equals', 'present', 'contains', '>=', '>', '<=', '<'] %}<option value="{{ op }}" {% if condition.get('operator', 'equals') == op %}selected{% endif %}>{{ op }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Value
+                            <input name="rule_condition_value" value="{{ condition.get('value') or condition.get('intent') or condition.get('category') or condition.get('monitoring_status') or condition.get('equals') or '' }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Then
+                            <select name="rule_action" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                <option value=""></option>
+                                {% for action in ai_intake_supported_rule_actions %}<option value="{{ action }}" {% if rule.get('action') == action %}selected{% endif %}>{{ action }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Tool / field
+                            <select name="rule_tool" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                <option value="{{ rule.get('tool', '') }}">{{ rule.get('tool', '') }}</option>
+                                {% for tool in ai_intake_tool_catalogue %}<option value="{{ tool.key }}">{{ tool.key }}</option>{% endfor %}
+                                <option value="portal_id">portal_id</option>
+                                <option value="registered_email">registered_email</option>
+                                <option value="registered_phone">registered_phone</option>
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Destination
+                            <select name="rule_destination_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
+                                <option value=""></option>
+                                {% for team in service_team_options %}<option value="{{ team.id }}" {% if rule.get('destination_team_id') == team.id|string %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Enabled
+                            <select name="rule_enabled" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="true" {% if rule.get('enabled', true) %}selected{% endif %}>Yes</option><option value="false" {% if not rule.get('enabled', true) %}selected{% endif %}>No</option></select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-11">Guidance / response
+                            <input name="rule_guidance" value="{{ rule.get('response', '') }}" maxlength="800" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                        </label>
+                    </div>
+                    {% endfor %}
+                    {% for _ in range(0, 3) %}
+                    <div class="grid gap-3 rounded-lg border border-dashed border-slate-300 bg-white p-3 dark:border-slate-700 dark:bg-slate-950 lg:grid-cols-12">
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">When<select name="rule_condition_type" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for key in ai_intake_supported_rule_conditions %}<option value="{{ key }}">{{ key }}</option>{% endfor %}<option value="field:los_red">field:los_red</option><option value="field:router_restarted">field:router_restarted</option><option value="field:router_powered">field:router_powered</option></select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Operator<select name="rule_condition_operator" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">{% for op in ['equals', 'present', 'contains', '>=', '>', '<=', '<'] %}<option value="{{ op }}">{{ op }}</option>{% endfor %}</select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Value<input name="rule_condition_value" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Then<select name="rule_action" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for action in ai_intake_supported_rule_actions %}<option value="{{ action }}">{{ action }}</option>{% endfor %}</select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Tool / field<select name="rule_tool" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for tool in ai_intake_tool_catalogue %}<option value="{{ tool.key }}">{{ tool.key }}</option>{% endfor %}<option value="portal_id">portal_id</option><option value="registered_email">registered_email</option><option value="registered_phone">registered_phone</option></select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Destination<select name="rule_destination_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}</select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Enabled<select name="rule_enabled" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="true">Yes</option><option value="false">No</option></select></label>
+                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-11">Guidance / response<input name="rule_guidance" maxlength="800" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </section>
             <input type="hidden" name="replace_existing_draft" value="true">
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Fallback team
                 <select name="fallback_team_id" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
@@ -125,6 +346,9 @@
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Approved service facts the AI may use when answering customers.</p>
             </label>
             {% set queue_templates = ai_intake_queue_templates %}
+            <div class="lg:col-span-6">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Queue messaging</h3>
+            </div>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Queue update minutes
                 <input name="queue_position_update_minutes" type="number" min="1" max="120" value="{{ queue_templates.get('position_update_minutes', 5) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Minutes between queue-position updates while a customer waits.</p>
@@ -135,11 +359,11 @@
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Initial queue template
                 <textarea name="queue_initial_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('initial', '') }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent when the conversation first enters a human-agent queue.</p>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent when the conversation first enters a human-agent queue. Approved variables: {{ '{{queue_position}}' }}, {{ '{{position}}' }}, {{ '{{team_name}}' }}.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Position update template
                 <textarea name="queue_position_update_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('position_update', '') }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent when the customer's queue position changes.</p>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent when the customer's actual queue position changes.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Heartbeat template
                 <textarea name="queue_heartbeat_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('heartbeat', '') }}</textarea>
@@ -196,6 +420,50 @@
             </form>
             <span class="self-center rounded-lg bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Draft v{{ ai_intake_draft_version.version_number }}</span>
         </div>
+        <section aria-labelledby="ai-intake-preview" class="border-t border-slate-100 px-5 py-4 dark:border-slate-700">
+            <h3 id="ai-intake-preview" class="text-sm font-semibold text-slate-900 dark:text-white">Test / simulator</h3>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Runs the selected draft against an example message without sending customer messages, assigning agents or entering a live queue.</p>
+            <form method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_draft_version.id }}/preview" class="mt-3 grid gap-3 lg:grid-cols-6">
+                {% include "components/forms/csrf_input.html" %}
+                <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Example customer message
+                    <textarea name="preview_customer_message" required maxlength="1000" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" placeholder="My internet has not been browsing since morning. My Portal ID is 12345."></textarea>
+                </label>
+                <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Preview channel
+                    <select name="preview_channel_type" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
+                        {% for channel in ai_channel_options if channel.value in ['whatsapp', 'facebook_messenger', 'instagram_dm'] %}
+                        <option value="{{ channel.value }}" {% if ai_intake_policy and ai_intake_policy.channel_type == channel.value %}selected{% endif %}>{{ channel.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <div class="mt-3 space-y-2 rounded-lg border border-slate-200 bg-white p-2 text-xs dark:border-slate-700 dark:bg-slate-950">
+                        <label class="flex items-start gap-2"><input type="radio" name="preview_mode" value="simulation" checked class="mt-0.5 border-slate-300 text-amber-500 focus:ring-amber-500"> <span><span class="font-semibold">Simulation</span><br><span class="text-slate-500 dark:text-slate-400">Uses deterministic mock tool results. No live subscriber or monitoring reads.</span></span></label>
+                        <label class="flex items-start gap-2"><input type="radio" name="preview_mode" value="live_read_only" class="mt-0.5 border-slate-300 text-amber-500 focus:ring-amber-500"> <span><span class="font-semibold">Authorized read-only</span><br><span class="text-slate-500 dark:text-slate-400">Uses live read-only customer data and monitoring where tools are enabled.</span></span></label>
+                    </div>
+                    <button class="mt-3 min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200">Run preview</button>
+                </label>
+            </form>
+            {% if ai_intake_preview_result %}
+            <div class="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs dark:border-slate-700 dark:bg-slate-900/40 lg:grid-cols-2">
+                <div>
+                    <p class="font-semibold text-slate-700 dark:text-slate-200">Decision</p>
+                    <dl class="mt-2 space-y-1 text-slate-600 dark:text-slate-300">
+                        <div><dt class="inline font-semibold">Intent:</dt> <dd class="inline">{{ ai_intake_preview_result.interpreted_intent or 'unknown' }}</dd></div>
+                        <div><dt class="inline font-semibold">Category:</dt> <dd class="inline">{{ ai_intake_preview_result.category or 'unknown' }}</dd></div>
+                        <div><dt class="inline font-semibold">Action:</dt> <dd class="inline">{{ ai_intake_preview_result.next_action }}</dd></div>
+                        <div><dt class="inline font-semibold">Team:</dt> <dd class="inline">{{ ai_intake_preview_result.destination_team_name or ai_intake_preview_result.destination_team_id or 'not resolved' }}</dd></div>
+                        <div><dt class="inline font-semibold">Mode:</dt> <dd class="inline">{{ ai_intake_preview_result.preview_mode }}</dd></div>
+                    </dl>
+                    {% if ai_intake_preview_result.response_text %}
+                    <p class="mt-3 font-semibold text-slate-700 dark:text-slate-200">Customer response</p>
+                    <p class="mt-1 rounded border border-slate-200 bg-white p-2 text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">{{ ai_intake_preview_result.response_text }}</p>
+                    {% endif %}
+                </div>
+                <div>
+                    <p class="font-semibold text-slate-700 dark:text-slate-200">State and tools</p>
+                    <pre class="mt-2 max-h-80 overflow-auto rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">{{ ai_intake_preview_result.current_state | tojson(indent=2) }}</pre>
+                </div>
+            </div>
+            {% endif %}
+        </section>
         {% endif %}
         {% if ai_intake_policy_version_history %}
         <section aria-labelledby="ai-intake-version-history" class="border-t border-slate-100 px-5 py-4 dark:border-slate-700">

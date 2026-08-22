@@ -29,6 +29,7 @@ from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
     InboxConversationAssignment,
+    InboxConversationQueueEntry,
     InboxMessage,
     InboxStatusTransitionEvent,
 )
@@ -1638,3 +1639,270 @@ def test_data_cleaning_eligible_conversation_records_identify_pending(
     assert cleaning["reason"] == "eligible"
     assert cleaning["support_team_id"] == str(configured_support.id)
     assert gateway.calls == 0
+
+
+def test_composable_handoff_creates_private_note_and_existing_queue_entry(
+    db_session, monkeypatch
+):
+    account_scope = f"phone-handoff-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "Fallback Team")
+    technical = _team(db_session, "Technical Support")
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test composable human handoff",
+    )
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback.id,
+            welcome_message="Hello from AI intake.",
+            intent_definitions=(
+                {
+                    "key": "technical_support",
+                    "display_name": "Technical Support",
+                    "category": "no_internet",
+                    "enabled": True,
+                    "priority": 1,
+                },
+            ),
+            intent_team_mappings=(
+                {
+                    "intent": "technical_support",
+                    "service_team_id": str(technical.id),
+                    "enabled": True,
+                },
+            ),
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={
+                "customer_lookup": {"enabled": False},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            conversation_policy={
+                "max_turns": 6,
+                "require_identity_before_tools": True,
+                "handoff": {
+                    "customer_message": "I will pass this to a support agent now.",
+                    "summary_template": (
+                        "AI Intake Summary\n"
+                        "Issue: {{issue}}\n"
+                        "Reason for escalation: {{escalation_reason}}\n"
+                        "Destination: {{destination_team}}"
+                    ),
+                },
+            },
+        ),
+    )
+    ai_conversation_intake.activate_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyVersionActivateCommand(
+            context=context,
+            version_id=draft.version_id,
+        ),
+    )
+    gateway = _Gateway()
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+
+    received = team_inbox_channel_receive.receive_inbound_channel(
+        db_session,
+        team_inbox_channel_receive.InboundChannelPayload(
+            channel_type=InboxChannelType.whatsapp.value,
+            contact_address="2348012345678",
+            body="Please let me speak to an agent.",
+            external_message_id="wamid-composable-human",
+            external_thread_id=f"thread-{uuid4()}",
+            metadata={
+                "provider": WHATSAPP_PROVIDER_META,
+                "provider_account_scope": account_scope,
+            },
+        ),
+    )
+    _process_ai(db_session)
+
+    conversation = db_session.get(InboxConversation, received.conversation_id)
+    note = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction == "internal")
+        .one()
+    )
+    queue_entry = (
+        db_session.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .one()
+    )
+    session = ai_conversation_intake.active_session_for_conversation(
+        db_session, conversation.id
+    )
+
+    assert note.metadata_["source"] == "ai_intake_handoff"
+    assert "AI Intake Summary" in note.body
+    assert "Destination: Technical Support" in note.body
+    assert "unknown" not in note.body.lower()
+    assert queue_entry.service_team_id == technical.id
+    assert queue_entry.queue_position == 1
+    assert session is not None
+    assert session.state == "handoff_requested"
+    assert conversation.metadata_["ai_handling"] is True
+    assert (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction == "outbound")
+        .filter(InboxMessage.body == note.body)
+        .count()
+        == 0
+    )
+
+
+def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
+    db_session, monkeypatch
+):
+    account_scope = f"phone-preview-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "Preview Fallback")
+    technical = _team(db_session, "Preview Technical")
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test preview safety",
+    )
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback.id,
+            welcome_message="Hello.",
+            intent_team_mappings=(
+                {
+                    "intent": "technical_support",
+                    "service_team_id": str(technical.id),
+                    "enabled": True,
+                },
+            ),
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={"customer_lookup": {"enabled": True}},
+            conversation_policy={"max_turns": 6},
+        ),
+    )
+    called = False
+
+    def _live_lookup(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("simulation preview must not query live subscribers")
+
+    monkeypatch.setattr(
+        ai_conversation_intake.ai_intake_conversation_engine,
+        "_customer_lookup",
+        _live_lookup,
+    )
+
+    preview = ai_conversation_intake.preview_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyPreviewCommand(
+            context=context,
+            version_id=draft.version_id,
+            customer_message="My Portal ID is 12345 and internet is down.",
+            preview_mode="simulation",
+        ),
+    )
+
+    assert called is False
+    assert preview.preview_mode == "simulation"
+    assert preview.next_action in {"respond", "handoff", "continue_classifier"}
+
+
+def test_activation_rejects_invalid_composable_rule_action(db_session):
+    account_scope = f"phone-invalid-rule-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "Invalid Rule Fallback")
+    technical = _team(db_session, "Invalid Rule Technical")
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test invalid composable rule",
+    )
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback.id,
+            welcome_message="Hello.",
+            intent_team_mappings=(
+                {
+                    "intent": "technical_support",
+                    "service_team_id": str(technical.id),
+                    "enabled": True,
+                },
+            ),
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={"customer_lookup": {"enabled": True}},
+            conversation_policy={
+                "max_turns": 6,
+                "troubleshooting_rules": [
+                    {
+                        "condition": {"type": "intent", "intent": "technical_support"},
+                        "action": "run_python",
+                    }
+                ],
+            },
+        ),
+    )
+
+    outcome = ai_conversation_intake.validate_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyVersionActivateCommand(
+            context=context,
+            version_id=draft.version_id,
+        ),
+    )
+
+    assert outcome.valid is False
+    assert "rule action is unsupported" in outcome.errors[0]
+
+
+def test_draft_policy_persists_langgraph_engine_mode(db_session):
+    account_scope = f"phone-langgraph-mode-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "LangGraph Mode Fallback")
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test langgraph mode persistence",
+    )
+
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback.id,
+            welcome_message="Hello.",
+            conversational_engine_enabled=True,
+            conversation_engine_mode="langgraph_v1",
+            permitted_identifiers=("portal_id",),
+            tool_config={"customer_lookup": {"enabled": True}},
+            conversation_policy={"max_turns": 6},
+        ),
+    )
+
+    version = db_session.get(AiIntakePolicyVersion, draft.version_id)
+
+    assert version.metadata_["conversational_engine_enabled"] is True
+    assert version.metadata_["conversation_engine_mode"] == "langgraph_v1"
