@@ -136,6 +136,35 @@ def test_configure_form_reports_queued_operation_without_claiming_delivery() -> 
     assert "Applied" not in html
 
 
+def test_configure_form_explains_acs_task_drain_waiting_state() -> None:
+    html = templates.env.get_template("admin/network/onts/_configure_form.html").render(
+        request=_request(),
+        ont_id="ont-1",
+        configuration_lifecycle=SimpleNamespace(
+            phase=OntServiceConfigurationPhase.readback_pending,
+            revision=3,
+            operation_id=uuid.uuid4(),
+            effective_customer_vlan=None,
+            vlan_source=None,
+            masked_pppoe_username=None,
+            pppoe_provenance=None,
+            last_verified_at=None,
+            waiting_reason="awaiting_acs_task_drain",
+            failure_message=None,
+            failure_code=None,
+            next_action=SimpleNamespace(value="retry_current_configuration"),
+            configuration_head_id=uuid.uuid4(),
+            current_events=(),
+        ),
+    )
+
+    assert "ACS accepted the LAN/DHCP task" in html
+    assert "force an OLT ONT reset to drain it" in html
+    assert "Do not retry this LAN configuration" in html
+    assert "Retry current configuration" not in html
+    assert "awaiting acs task drain" not in html
+
+
 def _submit_values(push_scope: str) -> dict[str, object]:
     return {
         "wan_mode": "",
