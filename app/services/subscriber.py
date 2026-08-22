@@ -50,6 +50,7 @@ from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
 )
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.nin_matching import normalize_nin
@@ -1629,34 +1630,76 @@ class Accounts(ListResponseMixin):
         db.commit()
 
 
+class AddressOwnerError(DomainError):
+    """`customer.accounts` refused an address command."""
+
+
+def create_address(
+    db: Session, payload: AddressCreate, *, geocode: bool = True
+) -> Address:
+    """Create one address under `customer.accounts`. Flush-only.
+
+    The composable entry point. `Addresses.create` below is the adapter over
+    it: identical behaviour plus the commit an HTTP caller expects.
+
+    Split out because the committing method could not be called from anywhere
+    that already owned a transaction, which is why `customer_location_requests`
+    constructed `Address` rows itself rather than asking the owner. It also
+    raised `HTTPException` — a transport error from a domain service, against
+    this repository's own rule that domain services raise domain errors and
+    only adapters map them. This function raises `AddressOwnerError`; the
+    adapter translates.
+
+    `geocode=False` is for a caller that already holds an authoritative
+    coordinate — an approved map pin, or its own geocode result. Without it,
+    routing those callers through this owner would spend an external geocoder
+    call on a value about to be overwritten.
+    """
+
+    subscriber = db.get(Subscriber, payload.subscriber_id)
+    if not subscriber:
+        raise AddressOwnerError(
+            code="customer.accounts.subscriber_not_found",
+            message="Subscriber not found",
+            details={"subscriber_id": str(payload.subscriber_id)},
+        )
+    if payload.tax_rate_id:
+        _validate_tax_rate(db, str(payload.tax_rate_id))
+    data = payload.model_dump()
+    data = _apply_validated_lga(data)
+    fields_set = payload.model_fields_set
+    if "address_type" not in fields_set:
+        default_type = settings_spec.resolve_value(
+            db, SettingDomain.subscriber, "default_address_type"
+        )
+        if default_type:
+            data["address_type"] = _validate_enum(
+                default_type, AddressType, "address_type"
+            )
+    if data.get("is_primary"):
+        db.query(Address).filter(
+            Address.subscriber_id == data["subscriber_id"],
+            Address.address_type == data["address_type"],
+            Address.is_primary.is_(True),
+        ).update({"is_primary": False})
+    if geocode:
+        data = geocoding_service.geocode_address(db, data)
+    address = Address(**data)
+    db.add(address)
+    db.flush()
+    return address
+
+
 class Addresses(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: AddressCreate):
-        subscriber = db.get(Subscriber, payload.subscriber_id)
-        if not subscriber:
-            raise HTTPException(status_code=404, detail="Subscriber not found")
-        if payload.tax_rate_id:
-            _validate_tax_rate(db, str(payload.tax_rate_id))
-        data = payload.model_dump()
-        data = _apply_validated_lga(data)
-        fields_set = payload.model_fields_set
-        if "address_type" not in fields_set:
-            default_type = settings_spec.resolve_value(
-                db, SettingDomain.subscriber, "default_address_type"
-            )
-            if default_type:
-                data["address_type"] = _validate_enum(
-                    default_type, AddressType, "address_type"
-                )
-        if data.get("is_primary"):
-            db.query(Address).filter(
-                Address.subscriber_id == data["subscriber_id"],
-                Address.address_type == data["address_type"],
-                Address.is_primary.is_(True),
-            ).update({"is_primary": False})
-        data = geocoding_service.geocode_address(db, data)
-        address = Address(**data)
-        db.add(address)
+        """HTTP adapter over `create_address`: same behaviour, plus the commit."""
+        try:
+            address = create_address(db, payload)
+        except AddressOwnerError as error:
+            if error.code == "customer.accounts.subscriber_not_found":
+                raise HTTPException(status_code=404, detail=error.message) from error
+            raise HTTPException(status_code=400, detail=error.message) from error
         db.commit()
         db.refresh(address)
         return address

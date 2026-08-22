@@ -594,20 +594,21 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         boundary=BoundaryRole.PERSISTS,
         reachability=Reachability.INTERNAL_ONLY,
         disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
-        entity_types=(
-            CohortEntityType.CUSTOMER_ACCOUNT,
-            CohortEntityType.CUSTOMER_ADDRESS,
-        ),
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
         open_question=None,
         note=(
-            "Constructs `Address` rows and writes the account `metadata` blob from an "
-            "undeclared module. Both halves bypass `customer.accounts`, which "
+            "Writes the account `metadata` blob from an undeclared module, bypassing "
+            "`customer.accounts`, which "
             "`docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md` names as the owner of "
             "the service Address's identity and text. An earlier version of this note "
             "said addresses had no declared owner at all; that was wrong, and it made "
             "a plain bypass look like unowned debt nobody could route around. "
+            "The address half is closed as of 2026-08-22: this module now calls "
+            "`customer.accounts.create_address` and `gis.spatial_sync"
+            ".project_address_point` rather than constructing `Address` rows and "
+            "projections itself. The `metadata` blob is what is left. "
             "Decided 2026-08-21 (dec-isp-007): the target owner is a product-first "
             "`dotmac-addresses`, extracted from `customer.accounts` plus "
             "`gis.spatial_sync`, `customer.location_capture` and "
@@ -723,6 +724,28 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
             "The declared native identity owner. Its writes to `subscribers` and "
             "`subscriber_contacts` are the canonical Party binding columns, not the "
             "legacy identity columns beside them."
+        ),
+    ),
+    SourceSurface(
+        path="app/services/gis_sync.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ADDRESS,),
+        owning_service="gis.spatial_sync",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "The declared owner of an address coordinate and its map projection. It "
+            "appears in the census for the first time in this change, and that is the "
+            "point: it previously offered only committing full-table sweeps with the "
+            "real write in a private helper, so three callers wrote the coordinate "
+            "themselves and one of them wrote it with the axes reversed. "
+            "`project_address_point` is the flush-only per-address operation they "
+            "now call. A census counts files, not owners — membership rose while the "
+            "surface shrank."
         ),
     ),
     SourceSurface(

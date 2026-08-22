@@ -10,6 +10,14 @@
 #
 # Counts live in isp_cohort1_write_sites_baseline.txt. This file says
 # nothing about how much a writer writes, on purpose.
+#
+# 2026-08-22 — `service|app/services/gis_sync.py` ADDED deliberately. It is
+# not a new parallel writer: `gis.spatial_sync` is the declared owner of an
+# address coordinate and its map projection, and this is the first release in
+# which it actually performs that write instead of leaving it to callers.
+# `customer_location_requests` fell 6 sites to 1 in the same change and the
+# total fell 101 -> 99, so the surface shrank while ownership concentrated.
+# The census is authority-blind by design; it counts files, not owners.
 
 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 cli_script|scripts/migration/backfill_party_status.py
@@ -33,6 +41,7 @@ service|app/services/crm_ticket_pull.py
 service|app/services/customer_location_requests.py
 service|app/services/customer_portal_contacts.py
 service|app/services/customer_portal_notifications.py
+service|app/services/gis_sync.py
 service|app/services/mrr_snapshot.py
 service|app/services/network_subscriber_bridge.py
 service|app/services/nin_verifications.py
