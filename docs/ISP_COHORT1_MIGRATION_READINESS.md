@@ -18,7 +18,7 @@ decision), `docs/ISP_COHORT1_SOURCE_OWNERSHIP.md` (who writes what today).
 
 | | |
 |---|---|
-| Programme | `pgm-dotmac-isp-replacement` at `68c7a62e2aafd9c236662a5a69d410ea002b4cdb` |
+| Programme | `pgm-dotmac-isp-replacement` at `d91a87f6823bfd2afa6c2025bdb1af644331fa39` |
 | Cohort | `cohort-isp-01`, sequence 1, state **blocked** |
 | Source | `asm-dotmac-sub-legacy` — source-authoritative |
 | Target | `asm-dotmac-isp` — candidate, independent database, no deployment owner |
