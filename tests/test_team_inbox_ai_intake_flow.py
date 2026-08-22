@@ -1649,6 +1649,8 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
     _install_whatsapp_scope(db_session, account_scope=account_scope)
     fallback = _team(db_session, "Fallback Team")
     technical = _team(db_session, "Technical Support")
+    fallback_id = fallback.id
+    technical_id = technical.id
     context = CommandContext.system(
         actor="test",
         scope="ai:intake-policy-draft",
@@ -1662,7 +1664,7 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
             channel_type=InboxChannelType.whatsapp.value,
             provider=WHATSAPP_PROVIDER_META,
             account_scope=account_scope,
-            fallback_team_id=fallback.id,
+            fallback_team_id=fallback_id,
             welcome_message="Hello from AI intake.",
             intent_definitions=(
                 {
@@ -1676,7 +1678,7 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
             intent_team_mappings=(
                 {
                     "intent": "technical_support",
-                    "service_team_id": str(technical.id),
+                    "service_team_id": str(technical_id),
                     "enabled": True,
                 },
             ),
@@ -1747,7 +1749,7 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
     assert "AI Intake Summary" in note.body
     assert "Destination: Technical Support" in note.body
     assert "unknown" not in note.body.lower()
-    assert queue_entry.service_team_id == technical.id
+    assert queue_entry.service_team_id == technical_id
     assert queue_entry.queue_position == 1
     assert session is not None
     assert session.state == "handoff_requested"
@@ -1769,6 +1771,8 @@ def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
     _install_whatsapp_scope(db_session, account_scope=account_scope)
     fallback = _team(db_session, "Preview Fallback")
     technical = _team(db_session, "Preview Technical")
+    fallback_id = fallback.id
+    technical_id = technical.id
     context = CommandContext.system(
         actor="test",
         scope="ai:intake-policy-draft",
@@ -1782,12 +1786,12 @@ def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
             channel_type=InboxChannelType.whatsapp.value,
             provider=WHATSAPP_PROVIDER_META,
             account_scope=account_scope,
-            fallback_team_id=fallback.id,
+            fallback_team_id=fallback_id,
             welcome_message="Hello.",
             intent_team_mappings=(
                 {
                     "intent": "technical_support",
-                    "service_team_id": str(technical.id),
+                    "service_team_id": str(technical_id),
                     "enabled": True,
                 },
             ),
@@ -1830,6 +1834,8 @@ def test_activation_rejects_invalid_composable_rule_action(db_session):
     _install_whatsapp_scope(db_session, account_scope=account_scope)
     fallback = _team(db_session, "Invalid Rule Fallback")
     technical = _team(db_session, "Invalid Rule Technical")
+    fallback_id = fallback.id
+    technical_id = technical.id
     context = CommandContext.system(
         actor="test",
         scope="ai:intake-policy-draft",
@@ -1843,12 +1849,12 @@ def test_activation_rejects_invalid_composable_rule_action(db_session):
             channel_type=InboxChannelType.whatsapp.value,
             provider=WHATSAPP_PROVIDER_META,
             account_scope=account_scope,
-            fallback_team_id=fallback.id,
+            fallback_team_id=fallback_id,
             welcome_message="Hello.",
             intent_team_mappings=(
                 {
                     "intent": "technical_support",
-                    "service_team_id": str(technical.id),
+                    "service_team_id": str(technical_id),
                     "enabled": True,
                 },
             ),
@@ -1883,6 +1889,7 @@ def test_draft_policy_persists_langgraph_engine_mode(db_session):
     account_scope = f"phone-langgraph-mode-{uuid4().hex}"
     _install_whatsapp_scope(db_session, account_scope=account_scope)
     fallback = _team(db_session, "LangGraph Mode Fallback")
+    fallback_id = fallback.id
     context = CommandContext.system(
         actor="test",
         scope="ai:intake-policy-draft",
@@ -1897,7 +1904,7 @@ def test_draft_policy_persists_langgraph_engine_mode(db_session):
             channel_type=InboxChannelType.whatsapp.value,
             provider=WHATSAPP_PROVIDER_META,
             account_scope=account_scope,
-            fallback_team_id=fallback.id,
+            fallback_team_id=fallback_id,
             welcome_message="Hello.",
             conversational_engine_enabled=True,
             conversation_engine_mode="langgraph_v1",

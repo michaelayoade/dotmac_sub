@@ -31,7 +31,11 @@ EVENTS_KEY = "conversation_events"
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PHONE_RE = re.compile(r"(?:\+?234|0)?[789][01]\d{8}\b")
-OUTAGE_CONTEXT_RE = re.compile(r"\b(?:since|for)\s+([a-z0-9][a-z0-9\s-]{0,60})", re.I)
+OUTAGE_CONTEXT_RE = re.compile(
+    r"\b(?:since|for)\s+([a-z0-9][a-z0-9\s-]{0,60}?)"
+    r"(?=(?:\s+(?:and|but|so|because)\b)|[,.!?;]|$)",
+    re.I,
+)
 PORTAL_RE = re.compile(
     r"\b(?:portal(?:\s+id)?|customer\s+id|account\s+(?:id|number)|acct)\s*"
     r"(?:is|=|[:#-])?\s*([A-Z0-9][A-Z0-9_-]{2,31})\b",
