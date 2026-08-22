@@ -1729,7 +1729,6 @@ def seed_billing_settings(db: Session) -> None:
     for reconciliation_key in (
         "topup_reconciliation_stale_minutes",
         "topup_reconciliation_max_age_days",
-        "topup_reconciliation_expiry_grace_hours",
         "topup_reconciliation_batch_size",
     ):
         reconciliation_spec = get_spec(SettingDomain.billing, reconciliation_key)

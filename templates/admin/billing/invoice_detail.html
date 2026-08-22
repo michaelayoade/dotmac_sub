@@ -77,7 +77,7 @@
                     Record Payment
                 </a>
                 {% endif %}
-                {% if prepaid_draft_reconciliation_preview and status_val == 'draft' and can(request, 'billing:invoice:update') %}
+                {% if prepaid_draft_reconciliation_preview and prepaid_draft_reconciliation_preview.actionable and status_val == 'draft' and can(request, 'billing:invoice:update') %}
                 <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/prepaid-draft-reconciliation/preview">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit" class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-emerald-700 transition hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-900/20">Reconcile prepaid draft</button>
@@ -146,6 +146,20 @@
     {% if notice %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200">
         {{ notice }}
+    </div>
+    {% endif %}
+
+    {% if prepaid_draft_issue_notice %}
+    <div id="prepaid-reconciliation" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+        <p>{{ prepaid_draft_issue_notice }}</p>
+        {% if prepaid_draft_reconciliation_preview and prepaid_draft_reconciliation_preview.actionable and can(request, 'billing:invoice:update') %}
+        <form class="mt-3" method="post" action="/admin/billing/invoices/{{ invoice.id }}/prepaid-draft-reconciliation/preview">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="font-semibold underline underline-offset-2">Reconcile prepaid draft</button>
+        </form>
+        {% elif prepaid_draft_reconciliation_preview %}
+        <p class="mt-2 font-medium">Classifier reason: {{ prepaid_draft_reconciliation_preview.reason }}</p>
+        {% endif %}
     </div>
     {% endif %}
 
@@ -340,6 +354,34 @@
 
             {# Apply Credit #}
             {% call card("Apply Credit", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald") %}
+                {% if credit_application_reversal_options and can(request, 'billing:invoice:update') %}
+                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/credit-applications/{{ credit_application_reversal_options[0].application_id }}/reversal/preview" class="mb-4 space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-900/20">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="idempotency_key" value="{{ credit_application_reversal_idempotency_key }}">
+                    <div>
+                        <label class="block text-xs font-medium text-amber-800 dark:text-amber-200 mb-1">Reverse Applied Credit Note</label>
+                        <select name="application_path" required data-form-consumer="client"
+                                onchange="this.form.action=this.value"
+                                class="block w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 dark:border-amber-700 dark:bg-slate-700 dark:text-white">
+                            {% for option in credit_application_reversal_options %}
+                            <option value="/admin/billing/invoices/{{ invoice.id }}/credit-applications/{{ option.application_id }}/reversal/preview">
+                                {{ option.credit_number | default('Credit Note') }} - {{ option.currency }} {{ '{:,.2f}'.format(option.amount) }} applied
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-amber-800 dark:text-amber-200 mb-1">Reason</label>
+                        <input type="text" name="memo" maxlength="500" required
+                               placeholder="Why is this credit note being released from this invoice?"
+                               class="block w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 dark:border-amber-700 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <button type="submit"
+                            class="inline-flex w-full items-center justify-center rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-700">
+                        Preview Credit Reversal
+                    </button>
+                </form>
+                {% endif %}
                 {% if credit_application_options %}
                 <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/apply-credit/preview" class="space-y-3">
                     {% include "components/forms/csrf_input.html" %}

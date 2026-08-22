@@ -645,6 +645,7 @@ class FundingChangeRenewalResult:
     non_cash_granted: int = 0
     treatment_blocked: int = 0
     draft_invoices_settled: int = 0
+    draft_invoices_voided: int = 0
     draft_invoices_pending: int = 0
     draft_review_exceptions: int = 0
 
@@ -2137,9 +2138,10 @@ def apply_due_prepaid_service_after_funding_change(
         raise ValueError("evidence_ref is required")
 
     # Invoice-first invariant: an existing prepaid draft owns the documentary
-    # service-period boundary. Exact verified funding settles that draft; a
-    # shortfall (including NGN 0.50), unbacked credit, overlap, or ambiguity
-    # leaves it unchanged and blocks the parallel invoice-less renewal path.
+    # service-period boundary. Exact verified funding settles that draft. One
+    # strictly proven duplicate is voided before the current funding continues
+    # to the invoice-less renewal path; shortfall, unbacked credit, or ambiguous
+    # overlap leaves the draft unchanged and blocks that path.
     from app.services.prepaid_draft_reconciliation import (
         FundingChangeDraftCommand,
         stage_prepaid_draft_after_funding_change,
@@ -2154,7 +2156,8 @@ def apply_due_prepaid_service_after_funding_change(
             evidence_ref=evidence,
         ),
     )
-    if draft_result.drafts_found:
+    duplicate_drafts_voided = draft_result.drafts_voided
+    if draft_result.drafts_found and not duplicate_drafts_voided:
         settled = draft_result.drafts_settled
         pending = draft_result.drafts_blocked
         return FundingChangeRenewalResult(
@@ -2175,6 +2178,7 @@ def apply_due_prepaid_service_after_funding_change(
                 )
             ),
             draft_invoices_settled=settled,
+            draft_invoices_voided=0,
             draft_invoices_pending=pending,
             draft_review_exceptions=draft_result.review_exceptions,
         )
@@ -2205,6 +2209,7 @@ def apply_due_prepaid_service_after_funding_change(
             missing_price=0,
             currency_mismatch=0,
             disposition=FundingChangeRenewalDisposition.no_due_service,
+            draft_invoices_voided=duplicate_drafts_voided,
         )
 
     if _payable_invoice_exists(db, account_id=account_id, currency=currency):
@@ -2217,6 +2222,7 @@ def apply_due_prepaid_service_after_funding_change(
             missing_price=0,
             currency_mismatch=0,
             disposition=FundingChangeRenewalDisposition.payable_invoice_remaining,
+            draft_invoices_voided=duplicate_drafts_voided,
         )
 
     from app.services.billing_automation import _period_end
@@ -2372,6 +2378,7 @@ def apply_due_prepaid_service_after_funding_change(
         renewals=tuple(renewals),
         non_cash_granted=non_cash_granted,
         treatment_blocked=treatment_blocked,
+        draft_invoices_voided=duplicate_drafts_voided,
     )
 
 

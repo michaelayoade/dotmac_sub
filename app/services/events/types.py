@@ -109,6 +109,7 @@ class EventType(enum.Enum):
     topup_intent_completed = "topup_intent.completed"
     topup_intent_expired = "topup_intent.expired"
     topup_intent_gateway_created = "topup_intent.gateway_created"
+    topup_intent_gateway_observed = "topup_intent.gateway_observed"
     topup_intent_failed = "topup_intent.failed"
     withholding_tax_receivable_recorded = "withholding_tax.receivable_recorded"
     withholding_tax_status_changed = "withholding_tax.status_changed"
@@ -175,6 +176,9 @@ class EventType(enum.Enum):
     workqueue_action_coordinated = "workqueue.action_coordinated"
     ai_intake_config_updated = "ai.intake_config_updated"
     plan_family_catalogue_published = "catalog.plan_family_catalogue_published"
+    catalog_offer_reseller_availability_changed = (
+        "catalog.offer_reseller_availability_changed"
+    )
     ncc_weekly_delivery_configuration_changed = (
         "ncc.weekly_delivery_configuration_changed"
     )
@@ -536,7 +540,7 @@ class Event:
                 return value.isoformat()
             if isinstance(value, dict):
                 return {key: _serialize(val) for key, val in value.items()}
-            if isinstance(value, (list, tuple)):
+            if isinstance(value, list | tuple):
                 return [_serialize(item) for item in value]
             return value
 

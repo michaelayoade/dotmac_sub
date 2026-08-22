@@ -477,6 +477,12 @@ def test_reseller_routes_require_customer_permissions():
     assert _route_has_permission(
         admin_resellers.router, "/resellers", "POST", "reseller:write"
     )
+    assert _route_has_permission(
+        admin_resellers.router,
+        "/resellers/{reseller_id}/catalog-access",
+        "POST",
+        "reseller:write",
+    )
 
 
 def test_design_system_routes_require_system_read():

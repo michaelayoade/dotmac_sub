@@ -369,6 +369,20 @@ def _customer_principal(sub) -> dict:
     }
 
 
+def test_customer_payment_proof_upload_is_disabled(db_session) -> None:
+    owner = _subscriber(db_session, "proof.disabled@example.com")
+    client = _client(db_session, _customer_principal(owner))
+
+    response = client.post(
+        "/api/v1/payment-proofs/me",
+        data={"amount": "5000", "reference": "TRF-DISABLED"},
+        files={"file": ("receipt.png", b"receipt", "image/png")},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Bank transfer is available to resellers only"
+
+
 class TestProofFileEndpointAuth:
     def test_admin_can_fetch_any_proof_file(self, db_session, proof_env) -> None:
         from app.api.payment_proofs import payment_proof_file

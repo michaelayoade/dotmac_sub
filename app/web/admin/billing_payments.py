@@ -28,7 +28,7 @@ from app.services import (
     web_billing_reconciliation as web_billing_reconciliation_service,
 )
 from app.services.audit_helpers import build_audit_activities
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
 from app.services.inclusive_date_range import InclusiveDateRangeError
 from app.web.request_parsing import parse_json_body
 
@@ -635,13 +635,17 @@ def payment_create(
 @router.get(
     "/payments/{payment_id:uuid}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:payment:read"))],
 )
 def payment_detail(
-    request: Request, payment_id: UUID, db: Session = Depends(get_db)
+    request: Request,
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission("billing:payment:read")),
 ) -> HTMLResponse:
     state = web_billing_payments_service.build_payment_detail_data(
-        db, payment_id=str(payment_id)
+        db,
+        payment_id=str(payment_id),
+        can_update_payment=has_permission(auth, db, "billing:payment:update"),
     )
     if not state:
         return templates.TemplateResponse(

@@ -73,6 +73,7 @@
                     <div><dt class="inline font-medium">Subscriptions:</dt> <dd class="inline break-all font-mono text-xs">{{ preview.subscription_ids | join(', ') if preview.subscription_ids else 'None' }}</dd></div>
                     <div><dt class="inline font-medium">Existing entitlements:</dt> <dd class="inline break-all font-mono text-xs">{{ preview.entitlement_ids | join(', ') if preview.entitlement_ids else 'None' }}</dd></div>
                     <div><dt class="inline font-medium">Renewal adjustments:</dt> <dd class="inline break-all font-mono text-xs">{{ preview.renewal_adjustment_ids | join(', ') if preview.renewal_adjustment_ids else 'None' }}</dd></div>
+                    <div><dt class="inline font-medium">Renewal ledger entries:</dt> <dd class="inline break-all font-mono text-xs">{{ preview.renewal_ledger_entry_ids | join(', ') if preview.renewal_ledger_entry_ids else 'None' }}</dd></div>
                 </dl>
             </div>
             <div>

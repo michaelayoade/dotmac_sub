@@ -14,7 +14,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from app.migration_source import programme, snapshot, surfaces
+from app.migration_source import cohort, programme, snapshot, surfaces
 from app.migration_source.cohort import CohortEntityType
 from app.migration_source.digest import MismatchCategory
 
@@ -132,6 +132,52 @@ def test_every_cli_flag_the_runbook_shows_actually_exists() -> None:
     assert not unknown, (
         "the runbook shows flags the export CLI does not accept:\n  "
         + "\n  ".join(unknown)
+    )
+
+
+def test_the_entity_table_matches_the_declared_cohort_surface() -> None:
+    """The ownership map's twelve-row table must not drift from `cohort.py`.
+
+    It drifted twice. The declared owner for `addresses` said "none declared"
+    when `customer.accounts` owns it, and the target component still said
+    `dotmac-customers` after dec-isp-007 moved it to `dotmac-addresses`.
+    Neither was caught, because the only guard on this document checked the
+    writer list.
+
+    A wrong owner in a table people read before a cutover is worse than a
+    missing one: it makes a bypass of a real owner look like unowned debt, and
+    it nearly produced a duplicate address service.
+    """
+
+    document = (
+        Path(__file__).resolve().parents[2] / "docs" / "ISP_COHORT1_SOURCE_OWNERSHIP.md"
+    ).read_text(encoding="utf-8")
+
+    rows = {
+        line.split("|")[1].strip().strip("`"): line
+        for line in document.splitlines()
+        if line.startswith("| `") and line.count("|") >= 6
+    }
+    problems: list[str] = []
+    for declared in cohort.COHORT_TABLES:
+        row = rows.get(declared.entity_type.value)
+        if row is None:
+            problems.append(f"{declared.entity_type.value}: no row in the table")
+            continue
+        expected_owner = declared.owning_service or "none declared"
+        if expected_owner not in row:
+            problems.append(
+                f"{declared.entity_type.value}: table does not name owner "
+                f"{expected_owner!r}"
+            )
+        if declared.expected_target_component.value not in row:
+            problems.append(
+                f"{declared.entity_type.value}: table does not name target "
+                f"{declared.expected_target_component.value!r}"
+            )
+    assert not problems, (
+        "docs/ISP_COHORT1_SOURCE_OWNERSHIP.md disagrees with "
+        "app/migration_source/cohort.py:\n  " + "\n  ".join(problems)
     )
 
 

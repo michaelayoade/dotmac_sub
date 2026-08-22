@@ -258,6 +258,7 @@ def _manager_ai_scope(request: Request, db: Session):
 def team_inbox_queue(
     request: Request,
     search: str | None = Query(default=None),
+    view: str | None = Query(default=None),
     status: str | None = Query(default=None),
     channel_type: str | None = Query(default=None),
     service_team_id: str | None = Query(default=None),
@@ -304,6 +305,7 @@ def team_inbox_queue(
             db,
             team_inbox_projection.InboxQueueRequest(
                 search=_query_text(search),
+                view=_query_text(view),
                 status=_query_text(status),
                 channel_type=_query_text(channel_type),
                 service_team_id=_query_text(service_team_id),
@@ -372,6 +374,7 @@ def team_inbox_queue(
             "has_next": projection.page_meta.has_next,
             "queue_return_url": _inbox_queue_return_url(request),
             "search": projection.list_query.search or "",
+            "view": projection.view,
             "status": projection.status,
             "channel_type": projection.channel_type,
             "service_team_id": projection.service_team_id,
@@ -894,6 +897,7 @@ def team_inbox_queue_row(
     conversation_id: UUID,
     request: Request,
     search: str | None = Query(default=None),
+    view: str | None = Query(default=None),
     status: str | None = Query(default=None),
     channel_type: str | None = Query(default=None),
     service_team_id: str | None = Query(default=None),
@@ -926,6 +930,7 @@ def team_inbox_queue_row(
         conversation_id=conversation_id,
         request=team_inbox_projection.InboxQueueRequest(
             search=_query_text(search),
+            view=_query_text(view),
             status=_query_text(status),
             channel_type=_query_text(channel_type),
             service_team_id=_query_text(service_team_id),
@@ -2102,6 +2107,7 @@ def team_inbox_saved_filter_create(
     request: Request,
     name: str = Form(...),
     search: str | None = Form(default=None),
+    view: str | None = Form(default=None),
     status_value: str | None = Form(default=None),
     channel_type: str | None = Form(default=None),
     service_team_id: str | None = Form(default=None),
@@ -2133,6 +2139,7 @@ def team_inbox_saved_filter_create(
             name=name,
             filter_payload=team_inbox_filters.InboxSavedFilterPayload(
                 search=_query_text(search),
+                view=_query_text(view),
                 status=_query_text(status_value),
                 channel_type=_query_text(channel_type),
                 service_team_id=_query_text(service_team_id),
@@ -2779,6 +2786,7 @@ def _settings_context(
     *,
     status: str | None = None,
     message: str | None = None,
+    ai_intake_preview_result: object | None = None,
 ) -> dict:
     context = _ctx(request, db)
     actor_person_id = _actor_uuid_from_request(request)
@@ -2816,6 +2824,7 @@ def _settings_context(
             ],
             "notice_status": _query_text(status),
             "notice_message": _query_text(message),
+            "ai_intake_preview_result": ai_intake_preview_result,
             "introduction_preference": introduction_preference,
         }
     )
@@ -2900,6 +2909,37 @@ def team_inbox_ai_intake_policy_draft_update(
     max_clarification_turns: int = Form(default=1),
     escalate_after_minutes: int = Form(default=5),
     exclude_campaign_attribution: bool = Form(default=True),
+    conversational_engine_enabled: bool = Form(default=False),
+    conversation_engine_mode: str = Form(default="custom_v1"),
+    request_portal_id: bool = Form(default=True),
+    request_registered_email: bool = Form(default=True),
+    request_registered_phone: bool = Form(default=True),
+    enable_customer_lookup_tool: bool = Form(default=True),
+    enable_subscriber_monitoring_tool: bool = Form(default=False),
+    max_conversation_turns: int = Form(default=6),
+    handoff_customer_message: str | None = Form(default=None),
+    handoff_summary_template: str | None = Form(default=None),
+    announce_destination_team: bool = Form(default=False),
+    troubleshooting_rules_json: str | None = Form(default=None),
+    intent_key: list[str] = Form(default=[]),
+    intent_display_name: list[str] = Form(default=[]),
+    intent_description: list[str] = Form(default=[]),
+    intent_category: list[str] = Form(default=[]),
+    intent_examples: list[str] = Form(default=[]),
+    intent_enabled: list[str] = Form(default=[]),
+    intent_priority: list[int] = Form(default=[]),
+    intent_route_team_id: list[str] = Form(default=[]),
+    intent_allowed_tools: list[str] = Form(default=[]),
+    intent_required_fields: list[str] = Form(default=[]),
+    intent_handoff: list[str] = Form(default=[]),
+    rule_condition_type: list[str] = Form(default=[]),
+    rule_condition_value: list[str] = Form(default=[]),
+    rule_condition_operator: list[str] = Form(default=[]),
+    rule_action: list[str] = Form(default=[]),
+    rule_tool: list[str] = Form(default=[]),
+    rule_guidance: list[str] = Form(default=[]),
+    rule_destination_team_id: list[str] = Form(default=[]),
+    rule_enabled: list[str] = Form(default=[]),
     fallback_team_id: str | None = Form(default=None),
     data_cleaning_support_team_id: str | None = Form(default=None),
     display_name: str | None = Form(default="Dotmac Virtual Assistant"),
@@ -2926,7 +2966,88 @@ def team_inbox_ai_intake_policy_draft_update(
     if actor_person_id is None:
         return _routes_redirect(status="error", message="Agent identity is required.")
     try:
-        intent_mappings = tuple(_json_mapping_list(department_mappings_json))
+        visual_intents: list[dict[str, object]] = []
+        visual_mappings: list[dict[str, object]] = []
+        for index, key in enumerate(intent_key):
+            clean_key = str(key or "").strip()
+            if not clean_key:
+                continue
+            route_team_id = (
+                intent_route_team_id[index] if index < len(intent_route_team_id) else ""
+            )
+            priority = (
+                int(intent_priority[index]) if index < len(intent_priority) else index
+            )
+            category = (
+                intent_category[index].strip()
+                if index < len(intent_category) and intent_category[index].strip()
+                else clean_key
+            )
+            examples = [
+                item.strip()
+                for item in (
+                    intent_examples[index] if index < len(intent_examples) else ""
+                ).splitlines()
+                if item.strip()
+            ]
+            tools = [
+                item.strip()
+                for item in (
+                    intent_allowed_tools[index]
+                    if index < len(intent_allowed_tools)
+                    else ""
+                ).split(",")
+                if item.strip()
+            ]
+            required_fields = [
+                item.strip()
+                for item in (
+                    intent_required_fields[index]
+                    if index < len(intent_required_fields)
+                    else ""
+                ).split(",")
+                if item.strip()
+            ]
+            enabled = (
+                intent_enabled[index] if index < len(intent_enabled) else "true"
+            ) == "true"
+            handoff_enabled = (
+                intent_handoff[index] if index < len(intent_handoff) else "false"
+            ) == "true"
+            visual_intents.append(
+                {
+                    "key": clean_key,
+                    "display_name": intent_display_name[index].strip()
+                    if index < len(intent_display_name)
+                    else clean_key,
+                    "description": intent_description[index].strip()
+                    if index < len(intent_description)
+                    else "",
+                    "category": category,
+                    "examples": examples,
+                    "enabled": enabled,
+                    "priority": priority,
+                    "allowed_tools": tools,
+                    "required_fields": required_fields,
+                    "handoff": {"enabled": handoff_enabled},
+                }
+            )
+            if route_team_id.strip():
+                visual_mappings.append(
+                    {
+                        "intent": clean_key,
+                        "department": intent_display_name[index].strip()
+                        if index < len(intent_display_name)
+                        else clean_key,
+                        "service_team_id": str(_uuid_form_value(route_team_id)),
+                        "enabled": enabled,
+                    }
+                )
+        intent_mappings = (
+            tuple(visual_mappings)
+            if visual_mappings
+            else tuple(_json_mapping_list(department_mappings_json))
+        )
         gender_choices = (
             json.loads(data_cleanup_gender_choices_json)
             if data_cleanup_gender_choices_json
@@ -2971,6 +3092,106 @@ def team_inbox_ai_intake_policy_draft_update(
             if _uuid_form_value(data_cleaning_support_team_id)
             else None,
         }
+        permitted_identifiers = tuple(
+            item
+            for item, enabled in (
+                ("registered_phone", request_registered_phone),
+                ("registered_email", request_registered_email),
+                ("portal_id", request_portal_id),
+            )
+            if enabled
+        )
+        tool_config = {
+            "customer_lookup": {"enabled": bool(enable_customer_lookup_tool)},
+            "subscriber_monitoring": {
+                "enabled": bool(enable_subscriber_monitoring_tool)
+            },
+        }
+        visual_rules: list[dict[str, object]] = []
+        for index, condition_type in enumerate(rule_condition_type):
+            clean_type = str(condition_type or "").strip()
+            if not clean_type:
+                continue
+            enabled = (
+                rule_enabled[index] if index < len(rule_enabled) else "true"
+            ) == "true"
+            condition_value = (
+                rule_condition_value[index].strip()
+                if index < len(rule_condition_value)
+                else ""
+            )
+            operator = (
+                rule_condition_operator[index].strip()
+                if index < len(rule_condition_operator)
+                else "equals"
+            )
+            condition: dict[str, object] = {"type": clean_type, "operator": operator}
+            if clean_type == "intent":
+                condition["intent"] = condition_value
+            elif clean_type == "category":
+                condition["category"] = condition_value
+            elif clean_type == "customer_identified":
+                condition["customer_identified"] = condition_value == "true"
+            elif clean_type == "human_requested":
+                condition["human_requested"] = condition_value == "true"
+            elif clean_type == "turn_count":
+                condition["turn_count"] = int(condition_value or "0")
+            elif clean_type == "monitoring_status":
+                condition["monitoring_status"] = condition_value
+            elif clean_type.startswith("field:"):
+                condition["type"] = "field_value"
+                condition["field"] = clean_type.removeprefix("field:")
+                condition["value"] = condition_value
+            else:
+                condition["type"] = "field_value"
+                condition["field"] = clean_type
+                condition["value"] = condition_value
+            visual_rules.append(
+                {
+                    "condition": condition,
+                    "action": rule_action[index].strip()
+                    if index < len(rule_action)
+                    else "",
+                    "tool": rule_tool[index].strip() if index < len(rule_tool) else "",
+                    "response": rule_guidance[index].strip()
+                    if index < len(rule_guidance)
+                    else "",
+                    "destination_team_id": str(
+                        _uuid_form_value(
+                            rule_destination_team_id[index]
+                            if index < len(rule_destination_team_id)
+                            else None
+                        )
+                        or ""
+                    ),
+                    "enabled": enabled,
+                }
+            )
+        troubleshooting_rules = (
+            visual_rules
+            if visual_rules
+            else (
+                json.loads(troubleshooting_rules_json)
+                if troubleshooting_rules_json
+                else None
+            )
+        )
+        if troubleshooting_rules is not None and not isinstance(
+            troubleshooting_rules, list
+        ):
+            raise ValueError("Troubleshooting rules must be a JSON list.")
+        conversation_policy = {
+            "require_identity_before_tools": True,
+            "handoff_after_classification": True,
+            "max_turns": max(1, min(int(max_conversation_turns), 10)),
+            "handoff": {
+                "customer_message": handoff_customer_message or "",
+                "summary_template": handoff_summary_template or "",
+                "announce_destination": bool(announce_destination_team),
+            },
+        }
+        if troubleshooting_rules is not None:
+            conversation_policy["troubleshooting_rules"] = troubleshooting_rules
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         return _routes_redirect(status="error", message=str(exc))
 
@@ -2997,10 +3218,16 @@ def team_inbox_ai_intake_policy_draft_update(
                 business_tone=business_tone,
                 business_instructions=instructions,
                 approved_isp_information=approved_isp_information,
+                intent_definitions=tuple(visual_intents),
                 intent_team_mappings=intent_mappings,
                 queue_templates=queue_templates,
                 escalation_rules=escalation_rules,
                 data_cleanup_policy=data_cleanup_policy,
+                conversational_engine_enabled=conversational_engine_enabled,
+                conversation_engine_mode=conversation_engine_mode,
+                permitted_identifiers=permitted_identifiers,
+                tool_config=tool_config,
+                conversation_policy=conversation_policy,
                 replace_existing_draft=replace_existing_draft,
             ),
         )
@@ -3011,6 +3238,50 @@ def team_inbox_ai_intake_policy_draft_update(
     return _routes_redirect(
         status="success",
         message="AI intake draft saved. Validate and activate separately.",
+    )
+
+
+@settings_router.post(
+    "/ai-intake-policy/{version_id}/preview",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_ai_intake_policy_preview(
+    request: Request,
+    version_id: UUID,
+    preview_customer_message: str = Form(...),
+    preview_channel_type: str | None = Form(default=None),
+    preview_mode: str = Form(default="simulation"),
+    db: Session = Depends(get_db),
+):
+    actor_person_id = _actor_uuid_from_request(request)
+    if actor_person_id is None:
+        return _routes_redirect(status="error", message="Agent identity is required.")
+    try:
+        preview = ai_conversation_intake.preview_policy_version(
+            db,
+            ai_conversation_intake.AiPolicyPreviewCommand(
+                context=CommandContext.system(
+                    actor=f"person:{actor_person_id}",
+                    scope="ai:intake-policy-preview",
+                    reason="preview Team Inbox AI intake policy from admin UI",
+                ),
+                version_id=version_id,
+                customer_message=preview_customer_message,
+                channel_type=preview_channel_type,
+                preview_mode=preview_mode,
+            ),
+        )
+    except ValueError as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    return templates.TemplateResponse(
+        "admin/inbox/email_routes.html",
+        _settings_context(
+            request,
+            db,
+            status="success",
+            message="AI intake preview generated without live side effects.",
+            ai_intake_preview_result=preview,
+        ),
     )
 
 

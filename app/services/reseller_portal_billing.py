@@ -30,7 +30,7 @@ from app.schemas.billing import (
 )
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
-from app.services import gateway_topup_intents
+from app.services import direct_transfer_intents, gateway_topup_intents
 from app.services.billing.consolidated_payments import consolidated_settlement_key
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.customer_portal_flow_payments import (
@@ -48,6 +48,8 @@ from app.services.topup_intents import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DIRECT_TRANSFER_INTENT_CREATE_SCOPE = direct_transfer_intents.CREATE_SCOPE
 
 
 def get_billing_account_summary(
