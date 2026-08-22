@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import finish_read_transaction, get_db
+from app.models.subscriber import Subscriber
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
@@ -228,7 +229,7 @@ def _profile_value(value):
     return value
 
 
-def _profile_audit_snapshot(subscriber) -> dict[str, object]:
+def _profile_audit_snapshot(subscriber: Subscriber) -> dict[str, object]:
     metadata = dict(getattr(subscriber, "metadata_", None) or {})
     nin_value = getattr(subscriber, "nin", None)
     masked_nin = (

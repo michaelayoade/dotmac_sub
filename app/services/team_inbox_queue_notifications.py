@@ -10,6 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.ai_intake import AiIntakePolicyVersion, AiIntakeSession
+from app.models.service_team import ServiceTeam
 from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
@@ -135,6 +136,29 @@ def _queue_policy_minutes(policy: dict[str, object], key: str, default: int) -> 
         return int(value) if isinstance(value, (str, int, float)) else default
     except (TypeError, ValueError):
         return default
+
+
+def _queue_team_name(db: Session, entry: InboxConversationQueueEntry) -> str:
+    team = db.get(ServiceTeam, entry.service_team_id)
+    return str(team.name) if team is not None else "the support team"
+
+
+def _render_queue_template(
+    template: object,
+    *,
+    position: int,
+    team_name: str,
+) -> str:
+    body = str(template or "")
+    variables = {
+        "position": str(position),
+        "queue_position": str(position),
+        "team_name": team_name,
+    }
+    for key, value in variables.items():
+        body = body.replace("{{" + key + "}}", value)
+        body = body.replace("{" + key + "}", value)
+    return body
 
 
 def _queue_lifecycle(entry: InboxConversationQueueEntry) -> str:
@@ -307,13 +331,18 @@ def send_initial_queue_notice(
         return None
     position = current_queue_position(db, entry)
     policy = _queue_policy(db, conversation)
+    team_name = _queue_team_name(db, entry)
     return _send_notice(
         db,
         entry=entry,
         conversation=conversation,
         kind=NOTICE_INITIAL,
         position=position,
-        body=str(policy["initial"]).format(position=position),
+        body=_render_queue_template(
+            policy["initial"],
+            position=position,
+            team_name=team_name,
+        ),
         now=observed_at,
     )
 
@@ -331,13 +360,18 @@ def send_handoff_notice(
         return None
     observed_at = now or datetime.now(UTC)
     policy = _queue_policy(db, conversation)
+    team_name = _queue_team_name(db, entry)
     return _send_notice(
         db,
         entry=entry,
         conversation=conversation,
         kind=NOTICE_HANDOFF,
         position=0,
-        body=str(policy["handoff"]),
+        body=_render_queue_template(
+            policy["handoff"],
+            position=0,
+            team_name=team_name,
+        ),
         now=observed_at,
     )
 
@@ -375,6 +409,7 @@ def _process_due_notice(
         return None
     position = current_queue_position(db, entry)
     policy = _queue_policy(db, conversation)
+    team_name = _queue_team_name(db, entry)
     update_minutes = _queue_policy_minutes(
         policy,
         "position_update_minutes",
@@ -393,9 +428,11 @@ def _process_due_notice(
             conversation=conversation,
             kind=notice.notification_kind,
             position=position if notice.notification_kind != NOTICE_HANDOFF else 0,
-            body=str(
-                policy.get(notice.notification_kind) or policy[NOTICE_HEARTBEAT]
-            ).format(position=position),
+            body=_render_queue_template(
+                policy.get(notice.notification_kind) or policy[NOTICE_HEARTBEAT],
+                position=position,
+                team_name=team_name,
+            ),
             now=observed_at,
             existing_notice=notice,
         )
@@ -421,7 +458,11 @@ def _process_due_notice(
                 conversation=conversation,
                 kind=NOTICE_POSITION_UPDATE,
                 position=position,
-                body=str(policy[NOTICE_POSITION_UPDATE]).format(position=position),
+                body=_render_queue_template(
+                    policy[NOTICE_POSITION_UPDATE],
+                    position=position,
+                    team_name=team_name,
+                ),
                 now=observed_at,
             ),
         )
@@ -439,7 +480,11 @@ def _process_due_notice(
                 conversation=conversation,
                 kind=NOTICE_HEARTBEAT,
                 position=position,
-                body=str(policy[NOTICE_HEARTBEAT]).format(position=position),
+                body=_render_queue_template(
+                    policy[NOTICE_HEARTBEAT],
+                    position=position,
+                    team_name=team_name,
+                ),
                 now=observed_at,
             ),
         )
