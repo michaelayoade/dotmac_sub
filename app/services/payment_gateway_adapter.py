@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
@@ -94,6 +95,22 @@ class PaymentGatewayVerificationError(ValueError):
     def __init__(self, observation: PaymentGatewayVerificationObservation) -> None:
         super().__init__(observation.reason_code.value)
         self.observation = observation
+
+
+def _string_keyed_mapping(value: object) -> dict[str, object]:
+    """Narrow an untrusted provider value to safe string-keyed metadata."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _kobo_value(value: object) -> int | str | Decimal:
+    """Narrow an untrusted provider amount before currency conversion."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, str, Decimal)):
+        return 0
+    return value
 
 
 class PaymentGatewayRefundState(str, Enum):
@@ -303,17 +320,17 @@ class PaymentGatewayAdapter:
                 amount=Decimal(str(tx.get("amount", 0))),
                 currency=str(tx.get("currency") or "NGN"),
                 provider_fee=Decimal(str(tx.get("app_fee") or 0)),
-                metadata=dict(tx.get("meta") or {}),
+                metadata=_string_keyed_mapping(tx.get("meta")),
                 memo_prefix="Flutterwave",
                 raw=dict(tx),
             )
         return PaymentGatewayTransaction(
             provider_type=provider_type,
             external_id=str(tx.get("id", "")),
-            amount=payment_capability.kobo_to_naira(tx.get("amount", 0)),
+            amount=payment_capability.kobo_to_naira(_kobo_value(tx.get("amount"))),
             currency=str(tx.get("currency") or "NGN"),
-            provider_fee=payment_capability.kobo_to_naira(tx.get("fees", 0)),
-            metadata=dict(tx.get("metadata") or {}),
+            provider_fee=payment_capability.kobo_to_naira(_kobo_value(tx.get("fees"))),
+            metadata=_string_keyed_mapping(tx.get("metadata")),
             memo_prefix="Paystack",
             raw=dict(tx),
         )
