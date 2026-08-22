@@ -366,11 +366,12 @@ def test_the_descriptor_and_the_receiver_are_served_by_the_same_router():
             if isinstance(router, ast.Name):
                 routes[node.name] = router.id
 
-    assert routes.get("read_product_port_descriptor") == "router"
-    assert routes.get("receive_integrator_observation") == "router"
-    assert routes["read_product_port_descriptor"] == (
-        routes["receive_integrator_observation"]
-    )
+    descriptor_router = routes.get("read_product_port_descriptor")
+    receiver_router = routes.get("receive_integrator_observation")
+
+    assert descriptor_router == "router"
+    assert receiver_router == "router"
+    assert descriptor_router == receiver_router
 
 
 def test_the_advertised_delivery_path_is_built_from_the_mounted_prefixes():
