@@ -422,9 +422,7 @@ class GeoSync(ListResponseMixin):
             if address.latitude == latitude and address.longitude == longitude:
                 result.unchanged += 1
                 continue
-            project_address_point(
-                db, address, latitude=latitude, longitude=longitude
-            )
+            project_address_point(db, address, latitude=latitude, longitude=longitude)
             result.written += 1
         result.missing = len(coordinates) - result.matched
         db.commit()

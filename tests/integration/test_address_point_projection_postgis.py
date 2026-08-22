@@ -101,9 +101,7 @@ def _point(db, table, row_id) -> tuple[float, float, int]:
 
 
 def _projection(db, address: Address) -> GeoLocation:
-    return (
-        db.query(GeoLocation).filter(GeoLocation.address_id == address.id).one()
-    )
+    return db.query(GeoLocation).filter(GeoLocation.address_id == address.id).one()
 
 
 # --------------------------------------------------------------------------
@@ -115,9 +113,7 @@ def test_the_stored_point_puts_longitude_on_x_and_latitude_on_y(db_session):
     subscriber = _subscriber(db_session)
     address = _address(db_session, subscriber)
 
-    project_address_point(
-        db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON
-    )
+    project_address_point(db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON)
     db_session.flush()
 
     x, y, srid = _point(db_session, Address, address.id)
@@ -142,9 +138,7 @@ def test_the_projection_carries_the_same_point_as_the_address(db_session):
     subscriber = _subscriber(db_session)
     address = _address(db_session, subscriber)
 
-    project_address_point(
-        db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON
-    )
+    project_address_point(db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON)
     db_session.flush()
 
     projection = _projection(db_session, address)
@@ -217,9 +211,7 @@ def test_an_existing_projection_is_updated_not_duplicated(db_session):
 
     assert created is False, "an address that already has a projection is updated"
     assert (
-        db_session.query(GeoLocation)
-        .filter(GeoLocation.address_id == stale.id)
-        .count()
+        db_session.query(GeoLocation).filter(GeoLocation.address_id == stale.id).count()
         == 1
     ), "updating a projection must not leave a second one beside it"
 
@@ -286,9 +278,7 @@ def test_replaying_a_different_point_moves_both_rows(db_session):
 
     subscriber = _subscriber(db_session)
     address = _address(db_session, subscriber)
-    project_address_point(
-        db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON
-    )
+    project_address_point(db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON)
     db_session.flush()
     projection_id = _projection(db_session, address).id
 
@@ -320,17 +310,13 @@ def test_neither_owner_operation_commits_or_rolls_back(db_session, monkeypatch):
     subscriber = _subscriber(db_session)
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        type(db_session), "commit", lambda self: calls.append("commit")
-    )
+    monkeypatch.setattr(type(db_session), "commit", lambda self: calls.append("commit"))
     monkeypatch.setattr(
         type(db_session), "rollback", lambda self: calls.append("rollback")
     )
 
     address = _address(db_session, subscriber)
-    project_address_point(
-        db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON
-    )
+    project_address_point(db_session, address, latitude=ABUJA_LAT, longitude=ABUJA_LON)
 
     assert calls == [], (
         "a composable owner operation must leave the transaction to its "

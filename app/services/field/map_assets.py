@@ -391,9 +391,7 @@ class FieldMapAssets:
         row.latitude = float(latitude)
         row.longitude = float(longitude)
         if hasattr(row, "geom"):
-            row.geom = point_wkt(
-                latitude=float(latitude), longitude=float(longitude)
-            )
+            row.geom = point_wkt(latitude=float(latitude), longitude=float(longitude))
 
         stage_audit_event(
             db,

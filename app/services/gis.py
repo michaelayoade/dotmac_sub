@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Final
-
 import builtins
 import logging
+from typing import Final
 
 from fastapi import HTTPException
 from geoalchemy2.functions import (

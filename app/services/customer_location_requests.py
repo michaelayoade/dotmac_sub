@@ -18,12 +18,12 @@ from app.models.gis import (
     GeoAreaType,
 )
 from app.models.subscriber import Address, AddressType, Subscriber
+from app.schemas.subscriber import AddressCreate
 from app.services import geocoding as geocoding_service
 from app.services import gis as gis_service
 from app.services import gis_sync
-from app.services import subscriber as subscriber_service
 from app.services import service_address as service_address_service
-from app.schemas.subscriber import AddressCreate
+from app.services import subscriber as subscriber_service
 from app.services.audit_adapter import record_audit_event
 from app.services.customer_context import optional_customer_subscriber_id
 

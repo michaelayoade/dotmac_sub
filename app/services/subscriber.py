@@ -38,7 +38,6 @@ from app.schemas.subscriber import (
 )
 from app.services import geocoding as geocoding_service
 from app.services import numbering, settings_spec
-from app.services.domain_errors import DomainError
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -51,6 +50,7 @@ from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
 )
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.nin_matching import normalize_nin
