@@ -1201,9 +1201,9 @@ class TopupPageResponse(BaseModel):
     max_amount: int
     preset_amounts: list[int] = Field(default_factory=list)
     customer_email: str | None = None
-    # The full pay-with selector: online gateways (Paystack/Flutterwave) and the
-    # direct-bank-transfer option, mirroring the web top-up chooser. Mobile
-    # renders one row per online option plus a bank-transfer + saved-card flow.
+    # The customer pay-with selector: online gateways (Paystack/Flutterwave)
+    # plus saved-card flows. Direct bank transfer is returned only as a disabled
+    # compatibility projection because transfer payment is reseller-only.
     payment_options: list[PaymentProviderOption] = Field(default_factory=list)
     direct_bank_transfer: DirectBankTransferConfig | None = None
 
