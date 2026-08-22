@@ -79,23 +79,27 @@ def test_assignment_replace_adds_and_deactivates_without_deleting(db_session):
     db_session.commit()
     first = _offer(db_session, "First Partner Plan")
     second = _offer(db_session, "Second Partner Plan")
+    reseller_id = reseller.id
+    first_id = first.id
+    second_id = second.id
+    db_session.rollback()
 
     added = set_reseller_offer_availability(
         db_session,
-        _command(reseller.id, (first.id, second.id)),
+        _command(reseller_id, (first_id, second_id)),
     )
-    assert set(added.added_offer_ids) == {first.id, second.id}
-    assert all(row.is_active for row in _assignments(db_session, reseller.id))
+    assert set(added.added_offer_ids) == {first_id, second_id}
+    assert all(row.is_active for row in _assignments(db_session, reseller_id))
     db_session.rollback()
 
     removed = set_reseller_offer_availability(
         db_session,
-        _command(reseller.id, (second.id,)),
+        _command(reseller_id, (second_id,)),
     )
-    assert removed.deactivated_offer_ids == (first.id,)
-    rows = {row.offer_id: row for row in _assignments(db_session, reseller.id)}
-    assert rows[first.id].is_active is False
-    assert rows[second.id].is_active is True
+    assert removed.deactivated_offer_ids == (first_id,)
+    rows = {row.offer_id: row for row in _assignments(db_session, reseller_id)}
+    assert rows[first_id].is_active is False
+    assert rows[second_id].is_active is True
     assert len(rows) == 2
 
 
@@ -111,16 +115,19 @@ def test_assignment_replace_reactivates_existing_inactive_row(db_session):
     )
     db_session.add(original)
     db_session.commit()
+    reseller_id = reseller.id
+    offer_id = offer.id
     original_id = original.id
+    db_session.rollback()
 
     outcome = set_reseller_offer_availability(
         db_session,
-        _command(reseller.id, (offer.id,)),
+        _command(reseller_id, (offer_id,)),
     )
 
     assert outcome.added_offer_ids == ()
-    assert outcome.reactivated_offer_ids == (offer.id,)
-    rows = _assignments(db_session, reseller.id)
+    assert outcome.reactivated_offer_ids == (offer_id,)
+    rows = _assignments(db_session, reseller_id)
     assert len(rows) == 1
     assert rows[0].id == original_id
     assert rows[0].is_active is True
