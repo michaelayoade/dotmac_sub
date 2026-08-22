@@ -424,6 +424,9 @@
         } else if (filters.get("open_only") === "true") {
           chips.push({ key: "open_only", label: "Active", keys: ["open_only"] });
         }
+        if (filters.get("view") === "all") {
+          chips.push({ key: "view", label: "All", keys: ["view"] });
+        }
         if (filters.get("status")) {
           chips.push({
             key: "status",
@@ -806,6 +809,7 @@
           const url = new URL(window.location.href);
           url.searchParams.delete("open_only");
           url.searchParams.delete("has_ticket");
+          url.searchParams.delete("view");
           if (status) url.searchParams.set("status", status);
           else url.searchParams.delete("status");
           history.replaceState({}, "", url);
@@ -987,6 +991,7 @@
         const url = new URL(window.location.href);
         const assignmentKeys = [
           "status",
+          "view",
           "assigned_person_id",
           "service_team_ids",
           "unassigned",
@@ -1103,6 +1108,8 @@
       applyStatusFilter(value) {
         if (value === "expired") {
           this.navigateFilter({ reply_window_status: "expired" });
+        } else if (value === "all") {
+          this.navigateFilter({ view: "all" });
         } else if (value) {
           this.navigateFilter({ status: value });
         } else {
@@ -1168,6 +1175,7 @@
         const filters = new URLSearchParams(window.location.search);
         const keys = [
           "status",
+          "view",
           "search",
           "channel_type",
           "service_team_id",
@@ -1208,6 +1216,7 @@
         const data = new FormData();
         data.set("name", name);
         const mapping = {
+          view: "view",
           status: "status_value",
           search: "search",
           channel_type: "channel_type",

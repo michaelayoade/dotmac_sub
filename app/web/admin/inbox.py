@@ -258,6 +258,7 @@ def _manager_ai_scope(request: Request, db: Session):
 def team_inbox_queue(
     request: Request,
     search: str | None = Query(default=None),
+    view: str | None = Query(default=None),
     status: str | None = Query(default=None),
     channel_type: str | None = Query(default=None),
     service_team_id: str | None = Query(default=None),
@@ -304,6 +305,7 @@ def team_inbox_queue(
             db,
             team_inbox_projection.InboxQueueRequest(
                 search=_query_text(search),
+                view=_query_text(view),
                 status=_query_text(status),
                 channel_type=_query_text(channel_type),
                 service_team_id=_query_text(service_team_id),
@@ -372,6 +374,7 @@ def team_inbox_queue(
             "has_next": projection.page_meta.has_next,
             "queue_return_url": _inbox_queue_return_url(request),
             "search": projection.list_query.search or "",
+            "view": projection.view,
             "status": projection.status,
             "channel_type": projection.channel_type,
             "service_team_id": projection.service_team_id,
@@ -894,6 +897,7 @@ def team_inbox_queue_row(
     conversation_id: UUID,
     request: Request,
     search: str | None = Query(default=None),
+    view: str | None = Query(default=None),
     status: str | None = Query(default=None),
     channel_type: str | None = Query(default=None),
     service_team_id: str | None = Query(default=None),
@@ -926,6 +930,7 @@ def team_inbox_queue_row(
         conversation_id=conversation_id,
         request=team_inbox_projection.InboxQueueRequest(
             search=_query_text(search),
+            view=_query_text(view),
             status=_query_text(status),
             channel_type=_query_text(channel_type),
             service_team_id=_query_text(service_team_id),
@@ -2102,6 +2107,7 @@ def team_inbox_saved_filter_create(
     request: Request,
     name: str = Form(...),
     search: str | None = Form(default=None),
+    view: str | None = Form(default=None),
     status_value: str | None = Form(default=None),
     channel_type: str | None = Form(default=None),
     service_team_id: str | None = Form(default=None),
@@ -2133,6 +2139,7 @@ def team_inbox_saved_filter_create(
             name=name,
             filter_payload=team_inbox_filters.InboxSavedFilterPayload(
                 search=_query_text(search),
+                view=_query_text(view),
                 status=_query_text(status_value),
                 channel_type=_query_text(channel_type),
                 service_team_id=_query_text(service_team_id),
