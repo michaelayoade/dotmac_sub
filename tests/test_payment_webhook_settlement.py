@@ -39,9 +39,14 @@ from app.services.api_billing_webhooks import (
 )
 from app.services.billing_enforcement_guards import payment_channel_health
 from app.services.db_session_adapter import db_session_adapter
-from app.services.integrations.payment_capability import PaymentCapabilityError
 from app.services.owner_commands import CommandContext
-from app.services.payment_gateway_adapter import PaymentGatewayTransaction
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayProviderStatus,
+    PaymentGatewayTransaction,
+    PaymentGatewayVerificationObservation,
+    PaymentGatewayVerificationOutcome,
+    PaymentGatewayVerificationReason,
+)
 from app.services.payment_reconciliation import (
     RECONCILIATION_SCOPE,
     RunTopupReconciliationCommand,
@@ -657,6 +662,15 @@ def _run_reconciliation(db):
     )
 
 
+def _success_observation(transaction: PaymentGatewayTransaction):
+    return PaymentGatewayVerificationObservation(
+        outcome=PaymentGatewayVerificationOutcome.succeeded,
+        transaction=transaction,
+        provider_status=PaymentGatewayProviderStatus.success,
+        reason_code=PaymentGatewayVerificationReason.provider_reported_success,
+    )
+
+
 def test_reconciliation_backlog_separates_eligible_and_outside_window(
     db_session, subscriber
 ):
@@ -691,13 +705,15 @@ def test_reconciliation_recovers_stranded_topup(db_session, subscriber):
     intent = _stale_intent(db_session, subscriber, reference="DMAC-RECON-1")
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        return_value=PaymentGatewayTransaction(
-            provider_type="paystack",
-            amount=Decimal("5000.00"),
-            currency="NGN",
-            external_id="660001",
-            memo_prefix="Paystack",
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=_success_observation(
+            PaymentGatewayTransaction(
+                provider_type="paystack",
+                amount=Decimal("5000.00"),
+                currency="NGN",
+                external_id="660001",
+                memo_prefix="Paystack",
+            )
         ),
     ):
         result = _run_reconciliation(db_session)
@@ -740,14 +756,16 @@ def test_reconciliation_routes_typed_deposit_through_deposit_owner(
     db_session.commit()
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        return_value=PaymentGatewayTransaction(
-            provider_type="paystack",
-            amount=Decimal("5090.00"),
-            provider_fee=Decimal("90.00"),
-            currency="NGN",
-            external_id="typed-reconciliation-deposit-payment",
-            memo_prefix="Paystack",
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=_success_observation(
+            PaymentGatewayTransaction(
+                provider_type="paystack",
+                amount=Decimal("5090.00"),
+                provider_fee=Decimal("90.00"),
+                currency="NGN",
+                external_id="typed-reconciliation-deposit-payment",
+                memo_prefix="Paystack",
+            )
         ),
     ):
         result = _run_reconciliation(db_session)
@@ -782,13 +800,15 @@ def test_reconciliation_links_existing_payment_without_duplicating(
     )
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        return_value=PaymentGatewayTransaction(
-            provider_type="paystack",
-            amount=Decimal("5000.00"),
-            currency="NGN",
-            external_id="660002",
-            memo_prefix="Paystack",
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=_success_observation(
+            PaymentGatewayTransaction(
+                provider_type="paystack",
+                amount=Decimal("5000.00"),
+                currency="NGN",
+                external_id="660002",
+                memo_prefix="Paystack",
+            )
         ),
     ):
         result = _run_reconciliation(db_session)
@@ -807,15 +827,19 @@ def test_reconciliation_expires_long_dead_intent(db_session, subscriber):
     )
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        side_effect=ValueError("Payment was not successful (status: abandoned)"),
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=PaymentGatewayVerificationObservation(
+            outcome=PaymentGatewayVerificationOutcome.abandoned,
+            provider_status=PaymentGatewayProviderStatus.abandoned,
+            reason_code=PaymentGatewayVerificationReason.provider_reported_abandoned,
+        ),
     ):
         result = _run_reconciliation(db_session)
 
-    assert result.expired == 1
+    assert result.abandoned == 1
     assert db_session.query(Payment).count() == 0
     db_session.refresh(intent)
-    assert intent.status == "expired"
+    assert intent.status == "abandoned"
 
 
 def test_reconciliation_skips_fresh_pending_intent(db_session, subscriber):
@@ -834,7 +858,7 @@ def test_reconciliation_skips_fresh_pending_intent(db_session, subscriber):
     db_session.commit()
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify"
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification"
     ) as verify_mock:
         result = _run_reconciliation(db_session)
 
@@ -848,7 +872,6 @@ def test_reconciliation_uses_configured_sweep_windows(db_session, subscriber):
     specs = {
         "topup_reconciliation_stale_minutes": (15, 1, 1440),
         "topup_reconciliation_max_age_days": (7, 1, 30),
-        "topup_reconciliation_expiry_grace_hours": (24, 0, 168),
         "topup_reconciliation_batch_size": (50, 1, 500),
     }
     for key, (default, min_value, max_value) in specs.items():
@@ -887,16 +910,12 @@ def test_reconciliation_uses_configured_sweep_windows(db_session, subscriber):
     _stale_intent(db_session, subscriber, reference="DMAC-RECON-CFG", minutes_old=60)
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify"
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification"
     ) as verify_mock:
         result = _run_reconciliation(db_session)
 
     assert result.checked == 0
     verify_mock.assert_not_called()
-
-
-def _capability_http_error(status_code: int) -> PaymentCapabilityError:
-    return PaymentCapabilityError(f"provider_http_{status_code}")
 
 
 def test_reconciliation_expires_intent_on_gateway_not_found(db_session, subscriber):
@@ -909,8 +928,11 @@ def test_reconciliation_expires_intent_on_gateway_not_found(db_session, subscrib
     )
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        side_effect=_capability_http_error(400),
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=PaymentGatewayVerificationObservation(
+            outcome=PaymentGatewayVerificationOutcome.unknown,
+            reason_code=PaymentGatewayVerificationReason.provider_reference_not_found,
+        ),
     ):
         result = _run_reconciliation(db_session)
 
@@ -920,24 +942,54 @@ def test_reconciliation_expires_intent_on_gateway_not_found(db_session, subscrib
     assert intent.status == "expired"
 
 
-def test_reconciliation_keeps_5xx_as_retryable_error(db_session, subscriber):
-    """A gateway 5xx is transient — keep it an error (retry next sweep), never
-    silently expire a possibly-paid intent."""
+def test_reconciliation_expires_old_intent_when_gateway_is_unavailable(
+    db_session, subscriber
+):
+    """A transient provider failure remains fail-closed until policy expiry."""
     _make_provider(db_session)
     intent = _stale_intent(
         db_session, subscriber, reference="DMAC-RECON-503", minutes_old=3 * 24 * 60
     )
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify",
-        side_effect=_capability_http_error(503),
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=PaymentGatewayVerificationObservation(
+            outcome=PaymentGatewayVerificationOutcome.unavailable,
+            reason_code=PaymentGatewayVerificationReason.provider_unavailable,
+        ),
     ):
         result = _run_reconciliation(db_session)
 
-    assert result.errors == 1
-    assert result.expired == 0
+    assert result.errors == 0
+    assert result.expired == 1
     db_session.refresh(intent)
-    assert intent.status == "pending"
+    assert intent.status == "expired"
+
+
+def test_reconciliation_does_not_recount_existing_terminal_state(
+    db_session, subscriber
+):
+    _make_provider(db_session)
+    intent = _stale_intent(
+        db_session, subscriber, reference="DMAC-RECON-TERMINAL-RECHECK"
+    )
+    intent.status = "failed"
+    db_session.commit()
+
+    with patch(
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification",
+        return_value=PaymentGatewayVerificationObservation(
+            outcome=PaymentGatewayVerificationOutcome.unavailable,
+            reason_code=PaymentGatewayVerificationReason.provider_unavailable,
+        ),
+    ):
+        result = _run_reconciliation(db_session)
+
+    assert result.checked == 1
+    assert result.failed == 0
+    assert result.errors == 0
+    db_session.refresh(intent)
+    assert intent.status == "failed"
 
 
 def test_reconciliation_skips_non_gateway_provider(db_session, subscriber):
@@ -951,7 +1003,7 @@ def test_reconciliation_skips_non_gateway_provider(db_session, subscriber):
     db_session.commit()
 
     with patch(
-        "app.services.payment_reconciliation.payment_gateway_adapter.verify"
+        "app.services.payment_reconciliation.payment_gateway_adapter.observe_verification"
     ) as verify_mock:
         result = _run_reconciliation(db_session)
 

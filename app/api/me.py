@@ -881,6 +881,11 @@ def my_topup_verify(
         result = customer_payments.verify_and_record_topup(
             db, customer, payload.reference
         )
+    except customer_payments.GatewayPaymentIncomplete as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=exc.projection.customer_message,
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     card_saved: bool | None = None

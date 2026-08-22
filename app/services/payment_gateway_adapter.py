@@ -35,12 +35,45 @@ class PaymentGatewayTransaction:
 
 
 class PaymentGatewayVerificationOutcome(str, Enum):
-    """Closed transport observation returned to reconciliation policy."""
+    """Closed provider observation vocabulary; it carries no billing decision."""
 
     succeeded = "succeeded"
-    not_found = "not_found"
-    not_successful = "not_successful"
+    awaiting_confirmation = "awaiting_confirmation"
+    processing = "processing"
+    failed = "failed"
+    abandoned = "abandoned"
     unavailable = "unavailable"
+    unknown = "unknown"
+
+
+class PaymentGatewayProviderStatus(str, Enum):
+    """Allowlisted transaction statuses emitted by supported provider adapters."""
+
+    success = "success"
+    successful = "successful"
+    succeeded = "succeeded"
+    failed = "failed"
+    abandoned = "abandoned"
+    ongoing = "ongoing"
+    pending = "pending"
+    processing = "processing"
+    queued = "queued"
+    reversed = "reversed"
+
+
+class PaymentGatewayVerificationReason(str, Enum):
+    """Safe evidence codes suitable for persistence and presentation."""
+
+    provider_reported_success = "provider_reported_success"
+    provider_reported_failed = "provider_reported_failed"
+    provider_reported_abandoned = "provider_reported_abandoned"
+    provider_reported_reversed = "provider_reported_reversed"
+    provider_reported_processing = "provider_reported_processing"
+    provider_awaiting_confirmation = "provider_awaiting_confirmation"
+    provider_reference_not_found = "provider_reference_not_found"
+    provider_unavailable = "provider_unavailable"
+    provider_evidence_incomplete = "provider_evidence_incomplete"
+    provider_status_unknown = "provider_status_unknown"
 
 
 @dataclass(frozen=True)
@@ -49,7 +82,18 @@ class PaymentGatewayVerificationObservation:
 
     outcome: PaymentGatewayVerificationOutcome
     transaction: PaymentGatewayTransaction | None = None
-    error_code: str | None = None
+    provider_status: PaymentGatewayProviderStatus | None = None
+    reason_code: PaymentGatewayVerificationReason = (
+        PaymentGatewayVerificationReason.provider_status_unknown
+    )
+
+
+class PaymentGatewayVerificationError(ValueError):
+    """Typed non-success observation returned by the legacy verify boundary."""
+
+    def __init__(self, observation: PaymentGatewayVerificationObservation) -> None:
+        super().__init__(observation.reason_code.value)
+        self.observation = observation
 
 
 class PaymentGatewayRefundState(str, Enum):
@@ -104,49 +148,18 @@ class PaymentGatewayAdapter:
         reference: str,
         capability_binding_id: UUID | str | None = None,
     ) -> PaymentGatewayTransaction:
-        if provider_type == "flutterwave":
-            tx = payment_capability.verify_transaction(
-                db,
-                provider_type="flutterwave",
-                reference=reference,
-                checkout_binding_id=capability_binding_id,
-            )
-            if tx.get("status") != "successful":
-                raise ValueError(
-                    f"Payment was not successful (status: {tx.get('status')})"
-                )
-            return PaymentGatewayTransaction(
-                provider_type="flutterwave",
-                external_id=str(tx.get("id", "")),
-                amount=Decimal(str(tx.get("amount", 0))),
-                currency=str(tx.get("currency") or "NGN"),
-                provider_fee=Decimal(str(tx.get("app_fee") or 0)),
-                metadata=dict(tx.get("meta") or {}),
-                memo_prefix="Flutterwave",
-                raw=dict(tx),
-            )
-
-        if provider_type != "paystack":
-            raise ValueError(f"Unsupported payment provider {provider_type!r}")
-
-        tx = payment_capability.verify_transaction(
+        observation = self.observe_verification(
             db,
-            provider_type="paystack",
+            provider_type=provider_type,
             reference=reference,
-            checkout_binding_id=capability_binding_id,
+            capability_binding_id=capability_binding_id,
         )
-        if tx.get("status") != "success":
-            raise ValueError(f"Payment was not successful (status: {tx.get('status')})")
-        return PaymentGatewayTransaction(
-            provider_type="paystack",
-            external_id=str(tx.get("id", "")),
-            amount=payment_capability.kobo_to_naira(tx.get("amount", 0)),
-            currency=str(tx.get("currency") or "NGN"),
-            provider_fee=payment_capability.kobo_to_naira(tx.get("fees", 0)),
-            metadata=dict(tx.get("metadata") or {}),
-            memo_prefix="Paystack",
-            raw=dict(tx),
-        )
+        if (
+            observation.outcome is not PaymentGatewayVerificationOutcome.succeeded
+            or observation.transaction is None
+        ):
+            raise PaymentGatewayVerificationError(observation)
+        return observation.transaction
 
     def observe_verification(
         self,
@@ -156,38 +169,153 @@ class PaymentGatewayAdapter:
         reference: str,
         capability_binding_id: UUID | str | None = None,
     ) -> PaymentGatewayVerificationObservation:
-        """Observe one gateway reference and normalize transport failures."""
+        """Observe one gateway reference without deciding an intent transition."""
+
+        if provider_type not in {"paystack", "flutterwave"}:
+            raise ValueError(f"Unsupported payment provider {provider_type!r}")
 
         try:
-            transaction = self.verify(
+            tx = payment_capability.verify_transaction(
                 db,
                 provider_type=provider_type,
                 reference=reference,
-                capability_binding_id=capability_binding_id,
+                checkout_binding_id=capability_binding_id,
             )
         except payment_capability.PaymentCapabilityError as exc:
-            outcome = (
-                PaymentGatewayVerificationOutcome.not_found
-                if payment_capability.is_verification_not_found(exc)
-                else PaymentGatewayVerificationOutcome.unavailable
-            )
             return PaymentGatewayVerificationObservation(
-                outcome=outcome,
-                error_code=exc.error_code,
+                outcome=(
+                    PaymentGatewayVerificationOutcome.unknown
+                    if payment_capability.is_verification_not_found(exc)
+                    else PaymentGatewayVerificationOutcome.unavailable
+                ),
+                reason_code=(
+                    PaymentGatewayVerificationReason.provider_reference_not_found
+                    if payment_capability.is_verification_not_found(exc)
+                    else PaymentGatewayVerificationReason.provider_unavailable
+                ),
             )
-        except ValueError as exc:
-            return PaymentGatewayVerificationObservation(
-                outcome=PaymentGatewayVerificationOutcome.not_successful,
-                error_code=type(exc).__name__,
-            )
-        except RuntimeError as exc:
+        except RuntimeError:
             return PaymentGatewayVerificationObservation(
                 outcome=PaymentGatewayVerificationOutcome.unavailable,
-                error_code=type(exc).__name__,
+                reason_code=PaymentGatewayVerificationReason.provider_unavailable,
             )
+
+        raw_status = str(tx.get("status") or "").strip().lower()
+        try:
+            provider_status = PaymentGatewayProviderStatus(raw_status)
+        except ValueError:
+            return PaymentGatewayVerificationObservation(
+                outcome=PaymentGatewayVerificationOutcome.unknown,
+                reason_code=PaymentGatewayVerificationReason.provider_status_unknown,
+            )
+
+        successful = (
+            provider_status is PaymentGatewayProviderStatus.success
+            if provider_type == "paystack"
+            else provider_status
+            in {
+                PaymentGatewayProviderStatus.successful,
+                PaymentGatewayProviderStatus.succeeded,
+            }
+        )
+        if successful:
+            try:
+                transaction = self._normalize_verified_transaction(provider_type, tx)
+            except (ArithmeticError, TypeError, ValueError):
+                return PaymentGatewayVerificationObservation(
+                    outcome=PaymentGatewayVerificationOutcome.unknown,
+                    provider_status=provider_status,
+                    reason_code=(
+                        PaymentGatewayVerificationReason.provider_evidence_incomplete
+                    ),
+                )
+            if (
+                not transaction.external_id.strip()
+                or len(transaction.external_id.strip()) > 120
+                or transaction.amount <= Decimal("0.00")
+                or transaction.provider_fee < Decimal("0.00")
+                or transaction.provider_fee > transaction.amount
+                or len(transaction.currency.strip()) != 3
+            ):
+                return PaymentGatewayVerificationObservation(
+                    outcome=PaymentGatewayVerificationOutcome.unknown,
+                    provider_status=provider_status,
+                    reason_code=(
+                        PaymentGatewayVerificationReason.provider_evidence_incomplete
+                    ),
+                )
+            return PaymentGatewayVerificationObservation(
+                outcome=PaymentGatewayVerificationOutcome.succeeded,
+                transaction=transaction,
+                provider_status=provider_status,
+                reason_code=PaymentGatewayVerificationReason.provider_reported_success,
+            )
+        if provider_type == "paystack":
+            if provider_status is PaymentGatewayProviderStatus.abandoned:
+                outcome = PaymentGatewayVerificationOutcome.abandoned
+                reason = PaymentGatewayVerificationReason.provider_reported_abandoned
+            elif provider_status in {
+                PaymentGatewayProviderStatus.failed,
+                PaymentGatewayProviderStatus.reversed,
+            }:
+                outcome = PaymentGatewayVerificationOutcome.failed
+                reason = (
+                    PaymentGatewayVerificationReason.provider_reported_reversed
+                    if provider_status is PaymentGatewayProviderStatus.reversed
+                    else PaymentGatewayVerificationReason.provider_reported_failed
+                )
+            elif provider_status is PaymentGatewayProviderStatus.pending:
+                outcome = PaymentGatewayVerificationOutcome.awaiting_confirmation
+                reason = PaymentGatewayVerificationReason.provider_awaiting_confirmation
+            elif provider_status in {
+                PaymentGatewayProviderStatus.ongoing,
+                PaymentGatewayProviderStatus.processing,
+                PaymentGatewayProviderStatus.queued,
+            }:
+                outcome = PaymentGatewayVerificationOutcome.processing
+                reason = PaymentGatewayVerificationReason.provider_reported_processing
+            else:
+                outcome = PaymentGatewayVerificationOutcome.unknown
+                reason = PaymentGatewayVerificationReason.provider_status_unknown
+        elif provider_status is PaymentGatewayProviderStatus.failed:
+            outcome = PaymentGatewayVerificationOutcome.failed
+            reason = PaymentGatewayVerificationReason.provider_reported_failed
+        elif provider_status is PaymentGatewayProviderStatus.pending:
+            outcome = PaymentGatewayVerificationOutcome.awaiting_confirmation
+            reason = PaymentGatewayVerificationReason.provider_awaiting_confirmation
+        else:
+            outcome = PaymentGatewayVerificationOutcome.unknown
+            reason = PaymentGatewayVerificationReason.provider_status_unknown
         return PaymentGatewayVerificationObservation(
-            outcome=PaymentGatewayVerificationOutcome.succeeded,
-            transaction=transaction,
+            outcome=outcome,
+            provider_status=provider_status,
+            reason_code=reason,
+        )
+
+    @staticmethod
+    def _normalize_verified_transaction(
+        provider_type: str, tx: dict[str, object]
+    ) -> PaymentGatewayTransaction:
+        if provider_type == "flutterwave":
+            return PaymentGatewayTransaction(
+                provider_type=provider_type,
+                external_id=str(tx.get("id", "")),
+                amount=Decimal(str(tx.get("amount", 0))),
+                currency=str(tx.get("currency") or "NGN"),
+                provider_fee=Decimal(str(tx.get("app_fee") or 0)),
+                metadata=dict(tx.get("meta") or {}),
+                memo_prefix="Flutterwave",
+                raw=dict(tx),
+            )
+        return PaymentGatewayTransaction(
+            provider_type=provider_type,
+            external_id=str(tx.get("id", "")),
+            amount=payment_capability.kobo_to_naira(tx.get("amount", 0)),
+            currency=str(tx.get("currency") or "NGN"),
+            provider_fee=payment_capability.kobo_to_naira(tx.get("fees", 0)),
+            metadata=dict(tx.get("metadata") or {}),
+            memo_prefix="Paystack",
+            raw=dict(tx),
         )
 
     def refund(

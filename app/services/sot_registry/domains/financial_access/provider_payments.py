@@ -538,9 +538,9 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                         "external gateway verification observation",
-                        "canonical top-up expiry protocol",
+                        "canonical gateway observation lifecycle protocol",
                     ),
                 ),
                 ConcernContract(
@@ -548,7 +548,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                         "external gateway verification observation",
                     ),
                 ),
@@ -556,7 +556,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name=("verified provider settlement then allocation orchestration"),
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                         "external gateway verification observation",
                         "canonical account-credit deposit protocol",
                         "canonical provider-event settlement protocol",
@@ -568,7 +568,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                     ),
                 ),
             ),
@@ -578,17 +578,18 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="control.settings_spec",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "typed stale window, maximum age, expiry grace, and batch "
-                        "size settings with bounded defaults"
+                        "typed stale window, maximum age, and batch size settings "
+                        "with bounded defaults; intent expiry itself is canonical"
                     ),
                 ),
                 AuthorityInput(
-                    name="canonical pending top-up intent",
+                    name="canonical reconcilable top-up intent",
                     owner="financial.topup_intents",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "locked intent identity, account scope, provider, reference, "
-                        "purpose, currency, invoice instruction, and completion state"
+                        "purpose, currency, invoice instruction, lifecycle status, "
+                        "expiry, normalized safe observation, and completion state"
                     ),
                 ),
                 AuthorityInput(
@@ -596,8 +597,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="external:payment_provider",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "normalized Paystack or Flutterwave transaction identity, "
-                        "gross amount, provider fee, currency, and outcome"
+                        "allowlisted Paystack or Flutterwave transaction status and "
+                        "safe reason; successful observations additionally carry "
+                        "transaction identity, gross amount, fee, and currency"
                     ),
                 ),
                 AuthorityInput(
@@ -625,10 +627,13 @@ SERVICES: tuple[SOTService, ...] = (
                     source="flush-only locked payment-to-intent completion projection",
                 ),
                 AuthorityInput(
-                    name="canonical top-up expiry protocol",
+                    name="canonical gateway observation lifecycle protocol",
                     owner="financial.topup_intents",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="flush-only locked expiry projection from canonical time",
+                    source=(
+                        "flush-only locked terminal/non-terminal observation, "
+                        "effective-expiry, blocker/retry, and late-success protocol"
+                    ),
                 ),
             ),
             transaction=TransactionContract(
@@ -651,7 +656,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "consequences."
                 ),
                 retries=(
-                    "Provider unavailability leaves the intent pending. Each candidate "
+                    "Unavailable or unknown evidence fails closed until canonical "
+                    "expiry; failed or abandoned evidence terminalizes immediately. "
+                    "Failed, abandoned, and expired intents remain bounded late-success "
+                    "candidates. Each candidate "
                     "is an independent transaction, so one rejection cannot roll back "
                     "or repeat another candidate's completed consequence."
                 ),
@@ -700,7 +708,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="top-up reconciliation backlog projection",
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                     ),
                     writer="financial.payment_reconciliation",
                     freshness=(

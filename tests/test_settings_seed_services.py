@@ -518,7 +518,6 @@ class TestSeedBillingNotificationSettings:
                         "topup_preset_amounts",
                         "topup_reconciliation_stale_minutes",
                         "topup_reconciliation_max_age_days",
-                        "topup_reconciliation_expiry_grace_hours",
                         "topup_reconciliation_batch_size",
                         "gateway_topup_intent_ttl_minutes",
                         "ar_aging_bucket_days",
@@ -543,7 +542,6 @@ class TestSeedBillingNotificationSettings:
         assert settings["topup_preset_amounts"] == ("1000,2000,5000,10000,20000,50000")
         assert settings["topup_reconciliation_stale_minutes"] == "15"
         assert settings["topup_reconciliation_max_age_days"] == "7"
-        assert settings["topup_reconciliation_expiry_grace_hours"] == "24"
         assert settings["topup_reconciliation_batch_size"] == "50"
         assert settings["gateway_topup_intent_ttl_minutes"] == "30"
         assert settings["ar_aging_bucket_days"] == "30,60,90"

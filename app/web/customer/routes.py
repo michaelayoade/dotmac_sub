@@ -67,6 +67,7 @@ from app.services.customer_portal_context import (
     resolve_allowed_subscriber_ids,
     resolve_customer_subscription,
 )
+from app.services.customer_portal_flow_payments import GatewayPaymentIncomplete
 from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition, file_uploads
 from app.services.nin_matching import mask_nin
@@ -75,7 +76,10 @@ from app.services.owner_commands import CommandContext
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
 )
-from app.services.topup_intents import DirectTransferCancellationSource
+from app.services.topup_intents import (
+    DirectTransferCancellationSource,
+    TopupIntentLifecycleProjection,
+)
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -165,37 +169,16 @@ def _render_payment_return_status(
     reference: str,
     provider: str | None,
     flow: str,
-    exc: Exception,
+    projection: TopupIntentLifecycleProjection,
 ) -> Response:
-    is_decline = isinstance(exc, (ValueError, HTTPException)) and not (
-        isinstance(exc, HTTPException) and exc.status_code >= 500
-    )
-    if is_decline:
-        status_kind = "declined"
-        title = "Payment not confirmed"
-        message = (
-            "The payment provider did not confirm a successful payment. "
-            "No duplicate payment was recorded."
-        )
-    else:
-        status_kind = "pending"
-        title = "Payment verification pending"
-        message = (
-            "We could not confirm the payment provider response right now. "
-            "If you were debited, the payment will be reconciled automatically."
-        )
-        logger.warning(
-            "Customer payment verification returned pending state",
-            extra={"reference": reference, "provider": provider, "flow": flow},
-            exc_info=(type(exc), exc, exc.__traceback__),
-        )
     return templates.TemplateResponse(
         "customer/billing/payment_status.html",
         {
             "request": request,
-            "status_kind": status_kind,
-            "title": title,
-            "message": message,
+            "status_kind": projection.normalized_status.value,
+            "title": projection.label,
+            "message": projection.customer_message,
+            "customer_retry_allowed": projection.customer_retry_allowed,
             "reference": reference,
             "provider": provider,
             "flow": flow,
@@ -2330,22 +2313,16 @@ def customer_verify_payment(
                 "active_page": "billing",
             },
         )
-    except (ValueError, HTTPException) as exc:
+    except GatewayPaymentIncomplete as exc:
         return _render_payment_return_status(
             request,
             reference=reference,
             provider=provider,
             flow="invoice_payment",
-            exc=exc,
+            projection=exc.projection,
         )
     except Exception as exc:
-        return _render_payment_return_status(
-            request,
-            reference=reference,
-            provider=provider,
-            flow="invoice_payment",
-            exc=exc,
-        )
+        return _payment_verification_error_response(request, exc, status_code=503)
 
 
 @router.get("/billing/topup", response_class=HTMLResponse)
@@ -2663,22 +2640,16 @@ def customer_verify_topup(
                 "active_page": "billing",
             },
         )
-    except (ValueError, HTTPException) as exc:
+    except GatewayPaymentIncomplete as exc:
         return _render_payment_return_status(
             request,
             reference=reference,
             provider=provider,
             flow="account_topup",
-            exc=exc,
+            projection=exc.projection,
         )
     except Exception as exc:
-        return _render_payment_return_status(
-            request,
-            reference=reference,
-            provider=provider,
-            flow="account_topup",
-            exc=exc,
-        )
+        return _payment_verification_error_response(request, exc, status_code=503)
 
 
 @router.post("/billing/autopay/enable")

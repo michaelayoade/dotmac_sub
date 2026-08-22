@@ -12,13 +12,41 @@ invoice, subscription, or access state.
 - `financial.payment_webhooks` owns signed webhook ingress and dispatches the
   normalized observation to the canonical settlement owners.
 - `financial.payment_reconciliation` owns the bounded scheduled fallback and its
-  pending-intent backlog projection.
+  reconcilable-intent backlog projection.
+- `financial.topup_intents` owns lifecycle transitions and the shared
+  customer/admin blocker and retry projection. Provider adapters only normalize
+  observations and never mutate intent state.
 - `financial.account_credit_deposits` owns account-credit deposit settlement.
   The requested deposit is the authorized customer credit; the provider gross
   and fee remain explicit settlement facts.
 - Canonical financial owners decide invoice allocation, account balance, and
   subsequent access restoration. Neither the webhook route nor the scheduled
   task decides those states independently.
+
+## Verification status semantics
+
+An HTTP `200` from Paystack proves only that the verification request completed.
+The adapter classifies the transaction status in the response data:
+
+- `success` is authoritative settlement evidence;
+- `failed` and `abandoned` are terminal unsuccessful observations and immediately
+  move a pending intent to a non-blocking local terminal state;
+- `pending` is awaiting confirmation, while `ongoing`, `processing`, and `queued`
+  remain non-terminal processing observations and block a duplicate attempt until
+  the intent's bounded expiry;
+- an unknown status, missing reference, transport failure, or unavailable provider
+  fails closed as confirmation unavailable. It does not mark the intent failed.
+
+The same typed contract applies to every supported gateway adapter. Safe reason
+codes and verification times may be persisted; raw responses, exceptions, and
+secrets must not be persisted or displayed. When canonical expiry elapses, the
+lifecycle owner projects and persists `expired`, which no longer blocks retry.
+
+Failed, abandoned, canceled, and expired labels are not money locks.
+Reconciliation continues within its bounded maximum-age policy, and authoritative
+late success can complete those states. Provider transaction identity and existing
+payment/event idempotency constraints ensure webhook and reconciliation replay
+settle exactly once.
 
 The production Paystack webhook URL is:
 
