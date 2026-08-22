@@ -211,19 +211,6 @@ def _apply_billing_approval_command(
     )
 
 
-def parse_json_object(value: str | None, field: str) -> dict | None:
-    """Parse an optional JSON object from form input."""
-    if not value or not value.strip():
-        return None
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{field} must be valid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{field} must be a JSON object")
-    return parsed
-
-
 def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
     """Build string defaults for customer billing form controls."""
     defaults = {
@@ -2390,7 +2377,6 @@ def create_customer_from_form(
                 == "true",
                 "account_start_date": _parse_date(form_data.get("account_start_date")),
                 "notes": _normalize_optional(form_data.get("notes")),
-                "metadata_": form_data.get("metadata_json"),
             },
         )
         if contact_rows:
@@ -2563,7 +2549,6 @@ def update_person_customer(
     tax_rate_id: str | None,
     withholding_tax_enabled: str | None,
     payment_method: str | None,
-    metadata_json: dict | None,
     managed_by_reseller: bool | None = None,
     reseller_id: str | None = None,
     vat_exempt: str | None = None,
@@ -2627,10 +2612,6 @@ def update_person_customer(
         "notes": _normalize_optional(notes),
         "reseller_id": resolved_reseller_id,
     }
-    if metadata_json is not None:
-        metadata_payload = dict(metadata_json)
-        metadata_payload["subscriber_category"] = before.category.value
-        data["metadata_"] = metadata_payload
     if bool((before.metadata_ or {}).get("nin_verified")) and data["nin"] != before.nin:
         data["nin"] = before.nin
     data.update(billing_payload)

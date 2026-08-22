@@ -24,7 +24,7 @@ compatibility projection, and nothing decides anything from it.
 |---|---|
 | Direct writer modules | **8** |
 | Read-only modules | **14** |
-| Distinct keys | **33** |
+| Distinct keys | **34** |
 | Keys written by more than one module | 1 (`subscriber_category`) |
 | Keys any admin can invent at runtime | **unbounded** — see the wildcard below |
 
@@ -78,13 +78,13 @@ Facts nothing else records. Losing them loses the fact.
 
 | Key | Written by | Owner to hold it | Shape |
 |---|---|---|---|
-| `recovery_deleted_at` | `web_system_restore_tool` | **`customer.account_recovery`** (new) | timestamp |
-| `recovery_deleted_by` | `web_system_restore_tool` | `customer.account_recovery` | actor id |
-| `recovery_purged_at` | `web_system_restore_tool` | `customer.account_recovery` | timestamp, terminal |
-| `recovery_last_restored_at` | `web_system_restore_tool` | `customer.account_recovery` | timestamp |
-| `recovery_last_restored_by` | `web_system_restore_tool` | `customer.account_recovery` | actor id |
-| `account_deletion_requested_at` | `account_deletion` | `customer.account_recovery` | timestamp |
-| `account_deletion_reason` | `account_deletion` | `customer.account_recovery` | free text |
+| `recovery_deleted_at` | `web_system_restore_tool` | **`customer.account_lifecycle`** (new) | timestamp |
+| `recovery_deleted_by` | `web_system_restore_tool` | `customer.account_lifecycle` | actor id |
+| `recovery_purged_at` | `web_system_restore_tool` | `customer.account_lifecycle` | timestamp, terminal |
+| `recovery_last_restored_at` | `web_system_restore_tool` | `customer.account_lifecycle` | timestamp |
+| `recovery_last_restored_by` | `web_system_restore_tool` | `customer.account_lifecycle` | actor id |
+| `account_deletion_requested_at` | `account_deletion` | `customer.account_lifecycle` | timestamp |
+| `account_deletion_reason` | `account_deletion` | `customer.account_lifecycle` | free text |
 | `portal_read_notification_keys` | `customer_portal_notifications` | **`customer.portal_notifications`** | unbounded list — see below |
 | 7 × `*_notifications`, `sms_updates` | `web_customer_actions` | **`customer.notification_policy`** (exists) | booleans |
 
@@ -93,7 +93,8 @@ Facts nothing else records. Losing them loses the fact.
 They record the same event — this account was deleted — in different key
 families, written by different modules, with no relationship between them and
 no rule about which wins. That is the strongest single argument for extracting
-account recovery as its own state rather than tidying the keys in place.
+**subscriber account lifecycle** as its own state rather than tidying the keys
+in place.
 
 **`portal_read_notification_keys` is an unbounded list inside a row.** Every
 notification a customer reads appends an entry. It has no cap, no pruning and
@@ -148,10 +149,21 @@ live state.
 | `latitude`, `longitude` | A **fourth** place an address coordinate lives, after `Address.latitude/longitude`, `Address.geom` and `GeoLocation`. Read by `web_customer_details` as a fallback when the column is null. `gis.spatial_sync` is the declared coordinate owner. |
 | `send_billing_notifications` | Written beside `billing_notifications` by the same module. Two keys, one preference. |
 
-`latitude`/`longitude` are reached through `getattr(customer, "metadata_", None)`,
-which the census deliberately does not resolve — see its "Known limit" section.
-They are recorded here because a census that omits what it cannot see is worse
-than one that says so.
+### One key was found by the guard, not by the census
+
+`auto_create_invoices` — a billing preference read by both billing presenters
+through `getattr(subscriber, "metadata_", None)`.
+
+The census originally excluded reflective access and said so in a "known limit"
+section, reasoning that resolving `getattr` would mean matching on attribute
+name again. That was wrong. A `getattr` whose attribute name is a **literal** is
+exactly as static as the dotted form; only a computed name defeats analysis, and
+nothing here computes one.
+
+The closed-key registry built from the incomplete census then refused a write
+the application legitimately makes, and the unit suite caught it. **A documented
+gap is still a gap** — the census now resolves literal `getattr`, and
+`latitude`/`longitude` became visible in the same change.
 
 ## The ratchet
 

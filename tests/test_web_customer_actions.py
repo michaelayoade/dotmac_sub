@@ -70,7 +70,6 @@ def test_update_person_customer_persists_billing_overrides(db_session, subscribe
         tax_rate_id=str(tax_rate.id),
         withholding_tax_enabled=None,
         payment_method="transfer",
-        metadata_json=None,
     )
 
     updated = db_session.get(Subscriber, subscriber.id)
@@ -476,7 +475,6 @@ def test_update_person_rejects_blank_name(db_session, subscriber):
             tax_rate_id=None,
             withholding_tax_enabled=None,
             payment_method=None,
-            metadata_json=None,
         )
 
 
@@ -513,7 +511,6 @@ def _update_person(db, subscriber, **overrides):
         tax_rate_id=None,
         withholding_tax_enabled=None,
         payment_method=None,
-        metadata_json=None,
     )
     kwargs.update(overrides)
     return actions.update_person_customer(
@@ -544,20 +541,45 @@ def test_update_person_allows_keeping_own_email(db_session, subscriber):
 
 
 def test_update_person_preserves_existing_customer_category(db_session, subscriber):
+    """The category column is authoritative and an update cannot move it.
+
+    This test used to prove the same thing by SUBMITTING
+    `{"subscriber_category": "business", "source": "form"}` through a free-JSON
+    form field and asserting the column stayed put — while also asserting that
+    the invented `source` key was persisted. That second assertion was the
+    wildcard: an admin form creating an arbitrary key on a customer record.
+
+    Both halves are now stronger. The category cannot be moved because there is
+    no metadata path into this update at all, and `source` cannot be persisted
+    because the column's key space is closed. What survives is the original
+    intent: a generic customer edit does not change the account category.
+    """
+
     subscriber.category = SubscriberCategory.government
     db_session.commit()
 
-    _update_person(
-        db_session,
-        subscriber,
-        first_name="Renamed",
-        metadata_json={"subscriber_category": "business", "source": "form"},
-    )
+    _update_person(db_session, subscriber, first_name="Renamed")
 
     refreshed = db_session.get(Subscriber, subscriber.id)
     assert refreshed.category == SubscriberCategory.government
     assert refreshed.company_name is None
-    assert refreshed.metadata_["source"] == "form"
+    assert refreshed.first_name == "Renamed"
+
+
+def test_update_person_accepts_no_free_json_metadata(db_session, subscriber):
+    """The removed parameter must stay removed.
+
+    A signature is the contract here: restoring `metadata_json` would reopen
+    the wildcard without touching any of the guards that replaced it, because
+    those guard the OWNER and this is the caller.
+    """
+
+    import inspect
+
+    signature = inspect.signature(actions.update_person_customer)
+    assert "metadata_json" not in signature.parameters, (
+        "`update_person_customer` accepts a free-JSON metadata payload again"
+    )
 
 
 def test_convert_person_to_business_customer_changes_account_type(

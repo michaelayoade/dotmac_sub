@@ -55,6 +55,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.nin_matching import normalize_nin
 from app.services.response import ListResponseMixin
+from app.services.subscriber_metadata_keys import reject_undeclared_keys
 from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
@@ -1114,6 +1115,12 @@ class Subscribers(ListResponseMixin):
             data, current_region=subscriber.region, current_lga=subscriber.lga
         )
         updated_fields = list(data.keys())
+        # The column's key space is closed. An undeclared key is REFUSED here
+        # rather than dropped: silently stripping it would report success and
+        # lose the value, surfacing later as absent data with no error attached
+        # to the moment it went missing.
+        if "metadata_" in data:
+            reject_undeclared_keys(data["metadata_"])
         lifecycle_fields = {"status", "is_active"} & data.keys()
         if lifecycle_fields:
             raise HTTPException(
