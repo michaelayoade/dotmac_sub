@@ -19,6 +19,12 @@ from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber
 from app.services import topup_intents
 from app.services.owner_commands import CommandContext
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayProviderStatus,
+    PaymentGatewayVerificationObservation,
+    PaymentGatewayVerificationOutcome,
+    PaymentGatewayVerificationReason,
+)
 
 
 def _context(scope: str) -> CommandContext:
@@ -241,3 +247,229 @@ def test_expiry_keeps_intent_pending_before_grace_elapses(db_session, subscriber
     assert result.changed is False
     assert db_session.get(TopupIntent, intent.id).status == "pending"
     assert db_session.query(EventStore).count() == 0
+
+
+def _observation(outcome: PaymentGatewayVerificationOutcome):
+    status = {
+        PaymentGatewayVerificationOutcome.failed: PaymentGatewayProviderStatus.failed,
+        PaymentGatewayVerificationOutcome.abandoned: (
+            PaymentGatewayProviderStatus.abandoned
+        ),
+        PaymentGatewayVerificationOutcome.processing: (
+            PaymentGatewayProviderStatus.processing
+        ),
+    }.get(outcome)
+    reason = {
+        PaymentGatewayVerificationOutcome.failed: (
+            PaymentGatewayVerificationReason.provider_reported_failed
+        ),
+        PaymentGatewayVerificationOutcome.abandoned: (
+            PaymentGatewayVerificationReason.provider_reported_abandoned
+        ),
+        PaymentGatewayVerificationOutcome.processing: (
+            PaymentGatewayVerificationReason.provider_reported_processing
+        ),
+        PaymentGatewayVerificationOutcome.unavailable: (
+            PaymentGatewayVerificationReason.provider_unavailable
+        ),
+    }[outcome]
+    return PaymentGatewayVerificationObservation(
+        outcome=outcome,
+        provider_status=status,
+        reason_code=reason,
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "status", "normalized"),
+    (
+        (PaymentGatewayVerificationOutcome.failed, "failed", "failed"),
+        (PaymentGatewayVerificationOutcome.abandoned, "abandoned", "abandoned"),
+    ),
+)
+def test_terminal_gateway_observation_releases_blocker_without_money(
+    db_session, subscriber, outcome, status, normalized
+):
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference=f"terminal-{status}",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+        metadata_={"payment_flow": "account_topup"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    result = topup_intents.stage_gateway_topup_observation(
+        db_session,
+        topup_intents.RecordGatewayTopupObservationCommand(
+            intent_id=intent.id,
+            observation=_observation(outcome),
+            observed_at=datetime.now(UTC),
+            source=topup_intents.GatewayTopupObservationSource.gateway_reconciliation,
+        ),
+        context=_context(topup_intents.GATEWAY_OBSERVATION_SCOPE),
+    )
+    db_session.commit()
+
+    projection = topup_intents.project_topup_intent_lifecycle(intent)
+    assert result.status.value == status
+    assert projection.normalized_status.value == normalized
+    assert projection.blocks_another_attempt is False
+    assert projection.customer_retry_allowed is True
+    assert projection.reason_code == _observation(outcome).reason_code.value
+    assert projection.last_verification_at is not None
+    assert db_session.query(Payment).count() == 0
+
+
+@pytest.mark.parametrize(
+    ("outcome", "normalized"),
+    (
+        (PaymentGatewayVerificationOutcome.processing, "processing"),
+        (
+            PaymentGatewayVerificationOutcome.unavailable,
+            "confirmation_unavailable",
+        ),
+    ),
+)
+def test_nonterminal_or_ambiguous_observation_remains_blocking(
+    db_session, subscriber, outcome, normalized
+):
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference=f"nonterminal-{outcome.value}",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    topup_intents.stage_gateway_topup_observation(
+        db_session,
+        topup_intents.RecordGatewayTopupObservationCommand(
+            intent_id=intent.id,
+            observation=_observation(outcome),
+            observed_at=datetime.now(UTC),
+            source=topup_intents.GatewayTopupObservationSource.gateway_reconciliation,
+        ),
+        context=_context(topup_intents.GATEWAY_OBSERVATION_SCOPE),
+    )
+    db_session.commit()
+
+    projection = topup_intents.project_topup_intent_lifecycle(intent)
+    assert intent.status == "pending"
+    assert projection.normalized_status.value == normalized
+    assert projection.blocks_another_attempt is True
+    assert projection.customer_retry_allowed is False
+
+
+def test_ambiguous_observation_persists_expiry_and_releases_retry(
+    db_session, subscriber
+):
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="ambiguous-expired",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    topup_intents.stage_gateway_topup_observation(
+        db_session,
+        topup_intents.RecordGatewayTopupObservationCommand(
+            intent_id=intent.id,
+            observation=_observation(PaymentGatewayVerificationOutcome.unavailable),
+            observed_at=datetime.now(UTC),
+            source=topup_intents.GatewayTopupObservationSource.gateway_reconciliation,
+        ),
+        context=_context(topup_intents.GATEWAY_OBSERVATION_SCOPE),
+    )
+    db_session.commit()
+
+    projection = topup_intents.project_topup_intent_lifecycle(intent)
+    assert intent.status == "expired"
+    assert projection.label == "Expired"
+    assert projection.blocks_another_attempt is False
+    assert projection.customer_retry_allowed is True
+    assert projection.reason_code == topup_intents.INTENT_EXPIRED_REASON_CODE
+
+
+def test_terminal_reason_survives_a_later_unavailable_check(db_session, subscriber):
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="terminal-reason-preserved",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(intent)
+    db_session.commit()
+    first_observed_at = datetime.now(UTC)
+    later_observed_at = first_observed_at + timedelta(minutes=2)
+
+    for observation, observed_at in (
+        (_observation(PaymentGatewayVerificationOutcome.failed), first_observed_at),
+        (
+            _observation(PaymentGatewayVerificationOutcome.unavailable),
+            later_observed_at,
+        ),
+    ):
+        topup_intents.stage_gateway_topup_observation(
+            db_session,
+            topup_intents.RecordGatewayTopupObservationCommand(
+                intent_id=intent.id,
+                observation=observation,
+                observed_at=observed_at,
+                source=(
+                    topup_intents.GatewayTopupObservationSource.gateway_reconciliation
+                ),
+            ),
+            context=_context(topup_intents.GATEWAY_OBSERVATION_SCOPE),
+        )
+        db_session.commit()
+
+    projection = topup_intents.project_topup_intent_lifecycle(intent)
+
+    assert projection.normalized_status.value == "failed"
+    assert projection.reason_code == "provider_reported_failed"
+    assert projection.last_verification_at == later_observed_at
+
+
+@pytest.mark.parametrize("prior_status", ("failed", "abandoned", "expired"))
+def test_authoritative_late_success_reopens_terminal_intent_once(
+    db_session, subscriber, prior_status
+):
+    intent, payment = _intent_and_payment(db_session, subscriber)
+    intent.status = prior_status
+    db_session.commit()
+    command = topup_intents.CompleteTopupIntentCommand(
+        intent_id=intent.id,
+        payment_id=payment.id,
+        source=topup_intents.TopupIntentCompletionSource.gateway_reconciliation,
+    )
+
+    first = topup_intents.stage_topup_intent_completion(
+        db_session, command, context=_context(topup_intents.COMPLETION_SCOPE)
+    )
+    db_session.commit()
+    second = topup_intents.stage_topup_intent_completion(
+        db_session, command, context=_context(topup_intents.COMPLETION_SCOPE)
+    )
+    db_session.commit()
+
+    assert first.changed is True
+    assert second.changed is False
+    assert intent.status == "completed"
+    assert intent.completed_payment_id == payment.id

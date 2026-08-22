@@ -85,6 +85,13 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword",
     "InternetGatewayDevice.WANDevice.1.WANConnectionDevice",
     "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
+    "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MinAddress",
+    "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MaxAddress",
+    "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.SubnetMask",
+    "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement."
+    "IPInterface.1.IPInterfaceIPAddress",
+    "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement."
+    "IPInterface.1.IPInterfaceSubnetMask",
     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Channel",
@@ -103,6 +110,7 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "Device.ManagementServer.ConnectionRequestUsername",
     "Device.ManagementServer.ConnectionRequestPassword",
     "Device.IP.Interface",
+    "Device.DHCPv4.Server",
     "Device.DHCPv4.Client",
     "Device.DHCPv6.Client",
     "Device.Routing.Router",
@@ -381,6 +389,7 @@ def _parse_device(
         _path(igd, "X_HW_UserInterface"),
         _path(dev_root, "X_HW_UserInterface"),
     )
+    igd_lan = _path(igd, "LANDevice", "1", "LANHostConfigManagement")
 
     return AcsObservedFields(
         acs_present=True,
@@ -413,9 +422,26 @@ def _parse_device(
                 _value_bool(wan_ppp, "NATEnabled"),
             )
         ),
-        acs_observed_dhcp_enabled=_value_bool(
-            _path(igd, "LANDevice", "1", "LANHostConfigManagement"),
-            "DHCPServerEnable",
+        acs_observed_dhcp_enabled=_first_not_none(
+            _value_bool(igd_lan, "DHCPServerEnable"),
+            _path_value_bool(device, "Device.DHCPv4.Server.1.Enable"),
+        ),
+        acs_observed_lan_gateway_ip=_first_not_none(
+            _value(_path(igd_lan, "IPInterface", "1"), "IPInterfaceIPAddress"),
+            _path_value(device, "Device.IP.Interface.2.IPv4Address.1.IPAddress"),
+        ),
+        acs_observed_dhcp_pool_min=_first_not_none(
+            _value(igd_lan, "MinAddress"),
+            _path_value(device, "Device.DHCPv4.Server.Pool.1.MinAddress"),
+        ),
+        acs_observed_dhcp_pool_max=_first_not_none(
+            _value(igd_lan, "MaxAddress"),
+            _path_value(device, "Device.DHCPv4.Server.Pool.1.MaxAddress"),
+        ),
+        acs_observed_dhcp_subnet_mask=_first_not_none(
+            _value(igd_lan, "SubnetMask"),
+            _value(_path(igd_lan, "IPInterface", "1"), "IPInterfaceSubnetMask"),
+            _path_value(device, "Device.IP.Interface.2.IPv4Address.1.SubnetMask"),
         ),
         acs_observed_ssid=(
             _path_value(device, wifi_paths.ssid)

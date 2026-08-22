@@ -34,7 +34,6 @@ from app.schemas.billing import (
     AccountBalanceResponse,
     AutopayEnableRequest,
     AutopayStatusResponse,
-    BankTransferAccount,
     DirectBankTransferConfig,
     InvoiceRead,
     LedgerEntryRead,
@@ -780,9 +779,9 @@ def my_topup_page(
 ):
     """Deposit Account Credit context, eligibility, limits, and payment options.
 
-    ``payment_options`` mirrors the web chooser (online gateways + a direct
-    bank-transfer option) and ``direct_bank_transfer`` carries the admin bank
-    account(s) so the customer can transfer and upload a receipt in-app.
+    ``payment_options`` mirrors the customer web chooser. Direct bank transfer
+    stays disabled for customer selfcare; reseller transfer flows use their own
+    endpoints and configuration projection.
     """
     ctx = customer_payments.get_topup_page(db, _customer(db, principal))
     options = [
@@ -790,22 +789,10 @@ def my_topup_page(
         for opt in ctx.get("payment_options", [])
         if opt.get("provider_type") != "direct_bank_transfer"
     ]
-    accounts = [
-        BankTransferAccount(
-            bank_name=acct["bank_name"],
-            account_name=acct["account_name"],
-            account_number=acct["account_number"],
-            sort_code=acct.get("sort_code") or None,
-        )
-        for acct in customer_payments.enabled_direct_bank_transfer_accounts(db)
-    ]
-    transfer_settings = customer_payments.direct_bank_transfer_settings(db)
     direct_transfer = DirectBankTransferConfig(
-        enabled=customer_payments.direct_bank_transfer_enabled(db),
-        instructions=(
-            transfer_settings.get("direct_bank_transfer_instructions") or None
-        ),
-        accounts=accounts,
+        enabled=customer_payments.customer_direct_bank_transfer_enabled(db),
+        instructions=None,
+        accounts=[],
     )
     return TopupPageResponse(
         provider_type=ctx["provider_type"],
@@ -894,6 +881,11 @@ def my_topup_verify(
         result = customer_payments.verify_and_record_topup(
             db, customer, payload.reference
         )
+    except customer_payments.GatewayPaymentIncomplete as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=exc.projection.customer_message,
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     card_saved: bool | None = None

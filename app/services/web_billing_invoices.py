@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TypedDict
@@ -22,6 +23,7 @@ from app.models.billing import (
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
     CreditNoteApplicationPreviewRequest,
+    CreditNoteApplicationReversalRequest,
     CreditNoteApplyRequest,
     InvoiceClosureConfirm,
     InvoiceLineCreate,
@@ -41,8 +43,13 @@ from app.services.audit_helpers import (
     format_changes,
     log_audit_event,
 )
+from app.services.billing.credit_notes import (
+    CreditApplicationReversalOption,
+    CreditApplicationReversalPreview,
+)
 from app.services.billing.invoices import verified_draft_issuance
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.status_presentation import invoice_status_presentation
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
@@ -51,6 +58,10 @@ logger = logging.getLogger(__name__)
 PROFORMA_TAG = invoice_draft_authoring.PROFORMA_TAG
 PROFORMA_PREFIX = invoice_draft_authoring.PROFORMA_PREFIX
 apply_proforma_form_values = invoice_draft_authoring.apply_proforma_form_values
+
+
+class InvoiceIssueFromDetailError(DomainError):
+    """Safe invoice-detail issue rejection for the admin route adapter."""
 
 
 class InvoiceLineItem(TypedDict):
@@ -282,6 +293,22 @@ def issue_invoice_from_detail(db: Session, *, invoice_id: UUID) -> Invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if invoice.status != InvoiceStatus.draft:
         raise HTTPException(status_code=409, detail="Only draft invoices can be issued")
+    prepaid_preview = (
+        web_prepaid_draft_reconciliation_service.preview_for_invoice_detail(
+            db,
+            invoice_id=invoice_id,
+        )
+    )
+    if prepaid_preview is not None and prepaid_preview.invoice_issue_notice is not None:
+        raise InvoiceIssueFromDetailError(
+            code="admin.invoice.prepaid_coverage_conflict",
+            message=prepaid_preview.invoice_issue_notice,
+            details={
+                "invoice_id": str(invoice_id),
+                "reconciliation_actionable": prepaid_preview.actionable,
+                "reconciliation_reason": prepaid_preview.reason,
+            },
+        )
     transition = billing_service.invoices.issue_draft_system(
         db,
         invoice_id_text,
@@ -757,6 +784,71 @@ def load_credit_application_options(db: Session, *, invoice_id: str):
     return billing_service.credit_notes.list_application_options(db, invoice_id)
 
 
+def load_credit_application_reversal_options(
+    db: Session, *, invoice_id: str
+) -> Sequence[CreditApplicationReversalOption]:
+    return billing_service.credit_notes.list_reversible_applications(db, invoice_id)
+
+
+def preview_credit_note_application_reversal(
+    db: Session, *, application_id: str
+) -> CreditApplicationReversalPreview:
+    return billing_service.credit_notes.preview_application_reversal(db, application_id)
+
+
+def reverse_credit_note_application_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    application_id: str,
+    memo: str | None,
+    preview_fingerprint: str,
+    idempotency_key: str,
+) -> dict[str, object]:
+    payload = CreditNoteApplicationReversalRequest(
+        application_id=UUID(application_id),
+        memo=memo.strip() if memo else None,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+    )
+    result = billing_service.credit_notes.reverse_application_with_evidence(
+        db, payload, stage_audit=False
+    )
+    preview = result.preview
+    metadata_payload: dict[str, object] = {
+        "application_id": str(result.application.id),
+        "reversal_application_id": str(result.reversal_application.id),
+        "credit_note_id": str(result.application.credit_note_id),
+        "invoice_id": str(result.application.invoice_id),
+        "ledger_entry_id": str(result.ledger_entry.id),
+        "consumption_ledger_entry_id": (
+            str(result.consumption_ledger_entry.id)
+            if result.consumption_ledger_entry
+            else None
+        ),
+        "amount": str(abs(result.reversal_application.amount)),
+        "currency": result.ledger_entry.currency,
+        "preview_fingerprint": preview_fingerprint,
+        "access_consequence": (
+            preview.access_consequence
+            if preview
+            else "recheck_after_credit_application_reversal"
+        ),
+    }
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="reverse_application",
+            entity_type="credit_note",
+            entity_id=str(result.application.credit_note_id),
+            actor_id=actor_id,
+            metadata=metadata_payload,
+        )
+    return metadata_payload
+
+
 def build_invoice_activities(db: Session, *, invoice_id: str) -> list[dict]:
     audit_events = audit_service.audit_events.list(
         db=db,
@@ -835,6 +927,10 @@ def load_invoice_detail_data(
         "credit_application_options": load_credit_application_options(
             db, invoice_id=invoice_id
         ),
+        "credit_application_reversal_options": (
+            load_credit_application_reversal_options(db, invoice_id=invoice_id)
+        ),
+        "credit_application_reversal_idempotency_key": secrets.token_urlsafe(24),
         "credit_application_idempotency_key": secrets.token_urlsafe(24),
         "invoice_void_capability": billing_service.invoices.void_capability(
             db, invoice_id
@@ -852,6 +948,11 @@ def load_invoice_detail_data(
             db, currency=invoice.currency
         ),
         "prepaid_draft_reconciliation_preview": (prepaid_draft_reconciliation_preview),
+        "prepaid_draft_issue_notice": (
+            prepaid_draft_reconciliation_preview.invoice_issue_notice
+            if prepaid_draft_reconciliation_preview is not None
+            else None
+        ),
     }
 
 

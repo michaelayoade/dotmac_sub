@@ -45,6 +45,10 @@ from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.locking import lock_for_update
 from app.services.owner_commands import CommandContext
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayVerificationObservation,
+    PaymentGatewayVerificationOutcome,
+)
 from app.services.settings_spec import resolve_values_atomic
 
 logger = logging.getLogger(__name__)
@@ -52,6 +56,8 @@ logger = logging.getLogger(__name__)
 DIRECT_TRANSFER_PROVIDER = "direct_bank_transfer"
 COMPLETION_SCOPE = "topup-intent:complete"
 EXPIRY_SCOPE = "topup-intent:expire"
+GATEWAY_OBSERVATION_SCOPE = "topup-intent:observe-gateway"
+INTENT_EXPIRED_REASON_CODE = "intent_expired"
 _DIRECT_TRANSFER_SETTING_KEYS = ("direct_bank_transfer_instructions",)
 
 
@@ -68,6 +74,22 @@ class TopupIntentStatus(str, Enum):
     # release was rolled back: a declined card locked the customer out of
     # retrying with a different one.
     failed = "failed"
+    abandoned = "abandoned"
+
+
+class TopupIntentLifecycleState(str, Enum):
+    """Authoritative normalized state consumed by customer and admin readers."""
+
+    awaiting_confirmation = "awaiting_confirmation"
+    processing = "processing"
+    confirmation_unavailable = "confirmation_unavailable"
+    completed = "completed"
+    failed = "failed"
+    abandoned = "abandoned"
+    expired = "expired"
+    awaiting_receipt = "awaiting_receipt"
+    under_review = "under_review"
+    canceled = "canceled"
 
 
 class TopupIntentCompletionSource(str, Enum):
@@ -115,6 +137,13 @@ class TopupIntentFailureReason(str, Enum):
     gateway_charge_failed = "gateway_charge_failed"
 
 
+class GatewayTopupObservationSource(str, Enum):
+    """Named coordinators allowed to submit provider observations."""
+
+    customer_gateway_verify = "customer_gateway_verify"
+    gateway_reconciliation = "gateway_reconciliation"
+
+
 class DirectTransferCancellationSource(str, Enum):
     """Named callers allowed to abandon an unsubmitted transfer request."""
 
@@ -144,6 +173,7 @@ _TOPUP_TERMINAL_STATUSES: frozenset[str] = frozenset(
         # A declined charge that later settles is a late recovery worth seeing,
         # exactly like the other two.
         TopupIntentStatus.failed.value,
+        TopupIntentStatus.abandoned.value,
     }
 )
 
@@ -463,6 +493,16 @@ class FailTopupIntentCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordGatewayTopupObservationCommand:
+    """Typed provider fact admitted by the lifecycle owner."""
+
+    intent_id: UUID
+    observation: PaymentGatewayVerificationObservation
+    observed_at: datetime
+    source: GatewayTopupObservationSource
+
+
+@dataclass(frozen=True, slots=True)
 class TopupIntentProjectionResult:
     """Immutable participant result for completion or expiry projection."""
 
@@ -470,6 +510,21 @@ class TopupIntentProjectionResult:
     status: TopupIntentStatus
     payment_id: UUID | None
     changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TopupIntentLifecycleProjection:
+    """Shared, read-only lifecycle/blocker projection for all interfaces."""
+
+    normalized_status: TopupIntentLifecycleState
+    label: str
+    customer_message: str
+    reason_code: str | None
+    last_verification_at: datetime | None
+    blocks_another_attempt: bool
+    customer_retry_allowed: bool
+    stored_status: str
+    effective_status: TopupIntentStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -580,6 +635,137 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _gateway_observation_metadata(intent: TopupIntent) -> Mapping[str, object]:
+    value = (intent.metadata_ or {}).get("gateway_verification")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _gateway_terminal_metadata(intent: TopupIntent) -> Mapping[str, object]:
+    value = (intent.metadata_ or {}).get("gateway_terminal")
+    return value if isinstance(value, Mapping) else {}
+
+
+def project_topup_intent_lifecycle(
+    intent: TopupIntent,
+    *,
+    observed_at: datetime | None = None,
+) -> TopupIntentLifecycleProjection:
+    """Resolve effective lifecycle, blocker, retry, and safe display semantics."""
+
+    now = _as_utc(observed_at) or datetime.now(UTC)
+    evidence = _gateway_observation_metadata(intent)
+    terminal_evidence = _gateway_terminal_metadata(intent)
+    raw_observed_at = evidence.get("observed_at")
+    last_verification_at: datetime | None = None
+    if isinstance(raw_observed_at, str):
+        try:
+            last_verification_at = _as_utc(
+                datetime.fromisoformat(raw_observed_at.replace("Z", "+00:00"))
+            )
+        except ValueError:
+            last_verification_at = None
+    reason_code = str(evidence.get("reason_code") or "").strip() or None
+
+    try:
+        stored = TopupIntentStatus(intent.status)
+    except ValueError:
+        stored = TopupIntentStatus.pending
+    effective = stored
+    expires_at = _as_utc(intent.expires_at)
+    if (
+        intent.provider_type != DIRECT_TRANSFER_PROVIDER
+        and stored is TopupIntentStatus.pending
+        and expires_at is not None
+        and now >= expires_at
+    ):
+        effective = TopupIntentStatus.expired
+
+    if effective is TopupIntentStatus.completed:
+        state = TopupIntentLifecycleState.completed
+        label = "Completed"
+        message = "Payment completed."
+        reason_code = None
+        blocks = False
+        retry = False
+    elif effective is TopupIntentStatus.failed:
+        state = TopupIntentLifecycleState.failed
+        label = "Failed"
+        message = "Payment was not completed. You can try again."
+        reason_code = (
+            str(terminal_evidence.get("reason_code") or "").strip() or reason_code
+        )
+        blocks = False
+        retry = True
+    elif effective is TopupIntentStatus.abandoned:
+        state = TopupIntentLifecycleState.abandoned
+        label = "Abandoned"
+        message = "Payment was not completed. You can try again."
+        reason_code = (
+            str(terminal_evidence.get("reason_code") or "").strip() or reason_code
+        )
+        blocks = False
+        retry = True
+    elif effective is TopupIntentStatus.expired:
+        state = TopupIntentLifecycleState.expired
+        label = "Expired"
+        message = "This payment attempt expired. Start a new payment."
+        reason_code = INTENT_EXPIRED_REASON_CODE
+        blocks = False
+        retry = True
+    elif effective is TopupIntentStatus.canceled:
+        state = TopupIntentLifecycleState.canceled
+        label = "Canceled"
+        message = "Payment was not completed. You can try again."
+        reason_code = None
+        blocks = False
+        retry = True
+    elif intent.provider_type == DIRECT_TRANSFER_PROVIDER:
+        if effective is TopupIntentStatus.submitted:
+            state = TopupIntentLifecycleState.under_review
+            label = "Under review"
+            message = "Your transfer receipt is under review."
+        else:
+            state = TopupIntentLifecycleState.awaiting_receipt
+            label = "Awaiting receipt"
+            message = "Upload your transfer receipt to continue."
+        blocks = True
+        retry = False
+    else:
+        raw_outcome = str(evidence.get("outcome") or "")
+        if raw_outcome == PaymentGatewayVerificationOutcome.processing.value:
+            state = TopupIntentLifecycleState.processing
+            label = "Processing"
+            message = "Your payment is still processing. Please wait."
+        elif raw_outcome in {
+            PaymentGatewayVerificationOutcome.unavailable.value,
+            PaymentGatewayVerificationOutcome.unknown.value,
+        }:
+            state = TopupIntentLifecycleState.confirmation_unavailable
+            label = "Confirmation unavailable"
+            message = (
+                "Payment confirmation is temporarily unavailable. "
+                "Please wait before starting another payment."
+            )
+        else:
+            state = TopupIntentLifecycleState.awaiting_confirmation
+            label = "Awaiting confirmation"
+            message = "Waiting for payment confirmation."
+        blocks = True
+        retry = False
+
+    return TopupIntentLifecycleProjection(
+        normalized_status=state,
+        label=label,
+        customer_message=message,
+        reason_code=reason_code,
+        last_verification_at=last_verification_at,
+        blocks_another_attempt=blocks,
+        customer_retry_allowed=retry,
+        stored_status=intent.status,
+        effective_status=effective,
+    )
 
 
 def lock_topup_intent_scope(db: Session, intent_id: UUID) -> TopupIntent:
@@ -839,6 +1025,123 @@ def stage_topup_intent_failure(
         status=TopupIntentStatus.failed,
         payment_id=intent.completed_payment_id,
         changed=True,
+    )
+
+
+def stage_gateway_topup_observation(
+    db: Session,
+    command: RecordGatewayTopupObservationCommand,
+    *,
+    context: CommandContext,
+) -> TopupIntentProjectionResult:
+    """Persist safe provider evidence and own its non-money lifecycle consequence."""
+
+    observed_at = _as_utc(command.observed_at)
+    if observed_at is None:
+        raise _error("observation_time_invalid", "Gateway observation time is required")
+    observation = command.observation
+    if observation.outcome is PaymentGatewayVerificationOutcome.succeeded:
+        raise _error(
+            "observation_success_forbidden",
+            "Successful gateway evidence must use the settlement owner",
+        )
+    if observation.transaction is not None:
+        raise _error(
+            "observation_transaction_forbidden",
+            "Unsuccessful gateway evidence cannot carry transaction settlement data",
+        )
+
+    intent = lock_topup_intent_scope(db, command.intent_id)
+    if intent.provider_type == DIRECT_TRANSFER_PROVIDER:
+        raise _error(
+            "provider_mismatch",
+            "Direct-transfer intents cannot record gateway observations",
+            intent_id=str(intent.id),
+        )
+    if (
+        intent.completed_payment_id is not None
+        or intent.status == TopupIntentStatus.completed.value
+    ):
+        return TopupIntentProjectionResult(
+            intent_id=intent.id,
+            status=TopupIntentStatus.completed,
+            payment_id=intent.completed_payment_id,
+            changed=False,
+        )
+
+    evidence = {
+        "schema_version": 1,
+        "outcome": observation.outcome.value,
+        "provider_status": (
+            observation.provider_status.value if observation.provider_status else None
+        ),
+        "reason_code": observation.reason_code.value,
+        "observed_at": observed_at.isoformat(),
+        "source": command.source.value,
+    }
+    metadata = dict(intent.metadata_ or {})
+    original_metadata = dict(metadata)
+    metadata["gateway_verification"] = evidence
+
+    previous_status = intent.status
+    status_changed = False
+    if intent.status == TopupIntentStatus.pending.value:
+        if observation.outcome is PaymentGatewayVerificationOutcome.failed:
+            status_changed = set_topup_intent_status(
+                intent, TopupIntentStatus.failed, source=command.source.value
+            )
+            metadata["gateway_terminal"] = evidence
+        elif observation.outcome is PaymentGatewayVerificationOutcome.abandoned:
+            status_changed = set_topup_intent_status(
+                intent, TopupIntentStatus.abandoned, source=command.source.value
+            )
+            metadata["gateway_terminal"] = evidence
+        else:
+            expires_at = _as_utc(intent.expires_at)
+            if expires_at is not None and observed_at >= expires_at:
+                status_changed = set_topup_intent_status(
+                    intent, TopupIntentStatus.expired, source=command.source.value
+                )
+
+    evidence_changed = metadata != original_metadata
+    if evidence_changed:
+        intent.metadata_ = metadata
+
+    if evidence_changed or status_changed:
+        db.add(intent)
+        emit_event(
+            db,
+            EventType.topup_intent_gateway_observed,
+            {
+                "schema_version": 1,
+                "topup_intent_id": str(intent.id),
+                "account_id": str(intent.account_id) if intent.account_id else None,
+                "billing_account_id": (
+                    str(intent.billing_account_id)
+                    if intent.billing_account_id
+                    else None
+                ),
+                "provider_type": intent.provider_type,
+                "outcome": observation.outcome.value,
+                "provider_status": evidence["provider_status"],
+                "reason_code": observation.reason_code.value,
+                "observed_at": observed_at.isoformat(),
+                "previous_status": previous_status,
+                "status": intent.status,
+                "source": command.source.value,
+                "command_id": str(context.command_id),
+                "correlation_id": str(context.correlation_id),
+            },
+            actor=context.actor,
+            subscriber_id=intent.account_id,
+            account_id=intent.account_id,
+        )
+
+    return TopupIntentProjectionResult(
+        intent_id=intent.id,
+        status=TopupIntentStatus(intent.status),
+        payment_id=intent.completed_payment_id,
+        changed=evidence_changed or status_changed,
     )
 
 

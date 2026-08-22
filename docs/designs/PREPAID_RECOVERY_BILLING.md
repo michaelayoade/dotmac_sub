@@ -12,7 +12,8 @@ invoice is fully settled.
 
 `financial.prepaid_recovery_billing` owns only the cross-domain coordination:
 
-1. create one recovery draft for the exact suspended prepaid service;
+1. create one recovery draft for the exact suspended prepaid service from the
+   prepaid renewal owner's price and tax policy;
 
 It does not void or settle invoices, change service status directly, spend the
 generic account balance, or decide that a credit note is valid. Invoice voiding
@@ -50,7 +51,8 @@ to `financial.prepaid_draft_reconciliation`.
   do not block creation.
 - Replay of the same confirmed recovery fingerprint returns the matching draft
   without creating another invoice.
-- Draft creation binds the price, tax, period, and subscription state.
+- Draft creation binds the renewal owner's resolved price, tax rate,
+  tax-application policy, period, and subscription state.
 - Reconciliation is all-or-nothing. Insufficient, unbacked, stale, or ambiguous
   funding leaves the invoice and access unchanged.
 - Credit notes are never treated as generic balance. Their application is a

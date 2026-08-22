@@ -141,6 +141,22 @@ restores the previous state exactly. There is no data change to reverse. The
 only durable consequence of a mistake is a wrong classification, which is a
 forward-fix in the same file.
 
+## Amendment — 2026-08-22: the binding is repinned
+
+The Context above cites `68c7a62e…`, the revision that ACCEPTED the programme.
+That remains the correct history and is left as written. The binding in
+`app/migration_source/programme.py` now pins
+`d91a87f6823bfd2afa6c2025bdb1af644331fa39` instead — the revision that answered
+dec-isp-003 through dec-isp-007 and added `dotmac-addresses` to cohort 1.
+
+A pin is not a citation. The Context says where the programme was accepted; the
+pin says which revision's cohort definition Sub is transcribing, and pointing it
+at a revision predating five answered decisions and a sixth component described
+a cohort that no longer existed. The binding also gained
+`resolved_decision_ids`, because Sub's view could previously say only what was
+still open, so an answered decision left no trace and the record read as though
+nothing had been settled.
+
 ## Amendment — 2026-08-21: three axes and a disposition
 
 The inventory's single `SurfaceClassification` was answering three independent

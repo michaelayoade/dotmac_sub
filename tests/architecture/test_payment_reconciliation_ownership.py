@@ -68,26 +68,26 @@ def test_payment_reconciliation_has_complete_coordinator_contract() -> None:
 def test_each_reconciliation_consequence_is_one_typed_owner_command() -> None:
     source = OWNER_PATH.read_text(encoding="utf-8")
     verified = _function("settle_verified_reconciled_topup")
-    unsuccessful = _function("project_unsuccessful_reconciled_topup")
+    observation = _function("record_reconciled_gateway_observation")
 
     assert source.count("execute_owner_command(") == 2
     assert "execute_owner_command" in _name_calls(verified)
-    assert "execute_owner_command" in _name_calls(unsuccessful)
+    assert "execute_owner_command" in _name_calls(observation)
     assert "CommandContext" in source
     assert "OwnerCommandDefinition" in source
 
 
 def test_reconciliation_composes_named_flush_only_participants() -> None:
     verified = _function("_stage_verified_settlement")
-    unsuccessful = _function("_stage_unsuccessful_observation")
+    observation = _function("_stage_gateway_observation")
     verified_calls = _attribute_calls(verified) | _name_calls(verified)
-    unsuccessful_calls = _attribute_calls(unsuccessful) | _name_calls(unsuccessful)
+    observation_calls = _attribute_calls(observation) | _name_calls(observation)
 
     assert "stage_verified_settlement" in verified_calls
     assert "stage_verified_reconciliation_event" in verified_calls
     assert "stage_topup_intent_completion" in verified_calls
-    assert "stage_topup_intent_expiry" in unsuccessful_calls
-    for calls in (verified_calls, unsuccessful_calls):
+    assert "stage_gateway_topup_observation" in observation_calls
+    for calls in (verified_calls, observation_calls):
         assert "commit" not in calls
         assert "rollback" not in calls
 
@@ -101,7 +101,7 @@ def test_sweep_separates_candidates_transport_and_consequence_transactions() -> 
     assert "release_read_transaction" in sweep_calls
     assert "observe_verification" in sweep_calls
     assert "settle_verified_reconciled_topup" in sweep_calls
-    assert "project_unsuccessful_reconciled_topup" in sweep_calls
+    assert "record_reconciled_gateway_observation" in sweep_calls
     assert "SUPPORTED_PROVIDER_TYPES" in source
     assert "topup_reconciliation_batch_size" in ast.unparse(candidates)
     assert "_GATEWAY_PROVIDERS" not in source

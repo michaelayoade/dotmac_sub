@@ -34,6 +34,7 @@ from app.models.idempotency import IdempotencyKey
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
     CreditNoteApplicationPreviewRequest,
+    CreditNoteApplicationReversalRequest,
     CreditNoteApplyRequest,
     CreditNoteCreate,
     CreditNoteIssueApplicationDisposition,
@@ -76,6 +77,7 @@ from app.services.sync_feeds import apply_sync_page, sync_page_response
 logger = logging.getLogger(__name__)
 
 _APPLICATION_IDEMPOTENCY_SCOPE = "credit_note_application"
+_APPLICATION_REVERSAL_IDEMPOTENCY_SCOPE = "credit_note_application_reversal"
 _ISSUE_IDEMPOTENCY_SCOPE = "credit_note_issue"
 _VOID_IDEMPOTENCY_SCOPE = "credit_note_void"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
@@ -98,6 +100,15 @@ class CreditApplicationOption:
     currency: str
     available_amount: Decimal
     max_applicable_amount: Decimal
+
+
+@dataclass(frozen=True)
+class CreditApplicationReversalOption:
+    application_id: UUID
+    credit_note_id: UUID
+    credit_number: str | None
+    currency: str
+    amount: Decimal
 
 
 @dataclass(frozen=True)
@@ -155,6 +166,38 @@ class CreditApplicationResult:
                 }
             )
         return metadata
+
+
+@dataclass(frozen=True)
+class CreditApplicationReversalPreview:
+    application_id: UUID
+    credit_note_id: UUID
+    credit_number: str | None
+    invoice_id: UUID
+    invoice_number: str | None
+    account_id: UUID
+    currency: str
+    reversal_amount: Decimal
+    invoice_receivable_before: Decimal
+    invoice_receivable_after: Decimal
+    credit_applied_before: Decimal
+    credit_applied_after: Decimal
+    credit_available_before: Decimal | None
+    credit_available_after: Decimal | None
+    reverses_ledger_entry_id: UUID
+    reverses_consumption_ledger_entry_id: UUID | None
+    access_consequence: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class CreditApplicationReversalResult:
+    application: CreditNoteApplication
+    reversal_application: CreditNoteApplication
+    ledger_entry: LedgerEntry
+    consumption_ledger_entry: LedgerEntry | None
+    preview: CreditApplicationReversalPreview | None
+    idempotent_replay: bool = False
 
 
 @dataclass(frozen=True)
@@ -844,15 +887,20 @@ def _funded_credit_available(db: Session, credit_note: CreditNote) -> Decimal:
             continue
         entry = db.get(LedgerEntry, application.consumption_ledger_entry_id)
         amount = round_money(application.amount)
+        expected_type = (
+            LedgerEntryType.debit
+            if amount >= Decimal("0.00")
+            else LedgerEntryType.credit
+        )
         if (
             entry is None
             or not entry.is_active
             or entry.account_id != credit_note.account_id
             or entry.invoice_id is not None
-            or entry.entry_type != LedgerEntryType.debit
+            or entry.entry_type != expected_type
             or entry.source != LedgerSource.credit_note
             or entry.currency != credit_note.currency
-            or round_money(entry.amount) != amount
+            or round_money(entry.amount) != abs(amount)
         ):
             raise HTTPException(
                 status_code=409,
@@ -2204,6 +2252,400 @@ class CreditNotes(ListResponseMixin):
             preview=None,
             idempotent_replay=True,
         )
+
+    @staticmethod
+    def _reversal_replay(
+        db: Session,
+        *,
+        key: str,
+        application_id: str,
+        preview_fingerprint: str,
+    ) -> CreditApplicationReversalResult | None:
+        reservation = db.scalars(
+            select(IdempotencyKey).where(
+                IdempotencyKey.scope == _APPLICATION_REVERSAL_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == key,
+            )
+        ).first()
+        if reservation is None:
+            return None
+        if not reservation.ref_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application reversal is already being processed",
+            )
+        reversal = get_by_id(db, CreditNoteApplication, reservation.ref_id)
+        if reversal is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application reversal evidence is incomplete",
+            )
+        if reversal.preview_fingerprint != preview_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency key was used with a different reversal preview",
+            )
+        original = get_by_id(db, CreditNoteApplication, application_id)
+        if original is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Original credit application evidence is incomplete",
+            )
+        ledger_entry = db.get(LedgerEntry, reversal.ledger_entry_id)
+        if ledger_entry is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application reversal ledger evidence was not found",
+            )
+        if (
+            original.ledger_entry_id is None
+            or ledger_entry.reversal_of_entry_id != original.ledger_entry_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application reversal belongs to another application",
+            )
+        return CreditApplicationReversalResult(
+            application=original,
+            reversal_application=reversal,
+            ledger_entry=ledger_entry,
+            consumption_ledger_entry=(
+                db.get(LedgerEntry, reversal.consumption_ledger_entry_id)
+                if reversal.consumption_ledger_entry_id
+                else None
+            ),
+            preview=None,
+            idempotent_replay=True,
+        )
+
+    @staticmethod
+    def _active_application_reversal(
+        db: Session, application: CreditNoteApplication
+    ) -> CreditNoteApplication | None:
+        if application.ledger_entry_id is None:
+            return None
+        rows = (
+            db.query(CreditNoteApplication)
+            .filter(CreditNoteApplication.credit_note_id == application.credit_note_id)
+            .filter(CreditNoteApplication.invoice_id == application.invoice_id)
+            .filter(CreditNoteApplication.amount < 0)
+            .all()
+        )
+        for row in rows:
+            ledger = db.get(LedgerEntry, row.ledger_entry_id)
+            if ledger and ledger.reversal_of_entry_id == application.ledger_entry_id:
+                return row
+        return None
+
+    @staticmethod
+    def preview_application_reversal(
+        db: Session,
+        application_id: str,
+    ) -> CreditApplicationReversalPreview:
+        application = get_by_id(db, CreditNoteApplication, application_id)
+        if application is None:
+            raise HTTPException(
+                status_code=404, detail="Credit note application not found"
+            )
+        amount = round_money(application.amount)
+        if amount <= Decimal("0.00"):
+            raise HTTPException(
+                status_code=409,
+                detail="Only a positive credit note application can be reversed",
+            )
+        if application.ledger_entry_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application is missing ledger evidence",
+            )
+        if CreditNotes._active_application_reversal(db, application) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application has already been reversed",
+            )
+        credit_note = get_by_id(db, CreditNote, application.credit_note_id)
+        invoice = get_by_id(db, Invoice, application.invoice_id)
+        if credit_note is None or invoice is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application document evidence is incomplete",
+            )
+        ledger_entry = db.get(LedgerEntry, application.ledger_entry_id)
+        if (
+            ledger_entry is None
+            or not ledger_entry.is_active
+            or ledger_entry.invoice_id != invoice.id
+            or ledger_entry.account_id != invoice.account_id
+            or ledger_entry.entry_type != LedgerEntryType.credit
+            or ledger_entry.source != LedgerSource.credit_note
+            or round_money(ledger_entry.amount) != amount
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application ledger evidence is incomplete",
+            )
+        consumption_ledger_entry = (
+            db.get(LedgerEntry, application.consumption_ledger_entry_id)
+            if application.consumption_ledger_entry_id
+            else None
+        )
+        if application.consumption_ledger_entry_id is not None and (
+            consumption_ledger_entry is None
+            or not consumption_ledger_entry.is_active
+            or consumption_ledger_entry.invoice_id is not None
+            or consumption_ledger_entry.account_id != credit_note.account_id
+            or consumption_ledger_entry.entry_type != LedgerEntryType.debit
+            or consumption_ledger_entry.source != LedgerSource.credit_note
+            or round_money(consumption_ledger_entry.amount) != amount
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application consumption evidence is incomplete",
+            )
+        from app.services.billing._common import resolve_invoice_settlement_amounts
+
+        settlement = resolve_invoice_settlement_amounts(db, invoice.id)
+        if round_money(settlement.credits_applied) < amount:
+            raise HTTPException(
+                status_code=409,
+                detail="Invoice credit evidence is below the reversal amount",
+            )
+        invoice_receivable_before = round_money(invoice.balance_due)
+        invoice_receivable_after = round_money(invoice_receivable_before + amount)
+        credit_applied_before = round_money(credit_note.applied_total)
+        credit_applied_after = round_money(credit_applied_before - amount)
+        available_before: Decimal | None
+        available_after: Decimal | None
+        if application.consumption_ledger_entry_id is not None:
+            available_before = _funded_credit_available(db, credit_note)
+            available_after = round_money(available_before + amount)
+        else:
+            available_before = None
+            available_after = None
+        fingerprint = _stable_fingerprint(
+            "credit_note_application_reversal",
+            application_id=application.id,
+            credit_note_id=credit_note.id,
+            invoice_id=invoice.id,
+            account_id=invoice.account_id,
+            currency=invoice.currency,
+            amount=amount,
+            ledger_entry_id=application.ledger_entry_id,
+            consumption_ledger_entry_id=application.consumption_ledger_entry_id,
+            invoice_receivable_before=invoice_receivable_before,
+            credit_applied_before=credit_applied_before,
+            credit_available_before=available_before,
+        )
+        return CreditApplicationReversalPreview(
+            application_id=application.id,
+            credit_note_id=credit_note.id,
+            credit_number=credit_note.credit_number,
+            invoice_id=invoice.id,
+            invoice_number=invoice.invoice_number,
+            account_id=invoice.account_id,
+            currency=invoice.currency,
+            reversal_amount=amount,
+            invoice_receivable_before=invoice_receivable_before,
+            invoice_receivable_after=invoice_receivable_after,
+            credit_applied_before=credit_applied_before,
+            credit_applied_after=credit_applied_after,
+            credit_available_before=available_before,
+            credit_available_after=available_after,
+            reverses_ledger_entry_id=application.ledger_entry_id,
+            reverses_consumption_ledger_entry_id=(
+                application.consumption_ledger_entry_id
+            ),
+            access_consequence="recheck_after_credit_application_reversal",
+            fingerprint=fingerprint,
+        )
+
+    @staticmethod
+    def list_reversible_applications(
+        db: Session, invoice_id: str
+    ) -> Sequence[CreditApplicationReversalOption]:
+        invoice = get_by_id(db, Invoice, invoice_id)
+        if invoice is None:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        applications = (
+            db.query(CreditNoteApplication)
+            .filter(CreditNoteApplication.invoice_id == invoice.id)
+            .filter(CreditNoteApplication.amount > 0)
+            .order_by(CreditNoteApplication.created_at.desc())
+            .all()
+        )
+        options: list[CreditApplicationReversalOption] = []
+        for application in applications:
+            try:
+                preview = CreditNotes.preview_application_reversal(
+                    db, str(application.id)
+                )
+            except HTTPException:
+                continue
+            options.append(
+                CreditApplicationReversalOption(
+                    application_id=preview.application_id,
+                    credit_note_id=preview.credit_note_id,
+                    credit_number=preview.credit_number,
+                    currency=preview.currency,
+                    amount=preview.reversal_amount,
+                )
+            )
+        return options
+
+    @staticmethod
+    def reverse_application_with_evidence(
+        db: Session,
+        payload: CreditNoteApplicationReversalRequest,
+        *,
+        stage_audit: bool = True,
+    ) -> CreditApplicationReversalResult:
+        application_id = str(payload.application_id)
+        key = _normalize_idempotency_key(payload.idempotency_key)
+        replay = CreditNotes._reversal_replay(
+            db,
+            key=key,
+            application_id=application_id,
+            preview_fingerprint=payload.preview_fingerprint,
+        )
+        if replay is not None:
+            return replay
+        initial = get_by_id(db, CreditNoteApplication, application_id)
+        if initial is None:
+            raise HTTPException(
+                status_code=404, detail="Credit note application not found"
+            )
+        initial_note = get_by_id(db, CreditNote, initial.credit_note_id)
+        if initial_note is None:
+            raise HTTPException(status_code=404, detail="Credit note not found")
+        lock_account(db, str(initial_note.account_id))
+        credit_note = lock_for_update(db, CreditNote, initial_note.id)
+        application = lock_for_update(db, CreditNoteApplication, initial.id)
+        invoice = lock_for_update(db, Invoice, initial.invoice_id)
+        if credit_note is None or application is None or invoice is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application evidence is incomplete",
+            )
+        replay = CreditNotes._reversal_replay(
+            db,
+            key=key,
+            application_id=application_id,
+            preview_fingerprint=payload.preview_fingerprint,
+        )
+        if replay is not None:
+            return replay
+        preview = CreditNotes.preview_application_reversal(db, str(application.id))
+        if preview.fingerprint != payload.preview_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Financial state changed after preview; preview again",
+            )
+        reservation = IdempotencyKey(
+            scope=_APPLICATION_REVERSAL_IDEMPOTENCY_SCOPE,
+            key=key,
+            account_id=invoice.account_id,
+        )
+        db.add(reservation)
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            replay = CreditNotes._reversal_replay(
+                db,
+                key=key,
+                application_id=application_id,
+                preview_fingerprint=payload.preview_fingerprint,
+            )
+            if replay is not None:
+                return replay
+            raise HTTPException(
+                status_code=409,
+                detail="Credit application reversal is already being processed",
+            ) from exc
+        try:
+            ledger_entry = LedgerEntries.reverse(
+                db,
+                str(application.ledger_entry_id),
+                memo=(
+                    payload.memo
+                    or f"Credit note application reversal: {application.id}"
+                ),
+                commit=False,
+            )
+            consumption_entry = None
+            if application.consumption_ledger_entry_id is not None:
+                consumption_entry = LedgerEntries.reverse(
+                    db,
+                    str(application.consumption_ledger_entry_id),
+                    memo=(
+                        payload.memo
+                        or f"Credit note application funding reversal: {application.id}"
+                    ),
+                    commit=False,
+                )
+            reversal = CreditNoteApplication(
+                credit_note_id=application.credit_note_id,
+                invoice_id=application.invoice_id,
+                ledger_entry_id=ledger_entry.id,
+                consumption_ledger_entry_id=(
+                    consumption_entry.id if consumption_entry else None
+                ),
+                preview_fingerprint=preview.fingerprint,
+                amount=-preview.reversal_amount,
+                memo=payload.memo or f"Reversal of credit application {application.id}",
+            )
+            db.add(reversal)
+            db.flush()
+            reservation.ref_id = str(reversal.id)
+            _recalculate_invoice_totals(db, invoice)
+            _recalculate_credit_note_totals(db, credit_note)
+            db.flush()
+            from app.services.billing.invoices import (
+                reconcile_service_after_invoice_settlement,
+            )
+
+            reconcile_service_after_invoice_settlement(
+                db, invoice.account_id, invoice.id
+            )
+            if stage_audit:
+                _stage_credit_audit(
+                    db,
+                    action="reverse_application",
+                    credit_note_id=credit_note.id,
+                    metadata={
+                        "application_id": str(application.id),
+                        "reversal_application_id": str(reversal.id),
+                        "invoice_id": str(invoice.id),
+                        "ledger_entry_id": str(ledger_entry.id),
+                        "reverses_ledger_entry_id": str(application.ledger_entry_id),
+                        "consumption_ledger_entry_id": (
+                            str(consumption_entry.id) if consumption_entry else None
+                        ),
+                        "reverses_consumption_ledger_entry_id": (
+                            str(application.consumption_ledger_entry_id)
+                            if application.consumption_ledger_entry_id
+                            else None
+                        ),
+                        "amount": str(preview.reversal_amount),
+                        "currency": preview.currency,
+                        "preview_fingerprint": preview.fingerprint,
+                        "access_consequence": preview.access_consequence,
+                    },
+                )
+            result = CreditApplicationReversalResult(
+                application=application,
+                reversal_application=reversal,
+                ledger_entry=ledger_entry,
+                consumption_ledger_entry=consumption_entry,
+                preview=preview,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(result.reversal_application)
+        db.refresh(result.ledger_entry)
+        return result
 
     @staticmethod
     def apply_with_evidence(

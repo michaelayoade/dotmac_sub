@@ -56,7 +56,9 @@ from app.services.topup_intents import (
     CompleteTopupIntentCommand,
     TopupIntentChannel,
     TopupIntentCompletionSource,
+    TopupIntentLifecycleState,
     TopupIntentStatus,
+    project_topup_intent_lifecycle,
     stage_topup_intent_completion,
 )
 
@@ -113,6 +115,8 @@ class ActiveDepositPhase(str, Enum):
 
     awaiting_receipt = "awaiting_receipt"
     awaiting_provider_confirmation = "awaiting_provider_confirmation"
+    processing = "processing"
+    confirmation_unavailable = "confirmation_unavailable"
     under_review = "under_review"
     receipt_rejected = "receipt_rejected"
 
@@ -140,6 +144,7 @@ class ActiveDepositRequest:
     created_at: datetime
     expires_at: datetime | None
     observed_at: datetime
+    message: str
     rejection_reason: str | None = None
 
 
@@ -332,14 +337,11 @@ def _pending_incompatible_intent(
     ).all()
     now = observed_at or datetime.now(UTC)
     for intent in candidates:
-        expires_at = intent.expires_at
-        if expires_at is not None:
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
-            if expires_at <= now:
-                continue
         flow = str((intent.metadata_ or {}).get("payment_flow") or "")
-        if intent.purpose == PURPOSE or flow == "account_topup":
+        lifecycle = project_topup_intent_lifecycle(intent, observed_at=now)
+        if lifecycle.blocks_another_attempt and (
+            intent.purpose == PURPOSE or flow == "account_topup"
+        ):
             return intent
     return None
 
@@ -448,8 +450,18 @@ class AccountCreditDeposits:
             phase = ActiveDepositPhase.awaiting_receipt
             next_action = ActiveDepositNextAction.upload_receipt
         else:
-            phase = ActiveDepositPhase.awaiting_provider_confirmation
+            lifecycle = project_topup_intent_lifecycle(intent, observed_at=observed)
+            if lifecycle.normalized_status is TopupIntentLifecycleState.processing:
+                phase = ActiveDepositPhase.processing
+            elif (
+                lifecycle.normalized_status
+                is TopupIntentLifecycleState.confirmation_unavailable
+            ):
+                phase = ActiveDepositPhase.confirmation_unavailable
+            else:
+                phase = ActiveDepositPhase.awaiting_provider_confirmation
             next_action = ActiveDepositNextAction.wait_for_provider
+        lifecycle = project_topup_intent_lifecycle(intent, observed_at=observed)
         return ActiveDepositRequest(
             intent_id=intent.id,
             phase=phase,
@@ -461,6 +473,7 @@ class AccountCreditDeposits:
             created_at=intent.created_at,
             expires_at=intent.expires_at,
             observed_at=observed,
+            message=lifecycle.customer_message,
             rejection_reason=rejection_reason,
         )
 

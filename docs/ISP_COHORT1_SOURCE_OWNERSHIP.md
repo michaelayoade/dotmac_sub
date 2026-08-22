@@ -15,14 +15,14 @@ implements.
 | | |
 |---|---|
 | Programme | `pgm-dotmac-isp-replacement` |
-| Accepted revision | `68c7a62e2aafd9c236662a5a69d410ea002b4cdb` |
+| Accepted revision | `d91a87f6823bfd2afa6c2025bdb1af644331fa39` |
 | Record | `programmes/dotmac-isp-replacement.json` in `dotmac_governance` |
 | Decision | `docs/adr/0012-dotmac-isp-replacement-programme.md` (Accepted) |
 | Source assembly | `asm-dotmac-sub-legacy` — **source-authoritative** |
 | Target assembly | `asm-dotmac-isp` — candidate, independent database |
 | Track | `track-isp-sub-cutover` |
 | Cohort | `cohort-isp-01`, sequence 1, state **blocked** |
-| Components | kernel (reuse), UI (reuse), `dotmac-party` (release), `dotmac-brand-profiles` (adopt), `dotmac-customers` (build) |
+| Components | kernel (reuse), UI (reuse), `dotmac-party` (release), `dotmac-brand-profiles` (adopt), `dotmac-customers` (build), `dotmac-addresses` (build) |
 
 Sub's readiness work produces inputs for `ctl-isp-006` (source dispositions and
 idempotent replay), `ctl-isp-007` (zero-unexplained-drift shadow) and
@@ -63,13 +63,95 @@ operator-tenant data.
 | `party_external_reference` | `party_external_references` | `PartyExternalReference` | `party.registry` | `dotmac-party` |
 | `customer_account` | `subscribers` | `Subscriber` | `customer.accounts` | `dotmac-customers` |
 | `customer_contact` | `subscriber_contacts` | `SubscriberContact` | **none declared** | `dotmac-customers` |
-| `customer_address` | `addresses` | `Address` | **none declared** | `dotmac-customers` |
+| `customer_address` | `addresses` | `Address` | `customer.accounts` | `dotmac-addresses` |
 | `organization` | `organizations` | `Organization` | **none declared** | `dotmac-customers` |
 | `organization_membership` | `organization_memberships` | `OrganizationMembership` | **none declared** | `dotmac-customers` |
 | `brand_profile` | `brand_profiles` | `BrandProfile` | `customer.branding` | `dotmac-brand-profiles` |
 
 The expected target component is an expectation recorded from the Governance
 matrix. It is not a plan, an approval, or a claim that any module is released.
+
+### Addresses are owned, four ways
+
+An earlier version of this document recorded `customer_address` as having no
+declared owner. **That was wrong**, and it mattered: it made a plain bypass of a
+real owner look like unowned debt nobody could route around, and it very nearly
+produced a second address service alongside the one Sub already has.
+
+`docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md` splits address ownership
+across four services, all declared in the SOT registry:
+
+| Concern | Owner |
+|---|---|
+| Service address identity and text | `customer.accounts` (`app/services/subscriber.py`) |
+| Coordinates and the map projection | `gis.spatial_sync` (`app/services/gis_sync.py`) |
+| New location capture — field arrival, portal pin, agent | `customer.location_capture` (`app/services/location_capture.py`) |
+| Capture adjudication and the verification ledger | `customer.location_verification` (`app/services/geocode_reconciler.py`) |
+
+Those four are the **product-first extraction source** for `dotmac-addresses`.
+dec-isp-007 asks that owner to hold "normalized address, geospatial data and
+verification history" — which is precisely what these four already own between
+them, so the extraction has proven implementations to draw on rather than being
+greenfield.
+
+The decision's question said addresses had "no named owner at all". True of the
+target, false of Sub. The distinction is worth keeping straight, because
+product-first extraction is only possible where an implementation already
+exists.
+
+#### Why three modules bypassed those owners — and what changed
+
+Being declared was not enough to be callable. Until 2026-08-22 neither address
+owner offered an operation a caller inside an existing transaction could use:
+
+- `customer.accounts` exposed address creation only as `Addresses.create`,
+  which **committed** and raised `HTTPException` — a transport error from a
+  domain service, against this repository's own adapter rule.
+- `gis.spatial_sync` exposed only committing full-table sweeps
+  (`GeoSync.sync_addresses`), with the actual per-address write in a private
+  helper.
+
+So `customer_location_requests.py` constructed `Address` rows and their
+`GeoLocation` projections itself, and `app/services/field/map_assets.py` kept a
+third private copy of the EWKT converter. That produced two live defects:
+
+1. **Reversed axes on every approved map pin.** `_point_wkt(latitude,
+   longitude)` returns `POINT(longitude latitude)` — WKT axis order. Both
+   `customer_location_requests` call sites passed
+   `_point_wkt(address.longitude, address.latitude)`, so `Address.geom` was
+   written with the two swapped while `Address.latitude`/`.longitude` stayed
+   correct. `gis_sync.py` called it correctly, so the two disagreed in silence.
+   A comment at the second site read "Match approve_request's existing arg
+   order" — the defect propagated because matching a wrong call site looked
+   like correctness.
+2. **A projection with no geometry.** `GeoSync.sync_addresses` set
+   `GeoLocation.latitude`/`.longitude` and never `GeoLocation.geom`, while the
+   duplicate in `customer_location_requests` did. Spatial queries read `geom`.
+
+Both are fixed by making the owners callable rather than by fixing the callers:
+
+- `app.services.gis.point_wkt(*, latitude, longitude)` is **keyword-only**, so
+  the positional reversal that caused defect 1 is now a `TypeError`. It is the
+  only converter in the repository.
+- `subscriber.create_address(db, payload, *, geocode=False)` is flush-only and
+  raises `AddressOwnerError`; `Addresses.create` is the HTTP adapter over it.
+- `gis_sync.project_address_point(db, address, *, latitude, longitude)` is
+  flush-only and idempotent, and writes latitude, longitude **and** `geom` on
+  both the `Address` and its `GeoLocation`. `GeoSync.sync_addresses` reuses
+  that same operation, which is what closes defect 2 for the sweep as well.
+
+`gis_sync.py` therefore enters the writer census for the first time. That is
+the intended direction: the census counts files, not owners, and membership
+rose while `customer_location_requests.py` fell from six write sites to one and
+the cohort total fell from 101 to 99.
+
+**The stored corruption is not repaired by this change.** Rows written before
+the fix still hold swapped `Address.geom`, and projections created by the sweep
+still hold a null `geom`. Repairing them is a separate, separately authorized,
+measured run of the full sweep with before/after null, drift and digest
+counts — deliberately not automatic, because a sweep that rewrites every
+address is exactly the shape of operation that should not ride along in a code
+merge.
 
 ## Writer census
 
@@ -93,11 +175,11 @@ already-baselined files looks like an ordinary shrink-and-grow pair.
 
 | Family | Files | Write sites |
 |---|---|---|
-| `service` | 17 | 66 |
+| `service` | 18 | 64 |
 | `web_presenter` | 5 | 13 |
 | `cli_script` | 6 | 14 |
 | `migration` | 6 | 8 |
-| **total** | **34** | **101** |
+| **total** | **35** | **99** |
 
 `api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
 `event_handler`, `websocket`, `importer`, `poller`, `app_module` and
@@ -127,7 +209,7 @@ inventory now answers them separately.
 |---|---|
 | `PARALLEL_WRITER` | 18 |
 | `NO_AUTHORITY` | 13 |
-| `DECLARED_OWNER` | 6 |
+| `DECLARED_OWNER` | 7 |
 | `SCHEMA_LINEAGE` | 6 |
 | `PROJECTION_WRITER` | 2 |
 | `UNDETERMINED` | 0 |
@@ -136,7 +218,7 @@ inventory now answers them separately.
 
 | `BoundaryRole` | Files |
 |---|---|
-| `PERSISTS` | 34 |
+| `PERSISTS` | 35 |
 | `DELEGATES` | 8 |
 | `READS` | 2 |
 | `TRANSPORTS` | 1 |
@@ -147,7 +229,7 @@ inventory now answers them separately.
 
 | `Reachability` | Files |
 |---|---|
-| `INTERNAL_ONLY` | 21 |
+| `INTERNAL_ONLY` | 22 |
 | `ONLINE_REQUEST` | 9 |
 | `APPLIED_ONCE` | 6 |
 | `OPERATOR_COMMAND` | 4 |
@@ -163,7 +245,7 @@ authorities; `NO_AUTHORITY` appears with five different boundary roles;
 `INTERNAL_ONLY` appears with four different authorities. If that ever
 collapses, the axes should be merged rather than kept apart for appearances.
 
-Of the 34 writing surfaces, **26 can write production again**. The other eight
+Of the 35 writing surfaces, **27 can write production again**. The other eight
 cannot: two touch only disposable databases and six are applied migrations
 Alembic will not re-run. All eight stay in the ratchet, because a *new* one is
 exactly what the guard should catch; none counts as something a cutover has to
@@ -179,7 +261,7 @@ it meant — and there is no second place to edit, so the two cannot disagree.
 |---|---|
 | `LEGACY_PARALLEL_WRITER` | 26 |
 | `AUTHORIZED_ADAPTER` | 8 |
-| `AUTHORITATIVE_WRITER` | 6 |
+| `AUTHORITATIVE_WRITER` | 7 |
 | `DERIVED_PROJECTION` | 2 |
 | `READ_ONLY_CONSUMER` | 2 |
 | `TRANSPORT` | 1 |
@@ -206,7 +288,7 @@ in another application.
 | `Disposition` | Files | Meaning |
 |---|---|---|
 | `ROUTE_THROUGH_OWNER_FIRST` | 14 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
-| `RETIRE_AFTER_CUTOVER` | 12 | Displaced by the target; must reach zero for `ctl-isp-009` |
+| `RETIRE_AFTER_CUTOVER` | 13 | Displaced by the target; must reach zero for `ctl-isp-009` |
 | `REPOINT_TO_TARGET_API` | 11 | Reads or forwards a cohort fact; after the switch it must reach the target through a versioned contract |
 | `HISTORICAL_NO_ACTION` | 6 | An applied migration; nothing to retire |
 | `NON_PRODUCTION_NO_ACTION` | 2 | Writes only disposable databases |
@@ -219,8 +301,8 @@ meaning "nothing happens" would be the one anybody reached for to avoid
 deciding.
 
 **Every counted writer has an individual disposition; the readers take a
-declared default.** 386 files reference cohort state and 45 are inventoried
-here. Assigning an individual disposition to the other 343 would be fabrication
+declared default.** 386 files reference cohort state and 46 are inventoried
+here. Assigning an individual disposition to the other 342 would be fabrication
 at scale — the reference census is a bounded reach, not an impact analysis, and
 many of those files only mention a model in a type hint.
 
@@ -238,8 +320,8 @@ Subscriber projection writes are displaced.
 
 `ROUTE_THROUGH_OWNER_FIRST` is the one that gates `ctl-isp-007` rather than
 `ctl-isp-009`: a shadow comparison run against a source with two writers cannot
-tell drift from the second writer, so those twelve have to be routed through
-their owners before a comparison means anything.
+tell drift from the second writer, so those fourteen have to be routed
+through their owners before a comparison means anything.
 
 ### No undecided surfaces
 
@@ -270,6 +352,7 @@ account rows belong to cohort 1.
 |---|---|---|
 | `app/services/party.py` | `party.registry` | 19 |
 | `app/services/subscriber.py` | `customer.accounts` | 14 |
+| `app/services/gis_sync.py` | `gis.spatial_sync` | 3 |
 | `app/services/web_customer_actions.py` | `customer.profile_commands` | 7 |
 | `app/services/brand_profiles.py` | `customer.branding` | 2 |
 | `app/services/subscriber_profile_cleanup.py` | `customer.profile_cleanup` | 2 |
@@ -299,7 +382,7 @@ Twenty-six files write a cohort fact some other owner is declared to own.
 **Eighteen of them can do it again**, and that eighteen is the set `ctl-isp-009`
 must ratchet to zero; the remaining eight are listed for completeness and
 marked non-production. Fourteen now carry `ROUTE_THROUGH_OWNER_FIRST` and
-twelve `RETIRE_AFTER_CUTOVER`, following the 2026-08-21 decisions.
+thirteen `RETIRE_AFTER_CUTOVER`, following the 2026-08-21 decisions.
 
 | Path | Bypasses | Entity |
 |---|---|---|
@@ -307,7 +390,7 @@ twelve `RETIRE_AFTER_CUTOVER`, following the 2026-08-21 decisions.
 | `app/services/billing_cleanup_remediation.py` | `customer.accounts` | `billing_mode` |
 | `app/services/crm_portal.py` | `party.registry` | `crm_subscriber_id` |
 | `app/services/crm_ticket_pull.py` | `party.registry` | `crm_subscriber_id` |
-| `app/services/customer_location_requests.py` | `customer.accounts` | `Address`, account `metadata` |
+| `app/services/customer_location_requests.py` | `customer.accounts` | account `metadata` |
 | `app/services/customer_portal_contacts.py` | `party.registry` | `subscriber_contacts` |
 | `app/services/customer_portal_notifications.py` | `customer.accounts` | account `metadata` |
 | `app/services/network_subscriber_bridge.py` | `customer.accounts` | constructs `Subscriber` |

@@ -23,7 +23,7 @@ def _function(path: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
     return next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
         and node.name == name
     )
 
@@ -83,6 +83,12 @@ def test_direct_transfer_intent_participant_has_complete_contract() -> None:
     assert (
         sot_relationships.owning_service_for(
             "direct-transfer reviewed-proof resolution projection"
+        )
+        == service
+    )
+    assert (
+        sot_relationships.owning_service_for(
+            "gateway observation lifecycle and blocker projection"
         )
         == service
     )
@@ -200,7 +206,7 @@ def test_customer_portal_does_not_write_direct_transfer_intent_state() -> None:
     assert "selected_bank_account" not in constants
 
 
-def test_customer_portal_creation_delegates_without_policy_or_record_writes() -> None:
+def test_customer_portal_creation_rejects_without_policy_or_record_writes() -> None:
     portal_function = _function(
         "app/services/customer_portal_flow_payments.py",
         "create_direct_transfer_topup_intent",
@@ -210,8 +216,9 @@ def test_customer_portal_creation_delegates_without_policy_or_record_writes() ->
         child.id for child in ast.walk(portal_function) if isinstance(child, ast.Name)
     }
 
-    assert "create_direct_transfer_intent" in calls
-    assert "release_read_transaction" in calls
+    assert "_raise_customer_direct_transfer_unavailable" in referenced_names
+    assert "create_direct_transfer_intent" not in calls
+    assert "release_read_transaction" not in calls
     assert "TopupIntent" not in referenced_names
     assert "AccountCreditDeposits" not in referenced_names
     assert "resolve_value" not in referenced_names
@@ -303,7 +310,7 @@ def test_completion_and_expiry_callers_delegate_to_intent_participant() -> None:
     for path, call in expected_calls.items():
         assert call in source_text(ROOT / path)
     reconciliation = source_text(ROOT / "app/services/payment_reconciliation.py")
-    assert "stage_topup_intent_expiry" in reconciliation
+    assert "stage_gateway_topup_observation" in reconciliation
     assert "_EXPIRE_GRACE" not in reconciliation
     assert "DEFAULT_EXPIRY_GRACE_HOURS" not in reconciliation
 

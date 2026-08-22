@@ -132,8 +132,10 @@ def _action_copy(
             "Close duplicate prepaid draft",
             "Void duplicate draft",
             (
-                "The draft will be voided with no payment or opening funding consumed "
-                "because the owner found exact existing renewal and entitlement evidence."
+                "This prepaid draft appears to duplicate service coverage that has "
+                "already been funded. Review the evidence and void the duplicate "
+                "draft instead of issuing it. No payment or opening funding will "
+                "be consumed."
             ),
         )
     return (
@@ -192,13 +194,13 @@ def _confirmation_claims(
 def preview_for_invoice_detail(
     db: Session, *, invoice_id: UUID
 ) -> PrepaidDraftReconciliationPreview | None:
-    """Return only an actionable owner hint for the invoice action menu."""
+    """Return owner state needed for reconciliation or issue-conflict guidance."""
 
     try:
         preview = preview_prepaid_draft_reconciliation(db, invoice_id)
     except DomainError:
         return None
-    return preview if preview.actionable else None
+    return preview if preview.actionable or preview.blocks_invoice_issue else None
 
 
 def build_admin_review(

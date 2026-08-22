@@ -1537,6 +1537,21 @@ def _dhcp_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     # covers the no-DHCP-by-default case from feedback_ont_setup_defaults; it
     # keys off the OLT authorization rather than ACS absence, because a device
     # the ACS has no document for cannot be written to at all.
+    # When a firmware does expose these values, enforce them before falling
+    # back to "not exposed" behavior.
+    optional_readback_pairs = (
+        (acs.acs_observed_dhcp_pool_min, desired.dhcp_pool_min),
+        (acs.acs_observed_dhcp_pool_max, desired.dhcp_pool_max),
+        (acs.acs_observed_dhcp_subnet_mask, desired.dhcp_subnet_mask),
+        (acs.acs_observed_lan_gateway_ip, desired.lan_gateway_ip),
+    )
+    if any(
+        observed_value is not None
+        and desired_value is not None
+        and _observed_differs(observed_value, desired_value)
+        for observed_value, desired_value in optional_readback_pairs
+    ):
+        return True
     return not observed.olt.olt_present
 
 

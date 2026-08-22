@@ -177,10 +177,28 @@ renewal:
 - unbacked credit whose economic timestamp or Sub creation time crosses the
   active reviewed opening-position boundary: keep the draft unchanged for
   evidence reconstruction;
-- one exact direct-renewal debit and entitlement overlapping the draft: close
-  the duplicate draft through the invoice owner with zero economic delta;
+- one exact direct-renewal evidence pair overlapping the draft: close the
+  duplicate draft through the invoice owner with zero economic delta. Evidence
+  may be the existing strict prepaid-service-renewal `AccountAdjustment` plus
+  its linked debit and entitlement, or one legacy active entitlement linked to
+  one unreversed customer-position service debit with exact account,
+  subscription, currency, and line-or-gross funded amount. The legacy form must
+  have no invoice, invoice-line, or billing-grant source and must not infer
+  identity from memo text;
 - multiple drafts, mixed lines, partial activity, or ambiguous coverage:
   require manual review.
+
+When a current funding-change transaction finds the exact duplicate case, the
+same owner stages the void first and reports it separately from a funded draft.
+The caller may then spend the current funding on the now-due invoice-less
+renewal. A settled draft still terminates the path because it funded that
+period; multiple or unproven overlaps remain blocking.
+
+Invoice detail reads this same preview. An actionable duplicate exposes the
+existing **Reconcile prepaid draft** review, while invoice issue returns a safe
+funded-coverage explanation instead of a generic request conflict. A
+non-actionable overlap displays the classifier reason and requires Finance
+review; neither the route nor template reclassifies evidence.
 
 When an active reviewed opening baseline exists, account-credit classification
 uses only native payment and ledger facts crossing its timestamp. Pre-boundary

@@ -819,6 +819,8 @@ SERVICES: tuple[SOTService, ...] = (
             "credit-note application idempotency",
             "credit-note application-to-ledger evidence",
             "funded credit-note application consumption evidence",
+            "credit-note application reversal preview and confirmation",
+            "credit-note application reversal ledger evidence",
             "credit-note ledger-posting requests",
             "referral reward account credits",
         ),
@@ -839,6 +841,302 @@ SERVICES: tuple[SOTService, ...] = (
             "inactive, void, written-off, and open invoices without a positive "
             "receivable fail closed. Direct and draft issuance use the same "
             "typed disposition and staged participant."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="credit-note lifecycle",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note issuance and void preview/confirmation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note funding and void ledger evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="historical credit-note funding reconciliation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application eligibility and preview",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical invoice receivable state",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application idempotency",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note application evidence",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application-to-ledger evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note application evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="funded credit-note application consumption evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note application evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application reversal preview and confirmation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "reviewed credit-note application reversal command",
+                        "canonical credit-note application evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application reversal ledger evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "reviewed credit-note application reversal command",
+                        "canonical credit-note application evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note ledger-posting requests",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="referral reward account credits",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical referral reward authorization",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="typed credit-note command",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed create, issue, draft-issue, void, application, "
+                        "funding-reconciliation, system, and referral reward "
+                        "commands accepted by the owner service"
+                    ),
+                ),
+                AuthorityInput(
+                    name="reviewed credit-note application reversal command",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed application id, memo, preview fingerprint, and "
+                        "idempotency key captured by the admin adapter"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical credit-note application evidence",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "credit-note application row, signed reversal row, "
+                        "preview fingerprint, and funded-consumption evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical invoice receivable state",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked invoice aggregate and recomputed settlement "
+                        "amounts after the credit application is reversed"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical ledger reversal protocol",
+                    owner="financial.ledger",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "ledger reversal entries linked by reversal_of_entry_id "
+                        "to the original application and consumption entries"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical credit-note document evidence",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "credit-note row, lines, first issuance timestamp, "
+                        "funding ledger link, void ledger link, preview "
+                        "fingerprints, and audit evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical referral reward authorization",
+                    owner="referrals.program",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "typed referral reward command and idempotency evidence "
+                        "that authorizes account-credit issuance"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "CreditNotes.reverse_application_with_evidence owns the "
+                    "lock, idempotency reservation, ledger reversals, signed "
+                    "application evidence, recalculation, audit staging, and "
+                    "commit."
+                ),
+                locking=(
+                    "Locks the account, credit note, original application, and "
+                    "invoice before confirming the preview fingerprint."
+                ),
+                idempotency=(
+                    "credit_note_application_reversal scope binds the key to "
+                    "the reversal application evidence and preview fingerprint."
+                ),
+                retries=(
+                    "Replay returns the recorded reversal when the key and "
+                    "fingerprint match; stale or conflicting evidence fails "
+                    "closed."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes("financial.credit_notes"),
+                    "financial.credit_notes.already_void",
+                    "financial.credit_notes.application_already_reversed",
+                    "financial.credit_notes.currency_mismatch",
+                    "financial.credit_notes.funding_evidence_missing",
+                    "financial.credit_notes.idempotency_conflict",
+                    "financial.credit_notes.invoice_balance_exceeded",
+                    "financial.credit_notes.invalid_application",
+                    "financial.credit_notes.invalid_credit_note_state",
+                    "financial.credit_notes.invalid_ledger_evidence",
+                    "financial.credit_notes.invalid_preview_fingerprint",
+                    "financial.credit_notes.invoice_not_found",
+                    "financial.credit_notes.note_not_found",
+                    "financial.credit_notes.ownership_mismatch",
+                    "financial.credit_notes.referral_reward_invalid",
+                    *owner_command_boundary_error_codes(
+                        "financial.credit_notes.application_reversal"
+                    ),
+                ),
+                mapping_owner="admin billing invoice adapter",
+                fail_closed_on=(
+                    "missing ledger evidence",
+                    "stale preview fingerprint",
+                    "already reversed application",
+                    "invoice or credit-note ownership mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "credit_note.issued",
+                    "credit_note.applied",
+                    "credit_note.application_reversed",
+                    "credit_note.voided",
+                    "credit_note.funding_reconciled",
+                    "credit_note.referral_reward_issued",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries bounded credit-note, invoice, ledger, "
+                    "amount, currency, fingerprint, and idempotency evidence "
+                    "without customer contact details or free-form documents."
+                ),
+                replay=(
+                    "Owner-command idempotency and linked ledger/application "
+                    "rows make replay observable without creating duplicate "
+                    "credit documents, applications, reversals, or rewards."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                new_owner="financial.credit_notes",
+                old_owner=(
+                    "legacy billing credit-note CRUD, direct ledger postings, "
+                    "manual referral account credits, and ad-hoc invoice "
+                    "application updates"
+                ),
+                verification=(
+                    "credit-note lifecycle, issue/apply/void/funding, referral "
+                    "reward, reversal, and billing money action template tests"
+                ),
+                cutover_gate=(
+                    "admin UI and API writes post only through typed "
+                    "financial.credit_notes owner commands; reversal is gated "
+                    "behind billing:invoice:update"
+                ),
+                fallback_retirement=(
+                    "direct invoice, credit-note, referral-credit, and ledger "
+                    "mutation paths are removed or retained only as adapters "
+                    "around the owner command"
+                ),
+            ),
+            steward="finance operations",
+            design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+            test_refs=(
+                "tests/test_credit_notes.py",
+                "tests/test_billing_money_action_templates.py",
+            ),
         ),
     ),
     SOTService(

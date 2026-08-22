@@ -2208,16 +2208,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="topup_reconciliation_expiry_grace_hours",
-        env_var="BILLING_TOPUP_RECONCILIATION_EXPIRY_GRACE_HOURS",
-        value_type=SettingValueType.integer,
-        default=24,
-        min_value=0,
-        max_value=168,
-        label="Top-up Reconciliation Expiry Grace Hours",
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="topup_reconciliation_batch_size",
         env_var="BILLING_TOPUP_RECONCILIATION_BATCH_SIZE",
         value_type=SettingValueType.integer,

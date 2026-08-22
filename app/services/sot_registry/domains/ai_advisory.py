@@ -236,6 +236,11 @@ DOMAIN = DomainSOT(
                 "AI conversational intake configuration lifecycle",
                 "AI conversational intake policy-version lifecycle",
                 "AI conversational intake session lifecycle",
+                "AI conversational intake structured operational state",
+                "AI conversational intake LangGraph orchestration",
+                "AI intake approved tool catalogue policy",
+                "AI intake customer lookup tool resolver",
+                "AI intake subscriber monitoring tool resolver",
                 "AI generation attempt evidence",
                 "customer-message intake eligibility policy",
                 "bounded customer-message intent classification",
@@ -245,6 +250,9 @@ DOMAIN = DomainSOT(
                 "ai.gateway",
                 "communications.team_inbox_observations",
                 "communications.team_inbox_threads",
+                "customer.accounts",
+                "network.device_state",
+                "network.radius_sessions",
                 "operations.service_team_lifecycle",
                 "events.dispatcher",
             ),
@@ -254,9 +262,15 @@ DOMAIN = DomainSOT(
                 "content for conversational intake. The owner classifies WhatsApp, "
                 "Facebook Messenger, and Instagram DM only, records session and "
                 "generation evidence, and returns validated destination-team "
-                "metadata. Team Inbox outbound alone delivers customer messages, "
+                "metadata. The composable conversation engine persists structured "
+                "operational facts only, never chain-of-thought, and can invoke "
+                "only registered read-only tools selected by policy. Team Inbox "
+                "outbound alone delivers customer messages, "
                 "and Team Inbox routing alone owns queue position and agent "
-                "selection. Data-cleaning eligibility reads only the exact linked "
+                "selection. When a pinned policy selects LangGraph, LangGraph "
+                "orchestrates the same bounded state and returns the same "
+                "decision contract; it does not own checkpoints, routing, queueing "
+                "or assignment. Data-cleaning eligibility reads only the exact linked "
                 "Subscriber and direct residential-customer facts; saving is owned "
                 "by customer.profile_commands."
             ),
@@ -288,6 +302,51 @@ DOMAIN = DomainSOT(
                             "normalized inbound conversation state",
                         ),
                         canonical_writer="ai.intake",
+                    ),
+                    ConcernContract(
+                        name="AI conversational intake structured operational state",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "active AI intake policy version",
+                            "normalized inbound conversation state",
+                            "support-relevant subscriber identity",
+                            "approved monitoring projection",
+                        ),
+                        canonical_writer="ai.intake",
+                    ),
+                    ConcernContract(
+                        name="AI conversational intake LangGraph orchestration",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "active AI intake policy version",
+                            "normalized inbound conversation state",
+                            "bounded redacted inbound message projection",
+                            "support-relevant subscriber identity",
+                            "approved monitoring projection",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="AI intake approved tool catalogue policy",
+                        role=OwnerRole.POLICY,
+                        input_names=("active AI intake policy version",),
+                    ),
+                    ConcernContract(
+                        name="AI intake customer lookup tool resolver",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "active AI intake policy version",
+                            "approved customer identifier",
+                            "support-relevant subscriber identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="AI intake subscriber monitoring tool resolver",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "active AI intake policy version",
+                            "support-relevant subscriber identity",
+                            "approved monitoring projection",
+                        ),
                     ),
                     ConcernContract(
                         name="AI generation attempt evidence",
@@ -347,10 +406,46 @@ DOMAIN = DomainSOT(
                         source="Most-specific AiIntakeConfig for provider/account/channel scope.",
                     ),
                     AuthorityInput(
+                        name="active AI intake policy version",
+                        owner="ai.intake",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Pinned AiIntakePolicyVersion selected when the intake "
+                            "session starts."
+                        ),
+                    ),
+                    AuthorityInput(
                         name="normalized inbound conversation state",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Conversation lifecycle, ownership, tags, and bounded recent messages.",
+                    ),
+                    AuthorityInput(
+                        name="approved customer identifier",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "Identifier already linked from channel context or "
+                            "provided by the customer and permitted by policy."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="support-relevant subscriber identity",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Subscriber id and bounded support contact/account "
+                            "fields resolved from the approved identifier."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="approved monitoring projection",
+                        owner="network.radius_sessions",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Read-only customer network context, live-session and "
+                            "ONT/CPE operational status fields approved for support intake."
+                        ),
                     ),
                     AuthorityInput(
                         name="channel AI-routing permission",
@@ -428,6 +523,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_ai_intake.py",
+                    "tests/test_ai_intake_conversation_engine.py",
                     "tests/test_team_inbox_ai_intake_flow.py",
                     "tests/architecture/test_ai_boundaries.py",
                 ),

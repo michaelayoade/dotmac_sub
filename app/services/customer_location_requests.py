@@ -16,13 +16,14 @@ from app.models.gis import (
     CustomerLocationChangeRequestStatus,
     GeoArea,
     GeoAreaType,
-    GeoLocation,
-    GeoLocationType,
 )
 from app.models.subscriber import Address, AddressType, Subscriber
+from app.schemas.subscriber import AddressCreate
 from app.services import geocoding as geocoding_service
 from app.services import gis as gis_service
+from app.services import gis_sync
 from app.services import service_address as service_address_service
+from app.services import subscriber as subscriber_service
 from app.services.audit_adapter import record_audit_event
 from app.services.customer_context import optional_customer_subscriber_id
 
@@ -124,54 +125,31 @@ def _ensure_target_address(
     if address is not None:
         return address
 
-    if not (subscriber.address_line1 or "").strip():
+    line1 = (subscriber.address_line1 or "").strip()
+    if not line1:
         raise HTTPException(
             status_code=400,
             detail="Subscriber has no address record to attach the approved map pin to",
         )
 
-    address = Address(
-        subscriber_id=subscriber.id,
-        address_type=AddressType.service,
-        label="Primary service",
-        address_line1=subscriber.address_line1,
-        address_line2=subscriber.address_line2,
-        city=subscriber.city,
-        region=subscriber.region,
-        postal_code=subscriber.postal_code,
-        country_code=subscriber.country_code,
-        is_primary=True,
+    # `customer.accounts` owns the service Address's identity and text.
+    # `geocode=False` because the caller supplies an authoritative pin next.
+    return subscriber_service.create_address(
+        db,
+        AddressCreate(
+            subscriber_id=subscriber.id,
+            address_type=AddressType.service,
+            label="Primary service",
+            address_line1=line1,
+            address_line2=subscriber.address_line2,
+            city=subscriber.city,
+            region=subscriber.region,
+            postal_code=subscriber.postal_code,
+            country_code=subscriber.country_code,
+            is_primary=True,
+        ),
+        geocode=False,
     )
-    db.add(address)
-    db.flush()
-    return address
-
-
-def _upsert_geo_location_for_address(db: Session, address: Address) -> None:
-    if address.latitude is None or address.longitude is None:
-        return
-    existing = (
-        db.query(GeoLocation).filter(GeoLocation.address_id == address.id).first()
-    )
-    name = _address_label(address, None)
-    if existing:
-        existing.name = name
-        existing.location_type = GeoLocationType.address
-        existing.latitude = float(address.latitude)
-        existing.longitude = float(address.longitude)
-        existing.is_active = True
-        gis_service._sync_location_geometry(existing)
-        return
-    geo_location = GeoLocation(
-        name=name,
-        location_type=GeoLocationType.address,
-        latitude=float(address.latitude),
-        longitude=float(address.longitude),
-        address_id=address.id,
-        is_active=True,
-    )
-    gis_service._sync_location_geometry(geo_location)
-    db.add(geo_location)
 
 
 def _audit(
@@ -517,10 +495,15 @@ def approve_request(
         raise HTTPException(status_code=404, detail="Subscriber account not found")
 
     address = _ensure_target_address(db, subscriber, location_request)
-    address.latitude = float(location_request.requested_latitude)
-    address.longitude = float(location_request.requested_longitude)
-    address.geom = gis_service._point_wkt(address.longitude, address.latitude)
-    _upsert_geo_location_for_address(db, address)
+    # `gis.spatial_sync` owns the coordinate and its projection. This used to
+    # write both itself, and passed the axes to `_point_wkt` reversed, so every
+    # approved pin landed with latitude and longitude swapped.
+    gis_sync.project_address_point(
+        db,
+        address,
+        latitude=float(location_request.requested_latitude),
+        longitude=float(location_request.requested_longitude),
+    )
 
     now = datetime.now(UTC)
     location_request.address_id = address.id
@@ -611,28 +594,36 @@ def geocode_service_address(
     Returns ``{latitude, longitude, display_name}`` when it set coordinates,
     else ``None``.
     """
-    composed = {
-        "address_line1": subscriber.address_line1,
+    line1 = (subscriber.address_line1 or "").strip()
+    if not line1:
+        return None
+    composed: dict[str, Any] = {
+        "address_line1": line1,
         "address_line2": subscriber.address_line2,
         "city": subscriber.city,
         "region": subscriber.region,
         "postal_code": subscriber.postal_code,
         "country_code": subscriber.country_code,
     }
-    if not (composed["address_line1"] or "").strip():
-        return None
     try:
         address = _resolve_service_address(db, str(subscriber.id))
         if address is None:
-            address = Address(
-                subscriber_id=subscriber.id,
-                address_type=AddressType.service,
-                label="Primary service",
-                is_primary=True,
-                **composed,
+            address = subscriber_service.create_address(
+                db,
+                AddressCreate(
+                    subscriber_id=subscriber.id,
+                    address_type=AddressType.service,
+                    label="Primary service",
+                    is_primary=True,
+                    address_line1=line1,
+                    address_line2=subscriber.address_line2,
+                    city=subscriber.city,
+                    region=subscriber.region,
+                    postal_code=subscriber.postal_code,
+                    country_code=subscriber.country_code,
+                ),
+                geocode=False,
             )
-            db.add(address)
-            db.flush()
         elif (
             not force and address.latitude is not None and address.longitude is not None
         ):
@@ -663,11 +654,9 @@ def geocode_service_address(
         lon = result.get("longitude")
         if lat is None or lon is None:
             return None
-        address.latitude = float(lat)
-        address.longitude = float(lon)
-        # Match approve_request's existing arg order for Address.geom.
-        address.geom = gis_service._point_wkt(address.longitude, address.latitude)
-        _upsert_geo_location_for_address(db, address)
+        gis_sync.project_address_point(
+            db, address, latitude=float(lat), longitude=float(lon)
+        )
         db.flush()
         return {
             "latitude": float(lat),

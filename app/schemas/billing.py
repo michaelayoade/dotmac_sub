@@ -469,6 +469,34 @@ class CreditNoteApplyRequest(CreditNoteApplicationPreviewRequest):
     idempotency_key: str = Field(min_length=16, max_length=120)
 
 
+class CreditNoteApplicationReversalPreviewRead(BaseModel):
+    application_id: UUID
+    credit_note_id: UUID
+    credit_number: str | None = None
+    invoice_id: UUID
+    invoice_number: str | None = None
+    account_id: UUID
+    currency: str
+    reversal_amount: Decimal
+    invoice_receivable_before: Decimal
+    invoice_receivable_after: Decimal
+    credit_applied_before: Decimal
+    credit_applied_after: Decimal
+    credit_available_before: Decimal | None = None
+    credit_available_after: Decimal | None = None
+    reverses_ledger_entry_id: UUID
+    reverses_consumption_ledger_entry_id: UUID | None = None
+    access_consequence: str
+    fingerprint: str
+
+
+class CreditNoteApplicationReversalRequest(BaseModel):
+    application_id: UUID
+    memo: str | None = Field(default=None, max_length=500)
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
 class PaymentMethodBase(BaseModel):
     # Exactly one owner: customer subscriber (account_id) or reseller org
     # (reseller_id, for subscriber-less reseller_user logins — Layer 3).
@@ -1173,9 +1201,9 @@ class TopupPageResponse(BaseModel):
     max_amount: int
     preset_amounts: list[int] = Field(default_factory=list)
     customer_email: str | None = None
-    # The full pay-with selector: online gateways (Paystack/Flutterwave) and the
-    # direct-bank-transfer option, mirroring the web top-up chooser. Mobile
-    # renders one row per online option plus a bank-transfer + saved-card flow.
+    # The customer pay-with selector: online gateways (Paystack/Flutterwave)
+    # plus saved-card flows. Direct bank transfer is returned only as a disabled
+    # compatibility projection because transfer payment is reseller-only.
     payment_options: list[PaymentProviderOption] = Field(default_factory=list)
     direct_bank_transfer: DirectBankTransferConfig | None = None
 

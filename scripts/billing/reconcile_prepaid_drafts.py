@@ -102,6 +102,9 @@ def _preview_payload(preview) -> dict[str, object]:
         "renewal_adjustment_ids": [
             str(value) for value in preview.renewal_adjustment_ids
         ],
+        "renewal_ledger_entry_ids": [
+            str(value) for value in preview.renewal_ledger_entry_ids
+        ],
         "reason": preview.reason,
         "fingerprint": preview.fingerprint,
     }

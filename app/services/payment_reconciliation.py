@@ -43,6 +43,7 @@ from app.services.owner_commands import (
 )
 from app.services.payment_gateway_adapter import (
     PaymentGatewayTransaction,
+    PaymentGatewayVerificationObservation,
     PaymentGatewayVerificationOutcome,
     payment_gateway_adapter,
 )
@@ -58,34 +59,36 @@ from app.services.payment_routing import (
 )
 from app.services.topup_intents import (
     COMPLETION_SCOPE,
-    EXPIRY_SCOPE,
     CompleteTopupIntentCommand,
-    ExpireTopupIntentCommand,
     GatewayTopupIntentFlow,
+    GatewayTopupObservationSource,
+    RecordGatewayTopupObservationCommand,
     TopupIntentCompletionSource,
     TopupIntentError,
-    TopupIntentExpirySource,
     TopupIntentStatus,
     lock_topup_intent_scope,
+    stage_gateway_topup_observation,
     stage_topup_intent_completion,
-    stage_topup_intent_expiry,
+)
+from app.services.topup_intents import (
+    GATEWAY_OBSERVATION_SCOPE as INTENT_OBSERVATION_SCOPE,
 )
 
 logger = logging.getLogger(__name__)
 
 RECONCILIATION_SCOPE = "topup-payment:reconcile"
 VERIFIED_SETTLEMENT_SCOPE = "topup-payment:reconcile-verified"
-UNSUCCESSFUL_OBSERVATION_SCOPE = "topup-payment:reconcile-unsuccessful"
+GATEWAY_OBSERVATION_SCOPE = "topup-payment:reconcile-observation"
 
 _VERIFIED_SETTLEMENT_COMMAND = OwnerCommandDefinition(
     owner="financial.payment_reconciliation",
     concern="verified provider settlement then allocation orchestration",
     name="settle_verified_reconciled_topup",
 )
-_UNSUCCESSFUL_OBSERVATION_COMMAND = OwnerCommandDefinition(
+_GATEWAY_OBSERVATION_COMMAND = OwnerCommandDefinition(
     owner="financial.payment_reconciliation",
     concern="stranded top-up reconciliation",
-    name="project_unsuccessful_reconciled_topup",
+    name="record_reconciled_gateway_observation",
 )
 
 
@@ -97,6 +100,8 @@ class TopupReconciliationDisposition(str, Enum):
     recovered = "recovered"
     linked = "linked"
     expired = "expired"
+    failed = "failed"
+    abandoned = "abandoned"
     unchanged = "unchanged"
 
 
@@ -124,10 +129,11 @@ class ReconcileVerifiedTopupCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class ReconcileUnsuccessfulTopupCommand:
+class ReconcileGatewayObservationCommand:
     candidate: TopupReconciliationCandidate
-    outcome: PaymentGatewayVerificationOutcome
+    observation: PaymentGatewayVerificationObservation
     observed_at: datetime
+    source: GatewayTopupObservationSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +149,8 @@ class TopupReconciliationSummary:
     recovered: int = 0
     linked: int = 0
     expired: int = 0
+    failed: int = 0
+    abandoned: int = 0
     errors: int = 0
 
     def as_dict(self) -> dict[str, int]:
@@ -153,6 +161,8 @@ class TopupReconciliationSummary:
             "recovered": self.recovered,
             "linked": self.linked,
             "expired": self.expired,
+            "failed": self.failed,
+            "abandoned": self.abandoned,
             "errors": self.errors,
         }
 
@@ -508,52 +518,35 @@ def settle_verified_reconciled_topup(
     )
 
 
-def _stage_unsuccessful_observation(
+def _stage_gateway_observation(
     db: Session,
-    command: ReconcileUnsuccessfulTopupCommand,
+    command: ReconcileGatewayObservationCommand,
     *,
     context: CommandContext,
 ) -> ReconciledTopupResult:
-    if command.outcome not in {
-        PaymentGatewayVerificationOutcome.not_found,
-        PaymentGatewayVerificationOutcome.not_successful,
-    }:
+    if command.observation.outcome is PaymentGatewayVerificationOutcome.succeeded:
         raise _error(
             "outcome_invalid",
-            "Only a definitive unsuccessful observation can expire an intent",
+            "Successful gateway evidence must use the settlement command",
             intent_id=str(command.candidate.intent_id),
         )
-    expiry_grace = timedelta(
-        hours=_resolve_reconciliation_int_setting(
-            db,
-            "topup_reconciliation_expiry_grace_hours",
-        )
-    )
     intent = lock_topup_intent_scope(db, command.candidate.intent_id)
     _validate_candidate(intent, command.candidate)
-    if (
-        intent.completed_payment_id is not None
-        or intent.status != TopupIntentStatus.pending.value
-    ):
-        return ReconciledTopupResult(
-            intent_id=intent.id,
-            payment_id=intent.completed_payment_id,
-            disposition=TopupReconciliationDisposition.unchanged,
-        )
+    previous_status = intent.status
     try:
-        result = stage_topup_intent_expiry(
+        result = stage_gateway_topup_observation(
             db,
-            ExpireTopupIntentCommand(
+            RecordGatewayTopupObservationCommand(
                 intent_id=intent.id,
+                observation=command.observation,
                 observed_at=_as_utc(command.observed_at),
-                grace=expiry_grace,
-                source=TopupIntentExpirySource.gateway_reconciliation,
+                source=command.source,
             ),
             context=_participant_context(
                 context,
-                scope=EXPIRY_SCOPE,
-                reason="Project definitive unsuccessful gateway observation",
-                idempotency_key=f"topup-expiry-{intent.id}",
+                scope=INTENT_OBSERVATION_SCOPE,
+                reason="Project normalized gateway observation",
+                idempotency_key=f"topup-observation-{intent.id}",
             ),
         )
     except TopupIntentError as exc:
@@ -563,30 +556,33 @@ def _stage_unsuccessful_observation(
             intent_id=str(intent.id),
             topup_error_code=exc.code,
         ) from exc
+    disposition = TopupReconciliationDisposition.unchanged
+    if previous_status == TopupIntentStatus.pending.value:
+        disposition = {
+            TopupIntentStatus.expired: TopupReconciliationDisposition.expired,
+            TopupIntentStatus.failed: TopupReconciliationDisposition.failed,
+            TopupIntentStatus.abandoned: TopupReconciliationDisposition.abandoned,
+        }.get(result.status, TopupReconciliationDisposition.unchanged)
     return ReconciledTopupResult(
         intent_id=intent.id,
         payment_id=result.payment_id,
-        disposition=(
-            TopupReconciliationDisposition.expired
-            if result.changed
-            else TopupReconciliationDisposition.unchanged
-        ),
+        disposition=disposition,
     )
 
 
-def project_unsuccessful_reconciled_topup(
+def record_reconciled_gateway_observation(
     db: Session,
-    command: ReconcileUnsuccessfulTopupCommand,
+    command: ReconcileGatewayObservationCommand,
     *,
     context: CommandContext,
 ) -> ReconciledTopupResult:
-    """Commit one definitive unsuccessful gateway consequence."""
+    """Commit one normalized non-success observation as an independent root."""
 
     return execute_owner_command(
         db,
-        definition=_UNSUCCESSFUL_OBSERVATION_COMMAND,
+        definition=_GATEWAY_OBSERVATION_COMMAND,
         context=context,
-        operation=lambda: _stage_unsuccessful_observation(
+        operation=lambda: _stage_gateway_observation(
             db,
             command,
             context=context,
@@ -600,6 +596,7 @@ def _candidate_context(
     *,
     scope: str,
     reason: str,
+    idempotency_suffix: str = "settlement",
 ) -> CommandContext:
     return CommandContext.system(
         actor=context.actor,
@@ -607,7 +604,9 @@ def _candidate_context(
         reason=reason,
         correlation_id=context.correlation_id,
         causation_id=context.command_id,
-        idempotency_key=f"topup-reconciliation-{candidate.intent_id}",
+        idempotency_key=(
+            f"topup-reconciliation-{candidate.intent_id}-{idempotency_suffix}"
+        ),
     )
 
 
@@ -633,7 +632,16 @@ def _reconciliation_candidates(
     supported_values = tuple(item.value for item in SUPPORTED_PROVIDER_TYPES)
     rows = db.execute(
         select(TopupIntent.id, TopupIntent.provider_type, TopupIntent.reference)
-        .where(TopupIntent.status == TopupIntentStatus.pending.value)
+        .where(
+            TopupIntent.status.in_(
+                (
+                    TopupIntentStatus.pending.value,
+                    TopupIntentStatus.failed.value,
+                    TopupIntentStatus.abandoned.value,
+                    TopupIntentStatus.expired.value,
+                )
+            )
+        )
         .where(TopupIntent.completed_payment_id.is_(None))
         .where(TopupIntent.provider_type.in_(supported_values))
         .where(TopupIntent.created_at < stale_before)
@@ -713,15 +721,15 @@ def reconcile_pending_topups(
     candidates = _reconciliation_candidates(db, observed_at=observed_at)
     db_session_adapter.release_read_transaction(db)
 
-    recovered = linked = expired = errors = 0
+    recovered = linked = expired = failed = abandoned = errors = 0
     for candidate in candidates:
-        observation = payment_gateway_adapter.observe_verification(
-            db,
-            provider_type=candidate.provider_type.value,
-            reference=candidate.reference,
-        )
-        db_session_adapter.release_read_transaction(db)
         try:
+            observation = payment_gateway_adapter.observe_verification(
+                db,
+                provider_type=candidate.provider_type.value,
+                reference=candidate.reference,
+            )
+            db_session_adapter.release_read_transaction(db)
             if observation.outcome is PaymentGatewayVerificationOutcome.succeeded:
                 if observation.transaction is None:
                     raise _error(
@@ -743,32 +751,26 @@ def reconcile_pending_topups(
                         reason="Settle verified stranded top-up",
                     ),
                 )
-            elif observation.outcome in {
-                PaymentGatewayVerificationOutcome.not_found,
-                PaymentGatewayVerificationOutcome.not_successful,
-            }:
-                result = project_unsuccessful_reconciled_topup(
+            else:
+                result = record_reconciled_gateway_observation(
                     db,
-                    ReconcileUnsuccessfulTopupCommand(
+                    ReconcileGatewayObservationCommand(
                         candidate=candidate,
-                        outcome=observation.outcome,
+                        observation=observation,
                         observed_at=observed_at,
+                        source=GatewayTopupObservationSource.gateway_reconciliation,
                     ),
                     context=_candidate_context(
                         context,
                         candidate,
-                        scope=UNSUCCESSFUL_OBSERVATION_SCOPE,
-                        reason="Project unsuccessful stranded top-up observation",
+                        scope=GATEWAY_OBSERVATION_SCOPE,
+                        reason="Project normalized stranded top-up observation",
+                        idempotency_suffix=(
+                            f"{observation.outcome.value}-"
+                            f"{int(observed_at.timestamp())}"
+                        ),
                     ),
                 )
-            else:
-                logger.warning(
-                    "Top-up reconciliation provider unavailable for intent %s (%s)",
-                    candidate.intent_id,
-                    observation.error_code or "unknown",
-                )
-                errors += 1
-                continue
         except DomainError as exc:
             logger.warning(
                 "Top-up reconciliation rejected intent %s (%s)",
@@ -791,21 +793,29 @@ def reconcile_pending_topups(
             linked += 1
         elif result.disposition is TopupReconciliationDisposition.expired:
             expired += 1
+        elif result.disposition is TopupReconciliationDisposition.failed:
+            failed += 1
+        elif result.disposition is TopupReconciliationDisposition.abandoned:
+            abandoned += 1
 
     summary = TopupReconciliationSummary(
         checked=len(candidates),
         recovered=recovered,
         linked=linked,
         expired=expired,
+        failed=failed,
+        abandoned=abandoned,
         errors=errors,
     )
     logger.info(
         "Top-up reconciliation completed: checked=%d recovered=%d linked=%d "
-        "expired=%d errors=%d",
+        "expired=%d failed=%d abandoned=%d errors=%d",
         summary.checked,
         summary.recovered,
         summary.linked,
         summary.expired,
+        summary.failed,
+        summary.abandoned,
         summary.errors,
     )
     return summary

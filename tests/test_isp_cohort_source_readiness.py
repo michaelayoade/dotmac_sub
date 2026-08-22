@@ -85,6 +85,29 @@ def test_no_control_this_work_feeds_is_already_verified() -> None:
     assert supplied and all(control.state == "blocked" for control in supplied)
 
 
+def test_a_decision_cannot_be_open_and_resolved() -> None:
+    """Sub's view mirrors the Governance rule rather than restating it loosely."""
+
+    payload = programme.BINDING.model_dump()
+    payload["resolved_decision_ids"] = ("dec-isp-002",)
+    with pytest.raises(ValidationError) as caught:
+        programme.GovernanceBinding.model_validate(payload)
+    assert "open or answered, never both" in str(caught.value)
+
+
+def test_the_binding_records_the_answered_decisions() -> None:
+    """Answered decisions leave a trace, or the binding reads as unsettled."""
+
+    assert programme.BINDING.resolved_decision_ids == (
+        "dec-isp-003",
+        "dec-isp-004",
+        "dec-isp-005",
+        "dec-isp-006",
+        "dec-isp-007",
+    )
+    assert programme.BINDING.unresolved_decision_ids == ("dec-isp-002",)
+
+
 def test_a_binding_with_no_sub_evidence_is_refused() -> None:
     payload = programme.BINDING.model_dump()
     payload["controls"] = [

@@ -86,6 +86,7 @@ def _desired(**overrides) -> OntDesiredState:
         dhcp_pool_min="192.168.100.2",
         dhcp_pool_max="192.168.100.254",
         dhcp_subnet_mask="255.255.255.0",
+        lan_gateway_ip="192.168.100.1",
         wifi_ssid="KURSI",
         wifi_password_ref="bao://wifi",
         wifi_password_pushed_at=None,
@@ -239,6 +240,10 @@ def _synced_observed(desired: OntDesiredState) -> OntObservedState:
             acs_observed_wan_vlan=desired.wan_vlan,
             acs_observed_nat_enabled=desired.nat_enabled,
             acs_observed_dhcp_enabled=desired.dhcp_enabled,
+            acs_observed_lan_gateway_ip=desired.lan_gateway_ip,
+            acs_observed_dhcp_pool_min=desired.dhcp_pool_min,
+            acs_observed_dhcp_pool_max=desired.dhcp_pool_max,
+            acs_observed_dhcp_subnet_mask=desired.dhcp_subnet_mask,
             acs_observed_ssid=desired.wifi_ssid,
             acs_observed_wifi_enabled=desired.wifi_enabled,
             acs_observed_wifi_channel=desired.wifi_channel,
@@ -503,6 +508,26 @@ def test_admitted_mask_only_lan_change_forces_write_only_dhcp_block():
     assert AcsSetDhcpServer not in _types(ordinary)
     action = next(item for item in forced.actions if isinstance(item, AcsSetDhcpServer))
     assert action.subnet_mask == desired.dhcp_subnet_mask
+
+
+def test_exposed_lan_dhcp_range_mismatch_emits_dhcp_repair():
+    desired = _desired()
+    synced = _synced_observed(desired)
+    observed = dataclasses.replace(
+        synced,
+        acs=dataclasses.replace(
+            synced.acs,
+            acs_observed_dhcp_pool_min="192.168.100.10",
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sync")
+
+    action = next(item for item in plan.actions if isinstance(item, AcsSetDhcpServer))
+    assert action.pool_min == desired.dhcp_pool_min
+    assert action.pool_max == desired.dhcp_pool_max
+    assert action.subnet_mask == desired.dhcp_subnet_mask
+    assert action.gateway_ip == desired.lan_gateway_ip
 
 
 def test_fresh_authorize_absent_from_acs_plans_olt_only_and_waits_for_inform():

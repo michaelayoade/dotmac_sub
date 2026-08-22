@@ -72,6 +72,18 @@ def test_funding_change_checks_draft_before_invoice_less_renewal():
     direct_renewal = source.index("preview_prepaid_service_renewal(")
     assert draft_check < direct_renewal
     assert "draft_invoice_pending" in source
+    assert "draft_result.drafts_voided" in source
+    assert "draft_result.drafts_found and not duplicate_drafts_voided" in source
+
+
+def test_duplicate_draft_transition_stays_under_reconciliation_owner():
+    source = inspect.getsource(
+        prepaid_draft_reconciliation.stage_prepaid_draft_after_funding_change
+    )
+
+    assert "PrepaidDraftAction.void_duplicate" in source
+    assert "_stage_action(" in source
+    assert "invoice.status =" not in source
 
 
 def test_reconciler_has_no_rounding_tolerance_or_raw_money_writes():

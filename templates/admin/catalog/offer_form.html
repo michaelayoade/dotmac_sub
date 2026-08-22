@@ -156,8 +156,24 @@
                             {% endif %}
                             {% endfor %}
                         </select>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Which plans can customers switch to from this plan. Leave empty for any.</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Which plans customers may switch to from this plan. Leave empty for any otherwise-eligible offer in the same plan family.</p>
                     </div>
+                    {% if reseller_availability is defined %}
+                    <div class="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">Reseller Catalog Access</p>
+                        {% if reseller_availability %}
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Restricted to these resellers for sales and new-service selection:</p>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            {% for assignment in reseller_availability %}
+                            <a href="/admin/resellers/{{ assignment.reseller_id }}#catalog-access" class="inline-flex items-center rounded-full bg-violet-100 px-2.5 py-1 text-xs font-medium text-violet-800 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-200 dark:hover:bg-violet-900/50">{{ assignment.reseller.name if assignment.reseller else 'Unknown reseller' }}</a>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">Unrestricted: visible to all resellers/customers where applicable.</p>
+                        {% endif %}
+                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Manage assignments from each reseller's Catalog Access section. These assignments are separate from Plans Available for Changing Services.</p>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>

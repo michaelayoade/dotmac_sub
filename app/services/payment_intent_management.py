@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -20,6 +20,7 @@ from app.services.owner_commands import (
 from app.services.topup_intents import (
     DirectTransferCancellationOutcome,
     DirectTransferCancellationSource,
+    project_topup_intent_lifecycle,
     stage_cancel_unsubmitted_direct_transfer,
 )
 
@@ -43,12 +44,15 @@ class PaymentIntentView:
     requested_amount: Decimal
     actual_amount: Decimal | None
     status: str
-    external_id: str | None
-    completed_payment_id: UUID | None
+    status_label: str
+    stored_status: str
+    safe_reason_code: str | None
+    last_verification_at: datetime | None
+    blocks_another_attempt: bool
+    customer_retry_allowed: bool
     expires_at: datetime | None
     created_at: datetime
     updated_at: datetime
-    metadata: dict[str, object]
     can_cancel: bool
 
 
@@ -60,8 +64,9 @@ class CancelPaymentIntentCommand:
     source: DirectTransferCancellationSource
 
 
-def _view(intent: TopupIntent) -> PaymentIntentView:
+def _view(intent: TopupIntent, *, observed_at: datetime) -> PaymentIntentView:
     metadata = dict(intent.metadata_ or {})
+    lifecycle = project_topup_intent_lifecycle(intent, observed_at=observed_at)
     return PaymentIntentView(
         id=intent.id,
         reference=intent.reference,
@@ -71,13 +76,16 @@ def _view(intent: TopupIntent) -> PaymentIntentView:
         currency=intent.currency,
         requested_amount=intent.requested_amount,
         actual_amount=intent.actual_amount,
-        status=intent.status,
-        external_id=intent.external_id,
-        completed_payment_id=intent.completed_payment_id,
+        status=lifecycle.normalized_status.value,
+        status_label=lifecycle.label,
+        stored_status=lifecycle.stored_status,
+        safe_reason_code=lifecycle.reason_code,
+        last_verification_at=lifecycle.last_verification_at,
+        blocks_another_attempt=lifecycle.blocks_another_attempt,
+        customer_retry_allowed=lifecycle.customer_retry_allowed,
         expires_at=intent.expires_at,
         created_at=intent.created_at,
         updated_at=intent.updated_at,
-        metadata=metadata,
         can_cancel=(
             intent.provider_type == "direct_bank_transfer"
             and intent.status == "pending"
@@ -93,7 +101,8 @@ def list_for_account(db: Session, account_id: UUID) -> tuple[PaymentIntentView, 
         .where(TopupIntent.account_id == account_id)
         .order_by(TopupIntent.created_at.desc(), TopupIntent.id.desc())
     ).all()
-    return tuple(_view(intent) for intent in intents)
+    observed_at = datetime.now(UTC)
+    return tuple(_view(intent, observed_at=observed_at) for intent in intents)
 
 
 def cancel_unsubmitted_direct_transfer(
