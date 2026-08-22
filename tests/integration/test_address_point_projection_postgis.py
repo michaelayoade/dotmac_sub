@@ -20,6 +20,28 @@ a valid longitude, so a swap stays inside every range check and fails only
 semantically. A test at 51.5, -0.12 would catch the swap by accident, through
 an out-of-range latitude, and would keep passing if the ranges were the only
 thing holding the axes in place.
+
+## Sensitivity
+
+A guard that has never been shown to fail is not evidence. Each defect was
+re-introduced against this file on real PostGIS (2026-08-22, commit
+`9fa3cb376`, PostGIS 3.4), and every one of them is caught:
+
+| Re-introduced defect | Failing tests |
+|---|---|
+| `point_wkt` emits `POINT(latitude longitude)` | 3 |
+| Neither branch writes `GeoLocation.geom` | 3 |
+| `Address.geom` is left at its previous value | 4 |
+| The update branch never finds the existing projection | 3 |
+| `db.commit()` inside the create branch | 1 |
+| `db.commit()` inside the update branch | 1 |
+
+The last two are why two of the assertions look redundant. An earlier version
+of this file drove only the create branch under the commit spy, and compared
+the two projections against each other rather than against the database — so a
+commit planted in the update branch survived, and `geom` missing from *both*
+branches would have agreed at NULL == NULL. Both mutants passed. Both now
+fail.
 """
 
 from __future__ import annotations
