@@ -184,7 +184,6 @@ def update_subscriber_from_full_form(
             withholding_tax_enabled=form_data.get("withholding_tax_enabled"),
             vat_exempt=form_data.get("vat_exempt"),
             payment_method=form_data.get("payment_method"),
-            metadata_json=form_data.get("metadata_json"),
         )
     elif customer_type == "business":
         web_customer_actions_service.update_business_customer(

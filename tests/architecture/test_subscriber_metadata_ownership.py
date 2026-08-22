@@ -231,12 +231,67 @@ def test_readers_outnumber_writers() -> None:
     assert len(metadata_readers()) > len(metadata_writers())
 
 
+def test_every_written_key_is_declared_in_the_registry() -> None:
+    """The census and the closed key registry must not drift apart.
+
+    The registry is what refuses an undeclared key at the owner. A key a module
+    actually writes but nobody declared would be refused in production while
+    passing every test that does not exercise that path — a guard that breaks
+    working code rather than catching a new one.
+    """
+
+    from app.services.subscriber_metadata_keys import DECLARED_METADATA_KEYS
+
+    written = {
+        key
+        for operations in keys_by_module().values()
+        for operation, keys in operations.items()
+        if operation in {"write", "delete"}
+        for key in keys
+        if key != "<dynamic>"
+    }
+    undeclared = sorted(written - set(DECLARED_METADATA_KEYS))
+    assert not undeclared, (
+        "these keys are written to `subscribers.metadata` and the closed "
+        "registry does not declare them, so the owner would refuse a write the "
+        "code still makes:\n  " + "\n  ".join(undeclared)
+    )
+
+
+def test_the_registry_declares_no_key_nothing_uses() -> None:
+    """The other direction: a declared key with no accessor is dead permission.
+
+    It would let a caller write a key no service reads, which is how the column
+    grew in the first place. Read access counts — several keys are written by a
+    service and read by a projection, and some are now read-only provenance.
+    """
+
+    from app.services.subscriber_metadata_keys import DECLARED_METADATA_KEYS
+
+    accessed = {
+        key
+        for operations in keys_by_module().values()
+        for keys in operations.values()
+        for key in keys
+    }
+    orphaned = sorted(set(DECLARED_METADATA_KEYS) - accessed)
+    assert not orphaned, (
+        "these keys are declared writable and nothing reads or writes them. A "
+        "declared key with no accessor is permission to grow the column "
+        "again:\n  " + "\n  ".join(orphaned)
+    )
+
+
 @pytest.mark.parametrize(
     "key",
     [
         # A JSON copy of `Subscriber.category`, a real typed column, read by
         # nine modules. Obsolete by construction rather than by decision.
         "subscriber_category",
+        # A fourth place an address coordinate lives, after Address.latitude,
+        # Address.geom and GeoLocation. `gis.spatial_sync` owns coordinates.
+        "latitude",
+        "longitude",
     ],
 )
 def test_duplicate_column_projections_are_still_present(key: str) -> None:
@@ -247,10 +302,6 @@ def test_duplicate_column_projections_are_still_present(key: str) -> None:
     deleted with it, which is the point — a silent removal would leave the
     ownership document claiming work that nobody can date.
 
-    `latitude`/`longitude` belong in this list and are absent: their only
-    remaining access is a `getattr` fallback the census deliberately does not
-    resolve (see its "Known limit" section). The ownership document records
-    them; this test cannot.
     """
 
     present = {
