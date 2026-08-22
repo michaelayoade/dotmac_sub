@@ -4,7 +4,7 @@
 {% block title %}{{ reseller.name }} - Reseller{% endblock %}
 
 {% block content %}
-<div class="space-y-8" x-data="{ showLinkCustomerModal: false, showInviteUserModal: false }">
+<div class="space-y-8" x-data="{ showLinkCustomerModal: false, showInviteUserModal: false, catalogSearch: '' }">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ reseller.name }}</h1>
@@ -294,20 +294,64 @@
                 <div class="flex items-center justify-between">
                     <div>
                         <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Catalog Access</h2>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Explicit reseller-scoped offers available to this partner.</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Explicit offers this reseller can sell or select for new services.</p>
                     </div>
                 </div>
+                <div class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-200">
+                    This controls reseller sales and new-service catalog visibility. It does not control customer self-service changes: <strong>Plans Available for Changing Services</strong> on the current offer and same-plan-family eligibility govern those targets.
+                </div>
+                {% if can(request, "reseller:write") %}
+                <form method="post" action="/admin/resellers/{{ reseller.id }}/catalog-access" class="mt-4 space-y-4">
+                    {% include "components/forms/csrf_input.html" %}
+                    <div>
+                        <label for="catalog-offer-search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search active offers</label>
+                        <input id="catalog-offer-search"
+                               type="search"
+                               x-model.debounce.150ms="catalogSearch"
+                               placeholder="Name, code, or plan family"
+                               class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    </div>
+                    <div class="max-h-96 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                        {% for option in reseller_catalog_offer_options %}
+                        <label data-search="{{ (option.name ~ ' ' ~ (option.code or '') ~ ' ' ~ (option.plan_family or ''))|lower|e }}"
+                               x-show="catalogSearch === '' || $el.dataset.search.includes(catalogSearch.toLowerCase())"
+                               class="flex cursor-pointer items-start gap-3 rounded-lg p-3 hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <input type="checkbox"
+                                   name="offer_ids"
+                                   value="{{ option.offer_id }}"
+                                   {% if option.assigned_to_reseller %}checked{% endif %}
+                                   class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                            <span class="min-w-0 flex-1">
+                                <span class="block text-sm font-medium text-slate-900 dark:text-white">{{ option.name }}</span>
+                                <span class="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
+                                    {{ option.code or 'No code' }}{% if option.plan_family %} &bull; {{ option.plan_family|replace('_', ' ')|title }}{% endif %}
+                                </span>
+                                <span class="mt-1 block text-xs {% if option.is_restricted %}text-amber-700 dark:text-amber-300{% else %}text-emerald-700 dark:text-emerald-300{% endif %}">
+                                    {% if option.is_restricted %}
+                                    Restricted to {{ option.active_assignment_count }} reseller{{ '' if option.active_assignment_count == 1 else 's' }}{% if option.assigned_to_reseller %}; assigned here{% endif %}.
+                                    {% else %}
+                                    Unrestricted until an explicit reseller assignment is added.
+                                    {% endif %}
+                                </span>
+                            </span>
+                        </label>
+                        {% else %}
+                        <p class="p-3 text-sm text-slate-500 dark:text-slate-400">No active catalog offers are available to assign.</p>
+                        {% endfor %}
+                    </div>
+                    <div class="flex items-center justify-between gap-4">
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Removing a selection deactivates the assignment but preserves its history.</p>
+                        <button type="submit" class="inline-flex shrink-0 items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Save Catalog Access</button>
+                    </div>
+                </form>
+                {% else %}
                 <div class="mt-4 flex flex-wrap gap-2">
                     {% for offer in explicit_available_offers %}
-                    <a href="/admin/catalog/offers/{{ offer.id }}" class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
-                        {{ offer.name }}
-                    </a>
+                    <a href="/admin/catalog/offers/{{ offer.id }}" class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">{{ offer.name }}</a>
                     {% else %}
-                    <p class="text-sm text-slate-500 dark:text-slate-400">No explicit reseller offer restrictions configured.</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No explicit reseller offer assignments.</p>
                     {% endfor %}
                 </div>
-                {% if explicit_available_offers_total > explicit_available_offers|length %}
-                <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing {{ explicit_available_offers|length }} of {{ explicit_available_offers_total }} explicitly assigned offers.</p>
                 {% endif %}
             </div>
         </div>

@@ -29,6 +29,8 @@ downstream records; none may independently decide the customer lifecycle.
 | Subscription state, command preview, billing/access impact, delivery mode, relocation qualification and field-fee preview | `service_intent.subscription_lifecycle` |
 | Locked command execution and idempotent outcome | `service_intent.subscription_lifecycle_execution` |
 | Plan-change request intent and result evidence | `app.services.subscription_changes` |
+| Customer self-service change-plan catalog eligibility | `service_intent.catalog_policy` |
+| Reseller/new-service offer assignment | `service_intent.offer_reseller_availability` |
 | Prepaid plan-change pricing/funding evidence | `financial.prepaid_plan_change` |
 | Account/subscription access state | `access.subscription_lifecycle` |
 | RADIUS session projection | `network.radius_sessions` |
@@ -45,6 +47,22 @@ Every compatible upgrade and downgrade uses a reviewed service-change preview
 and the subscription lifecycle command owner. The subscription, exact
 financial adjustment, access/profile consequence, request evidence, audit, and
 event must converge in one idempotent outcome.
+
+Customer self-service plan selection is deliberately narrower than general
+catalog or reseller sales visibility. An eligible target is active, has active
+catalog status, is customer-portal-visible, matches service type, billing mode,
+region compatibility, and (when the current offer declares one) the normalized
+`plan_family`, and has exactly one active positive recurring price. An explicit
+`allowed_change_plan_ids` list narrows that set further. An open subscription
+billing treatment blocks the set completely. When the current offer has no
+`plan_family`, the resolver retains the existing technical compatibility rules
+rather than inventing a cross-family classification.
+
+`OfferResellerAvailability` remains authoritative for reseller sales and
+new-service catalog listing, but it does not hide an otherwise eligible
+same-family change from an existing customer's service. Page, quote, deferred
+submit, and confirmed execution all consume the same candidate resolver so a
+target hidden from the page cannot be admitted by identifier.
 
 `plan_family` is commercial merchandising policy and never proves that a site
 visit or access-network migration is required. The service-change owner derives
@@ -110,8 +128,10 @@ Completed in this slice:
 - Commercial-only changes apply immediately. Remote and field changes persist a
   reviewed, idempotent `SubscriptionChangeRequest` without changing the current
   subscription, opening a ticket, or creating unverified billing effects.
-- The former plan-family filter, support-ticket fallback, migration endpoint,
-  and duplicate migration offer list are retired.
+- The support-ticket fallback, migration endpoint, and duplicate migration
+  offer list are retired. Customer self-service catalog eligibility now enforces
+  same-family merchandising when the current offer declares a family; this does
+  not make family a delivery-mode signal.
 - Customer self-service API routes are `/service-change`; the former
   `/plan-change` paths are retired without compatibility aliases.
 - Customer Portal, Reseller Portal, `/api/v1/me`, reseller API, and mobile all

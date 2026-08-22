@@ -67,6 +67,17 @@ def _same_region_compatibility(
     )
 
 
+def _same_plan_family_compatibility(
+    current_offer: CatalogOffer,
+    candidate_offer: CatalogOffer,
+) -> bool:
+    """Match a populated current family without inventing a blank-family policy."""
+    current_family = str(current_offer.plan_family or "").strip().casefold()
+    if not current_family:
+        return True
+    return current_family == str(candidate_offer.plan_family or "").strip().casefold()
+
+
 def offer_has_positive_recurring_price(offer: CatalogOffer) -> bool:
     """Fail closed unless one active customer-billable recurring price exists."""
     recurring_prices = [
@@ -619,6 +630,8 @@ def get_available_portal_offers(
     subscription: Subscription | None = None,
     *,
     subscriber_id: object | None = None,
+    apply_reseller_availability: bool = True,
+    require_same_plan_family: bool = False,
 ) -> list[CatalogOffer]:
     """Get catalog offers available on the customer portal.
 
@@ -627,6 +640,12 @@ def get_available_portal_offers(
         subscription: Optional current subscription used to scope compatible offers
         subscriber_id: Caller's subscriber id for reseller-availability scoping
             (derived from the subscription when not given)
+        apply_reseller_availability: Apply reseller catalog restrictions. Keep this
+            enabled for generic/new-service catalog contexts; customer self-service
+            plan changes disable it because an existing service stays customer-scoped.
+        require_same_plan_family: When the current offer has a populated family,
+            limit candidates to that family. Blank current families retain the
+            existing compatibility behavior rather than exposing a new assumption.
 
     Returns:
         List of CatalogOffer instances
@@ -643,20 +662,21 @@ def get_available_portal_offers(
             return []
 
     if not subscription or not subscription.offer_id:
-        return _filter_by_reseller_availability(
-            db,
-            cast(
-                list[CatalogOffer],
-                db.scalars(
-                    select(CatalogOffer)
-                    .options(selectinload(CatalogOffer.prices))
-                    .where(CatalogOffer.is_active.is_(True))
-                    .where(CatalogOffer.status == OfferStatus.active)
-                    .where(CatalogOffer.show_on_customer_portal.is_(True))
-                    .order_by(CatalogOffer.name.asc())
-                ).all(),
-            ),
-            subscriber_id,
+        offers = cast(
+            list[CatalogOffer],
+            db.scalars(
+                select(CatalogOffer)
+                .options(selectinload(CatalogOffer.prices))
+                .where(CatalogOffer.is_active.is_(True))
+                .where(CatalogOffer.status == OfferStatus.active)
+                .where(CatalogOffer.show_on_customer_portal.is_(True))
+                .order_by(CatalogOffer.name.asc())
+            ).all(),
+        )
+        return (
+            _filter_by_reseller_availability(db, offers, subscriber_id)
+            if apply_reseller_availability
+            else offers
         )
 
     current_offer = db.get(CatalogOffer, subscription.offer_id)
@@ -676,19 +696,25 @@ def get_available_portal_offers(
             .order_by(CatalogOffer.name.asc())
         ).all(),
     )
-    offers = _filter_by_reseller_availability(db, offers, subscriber_id)
+    if apply_reseller_availability:
+        offers = _filter_by_reseller_availability(db, offers, subscriber_id)
 
     allowed_ids = _parse_allowed_change_plan_ids(current_offer.allowed_change_plan_ids)
 
-    # Plan family is merchandising metadata, not delivery evidence. The
-    # subscription lifecycle owner classifies each compatible offer from access
-    # and provisionable network intent after the customer selects it.
+    # Plan family scopes customer self-service merchandising when requested; it
+    # remains unrelated to delivery evidence. The subscription lifecycle owner
+    # still classifies each eligible offer from access and provisionable network
+    # intent after the customer selects it.
     return cast(
         list[CatalogOffer],
         [
             offer
             for offer in offers
             if _same_region_compatibility(current_offer, offer)
+            and (
+                not require_same_plan_family
+                or _same_plan_family_compatibility(current_offer, offer)
+            )
             and (not allowed_ids or str(offer.id) in allowed_ids)
             and offer_has_positive_recurring_price(offer)
         ],
