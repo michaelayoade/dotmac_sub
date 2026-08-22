@@ -101,7 +101,7 @@ services:
     # willing to encode data in a query.
     dns:
       - 127.0.0.1
-    command: ["alembic", "upgrade", "head"]
+    command: ["alembic", "upgrade", "heads"]
     depends_on:
       postgres:
         condition: service_healthy

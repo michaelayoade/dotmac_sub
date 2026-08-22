@@ -200,7 +200,7 @@ def test_the_enum_becomes_open_text_and_keeps_every_row(
     _insert(database_url, "auth", "kept_live", cast_enum=True)
     _insert(database_url, RETIRED_DOMAIN, "kept_retired", cast_enum=True)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
 
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
@@ -240,7 +240,7 @@ def test_the_downgrade_restores_the_enum(
     )
     config = _alembic_config()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
     _insert(database_url, RETIRED_DOMAIN, "legacy_member", cast_enum=False)
 
     command.downgrade(config, REVISION_501)

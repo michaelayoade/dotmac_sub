@@ -288,7 +288,7 @@ def test_the_enum_becomes_open_text_and_a_second_json_type_becomes_writable(
     with pytest.raises(Exception, match="invalid input value for enum"):
         _insert_text(database_url, "impossible_enum", NEW_JSON_TYPE)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
 
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
@@ -334,7 +334,7 @@ def test_a_valueless_row_is_still_refused(
 
     database_url = isolated_migration_database
     _use_database(monkeypatch, database_url)
-    command.upgrade(_alembic_config(), "head")
+    command.upgrade(_alembic_config(), "heads")
 
     with pytest.raises(Exception, match=ALIGNMENT_CONSTRAINT):
         _execute(
@@ -366,7 +366,7 @@ def test_a_boolean_written_to_both_columns_is_accepted(
 
     database_url = isolated_migration_database
     _use_database(monkeypatch, database_url)
-    command.upgrade(_alembic_config(), "head")
+    command.upgrade(_alembic_config(), "heads")
 
     _execute(
         database_url,
@@ -395,7 +395,7 @@ def test_a_database_built_after_the_model_change_migrates_cleanly(
 
     database_url = isolated_migration_database
     _use_database(monkeypatch, database_url)
-    command.upgrade(_alembic_config(), "head")
+    command.upgrade(_alembic_config(), "heads")
 
     assert not _enum_exists(database_url)
     for table, _ in LEGACY_COLUMNS:

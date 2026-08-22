@@ -143,7 +143,7 @@ def test_postgres_drops_the_obsolete_column_and_keeps_501_resolvable(
         )
     assert _column_exists(database_url)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
 
     # Single-headedness and 501's presence in the head's ancestry — NOT a
     # literal head revision, which every later migration would falsify. See
@@ -161,12 +161,12 @@ def test_postgres_drops_the_obsolete_column_and_keeps_501_resolvable(
 
     # A database that already recorded 501 remains resolvable, and moving the
     # marker backward for compatibility checks does not recreate old data.
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
     assert _revision_rows(database_url) == expected_heads
     command.downgrade(config, REVISION_500)
     assert _revision_rows(database_url) == {REVISION_500}
     assert not _column_exists(database_url)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
     assert _revision_rows(database_url) == expected_heads
     assert not _column_exists(database_url)

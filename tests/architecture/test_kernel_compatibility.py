@@ -57,7 +57,7 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a90"
+KERNEL_PIN = "0.1.0a91"
 KERNEL_WHEEL_SHA256 = "49add8154708b8f154ecb9a41f3c97e3810f9d381588a7ec55eff4f5c18fa69f"
 KERNEL_SDIST_SHA256 = "7c2e506c909b5dc7c72511cd7e886b9e1b21c814663364f78ac6772a18db875e"
 

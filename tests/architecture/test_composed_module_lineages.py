@@ -5,7 +5,7 @@ Composing a Starter module into Sub is not one edit. It is a dependency pin in
 binding in `app/migration_bindings.py`. Each is load-bearing and each fails
 differently when it is the one that was forgotten:
 
-- **pinned, lineage missing** — `alembic upgrade head` reports success while
+- **pinned, lineage missing** — `alembic upgrade heads` reports success while
   the module's schema was never created. The application then imports a module
   whose tables do not exist, and the first query is the error message.
 - **lineage present, unpinned** — `env.py` raises `ModuleNotFoundError` at
@@ -62,12 +62,7 @@ def _pinned_distributions() -> set[str]:
     project = data.get("project", {})
     pinned: set[str] = set()
     for requirement in project.get("dependencies", []):
-        name = (
-            requirement.split("==")[0]
-            .split(">=")[0]
-            .split("[")[0]
-            .strip()
-        )
+        name = requirement.split("==")[0].split(">=")[0].split("[")[0].strip()
         if name:
             pinned.add(name)
     return pinned
@@ -95,7 +90,7 @@ def test_every_composed_lineage_is_pinned() -> None:
 def test_every_pinned_dotmac_module_composes_its_lineage() -> None:
     """The other direction, and the one that fails silently.
 
-    A pinned module whose lineage is not composed leaves `alembic upgrade head`
+    A pinned module whose lineage is not composed leaves `alembic upgrade heads`
     reporting success against a database that never got its schema. The kernel
     and UI are excluded deliberately: Sub composes kernel MODELS without
     adopting kernel MIGRATIONS, and `dotmac-ui` ships no lineage at all.
@@ -110,7 +105,7 @@ def test_every_pinned_dotmac_module_composes_its_lineage() -> None:
     )
     assert not missing, (
         "these modules are pinned and their lineages are not composed in "
-        "alembic/env.py, so `alembic upgrade head` would report success without "
+        "alembic/env.py, so `alembic upgrade heads` would report success without "
         "creating their schemas:\n  " + "\n  ".join(missing)
     )
 
