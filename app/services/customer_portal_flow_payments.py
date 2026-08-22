@@ -119,16 +119,20 @@ def _observe_gateway_for_customer(
     account_id: uuid.UUID,
 ) -> PaymentGatewayTransaction:
     observed_at = datetime.now(UTC)
+    # ``release_read_transaction`` commits and expires ORM instances. Keep only
+    # immutable scalar evidence so constructing the owner command cannot
+    # silently refresh ``intent`` and open another caller transaction.
+    intent_id = intent.id
+    reference = intent.reference
+    capability_binding_id = (
+        str(intent.capability_binding_id) if intent.capability_binding_id else None
+    )
     try:
         return payment_gateway_adapter.verify(
             db,
             provider_type=provider_type,
-            reference=intent.reference,
-            capability_binding_id=(
-                str(intent.capability_binding_id)
-                if intent.capability_binding_id
-                else None
-            ),
+            reference=reference,
+            capability_binding_id=capability_binding_id,
         )
     except PaymentGatewayVerificationError as exc:
         observation = exc.observation
@@ -138,9 +142,9 @@ def _observe_gateway_for_customer(
         db,
         ReconcileGatewayObservationCommand(
             candidate=TopupReconciliationCandidate(
-                intent_id=intent.id,
+                intent_id=intent_id,
                 provider_type=PaymentProviderType(provider_type),
-                reference=intent.reference,
+                reference=reference,
             ),
             observation=observation,
             observed_at=observed_at,
@@ -151,12 +155,12 @@ def _observe_gateway_for_customer(
             scope=RECONCILIATION_OBSERVATION_SCOPE,
             reason="Record customer-requested gateway verification observation",
             idempotency_key=(
-                f"customer-gateway-observation-{intent.id}-"
+                f"customer-gateway-observation-{intent_id}-"
                 f"{observation.outcome.value}-{int(observed_at.timestamp())}"
             ),
         ),
     )
-    observed_intent = db.get(TopupIntent, intent.id)
+    observed_intent = db.get(TopupIntent, intent_id)
     if observed_intent is None:
         raise ValueError("Payment intent is unavailable")
     raise GatewayPaymentIncomplete(

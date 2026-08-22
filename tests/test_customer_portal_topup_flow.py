@@ -290,6 +290,11 @@ def test_get_topup_page_uses_owner_active_deposit_state(
         "created_at": intent.created_at,
         "expires_at": intent.expires_at,
         "observed_at": page["active_deposit_request"]["observed_at"],
+        "message": (
+            "Your transfer receipt is under review."
+            if status == "submitted"
+            else "Upload your transfer receipt to continue."
+        ),
         "can_cancel": status == "pending",
         # None here is the point: neither fixture has a rejected proof, so the
         # normal phases stay untouched.
@@ -297,7 +302,7 @@ def test_get_topup_page_uses_owner_active_deposit_state(
     }
 
 
-def test_get_topup_page_ignores_expired_deposit_request(
+def test_get_topup_page_keeps_submitted_receipt_blocking_after_intent_expiry(
     monkeypatch,
     db_session,
     subscriber,
@@ -315,8 +320,9 @@ def test_get_topup_page_ignores_expired_deposit_request(
         {"account_id": str(subscriber.id), "username": "customer@example.com"},
     )
 
-    assert page["deposit_allowed"] is True
-    assert "active_deposit_request" not in page
+    assert page["deposit_allowed"] is False
+    assert page["active_deposit_request"]["phase"] == "under_review"
+    assert page["active_deposit_request"]["can_cancel"] is False
 
 
 def test_get_topup_page_does_not_fallback_to_customer_direct_transfer(

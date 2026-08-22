@@ -1,6 +1,6 @@
 """Persist effective expiry for legacy pending gateway intents.
 
-Revision ID: 549_gateway_intent_terminal_state
+Revision ID: 549_gateway_intent_lifecycle
 Revises: 548_inbox_observation_quarantine
 Create Date: 2026-08-22
 """
@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "549_gateway_intent_terminal_state"
+revision: str = "549_gateway_intent_lifecycle"
 down_revision: str | None = "548_inbox_observation_quarantine"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
