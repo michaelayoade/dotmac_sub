@@ -162,6 +162,7 @@ INBOX_LIST_DEFINITION = ListDefinition(
     key="team_inbox",
     fields=(
         ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("view", "View", filterable=True),
         ListFieldDefinition("channel_type", "Channel", filterable=True),
         ListFieldDefinition("service_team_id", "Team", filterable=True),
         # Declared so the multi-team "My team" scope survives a canonical
@@ -198,6 +199,7 @@ INBOX_LIST_DEFINITION = ListDefinition(
 @dataclass(frozen=True, slots=True)
 class InboxQueueRequest:
     search: str | None = None
+    view: str | None = None
     status: str | None = None
     channel_type: str | None = None
     service_team_id: str | UUID | None = None
@@ -434,6 +436,7 @@ class InboxQueueProjection:
     count: int
     list_query: ListQuery
     page_meta: PageMeta
+    view: str
     status: str
     channel_type: str
     service_team_id: str
@@ -1615,6 +1618,7 @@ def _activity_param(value: datetime | None) -> str | None:
 
 def _filter_params(
     *,
+    view: str | None,
     status: str | None,
     channel_type: str | None,
     service_team_id: str | None,
@@ -1645,6 +1649,7 @@ def _filter_params(
     """
 
     return {
+        "view": view,
         "status": status,
         "channel_type": channel_type,
         "service_team_id": service_team_id,
@@ -2130,6 +2135,8 @@ def get_queue_row_projection(
         if request.status in {item.value for item in InboxConversationStatus}
         else None
     )
+    view = "all" if str(request.view or "").strip().lower() == "all" else None
+    effective_open_only = request.open_only or (status is None and view != "all")
     channel = (
         request.channel_type
         if request.channel_type in {item.value for item in InboxChannelType}
@@ -2170,6 +2177,7 @@ def get_queue_row_projection(
     )
     filters = _filter_params(
         status=status,
+        view=view,
         channel_type=channel,
         service_team_id=str(team_id) if team_id else None,
         service_team_ids=team_id_scope,
@@ -2214,7 +2222,7 @@ def get_queue_row_projection(
         priority_at_most=priority,
         muted=request.muted,
         snoozed=request.snoozed,
-        open_only=request.open_only,
+        open_only=effective_open_only,
         unassigned=request.unassigned,
         operator_person_id=request.actor_person_id,
         unread_only=request.unread,
@@ -2249,6 +2257,7 @@ def build_queue_projection(
     """Own filter normalization, sort, pagination, cohorts, and UI state."""
 
     search = request.search
+    raw_view = request.view
     raw_status = request.status
     raw_channel = request.channel_type
     raw_team_id = request.service_team_id
@@ -2285,10 +2294,11 @@ def build_queue_projection(
         if raw_status in {item.value for item in InboxConversationStatus}
         else None
     )
-    # Status "All" is literal: an unqualified status includes every lifecycle
-    # state. The separate Active shortcut opts into ``open_only`` and remains
-    # the operational Open + Pending + Snoozed cohort.
-    effective_open_only = open_only
+    view = "all" if str(raw_view or "").strip().lower() == "all" else None
+    # Plain Inbox loads are operational work queues, so they default to the
+    # active non-resolved cohort. The explicit All view keeps resolved history
+    # available without letting it re-enter the day-to-day queue.
+    effective_open_only = open_only or (status is None and view != "all")
     channel = (
         raw_channel
         if raw_channel in {item.value for item in InboxChannelType}
@@ -2332,6 +2342,7 @@ def build_queue_projection(
     )
     normalized_filters = _filter_params(
         status=status,
+        view=view,
         channel_type=channel,
         service_team_id=str(team_id) if team_id else None,
         service_team_ids=team_id_scope,
@@ -2405,6 +2416,7 @@ def build_queue_projection(
         search=search,
         filters=_filter_params(
             status=raw_status,
+            view=raw_view,
             channel_type=raw_channel,
             service_team_id=raw_team_text,
             service_team_ids=team_id_scope,
@@ -2492,6 +2504,7 @@ def build_queue_projection(
         count=result.count,
         list_query=list_query,
         page_meta=page_meta,
+        view=view or "",
         status=status or "",
         channel_type=channel or "",
         service_team_id=str(team_id) if team_id else "",

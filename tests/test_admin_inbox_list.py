@@ -80,7 +80,7 @@ def test_order_by_last_message_at_ignores_priority(db_session):
     assert [row.id for row in result.items] == [str(a.id), str(b.id)]
 
 
-def test_all_status_includes_every_status_while_active_excludes_resolved(db_session):
+def test_default_queue_is_active_while_all_view_includes_resolved(db_session):
     now = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
     open_conversation = _conv(
         db_session, priority=1, last_message_at=now, thread="open"
@@ -101,8 +101,11 @@ def test_all_status_includes_every_status_while_active_excludes_resolved(db_sess
     )
     db_session.commit()
 
-    all_queue = team_inbox_projection.build_queue_projection(
+    default_queue = team_inbox_projection.build_queue_projection(
         db_session, team_inbox_projection.InboxQueueRequest()
+    )
+    all_queue = team_inbox_projection.build_queue_projection(
+        db_session, team_inbox_projection.InboxQueueRequest(view="all")
     )
     active_queue = team_inbox_projection.build_queue_projection(
         db_session,
@@ -127,6 +130,10 @@ def test_all_status_includes_every_status_while_active_excludes_resolved(db_sess
         ),
     )
 
+    assert {row.id for row in default_queue.rows} == {
+        str(open_conversation.id),
+        str(pending_conversation.id),
+    }
     assert {row.id for row in all_queue.rows} == {
         str(open_conversation.id),
         str(pending_conversation.id),
@@ -174,6 +181,11 @@ def test_resolved_realtime_row_remains_under_all_and_leaves_active(db_session):
     all_row = team_inbox_projection.get_queue_row_projection(
         db_session,
         conversation_id=resolved.id,
+        request=team_inbox_projection.InboxQueueRequest(view="all"),
+    )
+    default_row = team_inbox_projection.get_queue_row_projection(
+        db_session,
+        conversation_id=resolved.id,
         request=team_inbox_projection.InboxQueueRequest(),
     )
     active_row = team_inbox_projection.get_queue_row_projection(
@@ -184,6 +196,7 @@ def test_resolved_realtime_row_remains_under_all_and_leaves_active(db_session):
 
     assert all_row.row is not None
     assert all_row.row.id == str(resolved.id)
+    assert default_row.row is None
     assert active_row.row is None
 
 
