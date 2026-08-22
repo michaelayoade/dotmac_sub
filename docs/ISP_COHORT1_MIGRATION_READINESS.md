@@ -260,11 +260,13 @@ that were carried as `Disposition.UNDECIDED` on specific surfaces are now
 closed. What remains for `ctl-isp-006` is **work created by those answers**,
 plus the two dispositions that were always going to need one:
 
-- **`addresses` has no Sub owner.** dec-isp-007 names a product-first
-  `dotmac-addresses` owner for the target; product-first extraction needs a
-  proven Sub implementation to extract from. Sub must grow that owner before
-  `customer_location_requests.py` can be routed and before the cohort can be
-  shadowed.
+- **`customer_location_requests.py` bypasses `customer.accounts`.** Not, as an
+  earlier version of this document said, because addresses have no Sub owner —
+  they have four declared ones (see the ownership map). The write simply does
+  not go through any of them, and it has to before the cohort can be shadowed.
+  Extraction into `dotmac-addresses` draws on `customer.accounts`,
+  `gis.spatial_sync`, `customer.location_capture` and
+  `customer.location_verification`.
 - **The account-recovery cascade must be decomposed.** Customers owns recovery
   intent, but one restore currently touches invoices, payments, credentials,
   RADIUS, IP assignments and ONT assignments in the same pass. Only the account

@@ -603,14 +603,15 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         open_question=None,
         note=(
             "Constructs `Address` rows and writes the account `metadata` blob from an "
-            "undeclared module. Decided 2026-08-21 (Governance dec-isp-007): a "
-            "product-first `dotmac-addresses` owner takes normalized address, "
-            "geospatial data and verification history, and Customers, Services and "
-            "Billing hold typed purpose links rather than copies. Product-first means "
-            "the target owner is extracted from a proven Sub implementation, so Sub "
-            "needs that address owner before this write can be routed and before the "
-            "cohort can be shadowed. The account `metadata` half routes through "
-            "customer.accounts independently."
+            "undeclared module. Both halves bypass `customer.accounts`, which "
+            "`docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md` names as the owner of "
+            "the service Address's identity and text. An earlier version of this note "
+            "said addresses had no declared owner at all; that was wrong, and it made "
+            "a plain bypass look like unowned debt nobody could route around. "
+            "Decided 2026-08-21 (dec-isp-007): the target owner is a product-first "
+            "`dotmac-addresses`, extracted from `customer.accounts` plus "
+            "`gis.spatial_sync`, `customer.location_capture` and "
+            "`customer.location_verification`."
         ),
     ),
     SourceSurface(

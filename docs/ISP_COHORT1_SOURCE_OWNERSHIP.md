@@ -63,13 +63,41 @@ operator-tenant data.
 | `party_external_reference` | `party_external_references` | `PartyExternalReference` | `party.registry` | `dotmac-party` |
 | `customer_account` | `subscribers` | `Subscriber` | `customer.accounts` | `dotmac-customers` |
 | `customer_contact` | `subscriber_contacts` | `SubscriberContact` | **none declared** | `dotmac-customers` |
-| `customer_address` | `addresses` | `Address` | **none declared** | `dotmac-customers` |
+| `customer_address` | `addresses` | `Address` | `customer.accounts` | `dotmac-addresses` |
 | `organization` | `organizations` | `Organization` | **none declared** | `dotmac-customers` |
 | `organization_membership` | `organization_memberships` | `OrganizationMembership` | **none declared** | `dotmac-customers` |
 | `brand_profile` | `brand_profiles` | `BrandProfile` | `customer.branding` | `dotmac-brand-profiles` |
 
 The expected target component is an expectation recorded from the Governance
 matrix. It is not a plan, an approval, or a claim that any module is released.
+
+### Addresses are owned, four ways
+
+An earlier version of this document recorded `customer_address` as having no
+declared owner. **That was wrong**, and it mattered: it made a plain bypass of a
+real owner look like unowned debt nobody could route around, and it very nearly
+produced a second address service alongside the one Sub already has.
+
+`docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md` splits address ownership
+across four services, all declared in the SOT registry:
+
+| Concern | Owner |
+|---|---|
+| Service address identity and text | `customer.accounts` (`app/services/subscriber.py`) |
+| Coordinates and the map projection | `gis.spatial_sync` (`app/services/gis_sync.py`) |
+| New location capture — field arrival, portal pin, agent | `customer.location_capture` (`app/services/location_capture.py`) |
+| Capture adjudication and the verification ledger | `customer.location_verification` (`app/services/geocode_reconciler.py`) |
+
+Those four are the **product-first extraction source** for `dotmac-addresses`.
+dec-isp-007 asks that owner to hold "normalized address, geospatial data and
+verification history" — which is precisely what these four already own between
+them, so the extraction has proven implementations to draw on rather than being
+greenfield.
+
+The decision's question said addresses had "no named owner at all". True of the
+target, false of Sub. The distinction is worth keeping straight, because
+product-first extraction is only possible where an implementation already
+exists.
 
 ## Writer census
 
