@@ -18,6 +18,7 @@ from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
 from app.models.wireless_mast import WirelessMast
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
+from app.services.gis import point_wkt
 
 _EARTH_RADIUS_M = 6_371_000.0
 _METERS_PER_DEGREE = 111_320.0
@@ -76,10 +77,6 @@ def _status(row: Any) -> str | None:
     if active is None:
         return None
     return "active" if active else "inactive"
-
-
-def _point_wkt(latitude: float, longitude: float) -> str:
-    return f"SRID=4326;POINT({longitude} {latitude})"
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -394,7 +391,9 @@ class FieldMapAssets:
         row.latitude = float(latitude)
         row.longitude = float(longitude)
         if hasattr(row, "geom"):
-            row.geom = _point_wkt(float(latitude), float(longitude))
+            row.geom = point_wkt(
+                latitude=float(latitude), longitude=float(longitude)
+            )
 
         stage_audit_event(
             db,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Final
+
 import builtins
 import logging
 
@@ -42,15 +44,42 @@ from app.services.response import ListResponseMixin, list_response
 logger = logging.getLogger(__name__)
 
 
-def _point_wkt(latitude: float, longitude: float) -> str:
-    """Return WKT representation of a point."""
-    return f"SRID=4326;POINT({longitude} {latitude})"
+#: Every geometry column in this schema is declared `srid=4326`, and the WKT
+#: below states it explicitly so a value is self-describing wherever it is
+#: logged, copied or compared.
+POINT_SRID: Final[int] = 4326
+
+
+def point_wkt(*, latitude: float, longitude: float) -> str:
+    """Return the EWKT for one point, in WKT axis order.
+
+    Keyword-only, and that is the entire reason this function is public.
+
+    WKT orders a point `POINT(x y)` — longitude first. Latitude comes first in
+    speech, in `lat/lng` field pairs and in every URL a person pastes, so a
+    positional call site reads correctly while being wrong. That is not
+    hypothetical: `customer_location_requests` called the previous positional
+    `_point_wkt(latitude, longitude)` as `_point_wkt(address.longitude,
+    address.latitude)` and wrote every approved map pin with its axes swapped,
+    for as long as that code has existed. `gis_sync` called the same function
+    correctly, so the two disagreed silently and nothing failed.
+
+    Both orderings type-check as `float`. Both look plausible in review. Around
+    Abuja — latitude ~9.06, longitude ~7.49 — both are even inside Nigeria's
+    bounding box, so a swapped point lands somewhere real and only a spatial
+    query notices. Making the argument names mandatory is the one change that
+    turns "reads correctly but is wrong" into "does not run".
+    """
+
+    return f"SRID={POINT_SRID};POINT({longitude} {latitude})"
 
 
 def _sync_location_geometry(location: GeoLocation) -> None:
     """Sync the geom column from latitude/longitude."""
     if location.latitude is not None and location.longitude is not None:
-        location.geom = _point_wkt(location.latitude, location.longitude)
+        location.geom = point_wkt(
+            latitude=float(location.latitude), longitude=float(location.longitude)
+        )
 
 
 def subscriber_locations_geojson(db: Session, *, limit: int = 500) -> dict[str, object]:

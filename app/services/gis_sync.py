@@ -16,7 +16,7 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
 from app.services.db_session_adapter import db_session_adapter
-from app.services.gis import _point_wkt
+from app.services.gis import point_wkt
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -110,6 +110,68 @@ def get_last_sync_run(db: Session) -> dict[str, Any] | None:
     if isinstance(setting.value_json, dict):
         return setting.value_json
     return None
+
+
+def project_address_point(
+    db: Session,
+    address: Address,
+    *,
+    latitude: float,
+    longitude: float,
+) -> bool:
+    """Set one address's point and its map projection. Flush-only, idempotent.
+
+    The composable half of `gis.spatial_sync`. The owner previously offered
+    only full-table sweeps that commit, so any caller needing to move a single
+    pin either reached into `gis`'s private helpers or wrote the columns
+    itself — which is how `customer_location_requests` came to hold a second
+    copy of this upsert and an axis-swapped `geom`.
+
+    Writes both sides, because they are one fact: the `Address` carries the
+    authoritative coordinate and `geo_locations` carries the projection every
+    map and spatial query reads. Updating one without the other is the drift
+    this function exists to prevent — and is what the previous sweep did, since
+    it set the projection's latitude and longitude but never its `geom`.
+
+    Returns whether a projection row was created, so a sweep still reports
+    created-versus-updated without a second query.
+
+    Flush-only by contract: never commits, never rolls back, so a caller owning
+    a transaction can compose it. It flushes so a freshly created projection
+    has its identity before the caller continues.
+    """
+
+    address.latitude = latitude
+    address.longitude = longitude
+    address.geom = point_wkt(latitude=latitude, longitude=longitude)
+
+    existing = (
+        db.query(GeoLocation).filter(GeoLocation.address_id == address.id).first()
+    )
+    name = _address_display_name(address)
+    if existing is not None:
+        existing.name = name
+        existing.location_type = GeoLocationType.address
+        existing.latitude = latitude
+        existing.longitude = longitude
+        existing.geom = point_wkt(latitude=latitude, longitude=longitude)
+        existing.is_active = True
+        db.flush()
+        return False
+
+    db.add(
+        GeoLocation(
+            name=name,
+            location_type=GeoLocationType.address,
+            latitude=latitude,
+            longitude=longitude,
+            geom=point_wkt(latitude=latitude, longitude=longitude),
+            address_id=address.id,
+            is_active=True,
+        )
+    )
+    db.flush()
+    return True
 
 
 class GeoSync(ListResponseMixin):
@@ -235,7 +297,9 @@ class GeoSync(ListResponseMixin):
                 existing.longitude = pop.longitude
                 # Spatial reads filter on geom, so a projection carrying only
                 # lat/lon is invisible to the nearby and in-area endpoints.
-                existing.geom = _point_wkt(float(pop.latitude), float(pop.longitude))
+                existing.geom = point_wkt(
+                    latitude=float(pop.latitude), longitude=float(pop.longitude)
+                )
                 existing.is_active = pop.is_active
                 result.updated += 1
             else:
@@ -245,7 +309,10 @@ class GeoSync(ListResponseMixin):
                         location_type=GeoLocationType.pop,
                         latitude=pop.latitude,
                         longitude=pop.longitude,
-                        geom=_point_wkt(float(pop.latitude), float(pop.longitude)),
+                        geom=point_wkt(
+                            latitude=float(pop.latitude),
+                            longitude=float(pop.longitude),
+                        ),
                         pop_site_id=pop.id,
                         is_active=pop.is_active,
                     )
@@ -273,31 +340,20 @@ class GeoSync(ListResponseMixin):
                 result.skipped += 1
                 continue
             seen_ids.add(address.id)
-            existing = (
-                db.query(GeoLocation)
-                .filter(GeoLocation.address_id == address.id)
-                .first()
+            # The sweep and the per-address write are the same operation. They
+            # used to be two implementations that disagreed: this one set the
+            # projection's latitude and longitude but never its `geom`, so a
+            # row it "updated" stayed invisible to every spatial query.
+            created = project_address_point(
+                db,
+                address,
+                latitude=float(address.latitude),
+                longitude=float(address.longitude),
             )
-            name = _address_display_name(address)
-            if existing:
-                existing.name = name
-                existing.location_type = GeoLocationType.address
-                existing.latitude = address.latitude
-                existing.longitude = address.longitude
-                existing.is_active = True
-                result.updated += 1
-            else:
-                db.add(
-                    GeoLocation(
-                        name=name,
-                        location_type=GeoLocationType.address,
-                        latitude=address.latitude,
-                        longitude=address.longitude,
-                        address_id=address.id,
-                        is_active=True,
-                    )
-                )
+            if created:
                 result.created += 1
+            else:
+                result.updated += 1
         if deactivate_missing:
             missing_query = db.query(GeoLocation).filter(
                 GeoLocation.address_id.isnot(None)
@@ -335,7 +391,7 @@ class GeoSync(ListResponseMixin):
                 continue
             pop.latitude = latitude
             pop.longitude = longitude
-            pop.geom = _point_wkt(latitude, longitude)
+            pop.geom = point_wkt(latitude=latitude, longitude=longitude)
             result.written += 1
         result.missing = len(coordinates) - result.matched
         db.commit()
@@ -366,14 +422,12 @@ class GeoSync(ListResponseMixin):
             if address.latitude == latitude and address.longitude == longitude:
                 result.unchanged += 1
                 continue
-            address.latitude = latitude
-            address.longitude = longitude
-            address.geom = _point_wkt(latitude, longitude)
+            project_address_point(
+                db, address, latitude=latitude, longitude=longitude
+            )
             result.written += 1
         result.missing = len(coordinates) - result.matched
         db.commit()
-        if result.written:
-            GeoSync.sync_addresses(db)
         return result
 
 
