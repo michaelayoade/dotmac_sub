@@ -82,10 +82,16 @@ class CohortComponent(StrEnum):
     PARTY = "dotmac-party"
     CUSTOMERS = "dotmac-customers"
     BRAND_PROFILES = "dotmac-brand-profiles"
-    #: Added by Governance dec-isp-007 (2026-08-21). Addresses had no owner on
-    #: either side; a product-first `dotmac-addresses` owner takes normalized
-    #: address, geospatial data and verification history, and Customers,
-    #: Services and Billing hold typed purpose links rather than copies.
+    #: Added by Governance dec-isp-007 (2026-08-21). A product-first
+    #: `dotmac-addresses` owner takes normalized address, geospatial data and
+    #: verification history, and Customers, Services and Billing hold typed
+    #: purpose links rather than copies.
+    #:
+    #: The decision's question said addresses had "no named owner at all". That
+    #: is true of the TARGET and false of Sub — see
+    #: `docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md`, which splits address
+    #: ownership four ways across declared services. Product-first extraction
+    #: therefore has real sources rather than being greenfield.
     ADDRESSES = "dotmac-addresses"
 
 
@@ -200,10 +206,19 @@ COHORT_TABLES: Final[tuple[CohortTable, ...]] = (
         table="addresses",
         model_class="Address",
         model_module="app.models.subscriber",
-        # Still None: dec-isp-007 names the TARGET owner, and product-first
-        # extraction needs a Sub owner to extract from. Creating it is the
-        # follow-up this decision unblocks, not something the decision did.
-        owning_service=None,
+        # `customer.accounts` owns the service Address's identity and text.
+        # `docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md` says so, and the
+        # SOT registry declares the service. An earlier version of this file
+        # recorded `None` — that was wrong, and it made a bypass of a real
+        # owner look like unowned debt.
+        #
+        # Three declared services own the rest of the address story:
+        # `gis.spatial_sync` owns coordinates and the map projection,
+        # `customer.location_capture` owns new captures, and
+        # `customer.location_verification` owns capture adjudication and the
+        # verification ledger. Together they are the product-first extraction
+        # source for `dotmac-addresses`.
+        owning_service="customer.accounts",
         expected_target_component=CohortComponent.ADDRESSES,
     ),
     CohortTable(
