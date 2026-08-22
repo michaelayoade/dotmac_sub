@@ -1741,8 +1741,10 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
         .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
         .one()
     )
-    session = ai_conversation_intake.active_session_for_conversation(
-        db_session, conversation.id
+    session = (
+        db_session.query(AiIntakeSession)
+        .filter(AiIntakeSession.conversation_id == conversation.id)
+        .one()
     )
 
     assert note.metadata_["source"] == "ai_intake_handoff"
@@ -1752,8 +1754,9 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
     assert queue_entry.service_team_id == technical_id
     assert queue_entry.queue_position == 1
     assert session is not None
-    assert session.state == "handoff_requested"
-    assert conversation.metadata_["ai_handling"] is True
+    assert session.state == "completed"
+    assert session.completed_at is not None
+    assert conversation.metadata_["ai_handling"] is False
     assert (
         db_session.query(InboxMessage)
         .filter(InboxMessage.conversation_id == conversation.id)
