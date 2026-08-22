@@ -59,7 +59,10 @@ service team, but it never owns queueing or agent assignment. Four owners:
    registries, and returns route-ready metadata. It supports WhatsApp,
    Facebook Messenger, and Instagram messages only. It also evaluates the
    exact configured Support-team UUID gate for the reserved contact-data
-   cleaning flow; that skeleton performs no dialogue or customer-data access.
+   cleaning flow. Versioned policies may opt into the composable conversation
+   engine, which persists structured operational state, uses only the approved
+   tool catalogue, and still leaves routing, queueing and assignment with Team
+   Inbox.
 
 An **advisor** is not an owner; it is a declaration. `AdvisorSpec` binds one
 advisor key to one owned projection, the output contract it must satisfy, the
@@ -155,6 +158,43 @@ cleanup policy are auditable after activation. Protected system, security,
 privacy and ownership instructions stay code-owned and are not editable by
 normal administrators.
 
+An activated policy version can enable the composable conversational engine
+with metadata owned by `ai.intake`. The engine persists structured operational
+state in the active session metadata: current and previous intent, category,
+confidence, subscriber/contact identity, permitted identifiers supplied by the
+customer, collected facts, missing facts, requested fields, bounded customer
+statements, troubleshooting steps, tool results, tool errors, escalation reason,
+handoff status and counters. It does not store uncontrolled chain-of-thought.
+
+The approved tool catalogue is backend-owned. Current tools are:
+
+- `customer_lookup`: read-only lookup by a policy-permitted Portal/account ID,
+  registered email or registered phone. It returns only support-relevant
+  subscriber fields and explicit statuses: `found`, `not_found`, `ambiguous`,
+  `unavailable` or `unauthorized`.
+- `subscriber_monitoring`: read-only wrapper over the existing customer network
+  context and ONT/RADIUS status projections. It reports bounded factual service
+  state, live-session and equipment status where available. An unavailable
+  result must not become a diagnosis.
+
+Policy versions may select which identifiers can be requested and which
+approved tools are enabled. The UI cannot create arbitrary tools or executable
+conditions. If a customer explicitly asks for a human, AI intake records
+`human_requested=true`, stops troubleshooting and requests handoff while
+preserving already collected facts.
+
+Policy versions may select `conversation_engine_mode=custom_v1` or
+`conversation_engine_mode=langgraph_v1`. LangGraph is an orchestration layer
+only: it hydrates the same `AiIntakeSession.metadata["conversation_state"]`,
+runs a stable graph of policy-driven nodes, and returns the same typed
+conversation decision contract used by the existing session processor. Dotmac
+state remains authoritative; LangGraph checkpoints are not a business record
+and are not used for routing, queueing, assignment, or customer identity.
+During rollout, `langgraph_v1` is an optional runtime capability: publication
+validation refuses LangGraph activation when the package is unavailable, and
+`custom_v1` remains the deployable default until the server dependency is
+installed deliberately.
+
 The authoritative AI session state machine is:
 
 `eligible -> welcome_pending -> collecting_intent -> awaiting_customer ->
@@ -210,7 +250,15 @@ default-off controls and never send automatically.
   may enter `pending` UI state with an active `ai_intake_sessions` row. The AI
   sends through Team Inbox outbound only, uses `sender_type=ai` identity
   metadata, classifies intent, and requests handoff. Team Inbox remains the
-  owner of routing, queueing, assignment and provider delivery.
+  owner of routing, queueing, assignment and provider delivery. The admin
+  composer writes versioned intent definitions, approved tool selections,
+  typed troubleshooting rules, handoff templates and queue wording into
+  `ai_intake_policy_versions`; activation validates canonical intent/category
+  keys, active team references, supported tools, approved rule
+  conditions/actions and template variables. Preview has two explicit modes:
+  simulation, which uses deterministic mock tool results and performs no live
+  customer or monitoring reads, and authorized read-only preview, which may use
+  enabled read-only tools.
 
 ## Open work
 
