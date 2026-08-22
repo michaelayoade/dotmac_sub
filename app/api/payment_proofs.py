@@ -70,30 +70,12 @@ async def submit_my_payment_proof(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Customer uploads their own transfer receipt."""
-    from app.services import payment_proofs
-
     if principal.get("principal_type") != "subscriber":
         raise HTTPException(status_code=403, detail="Customer account required")
-    try:
-        path = await payment_proofs.save_proof_file(file)
-        db_session_adapter.release_read_transaction(db)
-        return payment_proofs.submit_proof(
-            db,
-            str(principal["subscriber_id"]),
-            context=_command_context(
-                principal,
-                scope=payment_proofs.SUBMISSION_SCOPE,
-                reason="Customer submitted bank-transfer evidence",
-            ),
-            submitted_by=str(principal["subscriber_id"]),
-            amount=amount,
-            bank_name=bank_name,
-            reference=reference,
-            paid_at=_parse_dt(paid_at),
-            file_path=path,
-        ).to_dict()
-    except DomainError as exc:
-        raise payment_proof_http_error(exc) from exc
+    raise HTTPException(
+        status_code=403,
+        detail="Bank transfer is available to resellers only",
+    )
 
 
 @router.get("/me")
