@@ -179,14 +179,14 @@ def test_bill_now_recovery_draft_uses_subscription_price_and_account_tax_policy(
         actor="pytest:billing-operator",
         scope="billing:invoice:update",
         reason="Reviewed recovery draft",
-        idempotency_key=f"pytest-recovery-draft-tax:{subscription.id}",
+        idempotency_key=f"pytest-recovery-draft-tax:{preview.subscription_id}",
     )
 
     result = create_prepaid_recovery_draft(
         db_session,
         context=context,
         confirmation=PrepaidRecoveryDraftConfirmation(
-            subscription_id=subscription.id,
+            subscription_id=preview.subscription_id,
             starts_at=preview.starts_at,
             fingerprint=preview.fingerprint,
         ),
