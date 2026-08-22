@@ -3,9 +3,9 @@
 **Status:** Rebaselined 2026-08-02 for slice S1 of the selective kernel-adoption
 plan; amended the same day for slice S2 (dependency pinned — see "S2 acceptance
 claim") and slice S3 (composition declared in `app/composition.py` — see "S3
-acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13
-to `dotmac-kernel==0.1.0a81` on 2026-08-20, and to `dotmac-kernel==0.1.0a90` on
-2026-08-22 — see "Pin history". Supersedes the
+acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13,
+to `dotmac-kernel==0.1.0a81` on 2026-08-20, and to
+`dotmac-kernel==0.1.0a90` on 2026-08-22 — see "Pin history". Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
 authorized by this document alone.
@@ -60,6 +60,14 @@ collision inventory re-verified at each rebase rather than assumed to hold:
   `platform_audit_events`; none of those names exists in Sub, so neither
   executable ratchet moves. The remeasurement was run against the a81 source
   tree, not assumed from the changelog.
+
+- against released kernel a90 (Sub unchanged since the a81 collision
+  measurement), the kernel's machine-credential facility adds runtime-loaded
+  `dotmac_kernel.machine_auth` and `dotmac_kernel.machine_models` modules. They
+  are admitted only as reviewed transitive modules in
+  `tests/architecture/test_kernel_compatibility.py`; Sub still does not import
+  them directly from `app/`, mount kernel middleware or endpoints, compose a
+  kernel migration lineage, or move the model/table collision ratchets.
 
 The recon is re-run on every pin and Sub model change because a stale inventory
 would silently under-report the very risk the S7 ADR gate exists to hold.
@@ -143,6 +151,11 @@ verifier until a separate, reviewed cutover. That cutover is credential
 nor material to re-key from, and Sub's verification subkey is derived from the
 connector-credential encryption key, so rotating one invalidates the other.
 Nothing in this amendment starts it.
+
+The guarded transitive package surface grows from twenty-four modules to
+twenty-six: `machine_auth` and `machine_models` are loaded by the kernel's own
+machine-credential facility, but they remain outside Sub's direct `app/`
+allowlist and mount no middleware or route in `app.main`.
 
 **2026-08-20 — `0.1.0a50` → `0.1.0a81`.** A deliberate catch-up repin, not a
 new kernel consumption: Sub's imported surface is unchanged and every module
@@ -654,7 +667,7 @@ Rules the guard enforces beyond the module list:
 - `dotmac_kernel.testing.*` is consume-pure for `tests/` and the dev dependency
   group only; it is not on the `app/` allowlist.
 
-## Collision inventory (kernel 0.1.0a81 vs Sub through migration 528)
+## Collision inventory (kernel 0.1.0a90 vs Sub through migration 528)
 
 The authoritative migration-lineage measurement has nine overlaps at current
 lineage head plus one transient name that still needs a chain disposition; see

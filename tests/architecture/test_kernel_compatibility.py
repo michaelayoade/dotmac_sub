@@ -23,7 +23,7 @@ What this file proves, with zero skips:
 - the Sub app builds with the kernel installed, and every ``dotmac_kernel``
   module in its import graph is one the ledger allowlist admits OR one the
   kernel reaches for itself (``TRANSITIVE_KERNEL_MODULES``, a reviewed
-  snapshot — twenty-four of them, which is worth knowing) — and no kernel
+  snapshot — twenty-six of them, which is worth knowing) — and no kernel
   middleware is mounted, no kernel route endpoint is served, and the top-level
   route prefix set is exactly the reviewed pin.
 
@@ -67,7 +67,7 @@ KERNEL_SOURCE = "forgejo"
 #: What the kernel loads FOR ITS OWN USE once `app/` imports the settings
 #: resolver, measured rather than assumed — and larger than anyone expected.
 #:
-#: Consuming one kernel subsystem pulls twenty-four more modules into the process,
+#: Consuming one kernel subsystem pulls twenty-six more modules into the process,
 #: including `audit`, `security`, `identity`, `permissions` and `entitlements`
 #: — precisely the surfaces the adoption ledger keeps out of `app/`. Nothing in
 #: `app/` imports them and the AST guard still refuses one that tries; they are
@@ -81,6 +81,9 @@ KERNEL_SOURCE = "forgejo"
 #: that stopped consent/delivery/idempotency/external-identity importing the
 #: eager kernel database owner just to open a SAVEPOINT. None of them is an
 #: authority Sub consults, and none is reachable from `app/`.
+#: The a81 -> a90 repin adds `machine_auth` and `machine_models`; they are
+#: loaded by the kernel's machine-credential facility but are not direct Sub
+#: imports and mount no runtime surface in `app.main`.
 #:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
@@ -104,6 +107,8 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.external_identity",
         "dotmac_kernel.flags",
         "dotmac_kernel.identity",
+        "dotmac_kernel.machine_auth",
+        "dotmac_kernel.machine_models",
         "dotmac_kernel.models_platform",
         "dotmac_kernel.modules",
         "dotmac_kernel.namespaces",
