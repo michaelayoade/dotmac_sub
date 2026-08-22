@@ -3590,7 +3590,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "locked prepaid subscription state",
                         "active prepaid enforcement lock",
-                        "contracted prepaid renewal price",
+                        "contracted prepaid renewal price and tax policy",
                         "unresolved service-invoice evidence",
                     ),
                 ),
@@ -3609,10 +3609,10 @@ SERVICES: tuple[SOTService, ...] = (
                     source="active EnforcementLock with prepaid reason for the exact subscription",
                 ),
                 AuthorityInput(
-                    name="contracted prepaid renewal price",
+                    name="contracted prepaid renewal price and tax policy",
                     owner="financial.prepaid_service_renewals",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="prepaid monthly charge resolver using subscription contract and tax policy",
+                    source="prepaid monthly charge resolver using subscription contract and customer tax policy",
                 ),
                 AuthorityInput(
                     name="unresolved service-invoice evidence",
