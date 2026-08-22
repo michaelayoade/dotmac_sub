@@ -2569,7 +2569,9 @@ def update_person_customer(
     vat_exempt: str | None = None,
     actor_id: str | None = None,
 ):
-    before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    before: Subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=customer_id
+    )
     resolved_reseller_id = (
         before.reseller_id
         if managed_by_reseller is None
@@ -2723,7 +2725,9 @@ def update_business_customer(
     vat_exempt: str | None = None,
     actor_id: str | None = None,
 ):
-    before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    before: Subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=customer_id
+    )
     resolved_reseller_id = (
         before.reseller_id
         if managed_by_reseller is None
@@ -2843,7 +2847,9 @@ def convert_person_to_business_customer(
     domain: str | None,
     website: str | None,
 ):
-    before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    before: Subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=customer_id
+    )
     if before.category == SubscriberCategory.business:
         raise ValueError("Customer is already a business customer.")
 
@@ -2877,7 +2883,9 @@ def update_billing_notification_preference(
     *,
     send_billing_notifications: bool,
 ):
-    before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    before: Subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=customer_id
+    )
     metadata = dict(before.metadata_ or {})
     metadata["subscriber_category"] = before.category.value
     metadata["send_billing_notifications"] = send_billing_notifications
@@ -2894,7 +2902,9 @@ def update_billing_notification_preference(
 def deactivate_person_customer(
     db: Session, customer_id: str, *, actor_id: str | None = None
 ):
-    before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    before: Subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=customer_id
+    )
     change_customer_account_active_state(
         db,
         before,

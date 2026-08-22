@@ -13,9 +13,10 @@ from app.models.billing import (
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    TaxApplication,
+    TaxRate,
 )
 from app.models.catalog import (
-    BillingCycle,
     BillingMode,
     Subscription,
     SubscriptionStatus,
@@ -30,6 +31,7 @@ from app.services.prepaid_recovery_billing import (
     preview_prepaid_recovery_draft,
     resolve_prepaid_recovery_draft_eligibility,
 )
+from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
 
 
 def _suspend_for_prepaid(db, subscriber, subscription) -> None:
@@ -156,17 +158,88 @@ def test_bill_now_does_not_block_on_another_subscription_draft(
     assert eligibility.next_action is PrepaidRecoveryNextAction.create_recovery_draft
 
 
-def test_bill_now_confirmation_replays_matching_recovery_draft(
-    db_session, subscriber, subscription, monkeypatch
+def test_bill_now_recovery_draft_uses_subscription_price_and_account_tax_policy(
+    db_session, subscriber, subscription
 ):
     _suspend_for_prepaid(db_session, subscriber, subscription)
-    subscription.unit_price = Decimal("4582.19")
-    subscription.billing_cycle = BillingCycle.monthly
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("17500.00"))
+    tax_rate = TaxRate(name=f"VAT-{uuid4().hex[:8]}", rate=Decimal("7.5000"))
+    db_session.add(tax_rate)
+    db_session.flush()
+    subscriber.tax_rate_id = tax_rate.id
     db_session.commit()
-    monkeypatch.setattr(
-        "app.services.prepaid_recovery_billing.resolve_prepaid_monthly_charge",
-        lambda *_args: (Decimal("4582.19"), "NGN", BillingCycle.monthly),
+
+    preview = preview_prepaid_recovery_draft(
+        db_session,
+        subscription_id=subscription.id,
+        effective_at=datetime(2026, 8, 2, 9, 17, tzinfo=UTC),
     )
+    db_session.commit()
+    context = CommandContext.system(
+        actor="pytest:billing-operator",
+        scope="billing:invoice:update",
+        reason="Reviewed recovery draft",
+        idempotency_key=f"pytest-recovery-draft-tax:{preview.subscription_id}",
+    )
+
+    result = create_prepaid_recovery_draft(
+        db_session,
+        context=context,
+        confirmation=PrepaidRecoveryDraftConfirmation(
+            subscription_id=preview.subscription_id,
+            starts_at=preview.starts_at,
+            fingerprint=preview.fingerprint,
+        ),
+    )
+
+    invoice = db_session.get(Invoice, result.invoice_id)
+    line = (
+        db_session.query(InvoiceLine)
+        .filter(InvoiceLine.invoice_id == result.invoice_id)
+        .one()
+    )
+    assert preview.unit_price == Decimal("17500.00")
+    assert preview.subtotal == Decimal("17500.00")
+    assert preview.tax_total == Decimal("1312.50")
+    assert preview.total == Decimal("18812.50")
+    assert preview.tax_rate_id == tax_rate.id
+    assert preview.tax_application is TaxApplication.exclusive
+    assert invoice.subtotal == Decimal("17500.00")
+    assert invoice.tax_total == Decimal("1312.50")
+    assert invoice.total == Decimal("18812.50")
+    assert line.unit_price == Decimal("17500.00")
+    assert line.amount == Decimal("17500.00")
+    assert line.tax_rate_id == tax_rate.id
+    assert line.tax_application is TaxApplication.exclusive
+
+
+def test_bill_now_recovery_draft_uses_exempt_policy_without_tax_rate(
+    db_session, subscriber, subscription
+):
+    _suspend_for_prepaid(db_session, subscriber, subscription)
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("12000.00"))
+    db_session.commit()
+
+    preview = preview_prepaid_recovery_draft(
+        db_session,
+        subscription_id=subscription.id,
+        effective_at=datetime(2026, 8, 2, 9, 17, tzinfo=UTC),
+    )
+
+    assert preview.unit_price == Decimal("12000.00")
+    assert preview.subtotal == Decimal("12000.00")
+    assert preview.tax_total == Decimal("0.00")
+    assert preview.total == Decimal("12000.00")
+    assert preview.tax_rate_id is None
+    assert preview.tax_application is TaxApplication.exempt
+
+
+def test_bill_now_confirmation_replays_matching_recovery_draft(
+    db_session, subscriber, subscription
+):
+    _suspend_for_prepaid(db_session, subscriber, subscription)
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("4582.19"))
+    db_session.commit()
     preview = preview_prepaid_recovery_draft(
         db_session,
         subscription_id=subscription.id,
@@ -196,4 +269,6 @@ def test_bill_now_confirmation_replays_matching_recovery_draft(
 
     assert replay.replayed is True
     assert replay.invoice_id == first.invoice_id
+    assert replay.preview.unit_price == Decimal("4582.19")
+    assert replay.preview.total == Decimal("4582.19")
     assert db_session.query(Invoice).filter(Invoice.id == first.invoice_id).count() == 1
