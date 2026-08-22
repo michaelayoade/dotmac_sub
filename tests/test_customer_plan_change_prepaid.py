@@ -294,9 +294,7 @@ def test_zero_price_offer_is_not_available_for_customer_plan_change(
     assert subscription.offer_id == current_offer.id
 
 
-def test_change_plan_page_excludes_cross_family_offer(
-    db_session, subscriber
-):
+def test_change_plan_page_excludes_cross_family_offer(db_session, subscriber):
     from app.services import customer_portal_flow_changes as flow
 
     current_offer = _make_offer(

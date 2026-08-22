@@ -124,21 +124,21 @@ def test_assignment_replace_reactivates_existing_inactive_row(db_session):
     assert rows[0].is_active is True
 
 
-def test_admin_route_delegates_complete_offer_selection(
-    db_session, monkeypatch
-):
+def test_admin_route_delegates_complete_offer_selection(db_session, monkeypatch):
     reseller_id = uuid4()
     offer_ids = (uuid4(), uuid4())
     captured = []
     monkeypatch.setattr(
         admin_resellers.offer_reseller_availability,
         "set_reseller_offer_availability",
-        lambda db, command: captured.append(command)
-        or SimpleNamespace(
-            changed=True,
-            added_offer_ids=offer_ids,
-            reactivated_offer_ids=(),
-            deactivated_offer_ids=(),
+        lambda db, command: (
+            captured.append(command)
+            or SimpleNamespace(
+                changed=True,
+                added_offer_ids=offer_ids,
+                reactivated_offer_ids=(),
+                deactivated_offer_ids=(),
+            )
         ),
     )
 

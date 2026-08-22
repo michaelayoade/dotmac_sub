@@ -391,8 +391,7 @@ def reseller_catalog_access_update(
                     ),
                     reason="Update reseller catalog access",
                     idempotency_key=(
-                        f"reseller-catalog-access:{reseller_uuid}:"
-                        f"{desired_fingerprint}"
+                        f"reseller-catalog-access:{reseller_uuid}:{desired_fingerprint}"
                     ),
                 ),
                 reseller_id=reseller_uuid,
@@ -428,8 +427,7 @@ def reseller_catalog_access_update(
     )
     return RedirectResponse(
         url=(
-            f"/admin/resellers/{reseller_id}?notice={quote_plus(notice)}"
-            "#catalog-access"
+            f"/admin/resellers/{reseller_id}?notice={quote_plus(notice)}#catalog-access"
         ),
         status_code=303,
     )

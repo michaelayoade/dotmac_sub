@@ -115,9 +115,7 @@ def set_reseller_offer_availability(
             )
 
         reseller = db.execute(
-            select(Reseller)
-            .where(Reseller.id == command.reseller_id)
-            .with_for_update()
+            select(Reseller).where(Reseller.id == command.reseller_id).with_for_update()
         ).scalar_one_or_none()
         if reseller is None:
             raise _error(
@@ -148,9 +146,7 @@ def set_reseller_offer_availability(
         existing_rows = tuple(
             db.scalars(
                 select(OfferResellerAvailability)
-                .where(
-                    OfferResellerAvailability.reseller_id == command.reseller_id
-                )
+                .where(OfferResellerAvailability.reseller_id == command.reseller_id)
                 .order_by(OfferResellerAvailability.offer_id)
                 .with_for_update()
             ).all()

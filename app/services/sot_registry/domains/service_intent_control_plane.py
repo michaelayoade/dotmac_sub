@@ -152,9 +152,7 @@ DOMAIN = DomainSOT(
                             "canonical reseller identity",
                             "active catalog offer identity",
                         ),
-                        canonical_writer=(
-                            "service_intent.offer_reseller_availability"
-                        ),
+                        canonical_writer=("service_intent.offer_reseller_availability"),
                     ),
                 ),
                 authoritative_inputs=(
@@ -219,9 +217,7 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 events=EventContract(
-                    event_types=(
-                        "catalog.offer_reseller_availability_changed",
-                    ),
+                    event_types=("catalog.offer_reseller_availability_changed",),
                     schema_version=1,
                     delivery_owner="events.dispatcher",
                     compatibility=(
