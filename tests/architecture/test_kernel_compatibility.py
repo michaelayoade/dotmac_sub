@@ -44,6 +44,7 @@ import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -284,6 +285,7 @@ def test_money_is_exact_decimal_and_rejects_float() -> None:
 
 
 def test_provisioning_contract_types_construct_and_check_runs() -> None:
+    from dotmac_kernel.cache import TenantScope
     from dotmac_kernel.providers.provisioning import (
         ApplyResult,
         ObserveResult,
@@ -297,7 +299,17 @@ def test_provisioning_contract_types_construct_and_check_runs() -> None:
         check_provisioning_provider_contract,
     )
 
-    request = ProvisioningRequest(intent_id="intent-1", spec={"profile": "basic"})
+    # a89 made `participant_code` and an explicit `Scope` REQUIRED — an
+    # intentional pre-1.0 break, because an ambient/nullable scope and an
+    # unowned provider identity are no longer valid inputs. Naming both here is
+    # the point of a compatibility canary: it fails on the kernel bump rather
+    # than in a caller that quietly kept provisioning without saying for whom.
+    request = ProvisioningRequest(
+        participant_code="participant.canary",
+        scope=TenantScope(tenant_id=uuid4()),
+        intent_id="intent-1",
+        spec={"profile": "basic"},
+    )
     plan = PlanResult(intent_id=request.intent_id, plan_hash="hash-1")
     assert plan.is_noop
     applied = ApplyResult(
