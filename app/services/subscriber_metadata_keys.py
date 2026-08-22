@@ -88,7 +88,6 @@ DECLARED_METADATA_KEYS: Final[dict[str, str]] = {
     # not resolve at the time. It belongs with the other billing settings on
     # the subscriber row, none of which live in this column.
     "auto_create_invoices": "customer.accounts (typed column pending)",
-
     # --- observations ------------------------------------------------------
     "geocode_attempted_at": "gis.spatial_sync",
     "crm_customer_name_remediation_digest": "customer.name_remediation",

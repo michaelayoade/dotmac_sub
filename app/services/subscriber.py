@@ -51,11 +51,11 @@ from app.services.customer_identity_normalization import (
     normalize_phone_identifier,
 )
 from app.services.domain_errors import DomainError
-from app.services.subscriber_metadata_keys import reject_undeclared_keys
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.nin_matching import normalize_nin
 from app.services.response import ListResponseMixin
+from app.services.subscriber_metadata_keys import reject_undeclared_keys
 from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
