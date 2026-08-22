@@ -57,9 +57,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a81"
-KERNEL_WHEEL_SHA256 = "f3b82ed2f1a12897cf7e9b801c905f0f7018fbbb5f9045aa6bef02a3632665bb"
-KERNEL_SDIST_SHA256 = "2c4fe080d0d2b31271ca0b0c2d435d0ad2d3a2fb81c25c591a1bc0b3774d3810"
+KERNEL_PIN = "0.1.0a90"
+KERNEL_WHEEL_SHA256 = "49add8154708b8f154ecb9a41f3c97e3810f9d381588a7ec55eff4f5c18fa69f"
+KERNEL_SDIST_SHA256 = "7c2e506c909b5dc7c72511cd7e886b9e1b21c814663364f78ac6772a18db875e"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"

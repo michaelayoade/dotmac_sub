@@ -4,7 +4,8 @@
 plan; amended the same day for slice S2 (dependency pinned — see "S2 acceptance
 claim") and slice S3 (composition declared in `app/composition.py` — see "S3
 acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13
-and to `dotmac-kernel==0.1.0a81` on 2026-08-20 — see "Pin history". Supersedes the
+to `dotmac-kernel==0.1.0a81` on 2026-08-20, and to `dotmac-kernel==0.1.0a90` on
+2026-08-22 — see "Pin history". Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
 authorized by this document alone.
@@ -96,6 +97,52 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-08-22 — `0.1.0a81` → `0.1.0a90`.** Supply, not adoption. Sub's imported
+surface is unchanged and no `app/` module gained a kernel import; the pin moves
+so the machine-credential facility is INSTALLABLE, not because Sub calls it yet.
+
+Protected release run `32579832544` built, inspected, published, installed back
+from the private index and registry-verified a90. The annotated tag
+`dotmac-kernel-v0.1.0a90` peels to Starter main
+`4999bc492f58a2af60dd87d8b4a25fbb76751918`. The lock records wheel SHA256
+`49add8154708b8f154ecb9a41f3c97e3810f9d381588a7ec55eff4f5c18fa69f` and sdist
+SHA256 `7c2e506c909b5dc7c72511cd7e886b9e1b21c814663364f78ac6772a18db875e`;
+re-locking moved no other package.
+
+**a90 was chosen over a91 deliberately.** a91 exists on Starter `main` and is
+NOT published. `dotmac_governance` ADR 0013, accepted 2026-08-22 (merge
+`2d711cd594979ba0bc368382b7f5ea69bf21eaa4`), requires a release, registry or
+production-adoption claim to rest on an authoritative external oracle rather
+than on a version being visible in a repository. A version with no release run
+and no peeled tag is not pinnable, whatever `pyproject.toml` says upstream.
+
+One breaking change to a released surface was crossed in this span, and unlike
+every earlier repin it is **NOT inert for Sub**. a89 made
+`ProvisioningRequest` require `participant_code` and an explicit `Scope`
+(`TenantScope`/`PlatformScope`) — an intentional pre-1.0 break, because an
+ambient or nullable scope and an unowned provider identity stopped being valid
+inputs. Sub's only construction site is the compatibility canary in
+`tests/architecture/test_kernel_compatibility.py`, which now names both. No
+`app/` code constructs a `ProvisioningRequest`, so no product behaviour moved;
+the canary is what carried the break, which is the job it exists to do.
+`dotmac_kernel.cache` is imported inside that test rather than added to
+`ALLOWED_KERNEL_MODULES`, because the boundary scan governs `app/` and a
+compatibility canary is not product surface.
+
+The only other change to a consumed name was a88 re-exporting
+`fingerprint_of` from the persistence-free definition; existing imports are
+explicitly still supported.
+
+**What this pin does NOT authorize.** a90 adds `dotmac_kernel.machine_auth`,
+the kernel-owned `X-Api-Key` seam extracted product-first from Sub and ERP
+after they were found to disagree about what an empty scope list means —
+nothing authorized here, everything authorized there. Sub keeps its own
+verifier until a separate, reviewed cutover. That cutover is credential
+**reissuance**, not a hash migration: a stored digest holds neither the raw key
+nor material to re-key from, and Sub's verification subkey is derived from the
+connector-credential encryption key, so rotating one invalidates the other.
+Nothing in this amendment starts it.
 
 **2026-08-20 — `0.1.0a50` → `0.1.0a81`.** A deliberate catch-up repin, not a
 new kernel consumption: Sub's imported surface is unchanged and every module
