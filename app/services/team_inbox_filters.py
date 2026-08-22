@@ -53,6 +53,7 @@ class InboxAdvancedFilterPayload:
 
 class InboxSavedFilterTransport(TypedDict, total=False):
     search: str
+    view: str
     status: str
     channel_type: str
     service_team_id: str
@@ -79,6 +80,7 @@ class InboxSavedFilterPayload:
     """Typed saved-view state for every live Inbox queue filter."""
 
     search: str | None = None
+    view: str | None = None
     status: str | None = None
     channel_type: str | None = None
     service_team_id: str | None = None
@@ -103,6 +105,8 @@ class InboxSavedFilterPayload:
         result = InboxSavedFilterTransport()
         if self.search:
             result["search"] = self.search
+        if self.view:
+            result["view"] = self.view
         if self.status:
             result["status"] = self.status
         if self.channel_type:
@@ -167,6 +171,7 @@ def saved_filter_payload_from_storage(
     )
     return InboxSavedFilterPayload(
         search=text_value("search"),
+        view=text_value("view"),
         status=text_value("status"),
         channel_type=text_value("channel_type"),
         service_team_id=text_value("service_team_id"),
