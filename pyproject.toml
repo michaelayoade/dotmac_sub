@@ -49,7 +49,6 @@ dependencies = [
     "defusedxml==0.7.1",
     "dotmac-kernel==0.1.0a81",
     "dotmac-ui==0.1.0a7",
-    "langgraph==0.6.6",
 ]
 
 [tool.poetry]

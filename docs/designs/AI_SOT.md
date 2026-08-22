@@ -190,6 +190,10 @@ runs a stable graph of policy-driven nodes, and returns the same typed
 conversation decision contract used by the existing session processor. Dotmac
 state remains authoritative; LangGraph checkpoints are not a business record
 and are not used for routing, queueing, assignment, or customer identity.
+During rollout, `langgraph_v1` is an optional runtime capability: publication
+validation refuses LangGraph activation when the package is unavailable, and
+`custom_v1` remains the deployable default until the server dependency is
+installed deliberately.
 
 The authoritative AI session state machine is:
 
