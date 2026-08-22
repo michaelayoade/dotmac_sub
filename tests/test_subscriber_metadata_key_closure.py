@@ -20,9 +20,9 @@ NOT modified. A guard that raises after writing is not a guard.
 
 from __future__ import annotations
 
-import pytest
-
 from pathlib import Path
+
+import pytest
 
 from app.schemas.subscriber import SubscriberUpdate
 from app.services import subscriber as subscriber_service

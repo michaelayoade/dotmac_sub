@@ -274,11 +274,7 @@ def test_the_registry_declares_no_key_nothing_uses() -> None:
         for keys in operations.values()
         for key in keys
     }
-    # `latitude`/`longitude` reach the column only through `getattr`, which the
-    # census deliberately does not resolve — see its "Known limit" section.
-    # They are declared so the registry can carry their obsolescence.
-    known_invisible = {"latitude", "longitude"}
-    orphaned = sorted(set(DECLARED_METADATA_KEYS) - accessed - known_invisible)
+    orphaned = sorted(set(DECLARED_METADATA_KEYS) - accessed)
     assert not orphaned, (
         "these keys are declared writable and nothing reads or writes them. A "
         "declared key with no accessor is permission to grow the column "
@@ -292,6 +288,10 @@ def test_the_registry_declares_no_key_nothing_uses() -> None:
         # A JSON copy of `Subscriber.category`, a real typed column, read by
         # nine modules. Obsolete by construction rather than by decision.
         "subscriber_category",
+        # A fourth place an address coordinate lives, after Address.latitude,
+        # Address.geom and GeoLocation. `gis.spatial_sync` owns coordinates.
+        "latitude",
+        "longitude",
     ],
 )
 def test_duplicate_column_projections_are_still_present(key: str) -> None:
@@ -302,10 +302,6 @@ def test_duplicate_column_projections_are_still_present(key: str) -> None:
     deleted with it, which is the point — a silent removal would leave the
     ownership document claiming work that nobody can date.
 
-    `latitude`/`longitude` belong in this list and are absent: their only
-    remaining access is a `getattr` fallback the census deliberately does not
-    resolve (see its "Known limit" section). The ownership document records
-    them; this test cannot.
     """
 
     present = {

@@ -8,6 +8,8 @@ from urllib.parse import quote_plus, urlsplit
 from uuid import UUID, uuid4
 
 import anyio
+
+from app.models.subscriber import Subscriber
 from fastapi import (
     APIRouter,
     Body,
@@ -245,7 +247,7 @@ def _profile_value(value):
     return value
 
 
-def _profile_audit_snapshot(subscriber) -> dict[str, object]:
+def _profile_audit_snapshot(subscriber: Subscriber) -> dict[str, object]:
     metadata = dict(getattr(subscriber, "metadata_", None) or {})
     nin_value = getattr(subscriber, "nin", None)
     masked_nin = (

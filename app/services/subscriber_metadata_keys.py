@@ -82,6 +82,13 @@ DECLARED_METADATA_KEYS: Final[dict[str, str]] = {
     # Written beside `billing_notifications` by the same module: two keys,
     # one preference.
     "send_billing_notifications": "customer.notification_policy",
+    # --- billing preferences ----------------------------------------------
+    # Found by the closed-key guard refusing a write the application makes:
+    # both billing presenters read it through `getattr`, which the census did
+    # not resolve at the time. It belongs with the other billing settings on
+    # the subscriber row, none of which live in this column.
+    "auto_create_invoices": "customer.accounts (typed column pending)",
+
     # --- observations ------------------------------------------------------
     "geocode_attempted_at": "gis.spatial_sync",
     "crm_customer_name_remediation_digest": "customer.name_remediation",
