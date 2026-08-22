@@ -1,15 +1,15 @@
 # Subscriber account lifecycle — product-first inventory
 
-Dated 2026-08-22, before any code is written. Required by `AGENTS.md` rule 22
-and ADR-0006's extraction amendment: inventory the fleet's existing
-implementations before adding shared behaviour, and port a qualifying
-production implementation rather than inventing one.
+Dated 2026-08-22. Required by `AGENTS.md` rule 22 and ADR-0006's extraction
+amendment: inventory the fleet's existing implementations before adding shared
+behaviour.
 
-**Verdict: extract to a Starter-owned module now, with Sub as consumer one.**
+**Verdict: build no new module. The capability decomposes across two existing
+Starter owners plus assembly-level coordination.**
 
 ## The capability
 
-*Subscriber account lifecycle* owns:
+*Subscriber account lifecycle* covers:
 
 1. Deletion request and execution state.
 2. Restoration eligibility and precedence.
@@ -17,115 +17,162 @@ production implementation rather than inventing one.
 4. Purge eligibility and terminal purge.
 5. Retention and legal-hold decisions, and their audit evidence.
 
-## What exists in Starter
+## Correction — the first version of this document was wrong
 
-**No owner.** None of the 24 packages carries account or record lifecycle.
-`dotmac-approvals`, `dotmac-ticketing`, `dotmac-projects` and the rest each hold
-their own entity state; nothing holds the lifecycle of a subject *across*
-owners, which is what deletion and restoration require.
+An earlier draft said Starter had **no owner** for any of this and proposed a
+new module. That was wrong, and the reason is a method failure worth recording
+rather than quietly replacing.
 
-One thing IS reusable, and it is a principle rather than code.
-`dotmac-integration`'s `retention.py` states it exactly:
+The inventory ran `ls packages/` in a Starter working tree **137 commits behind
+`origin/main`**, which showed **24 packages**. `origin/main` has **71**, and the
+committed ISP-essential candidate branch adds more. The search covered roughly a
+third of the fleet and reported absence.
 
-> Payload retention — age out the CONTENT, never the identity.
+Two owners were missed. The proposed module would have been a **third** owner of
+account lifecycle and a **second** owner of retention and disposition — the
+precise outcome rule 22 exists to prevent.
 
-Its reasoning is that deduplication lives in a unique key, so a deleted receipt
-is not a tidied receipt — it is a receipt whose redelivery becomes a **new**
-event, processed a second time with no record that it was already answered.
+This is the second "no declared owner" error in this domain in one session; the
+first claimed addresses were unowned and was corrected in Sub PR #2619. Both
+have the same shape: a partial search, then a conclusion of absence.
+**Inventory `origin/main` and the committed candidate branches — never a local
+working tree.**
 
-That transfers directly. Purging a subscriber must not delete the record that
-the subscriber existed and was purged, or a legacy re-import, a restored backup
-or a provider replay recreates the account as new — a purged customer walking
-back in through the import path, with none of the deletion decisions attached.
-The lifecycle owner keeps identity and terminal state after purge and redacts
-only content, for the same reason and by the same shape.
+## The owners that already exist
 
-This is a principle to apply, not a package to compose: different domain,
-different tables, no shared rows. Recorded so the reasoning is not re-derived.
+### `dotmac-customers` — account lifecycle
 
-## What exists in ERP
+`audit-complete`, `product-first`, sourced from `dotmac_sub` including
+`app/services/subscriber.py`. Declared owner: *"Tenant customer account
+identity, narrow profile, lifecycle, and typed Party references"*. Contract:
+*"Own customer account numbers, **account lifecycle**, display/profile
+attributes…"*.
 
-**Per-entity status flips only.** Two implementations, both narrow:
+It takes concerns **1 and 2** — deletion request and execution state,
+restoration eligibility and precedence. Those are close, restore and recovery
+commands ON the customer account, which is what the module already says it owns.
+Extending it is composition; a parallel module beside it would be a second
+lifecycle authority.
+
+### `dotmac-records` — retention, holds and disposition
+
+`audit-complete`, on `origin/main`, naming `dotmac_sub` among its sources.
+Declared owner covers *"retention schedules/triggers, legal holds,
+preservation/custody and **disposition authority**"*. Its contract evaluates
+disposition with source-state and all-hold rechecks, freezes batch membership,
+binds an Approvals digest, and authorizes destruction only from matching
+physical confirmation.
+
+It takes concerns **4 and 5** — purge eligibility and terminal purge, retention
+and legal-hold decisions with audit evidence. Sub computes a purge due date from
+one integer setting (`restore_retention_days`) with no hold concept and no
+approval; Records is a strictly stronger contract that already exists.
+
+### The Sub assembly — coordination, not ownership
+
+Concern **3** is not a module. The cascade spans nine owners and the
+coordination between them is what an assembly is for — the same reason
+`customer.experience_lifecycle` stays in the assembly.
+
+Account recovery is therefore **not standalone**: Customers owns lifecycle,
+Records owns retention and disposition, and the assembly coordinates the
+affected domain owners through typed ports.
+
+### A principle worth reusing
+
+`dotmac-integration`'s `retention.py`: *"age out the CONTENT, never the
+identity."* Deleting a receipt does not tidy it — it makes redelivery a **new**
+event. That transfers exactly: purging a subscriber must not delete the record
+that the subscriber existed and was purged, or a legacy re-import recreates the
+account as new with none of the deletion decisions attached. A principle to
+apply, not a package to compose.
+
+## What ERP has
+
+Two per-entity status flips, neither a candidate:
 
 | Implementation | What it does |
 |---|---|
-| `app/services/fleet/vehicle_service.py::soft_delete` | Sets `Vehicle.status = DISPOSED`. Six lines. |
-| `app/services/support/ticket.py::restore_ticket` | Clears a soft-delete flag on one ticket row. |
+| `fleet/vehicle_service.py::soft_delete` | Sets `Vehicle.status = DISPOSED`. Six lines. |
+| `support/ticket.py::restore_ticket` | Clears a soft-delete flag on one ticket row. |
 
-Neither is a candidate. Together they have no cross-resource cascade, no purge
-eligibility, no retention window, no legal hold, no restoration precedence and
-no audit evidence — which is five of the six concerns above. A search for a
-snapshot-and-restore pattern anywhere in ERP returns nothing.
+No cross-resource cascade, purge eligibility, retention window, legal hold,
+restoration precedence or audit evidence. A search for snapshot-and-restore
+anywhere in ERP returns nothing.
 
-## What exists in Sub
+## What Sub implements today
 
-`app/services/web_system_restore_tool.py` is the **only** implementation in the
-fleet with the full shape: mark deleted → cascade soft-delete → compute a purge
-due date from a retention setting → sweep and purge on expiry → restore.
+`app/services/web_system_restore_tool.py` — and it is why this is not a
+key-renaming exercise.
 
-It is therefore the product-first source, and it is also the thing being fixed:
-it stores all of that in `subscribers.metadata`, an unowned JSONB column, and
-serialises the affected resources into `recovery_snapshot`.
+### The cascade writes nine resource classes, two ways
 
-## What product-first actually requires
+**Routes through an owner (2):** subscriptions via
+`account_lifecycle.cancel_subscription`, service orders via
+`service_order_lifecycle.restore_recorded_status`.
 
-An earlier draft of this section concluded "build it in Sub, extract when a
-second consumer exists". **That was wrong**, and the correction matters enough
-to record rather than quietly replace.
+**Direct boolean flip — no owner, no event, no audit (7):** invoices, payments,
+access credentials, RADIUS users, IP assignments, ONT assignments, splitter port
+assignments.
 
-Product-first means Sub supplies the **implementation and the parity tests**.
-It does not mean Sub keeps ownership until someone else asks for it. The
-Starter module becomes the owner, and Sub adopts it **in the same authority
-slice** — one coherent change in which the fact moves to its owner and the
-legacy writer retires, rather than two changes with a period of two writers
-between them.
+Two of those seven are money. Five are scarce network resources whose
+deactivation is what disconnects a customer and frees an IP, an ONT port and a
+splitter port. `tests/architecture/test_ip_assignment_service_ownership.py`
+already records the module as tolerated debt:
+`"app/services/web_system_restore_tool.py",  # debt: restore tooling`.
 
-`dotmac_sub` is **consumer one**. A second consumer is what justifies further
-GENERALISATION — widening a contract, adding a provider seam, admitting a shape
-Sub does not need. It is not a precondition for the initial extraction. Waiting
-for one would leave the fact in an unowned JSONB column indefinitely, since
-nothing else is going to ask for subscriber account lifecycle first.
+### Three defects in the restore path
 
-The risk the earlier draft named is real but differently managed: a module
-designed from one caller can acquire that caller's private conventions. The
-guard against that is the extraction dossier and the typed ports below — the
-module owns lifecycle state and transitions, and everything Sub-specific stays
-behind a port the assembly binds. It is not a delay.
+1. **Restore is asymmetric.** Subscriptions, service orders and CPE devices
+   restore from the snapshot. The other six restore by blanket reactivation.
 
-## The snapshot is not re-homed, it is removed
+2. **Blanket reactivation resurrects rows the cascade never touched.** The
+   cascade deactivates only invoices that were active, and counts them; the
+   count is never used. Restore sets `is_active = True` on **every** inactive
+   invoice, so an invoice voided for a legitimate business reason months before
+   the deletion comes back active. Payments likewise.
 
-`recovery_snapshot` currently copies subscriptions, service orders and CPE
-devices — ids, statuses, cancellation timestamps — onto the subscriber row.
-Giving that a typed table would move the defect, not fix it: a second copy of
-resources whose owners already hold them, drifting from the moment it is
-written, with no way to detect the drift.
+3. **A missing snapshot silently rewrites service orders to `draft`.** The
+   snapshot is read from the metadata blob behind an `isinstance(..., dict)`
+   guard, so an absent, malformed or truncated value yields an empty dict and
+   every service order is forced to `ServiceOrderStatus.draft`. Orders created
+   after the snapshot was taken hit the same path. No error is raised.
 
-The lifecycle owner records **references and versions** — which resources were
-affected, at what version, by which deletion — and restoration goes back through
-each owning service or its own soft-deleted rows. The owners already hold the
-data; the lifecycle owner holds the decision.
+**No behavioural tests exist for any of it.** `web_system_restore_tool` appears
+in the test tree only in architecture baselines and as a named exception in
+three boundary tests. Nothing calls `mark_subscriber_deleted`,
+`restore_subscriber`, `purge_expired_from_recovery_queue` or
+`build_restore_preview`; nothing exercises their three routes.
 
-This bounds recovery to before purge, deliberately. **If recovery after purge is
-required, that is an explicit versioned archive with its own retention
-contract** — a separate, named capability with its own storage and its own
-rules. It is not `subscribers.metadata`, and it is not a JSON column on the row
-being purged.
+## `recovery_snapshot` is removed, not re-homed
 
-## Consequences for the extraction
+It copies subscriptions, service orders and CPE devices onto the subscriber row,
+after which the real rows are soft-deleted. A typed table for it would move the
+defect: a second copy of resources whose owners already hold them, drifting from
+the moment it is written.
 
-- A new **Starter module** owning subscriber account lifecycle, with a complete
-  `EXTRACTION.toml` written from Sub's source and tests.
-- Durable lifecycle state and transitions live in the MODULE.
-- The module exposes **typed ports** for subscriptions, orders, devices and
-  every other affected owner, and imports no sibling module.
-- The Sub assembly keeps only thin port binding and orchestration, and declares
-  `customer.account_lifecycle` in the SOT registry as the local owner name.
-- Both deletion lineages move to it: `account_deletion`'s
-  `account_deletion_requested_at`/`_reason` and the restore tool's
-  `recovery_deleted_at`/`_by`/`_purge_due_at`/`_purged_at`/`_last_restored_at`/
-  `_by`. They record the same event today with no rule about which wins; the
-  owner is where that rule lives.
-- `recovery_snapshot` is replaced by typed affected-resource references, and
-  the purge sweep moves with them.
-- The `subscribers.metadata` writer ratchet falls by however many modules stop
-  writing the column — measured by the scanner, not asserted.
+Defects 2 and 3 share one root cause — **the system never recorded what it
+actually changed.** It stored a picture of what things looked like, then guessed
+on the way back. Affected-resource **references and versions** fix both: restore
+only what this deletion deactivated, at the version it was deactivated from,
+through the owning service.
+
+This bounds recovery to before purge, deliberately. Recovery after purge
+requires an explicit versioned archive with its own retention contract —
+governed by Records, not a JSON column on the row being purged.
+
+## Consequences
+
+- **No new module.** Extend `dotmac-customers` with close, restore and recovery
+  commands; use `dotmac-records` for deletion eligibility and purge
+  authorization.
+- Both need a completed rule-24 product-first dossier covering Sub's source and
+  tests before the shared behaviour is implemented.
+- The Sub assembly keeps thin port binding and orchestration across the nine
+  affected owners. Two ports bind to existing owner commands; **seven owners
+  have no deactivation command at all** and need one, which is where most of the
+  work is.
+- Characterization tests come first. The path is destructive, terminal and
+  untested, so the extraction cannot claim to preserve behaviour it has never
+  measured. The three defects are pinned as current behaviour and fixed as
+  deliberate, separately visible changes.
