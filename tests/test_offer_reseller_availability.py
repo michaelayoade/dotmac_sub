@@ -8,6 +8,7 @@ from sqlalchemy import select
 from starlette.datastructures import FormData
 
 from app.models.catalog import (
+    AccessType,
     BillingCycle,
     BillingMode,
     CatalogOffer,
@@ -31,6 +32,7 @@ def _offer(db_session, name: str) -> CatalogOffer:
         name=name,
         code=name.lower().replace(" ", "-"),
         service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
         price_basis=PriceBasis.flat,
         billing_cycle=BillingCycle.monthly,
         billing_mode=BillingMode.prepaid,

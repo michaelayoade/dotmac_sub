@@ -13,7 +13,7 @@ from app.models.audit import AuditActorType
 from app.models.catalog import CatalogOffer, OfferStatus
 from app.models.offer_availability import OfferResellerAvailability
 from app.models.subscriber import Reseller
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -68,7 +68,7 @@ def _error(
     )
 
 
-def _validated_actor(context: CommandContext) -> tuple[AuditActorType, str]:
+def _validated_actor(context: CommandContext) -> AuditActor:
     if context.scope != RESELLER_OFFER_AVAILABILITY_SCOPE:
         raise _error(
             "invalid_command",
@@ -90,7 +90,7 @@ def _validated_actor(context: CommandContext) -> tuple[AuditActorType, str]:
             "Reseller catalog access actor identity is incomplete.",
             field="actor",
         )
-    return actor_type, actor_id.strip()
+    return AuditActor(actor_type=actor_type, actor_id=actor_id.strip())
 
 
 def set_reseller_offer_availability(
@@ -100,7 +100,7 @@ def set_reseller_offer_availability(
     """Replace one reseller's active assignments while preserving row history."""
 
     def operation() -> ResellerOfferAvailabilityOutcome:
-        actor_type, actor_id = _validated_actor(command.context)
+        audit_actor = _validated_actor(command.context)
         desired_offer_ids = set(command.offer_ids)
         if len(desired_offer_ids) != len(command.offer_ids):
             raise _error(
@@ -199,8 +199,7 @@ def set_reseller_offer_availability(
                 action="catalog_access_updated",
                 entity_type="reseller",
                 entity_id=str(command.reseller_id),
-                actor_type=actor_type,
-                actor_id=actor_id,
+                actor=audit_actor,
                 metadata=change_payload,
             )
             emit_event(
