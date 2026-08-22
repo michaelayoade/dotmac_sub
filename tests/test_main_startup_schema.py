@@ -50,4 +50,4 @@ def test_assert_required_schema_requires_contact_column(monkeypatch):
         main_module._assert_required_schema()
 
     assert "ont_units.contact" in str(exc_info.value)
-    assert "alembic upgrade head" in str(exc_info.value)
+    assert "alembic upgrade heads" in str(exc_info.value)

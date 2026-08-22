@@ -123,7 +123,7 @@ jobs:
           SECRET_KEY: "e2e-test-secret-key-not-for-production"
           REDIS_URL: "redis://127.0.0.1:56379/0"
         run: |
-          poetry run alembic upgrade head
+          poetry run alembic upgrade heads
           poetry run python -m scripts.seed.seed_rbac
           poetry run python -m scripts.seed.seed_admin \
             --email e2e.admin@example.com --first-name E2E --last-name Admin \

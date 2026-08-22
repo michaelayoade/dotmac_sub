@@ -1,8 +1,6 @@
 from importlib import import_module
 from logging.config import fileConfig
 
-from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
-
 from alembic import context
 from app.config import settings
 from app.db import Base, resolve_migration_lock_timeout
@@ -48,6 +46,7 @@ from app.models import (  # noqa: F401
     usage,
     wireguard,
 )
+from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
 
 config = context.config
 
@@ -67,7 +66,7 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 #
 # A module absent from the environment is a composition error, not something to
 # skip: the pin in `pyproject.toml` says it is installed, and continuing without
-# its lineage would run `alembic upgrade head` against a database missing that
+# its lineage would run `alembic upgrade heads` against a database missing that
 # module's schema while reporting success.
 _COMPOSED_MODULE_LINEAGES: tuple[str, ...] = ("dotmac_service_orders",)
 
@@ -84,9 +83,7 @@ def _composed_version_locations() -> list[str]:
     return locations
 
 
-config.set_main_option(
-    "version_locations", " ".join(_composed_version_locations())
-)
+config.set_main_option("version_locations", " ".join(_composed_version_locations()))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
