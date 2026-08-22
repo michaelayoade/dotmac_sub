@@ -4,6 +4,53 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from app.services.customer_portal_flow_payments import GatewayPaymentIncomplete
+from app.services.topup_intents import (
+    TopupIntentLifecycleProjection,
+    TopupIntentLifecycleState,
+    TopupIntentStatus,
+)
+
+
+def _gateway_incomplete(state: TopupIntentLifecycleState) -> GatewayPaymentIncomplete:
+    terminal = state in {
+        TopupIntentLifecycleState.failed,
+        TopupIntentLifecycleState.abandoned,
+        TopupIntentLifecycleState.expired,
+    }
+    messages = {
+        TopupIntentLifecycleState.failed: (
+            "Failed",
+            "Payment was not completed. You can try again.",
+            TopupIntentStatus.failed,
+        ),
+        TopupIntentLifecycleState.abandoned: (
+            "Abandoned",
+            "Payment was not completed. You can try again.",
+            TopupIntentStatus.abandoned,
+        ),
+        TopupIntentLifecycleState.confirmation_unavailable: (
+            "Confirmation unavailable",
+            "Payment confirmation is temporarily unavailable. "
+            "Please wait before starting another payment.",
+            TopupIntentStatus.pending,
+        ),
+    }
+    label, message, effective = messages[state]
+    return GatewayPaymentIncomplete(
+        TopupIntentLifecycleProjection(
+            normalized_status=state,
+            label=label,
+            customer_message=message,
+            reason_code="safe_test_reason",
+            last_verification_at=datetime.now(UTC),
+            blocks_another_attempt=not terminal,
+            customer_retry_allowed=terminal,
+            stored_status=effective.value,
+            effective_status=effective,
+        )
+    )
+
 
 class TestCustomerBillingRouteRegistration:
     def test_topup_get_route_exists(self) -> None:
@@ -313,7 +360,7 @@ class TestPaymentSuccessBanner:
             ),
             patch(
                 "app.web.customer.routes.customer_portal.verify_and_record_payment",
-                side_effect=ValueError("Payment was not successful"),
+                side_effect=_gateway_incomplete(TopupIntentLifecycleState.failed),
             ),
             patch(
                 "app.web.customer.routes.is_subscriber_restricted",
@@ -338,9 +385,9 @@ class TestPaymentSuccessBanner:
         assert response is template_response
         assert render.call_args.args[0] == "customer/billing/payment_status.html"
         context = render.call_args.args[1]
-        assert context["status_kind"] == "declined"
+        assert context["status_kind"] == "failed"
         assert context["reference"] == "ref-declined"
-        assert "not confirm" in context["message"]
+        assert context["message"] == "Payment was not completed. You can try again."
         capture.assert_not_called()
 
 
@@ -650,7 +697,7 @@ class TestCustomerTopupRoutes:
             ),
             patch(
                 "app.web.customer.routes.customer_portal.verify_and_record_topup",
-                side_effect=ValueError("Payment was not successful"),
+                side_effect=_gateway_incomplete(TopupIntentLifecycleState.abandoned),
             ),
             patch(
                 "app.web.customer.routes.is_subscriber_restricted",
@@ -675,7 +722,8 @@ class TestCustomerTopupRoutes:
         assert response is template_response
         assert render.call_args.args[0] == "customer/billing/payment_status.html"
         context = render.call_args.args[1]
-        assert context["status_kind"] == "declined"
+        assert context["status_kind"] == "abandoned"
+        assert context["customer_retry_allowed"] is True
         assert context["flow"] == "account_topup"
         capture.assert_not_called()
 
@@ -884,7 +932,9 @@ class TestSaveCardOnVerify:
             ),
             patch(
                 "app.web.customer.routes.customer_portal.verify_and_record_payment",
-                side_effect=RuntimeError("gateway raw stack detail"),
+                side_effect=_gateway_incomplete(
+                    TopupIntentLifecycleState.confirmation_unavailable
+                ),
             ),
             patch(
                 "app.web.customer.routes.is_subscriber_restricted",
@@ -906,9 +956,9 @@ class TestSaveCardOnVerify:
         assert response is template_response
         assert render.call_args.args[0] == "customer/billing/payment_status.html"
         context = render.call_args.args[1]
-        assert context["status_kind"] == "pending"
+        assert context["status_kind"] == "confirmation_unavailable"
         assert context["reference"] == "ref-1"
-        assert "reconciled automatically" in context["message"]
+        assert "temporarily unavailable" in context["message"]
         assert "gateway raw stack detail" not in context["message"]
         assert render.call_args.kwargs["status_code"] == 200
 

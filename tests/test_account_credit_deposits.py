@@ -251,6 +251,66 @@ def test_active_request_ignores_expired_or_terminal_intents(
         is None
     )
 
+
+def test_submitted_direct_transfer_remains_blocking_after_nominal_expiry(
+    db_session, subscriber
+):
+    intent = _intent(db_session, subscriber, _provider(db_session))
+    intent.provider_type = DIRECT_TRANSFER_PROVIDER
+    intent.status = TopupIntentStatus.submitted.value
+    intent.expires_at = datetime.now(UTC) - timedelta(days=1)
+    db_session.commit()
+
+    active = AccountCreditDeposits.active_request(db_session, account_id=subscriber.id)
+
+    assert active is not None
+    assert active.phase is ActiveDepositPhase.under_review
+
+
+def test_terminal_gateway_failure_allows_new_deposit_preview(db_session, subscriber):
+    intent = _intent(db_session, subscriber, _provider(db_session))
+    intent.status = TopupIntentStatus.failed.value
+    db_session.commit()
+
+    preview = AccountCreditDeposits.preview(
+        db_session,
+        account_id=subscriber.id,
+        amount="2000.00",
+        currency="NGN",
+        minimum="1000.00",
+        maximum="500000.00",
+    )
+
+    assert preview.requested_deposit == Decimal("2000.00")
+
+
+def test_processing_gateway_intent_prevents_duplicate_preview(db_session, subscriber):
+    intent = _intent(db_session, subscriber, _provider(db_session))
+    intent.metadata_ = {
+        **dict(intent.metadata_ or {}),
+        "gateway_verification": {
+            "schema_version": 1,
+            "outcome": "processing",
+            "provider_status": "ongoing",
+            "reason_code": "provider_reported_processing",
+            "observed_at": datetime.now(UTC).isoformat(),
+            "source": "gateway_reconciliation",
+        },
+    }
+    db_session.commit()
+
+    with pytest.raises(DepositEligibilityError) as exc:
+        AccountCreditDeposits.preview(
+            db_session,
+            account_id=subscriber.id,
+            amount="2000.00",
+            currency="NGN",
+            minimum="1000.00",
+            maximum="500000.00",
+        )
+
+    assert exc.value.code == "deposit_intent_already_pending"
+
     intent.expires_at = datetime.now(UTC) + timedelta(minutes=30)
     intent.status = TopupIntentStatus.completed.value
     db_session.add(intent)
