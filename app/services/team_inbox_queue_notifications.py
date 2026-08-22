@@ -205,6 +205,22 @@ def _aware_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _suppressed_by_human_takeover(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    kind: str,
+) -> bool:
+    if kind == NOTICE_HANDOFF:
+        return False
+    return ai_conversation_intake.has_human_takeover(db, conversation)
+
+
+def _cancel_notice(notice: InboxQueueNotification) -> None:
+    notice.status = NOTICE_CANCELLED
+    notice.next_due_at = None
+
+
 def _send_notice(
     db: Session,
     *,
@@ -274,6 +290,16 @@ def _send_notice(
         )
         db.add(notice)
     db.flush()
+    if _suppressed_by_human_takeover(db, conversation=conversation, kind=kind):
+        _cancel_notice(notice)
+        notice.metadata_ = {
+            **dict(notice.metadata_ or {}),
+            "delivery_kind": "suppressed",
+            "delivery_reason": "human_takeover",
+            "queue_lifecycle": _queue_lifecycle(entry),
+        }
+        db.flush()
+        return notice
     if conversation.channel_type not in SUPPORTED_NOTICE_CHANNELS:
         notice.status = "cancelled"
         notice.next_due_at = None
@@ -376,11 +402,6 @@ def send_handoff_notice(
     )
 
 
-def _cancel_notice(notice: InboxQueueNotification) -> None:
-    notice.status = NOTICE_CANCELLED
-    notice.next_due_at = None
-
-
 def _replace_due_notice(
     due_notice: InboxQueueNotification,
     replacement: InboxQueueNotification | None,
@@ -404,6 +425,13 @@ def _process_due_notice(
     if (
         entry.status != InboxQueueEntryStatus.queued.value
         or conversation.channel_type not in SUPPORTED_NOTICE_CHANNELS
+    ):
+        _cancel_notice(notice)
+        return None
+    if _suppressed_by_human_takeover(
+        db,
+        conversation=conversation,
+        kind=notice.notification_kind,
     ):
         _cancel_notice(notice)
         return None
