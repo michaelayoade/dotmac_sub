@@ -693,7 +693,6 @@ def customer_create(
     notes: str | None = Form(None),
     account_start_date: str | None = Form(None),
     org_account_start_date: str | None = Form(None),
-    metadata: str | None = Form(None),
     contact_first_name: list[str] = Form([]),
     contact_last_name: list[str] = Form([]),
     contact_title: list[str] = Form([]),
@@ -751,9 +750,6 @@ def customer_create(
             "notes": notes,
             "account_start_date": account_start_date,
             "org_account_start_date": org_account_start_date,
-            "metadata_json": web_customer_actions_service.parse_json_object(
-                metadata, "metadata"
-            ),
             "managed_by_reseller": managed_by_reseller is not None,
             "reseller_id": reseller_id,
         }
@@ -1932,7 +1928,6 @@ def person_update(
     withholding_tax_enabled: str | None = Form(None),
     vat_exempt: str | None = Form(None),
     payment_method: str | None = Form(None),
-    metadata: str | None = Form(None),
     managed_by_reseller: str | None = Form(None),
     reseller_id: str | None = Form(None),
     inbox_conversation_id: str | None = Form(None),
@@ -1990,11 +1985,6 @@ def person_update(
             withholding_tax_enabled=withholding_tax_enabled,
             vat_exempt=vat_exempt,
             payment_method=payment_method,
-            metadata_json=web_customer_actions_service.parse_json_object(
-                metadata, "metadata"
-            )
-            if metadata is not None
-            else None,
             actor_id=_get_actor_id(request),
             managed_by_reseller=managed_by_reseller is not None,
             reseller_id=reseller_id,

@@ -52,19 +52,19 @@ A key that cannot be resolved to a literal is reported as ``<dynamic>`` rather
 than dropped. ``<dynamic>`` is the finding, not a gap: a module that computes
 its metadata keys at runtime has no declarable shape at all.
 
-## Known limit: ``getattr``
+## ``getattr`` with a literal name counts
 
-``getattr(customer, "metadata_", None)`` is not counted. It is a reflective
-read that no binding can resolve, and the one module using it —
-``web_customer_details``, for a legacy ``latitude``/``longitude`` fallback — is
-already counted as a reader through its other accesses, so the module set is
-right even though those two keys are absent from the key inventory.
+``getattr(customer, "metadata_", None)`` is treated exactly like
+``customer.metadata_``. A reflective access whose attribute name is a literal
+is as static as the dotted form; only a COMPUTED name defeats analysis, and
+nothing in this repository computes one.
 
-This is recorded rather than fixed because widening the census to reflective
-access would mean matching on the attribute NAME again, which is the mistake
-this module's receiver resolution exists to avoid. If a WRITE ever appears
-behind ``getattr`` the module-level ratchet still catches it, because the same
-module writes through a resolvable path or does not write at all.
+An earlier version of this module excluded it and said so in a "known limit"
+section, reasoning that reflective access would mean matching on attribute name
+again. That was wrong, and the closed-key guard proved it: the billing
+presenters read ``auto_create_invoices`` through ``getattr``, the census
+reported no such key, and the resulting registry refused a write the
+application legitimately makes. A documented gap is still a gap.
 """
 
 from __future__ import annotations
@@ -177,6 +177,25 @@ def _string_constants(tree: ast.Module) -> dict[str, str]:
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             constants[node.target.id] = value.value
     return constants
+
+
+def _is_metadata_getattr(node: ast.expr) -> bool:
+    """``getattr(subscriber, "metadata_", None)`` — reflective, but resolvable.
+
+    A `getattr` whose attribute name is a LITERAL is exactly as static as the
+    dotted form; only a computed name defeats analysis. Treating the two the
+    same closes a real hole rather than documenting around it: the billing
+    presenters read `auto_create_invoices` this way, and the census reported
+    the column had no such key until the closed-key guard refused a write the
+    application legitimately makes.
+    """
+
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+        return False
+    if node.func.id != "getattr" or len(node.args) < 2:
+        return False
+    name = node.args[1]
+    return isinstance(name, ast.Constant) and name.value == "metadata_"
 
 
 def _looks_like_model(name: str) -> bool:
@@ -390,9 +409,13 @@ class _Census(ast.NodeVisitor):
         counted as a read of an unresolvable key rather than ignored.
         """
 
-        if not (isinstance(node, ast.Attribute) and node.attr == "metadata_"):
+        receiver: ast.expr
+        if isinstance(node, ast.Attribute) and node.attr == "metadata_":
+            receiver = node.value
+        elif _is_metadata_getattr(node):
+            receiver = node.args[0]  # type: ignore[attr-defined]
+        else:
             return False
-        receiver = node.value
         if isinstance(receiver, ast.Name):
             if receiver.id in SUBSCRIBER_MODELS:
                 return True
