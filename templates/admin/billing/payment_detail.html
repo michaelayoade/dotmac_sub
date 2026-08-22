@@ -61,12 +61,12 @@
             </button>
         </form>
         {% endif %}
-        {% if reversal_capability.allowed %}
-        <form method="post" action="/admin/billing/payments/{{ payment.id }}/reversal/preview" class="inline-flex items-center gap-2">
+        {% if reversal_capability.allowed and payment_correction_action.allowed %}
+        <form method="post" action="{{ payment_correction_action.preview_url }}" class="inline-flex items-center gap-2">
             {% include "components/forms/csrf_input.html" %}
-            <input type="text" name="reason" required minlength="3" maxlength="500" placeholder="Chargeback or bank-reversal reason" class="w-64 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+            <input type="text" name="reason" required minlength="3" maxlength="500" placeholder="Correction reason" class="w-64 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
             <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-800/60 dark:bg-slate-800 dark:text-amber-300 dark:hover:bg-amber-900/20">
-                Review payment reversal
+                {{ payment_correction_action.label }}
             </button>
         </form>
         {% endif %}
