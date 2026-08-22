@@ -246,22 +246,25 @@
             </div>
 
             <!-- Availability Controls -->
-            {% if reseller_availability or location_availability or category_availability or billing_mode_availability %}
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                     <h2 class="font-semibold text-slate-900 dark:text-white">Availability Controls</h2>
                 </div>
                 <div class="p-6 space-y-4">
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Reseller Catalog Access</p>
                     {% if reseller_availability %}
-                    <div>
-                        <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Resellers ({{ reseller_availability|length }})</p>
-                        <div class="flex flex-wrap gap-1.5">
+                        <p class="mt-2 text-sm text-slate-700 dark:text-slate-300">Restricted to these resellers for sales and new-service selection:</p>
+                        <div class="mt-2 flex flex-wrap gap-1.5">
                             {% for ra in reseller_availability %}
-                            <span class="inline-flex items-center rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">{{ ra.reseller.name if ra.reseller else 'Unknown' }}</span>
+                            <a href="/admin/resellers/{{ ra.reseller_id }}#catalog-access" class="inline-flex items-center rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-800 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50">{{ ra.reseller.name if ra.reseller else 'Unknown reseller' }}</a>
                             {% endfor %}
                         </div>
-                    </div>
+                    {% else %}
+                        <p class="mt-2 text-sm text-emerald-700 dark:text-emerald-300">Unrestricted: visible to all resellers/customers where applicable.</p>
                     {% endif %}
+                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">This is separate from <strong>Plans Available for Changing Services</strong>, which controls explicit targets from the current offer within the same plan family.</p>
+                    </div>
                     {% if location_availability %}
                     <div>
                         <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Locations ({{ location_availability|length }})</p>
@@ -294,7 +297,6 @@
                     {% endif %}
                 </div>
             </div>
-            {% endif %}
 
             <!-- Subscriptions -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">

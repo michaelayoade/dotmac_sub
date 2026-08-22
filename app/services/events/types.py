@@ -175,6 +175,9 @@ class EventType(enum.Enum):
     workqueue_action_coordinated = "workqueue.action_coordinated"
     ai_intake_config_updated = "ai.intake_config_updated"
     plan_family_catalogue_published = "catalog.plan_family_catalogue_published"
+    catalog_offer_reseller_availability_changed = (
+        "catalog.offer_reseller_availability_changed"
+    )
     ncc_weekly_delivery_configuration_changed = (
         "ncc.weekly_delivery_configuration_changed"
     )
