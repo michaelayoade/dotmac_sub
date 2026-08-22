@@ -91,6 +91,8 @@ def _create_quote_command(installation, vendor_id, user_id):
 
 def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_session):
     installation, _vendor, user = _chain(db_session)
+    installation_id = str(installation.id)
+    user_id = str(user.id)
     naive_close = (datetime.now(UTC) + timedelta(days=1)).replace(tzinfo=None)
     db_session_adapter.release_read_transaction(db_session)
 
@@ -98,11 +100,11 @@ def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_sessi
         db_session,
         ConfigureVendorProcurementCommand(
             context=_context(
-                actor=str(user.id),
-                scope=str(installation.id),
+                actor=user_id,
+                scope=installation_id,
                 reason="test bidding procurement",
             ),
-            project_id=str(installation.id),
+            project_id=installation_id,
             mode=VendorAssignmentType.bidding.value,
             bidding_close_at=naive_close,
         ),
@@ -228,6 +230,61 @@ def test_any_vendor_may_quote_inside_an_open_bidding_window(db_session):
     quote = vendor_portal_operations.create_quote(db_session, command)
 
     assert quote["status"] == ProjectQuoteStatus.draft.value
+
+
+def test_procurement_normalizes_naive_browser_datetime_to_utc(db_session):
+    installation, _vendor, user = _chain(db_session)
+    installation.assigned_vendor_id = None
+    db_session.commit()
+    installation_id = installation.id
+    user_id = user.id
+    naive_close = (datetime.now(UTC) + timedelta(days=2)).replace(tzinfo=None)
+    db_session_adapter.release_read_transaction(db_session)
+
+    result = vendor_portal_operations.configure_procurement(
+        db_session,
+        ConfigureVendorProcurementCommand(
+            context=_context(
+                actor=str(user_id),
+                scope=str(installation_id),
+                reason="test bidding configuration",
+            ),
+            project_id=str(installation_id),
+            mode=VendorAssignmentType.bidding.value,
+            bidding_close_at=naive_close,
+        ),
+    )
+
+    assert result["status"] == InstallationProjectStatus.open_for_bidding.value
+    assert result["bidding_close_at"].tzinfo == UTC
+
+
+def test_procurement_rejects_past_naive_browser_datetime_as_domain_error(db_session):
+    installation, _vendor, user = _chain(db_session)
+    installation.assigned_vendor_id = None
+    db_session.commit()
+    installation_id = installation.id
+    user_id = user.id
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(VendorProjectWorkspaceError) as exc:
+        vendor_portal_operations.configure_procurement(
+            db_session,
+            ConfigureVendorProcurementCommand(
+                context=_context(
+                    actor=str(user_id),
+                    scope=str(installation_id),
+                    reason="test invalid bidding configuration",
+                ),
+                project_id=str(installation_id),
+                mode=VendorAssignmentType.bidding.value,
+                bidding_close_at=(datetime.now(UTC) - timedelta(minutes=1)).replace(
+                    tzinfo=None
+                ),
+            ),
+        )
+
+    assert exc.value.code.endswith(".bidding_window_required")
 
 
 def test_an_awarded_project_stops_accepting_new_quotes(db_session):

@@ -21,9 +21,11 @@ from sqlalchemy.orm import Session
 
 from app.models.team_inbox import (
     InboxChannelType,
+    InboxObservationCollisionStatus,
     InboxObservationKind,
     InboxObservationStatus,
     InboxProviderObservation,
+    InboxProviderObservationCollision,
 )
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
@@ -33,6 +35,7 @@ from app.services.owner_commands import (
 )
 
 OBSERVATION_OWNER = "communications.team_inbox_observations"
+SEMANTIC_FINGERPRINT_VERSION = 2
 
 _RECORD_OBSERVATION = OwnerCommandDefinition(
     owner=OBSERVATION_OWNER,
@@ -52,8 +55,14 @@ class InboxProvider(StrEnum):
 class ObservationProcessingOutcome(StrEnum):
     recorded = "recorded"
     replayed = "replayed"
+    quarantined = "quarantined"
     processed = "processed"
     already_processed = "already_processed"
+
+
+class ObservationCollisionPolicy(StrEnum):
+    reject = "reject"
+    quarantine = "quarantine"
 
 
 class TeamInboxObservationError(DomainError):
@@ -219,6 +228,7 @@ class RecordProviderObservationCommand:
     external_message_id: str | None
     observed_at: datetime
     payload: NormalizedObservation
+    collision_policy: ObservationCollisionPolicy = ObservationCollisionPolicy.reject
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +242,7 @@ class ProviderObservationOutcome:
     subscriber_id: UUID | None = None
     reseller_id: UUID | None = None
     resolution_status: str | None = None
+    collision_id: UUID | None = None
 
 
 def _error(suffix: str, message: str, **details: object) -> TeamInboxObservationError:
@@ -252,8 +263,8 @@ def _payload_dict(payload: NormalizedObservation) -> dict[str, object]:
     return data
 
 
-def _fingerprint(command: RecordProviderObservationCommand) -> str:
-    evidence = {
+def _command_evidence(command: RecordProviderObservationCommand) -> dict[str, object]:
+    return {
         "provider": command.provider.value,
         "provider_account_scope": command.provider_account_scope,
         "provider_event_id": command.provider_event_id,
@@ -263,17 +274,177 @@ def _fingerprint(command: RecordProviderObservationCommand) -> str:
         "observed_at": command.observed_at.astimezone(UTC).isoformat(),
         "payload": _payload_dict(command.payload),
     }
+
+
+def _fingerprint_json(evidence: dict[str, object]) -> str:
     encoded = json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
-def observation_fingerprint(command: RecordProviderObservationCommand) -> str:
-    """The domain fingerprint this owner arbitrates replay against collision by.
+def _fingerprint(command: RecordProviderObservationCommand) -> str:
+    return _fingerprint_json(_command_evidence(command))
 
-    Public because a parity harness must compare against the SAME rule the
-    owner enforces. A caller that recomputed its own equivalent would be a
-    second definition of "is this the same fact?", and the two would drift.
-    Callers may read it; only this module writes it to a row.
+
+_INBOUND_OPTIONAL_FIELDS = (
+    "contact_name",
+    "subject",
+    "external_thread_id",
+    "subscriber_id",
+    "fallback_service_team_id",
+    "in_reply_to",
+    "references",
+    "provider_account_id",
+    "external_account_id",
+    "page_id",
+    "instagram_account_id",
+    "provider_comment_id",
+    "comment_id",
+    "post_id",
+    "media_id",
+    "parent_provider_comment_id",
+    "commenter_id",
+    "commenter_name",
+    "commenter_username",
+    "surface",
+    "permalink_url",
+    "media_url",
+    "contact_profile",
+)
+
+
+def _semantic_attachment(value: object) -> dict[str, object] | object:
+    if not isinstance(value, dict):
+        return value
+    location = value.get("location")
+    normalized_location = None
+    if isinstance(location, dict):
+        normalized_location = {
+            "latitude": location.get("latitude"),
+            "longitude": location.get("longitude"),
+            "name": location.get("name"),
+            "address": location.get("address"),
+        }
+    return {
+        "asset_type": value.get("asset_type"),
+        "file_name": value.get("file_name"),
+        "mime_type": value.get("mime_type"),
+        "provider_media_id": value.get("provider_media_id"),
+        "source_url": value.get("source_url"),
+        "caption": value.get("caption"),
+        "file_size": value.get("file_size"),
+        "download_status": value.get("download_status"),
+        "location": normalized_location,
+    }
+
+
+def _semantic_payload(
+    *,
+    provider: str,
+    observation_kind: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    """Return the explicit v2 meaning of a normalized provider payload.
+
+    The allowlist makes additive dataclass fields schema-neutral until this
+    version is deliberately advanced. SMTP authentication and relay hops are
+    transport evidence: they remain persisted in the exact candidate evidence
+    but do not redefine the upstream message.
+    """
+
+    if observation_kind == InboxObservationKind.delivery_receipt.value:
+        return {
+            "status": payload.get("status"),
+            "recipient_id": payload.get("recipient_id"),
+            "error_codes": payload.get("error_codes") or [],
+        }
+    if provider == InboxProvider.fiber_website.value:
+        return {
+            "full_name": payload.get("full_name"),
+            "email": payload.get("email"),
+            "phone": payload.get("phone"),
+            "interest": payload.get("interest"),
+            "message": payload.get("message"),
+            "integration_inbox_id": payload.get("integration_inbox_id"),
+            "form_version": payload.get("form_version") or "fiber-contact-v1",
+        }
+
+    html_body = payload.get("html_body")
+    semantic_body = payload.get("body")
+    if (
+        provider == InboxProvider.smtp.value
+        and isinstance(html_body, str)
+        and html_body.strip()
+    ):
+        # Before readable email bodies were introduced, the raw HTML lived in
+        # ``body``. New rows retain those same bytes in ``html_body`` while
+        # projecting readable text through ``body``/``body_text``. Prefer the
+        # stable HTML evidence so that schema evolution is replay-equivalent
+        # without treating genuinely changed markup as the same message.
+        semantic_body = html_body
+    raw_attachments = payload.get("attachments")
+    attachments = raw_attachments if isinstance(raw_attachments, list) else []
+    result: dict[str, object] = {
+        "contact_address": payload.get("contact_address"),
+        "body": semantic_body,
+        "to_addresses": payload.get("to_addresses") or [],
+        "cc_addresses": payload.get("cc_addresses") or [],
+        "smtp_probe": bool(payload.get("smtp_probe", False)),
+        "campaign_attributed": bool(payload.get("campaign_attributed", False)),
+        "attachments": [_semantic_attachment(item) for item in attachments],
+    }
+    result.update({field: payload.get(field) for field in _INBOUND_OPTIONAL_FIELDS})
+    return result
+
+
+def _semantic_evidence(evidence: dict[str, object]) -> dict[str, object]:
+    raw_payload = evidence.get("payload")
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    return {
+        "fingerprint_version": SEMANTIC_FINGERPRINT_VERSION,
+        "provider": evidence.get("provider"),
+        "provider_account_scope": evidence.get("provider_account_scope"),
+        "provider_event_id": evidence.get("provider_event_id"),
+        "kind": evidence.get("kind"),
+        "channel_type": evidence.get("channel_type"),
+        "external_message_id": evidence.get("external_message_id"),
+        "observed_at": evidence.get("observed_at"),
+        "payload": _semantic_payload(
+            provider=str(evidence.get("provider") or ""),
+            observation_kind=str(evidence.get("kind") or ""),
+            payload=payload,
+        ),
+    }
+
+
+def _semantic_fingerprint(evidence: dict[str, object]) -> str:
+    return _fingerprint_json(_semantic_evidence(evidence))
+
+
+def _changed_semantic_fields(
+    existing: dict[str, object], candidate: dict[str, object]
+) -> list[str]:
+    changed: list[str] = []
+    keys = sorted(set(existing) | set(candidate))
+    for key in keys:
+        left = existing.get(key)
+        right = candidate.get(key)
+        if key == "payload" and isinstance(left, dict) and isinstance(right, dict):
+            changed.extend(
+                f"payload.{payload_key}"
+                for payload_key in sorted(set(left) | set(right))
+                if left.get(payload_key) != right.get(payload_key)
+            )
+        elif left != right:
+            changed.append(key)
+    return changed
+
+
+def observation_fingerprint(command: RecordProviderObservationCommand) -> str:
+    """Return the exact normalized-evidence fingerprint retained on the row.
+
+    Public because the Integrator parity harness must compare the same exact
+    normalized representation. Replay/collision arbitration separately uses
+    the versioned semantic fingerprint defined in this owner.
     """
 
     return _fingerprint(command)
@@ -339,29 +510,133 @@ def _validate(command: RecordProviderObservationCommand) -> tuple[str, str, str]
     return provider_scope[:160], provider_event_id[:255], external_message_id[:255]
 
 
+def _utc_iso(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
+
+
+def _stored_evidence(row: InboxProviderObservation) -> dict[str, object]:
+    return {
+        "provider": row.provider,
+        "provider_account_scope": row.provider_account_scope,
+        "provider_event_id": row.provider_event_id,
+        "kind": row.observation_kind,
+        "channel_type": row.channel_type,
+        "external_message_id": row.external_message_id,
+        "observed_at": _utc_iso(row.observed_at),
+        "payload": dict(row.normalized_payload),
+    }
+
+
+def _record_quarantine(
+    db: Session,
+    *,
+    existing: InboxProviderObservation,
+    existing_semantic: dict[str, object],
+    candidate_evidence: dict[str, object],
+    candidate_payload_fingerprint: str,
+    candidate_semantic_fingerprint: str,
+) -> InboxProviderObservationCollision:
+    now = datetime.now(UTC)
+    collision = db.execute(
+        select(InboxProviderObservationCollision).where(
+            InboxProviderObservationCollision.observation_id == existing.id,
+            InboxProviderObservationCollision.candidate_semantic_fingerprint
+            == candidate_semantic_fingerprint,
+        )
+    ).scalar_one_or_none()
+    if collision is not None:
+        collision.attempt_count += 1
+        collision.last_seen_at = now
+        return collision
+
+    collision = InboxProviderObservationCollision(
+        observation_id=existing.id,
+        candidate_payload_fingerprint=candidate_payload_fingerprint,
+        candidate_semantic_fingerprint=candidate_semantic_fingerprint,
+        semantic_fingerprint_version=SEMANTIC_FINGERPRINT_VERSION,
+        candidate_evidence=candidate_evidence,
+        changed_fields=_changed_semantic_fields(
+            existing_semantic,
+            _semantic_evidence(candidate_evidence),
+        ),
+        status=InboxObservationCollisionStatus.quarantined.value,
+        attempt_count=1,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    db.add(collision)
+    db.flush()
+    return collision
+
+
 def record_provider_observation(
     db: Session,
     command: RecordProviderObservationCommand,
 ) -> ProviderObservationOutcome:
-    """Commit one normalized provider fact and prove exact replay equivalence."""
+    """Commit one normalized provider fact and prove semantic replay equivalence."""
 
     def operation() -> ProviderObservationOutcome:
         provider_scope, provider_event_id, external_message_id = _validate(command)
-        fingerprint = _fingerprint(command)
+        candidate_evidence = _command_evidence(command)
+        candidate_evidence.update(
+            {
+                "provider_account_scope": provider_scope,
+                "provider_event_id": provider_event_id,
+                "external_message_id": external_message_id or None,
+                "observed_at": _utc_iso(command.observed_at),
+            }
+        )
+        fingerprint = _fingerprint_json(candidate_evidence)
+        semantic_fingerprint = _semantic_fingerprint(candidate_evidence)
         existing = db.execute(
-            select(InboxProviderObservation).where(
+            select(InboxProviderObservation)
+            .where(
                 InboxProviderObservation.provider == command.provider.value,
                 InboxProviderObservation.provider_account_scope == provider_scope,
                 InboxProviderObservation.provider_event_id == provider_event_id,
             )
+            .with_for_update()
         ).scalar_one_or_none()
         if existing is not None:
-            if existing.payload_fingerprint != fingerprint:
+            existing_evidence = _stored_evidence(existing)
+            existing_semantic = _semantic_evidence(existing_evidence)
+            existing_semantic_fingerprint = (
+                existing.semantic_fingerprint
+                if existing.semantic_fingerprint_version == SEMANTIC_FINGERPRINT_VERSION
+                and existing.semantic_fingerprint
+                else _fingerprint_json(existing_semantic)
+            )
+            if existing_semantic_fingerprint != semantic_fingerprint:
+                if command.collision_policy is ObservationCollisionPolicy.quarantine:
+                    collision = _record_quarantine(
+                        db,
+                        existing=existing,
+                        existing_semantic=existing_semantic,
+                        candidate_evidence=candidate_evidence,
+                        candidate_payload_fingerprint=fingerprint,
+                        candidate_semantic_fingerprint=semantic_fingerprint,
+                    )
+                    return ProviderObservationOutcome(
+                        observation_id=existing.id,
+                        outcome=ObservationProcessingOutcome.quarantined,
+                        processing_status=InboxObservationStatus(
+                            existing.processing_status
+                        ),
+                        collision_id=collision.id,
+                    )
                 raise _error(
                     "provider_event_identity_collision",
                     "Provider reused an observation identity with different evidence.",
                     provider=command.provider.value,
                 )
+            if (
+                existing.semantic_fingerprint != semantic_fingerprint
+                or existing.semantic_fingerprint_version != SEMANTIC_FINGERPRINT_VERSION
+            ):
+                existing.semantic_fingerprint = semantic_fingerprint
+                existing.semantic_fingerprint_version = SEMANTIC_FINGERPRINT_VERSION
             return ProviderObservationOutcome(
                 observation_id=existing.id,
                 outcome=ObservationProcessingOutcome.replayed,
@@ -384,6 +659,8 @@ def record_provider_observation(
                 else None
             ),
             payload_fingerprint=fingerprint,
+            semantic_fingerprint=semantic_fingerprint,
+            semantic_fingerprint_version=SEMANTIC_FINGERPRINT_VERSION,
             normalized_payload=_payload_dict(command.payload),
             observed_at=command.observed_at.astimezone(UTC),
             recorded_at=datetime.now(UTC),

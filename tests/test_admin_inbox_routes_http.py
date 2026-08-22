@@ -84,6 +84,30 @@ def test_start_conversation_passes_selected_subscriber_to_owner(db_session):
     assert start.call_args.kwargs["subscriber_id"] == str(selected_subscriber_id)
 
 
+def test_merge_contact_conflict_returns_operator_facing_409(db_session):
+    conversation_id = uuid.uuid4()
+    conflict = team_inbox_commands.InboxContactMergeConflict(
+        conversation_id=conversation_id,
+        conflicting_lead_id=uuid.uuid4(),
+    )
+    with (
+        patch(
+            "app.web.admin.inbox.team_inbox_commands.merge_contact",
+            side_effect=conflict,
+        ),
+        patch("app.web.admin.inbox._prepare_mutation"),
+        patch("app.web.admin.inbox._actor_id_from_request", return_value=None),
+    ):
+        response = _client(db_session).post(
+            f"/inbox/{conversation_id}/merge-contact",
+            data={"target_type": "subscriber", "target_query": "customer@example.com"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 409
+    assert conflict.message in response.text
+
+
 @pytest.fixture
 def captured_request(db_session):
     """Drive the queue route and capture the `InboxQueueRequest` it builds."""
@@ -145,6 +169,11 @@ def test_has_ticket_checkbox_reaches_the_read_model_as_a_boolean(captured_reques
 def test_has_ticket_false_is_distinct_from_absent(captured_request):
     assert captured_request("?has_ticket=false").has_ticket is False
     assert captured_request("").has_ticket is None
+
+
+def test_all_view_reaches_the_projection_owner(captured_request):
+    assert captured_request("?view=all").view == "all"
+    assert captured_request("").view is None
 
 
 def test_queue_requests_exact_total_for_numbered_pagination(captured_request):
@@ -422,6 +451,45 @@ def test_message_fragment_route_renders_one_authoritative_message():
     assert "copy@example.test" in response.text
     assert "audit@example.test" in response.text
     assert "Email recipients" in response.text
+
+
+def test_failed_message_fragment_renders_retry_form_with_request_context():
+    conversation_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    message = team_inbox_read.InboxTimelineMessage(
+        id=str(message_id),
+        channel_type="email",
+        direction="outbound",
+        subject=None,
+        body="Failed delivery",
+        from_address=None,
+        to_addresses=["customer@example.test"],
+        cc_addresses=[],
+        bcc_addresses=[],
+        sent_at=None,
+        received_at=None,
+        created_at=datetime.now(UTC),
+        metadata={"delivery_status": "failed", "send_error": "SMTP rejected"},
+        attachments=[],
+        sender=None,
+    )
+    projection = team_inbox_projection.InboxMessageFragmentProjection(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        message=message,
+    )
+
+    with patch(
+        "app.web.admin.inbox.team_inbox_projection.get_message_fragment_projection",
+        return_value=projection,
+    ):
+        response = _client(object()).get(
+            f"/inbox/{conversation_id}/messages/{message_id}"
+        )
+
+    assert response.status_code == 200
+    assert 'name="_csrf_token"' in response.text
+    assert f'action="/admin/inbox/messages/{message_id}/retry"' in response.text
 
 
 def test_queue_row_route_deletes_a_row_that_no_longer_matches_filters():

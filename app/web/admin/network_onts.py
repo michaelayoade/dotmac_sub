@@ -704,7 +704,7 @@ def ont_configure_submit(
     mgmt_service_port_index: str = Form(default=""),
     wan_service_port_index: str = Form(default=""),
     push_scope: str = Form(default="management"),
-    idempotency_key: str = Form(...),
+    idempotency_key: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Parse one section and delegate admission to the typed coordinator."""
@@ -824,6 +824,14 @@ def ont_configure_submit(
             wan_service_port_index=wan_sp_value,
         )
 
+    submitted_idempotency_key = (
+        idempotency_key.strip() if isinstance(idempotency_key, str) else ""
+    )
+    resolved_idempotency_key = (
+        submitted_idempotency_key
+        if submitted_idempotency_key
+        else f"ont-config:{ont_id}:{section.value}:{uuid.uuid4()}"
+    )
     auth = getattr(request.state, "auth", {}) or {}
     permission_granted = bool(auth) and has_permission(auth, db, "network:ont:write")
     finish_read_transaction(db)
@@ -836,7 +844,7 @@ def ont_configure_submit(
                 context=_ont_configuration_command_context(
                     request,
                     reason=f"Configure ONT {section.value} service settings",
-                    idempotency_key=idempotency_key,
+                    idempotency_key=resolved_idempotency_key,
                 ),
                 ont_unit_id=uuid.UUID(ont_id),
                 permission_granted=permission_granted,

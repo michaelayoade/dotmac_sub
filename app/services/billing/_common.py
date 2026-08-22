@@ -459,13 +459,18 @@ def assert_legal_invoice_transition(
 
 
 def _assert_invoice_allocatable(invoice: Invoice) -> None:
-    """Reject allocating a payment to a void or draft invoice.
+    """Reject allocating a payment to a terminal or pre-issue invoice.
 
     A void invoice is terminal (settling money against it would resurrect it to
     'paid' — see ``_recalculate_invoice_totals``); a draft is pre-issue and not
-    yet a payable obligation. Both must refuse allocations.
+    yet a payable obligation. Written-off invoices are also terminal and no
+    longer own a payable receivable. All must refuse allocations.
     """
-    if invoice.status in (InvoiceStatus.void, InvoiceStatus.draft):
+    if invoice.status in (
+        InvoiceStatus.void,
+        InvoiceStatus.written_off,
+        InvoiceStatus.draft,
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot allocate a payment to a {invoice.status.value} invoice",

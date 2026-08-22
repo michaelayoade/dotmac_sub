@@ -909,8 +909,9 @@ DOMAIN = DomainSOT(
                         "back partial domain writes before recording retry evidence."
                     ),
                     locking=(
-                        "Capability/provider-event uniqueness deduplicates receipt; claim "
-                        "and replay operate on the canonical receipt aggregate."
+                        "Receipt admission locks the capability binding before the "
+                        "provider-event check/insert; uniqueness remains the final "
+                        "arbiter, and claim and replay operate on the canonical receipt."
                     ),
                     idempotency=(
                         "The same binding and provider event id with the same payload digest "

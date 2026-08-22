@@ -95,6 +95,23 @@ def test_credit_application_requires_owner_preview_and_exact_confirmation():
     assert "restoration is not inferred from this credit" in confirmation
 
 
+def test_credit_application_reversal_requires_owner_preview_and_exact_confirmation():
+    invoice_detail = _template("templates/admin/billing/invoice_detail.html")
+    confirmation = _template(
+        "templates/admin/billing/credit_application_reversal_confirm.html"
+    )
+    route = _template("app/web/admin/billing_invoice_actions.py")
+
+    assert "credit_application_reversal_options" in invoice_detail
+    assert "/credit-applications/{{ option.application_id }}/reversal/preview" in (
+        invoice_detail
+    )
+    assert "Confirm credit application reversal" in confirmation
+    assert 'name="preview_fingerprint"' in confirmation
+    assert 'name="idempotency_key"' in confirmation
+    assert "billing:invoice:update" in route
+
+
 def test_invoice_detail_exposes_draft_issue_action():
     invoice_detail = _template("templates/admin/billing/invoice_detail.html")
 
@@ -109,6 +126,7 @@ def test_credit_application_templates_compile():
 
     env.get_template("admin/billing/invoice_detail.html")
     env.get_template("admin/billing/credit_apply_confirm.html")
+    env.get_template("admin/billing/credit_application_reversal_confirm.html")
     env.get_template("admin/billing/credit_issue_confirm.html")
     env.get_template("admin/billing/payment_refund_confirm.html")
     env.get_template("admin/billing/invoice_closure_confirm.html")
@@ -128,3 +146,15 @@ def test_payment_refund_requires_owner_preview_and_confirmation():
     assert "Exact evidence and access consequence" in confirmation
     assert 'name="preview_fingerprint"' in confirmation
     assert 'name="idempotency_key"' in confirmation
+
+
+def test_payment_detail_correction_action_uses_reversal_preview_and_permission_gate():
+    detail = _template("templates/admin/billing/payment_detail.html")
+    route = _template("app/web/admin/billing_payments.py")
+    web_service = _template("app/services/web_billing_payments.py")
+
+    assert "payment_correction_action.allowed" in detail
+    assert "reversal_capability.allowed and payment_correction_action.allowed" in detail
+    assert 'label: str = "Correct accepted payment"' in web_service
+    assert "payment_correction_action.preview_url" in detail
+    assert 'has_permission(auth, db, "billing:payment:update")' in route

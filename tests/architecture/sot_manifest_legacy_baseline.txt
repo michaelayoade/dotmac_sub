@@ -52,7 +52,6 @@ financial.billing_scheduled
 financial.collection_accounts
 financial.collections_scheduled
 financial.consolidated_payments
-financial.credit_notes
 financial.dunning
 financial.import_payment_batch_reversals
 financial.invoices

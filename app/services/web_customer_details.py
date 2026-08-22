@@ -1364,13 +1364,24 @@ def _build_network_access_cards(
             continue
         nas = getattr(sub, "provisioning_nas_device", None)
         pop_site = getattr(nas, "pop_site", None) if nas else None
+        connection_status = connection_by_subscription.get(sub_id)
+        if connection_status is None:
+            unknown_presentation = access_session_status_presentation("unknown")
+            connection_status = {
+                "state": "unknown",
+                "label": unknown_presentation.label,
+                "detail": "Connection observation unavailable",
+                "last_seen_at": None,
+                "identifier": None,
+                "status_presentation": unknown_presentation.model_dump(mode="json"),
+            }
         cards.append(
             {
                 "subscription_id": sub_id,
                 "offer_name": sub.offer.name if sub.offer else "Subscription",
                 "status": status,
                 "status_presentation": subscription_status_presentation(raw_status),
-                "connection_status": connection_by_subscription.get(sub_id, {}),
+                "connection_status": connection_status,
                 "login": sub.login,
                 "ipv4_address": service_ipv4.address,
                 "ipv4_detail": service_ipv4.detail,

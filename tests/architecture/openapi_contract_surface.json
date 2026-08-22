@@ -19307,7 +19307,7 @@
   "IPv6AddressCreate": "556d549e15ca",
   "IPv6AddressRead": "d14ab909bf1f",
   "IPv6AddressUpdate": "c13ce5267072",
-  "InboxAgentPerformanceRead": "f93a4811c371",
+  "InboxAgentPerformanceRead": "6a8463944e15",
   "InboxConversationContactLinkRead": "bb228be5e29a",
   "InboxConversationContactLinkRequest": "f407043f0c43",
   "InboxConversationEscalateRequest": "616991a12b83",

@@ -18,12 +18,12 @@ decision), `docs/ISP_COHORT1_SOURCE_OWNERSHIP.md` (who writes what today).
 
 | | |
 |---|---|
-| Programme | `pgm-dotmac-isp-replacement` at `68c7a62e2aafd9c236662a5a69d410ea002b4cdb` |
+| Programme | `pgm-dotmac-isp-replacement` at `d91a87f6823bfd2afa6c2025bdb1af644331fa39` |
 | Cohort | `cohort-isp-01`, sequence 1, state **blocked** |
 | Source | `asm-dotmac-sub-legacy` — source-authoritative |
 | Target | `asm-dotmac-isp` — candidate, independent database, no deployment owner |
 | Entity types | 12 |
-| Production writers | 26 (6 declared owners, 2 derived projections, 18 parallel) |
+| Production writers | 27 (7 declared owners, 2 derived projections, 18 parallel) |
 | Contract version | 1 |
 | Record schema version | 1 |
 
@@ -202,7 +202,7 @@ Not this work, and not this document's to schedule. What the switch needs:
 - the enforceable legacy Sub transition rule (`dec-isp-003`, open);
 - an operator approval attributable to a person, recorded in Governance;
 - **traffic-zero evidence** for the cohort's Sub write paths: a measured window
-  in which none of the 26 production writers executed. Sub already emits
+  in which none of the 27 production writers executed. Sub already emits
   structured logs and audit events; the evidence is a query over them naming
   each writer and showing no invocation, not an assertion that the surface is
   quiet;
@@ -213,14 +213,14 @@ Not this work, and not this document's to schedule. What the switch needs:
 
 ### 10. Displaced Sub writers are removed and the ratchet is lowered — `ctl-isp-009`
 
-Only after the switch. The ratchet baselines hold 34 entries; the 26 that can
+Only after the switch. The ratchet baselines hold 35 entries; the 27 that can
 still write production are what must reach zero — `displaced_writer_paths()`
 is that set, and every one of them carries a disposition that removes it
 (`RETIRE_AFTER_CUTOVER`, `ROUTE_THROUGH_OWNER_FIRST`, or `UNDECIDED`). A
 displaced writer marked to stay would be a contradiction the ratchet could
 never resolve, so a test refuses one.
 
-Twelve of the 26 are `ROUTE_THROUGH_OWNER_FIRST`, and those come **earlier**
+Fourteen of the 27 are `ROUTE_THROUGH_OWNER_FIRST`, and those come **earlier**
 than this step: a shadow comparison run against a source with two writers
 cannot tell drift from the second writer. They gate `ctl-isp-007`, not
 `ctl-isp-009`.
@@ -247,7 +247,7 @@ nothing to retire; they remain in the baseline so a *new* fixture seeder or a
 | `ctl-isp-006` | Dotmac Sub technical owner | Every source row dispositioned; idempotent replay proved by digest equality |
 | `ctl-isp-007` | Dotmac ISP technical owner | Zero unexplained drift at an immutable source watermark |
 | `ctl-isp-008` | Michael Ayoade | Sealed switch: approval, delta capture, traffic-zero evidence, rollback conditions |
-| `ctl-isp-009` | Dotmac Sub technical owner | 26 production writers to zero, ratchet lowered writer by writer |
+| `ctl-isp-009` | Dotmac Sub technical owner | 27 production writers to zero, ratchet lowered writer by writer |
 
 A control is verified only in Governance, citing an immutable
 controlled-source reference. Nothing in this repository advances one, and an
@@ -255,32 +255,37 @@ agent-authored assertion is not evidence.
 
 ## Open source-side questions
 
-These belong to `ctl-isp-006` and none of them has an answer yet. The first
-three are carried as `Disposition.UNDECIDED` on a specific surface and are
-enumerable through `surfaces.undecided_surfaces()`, so they cannot be lost
-between here and the control:
+Governance answered five decisions on 2026-08-21 (`d91a87f`), and the three
+that were carried as `Disposition.UNDECIDED` on specific surfaces are now
+closed. What remains for `ctl-isp-006` is **work created by those answers**,
+plus the two dispositions that were always going to need one:
 
+- **`customer_location_requests.py` bypasses `customer.accounts`.** Not, as an
+  earlier version of this document said, because addresses have no Sub owner —
+  they have four declared ones (see the ownership map). The write simply does
+  not go through any of them, and it has to before the cohort can be shadowed.
+  Extraction into `dotmac-addresses` draws on `customer.accounts`,
+  `gis.spatial_sync`, `customer.location_capture` and
+  `customer.location_verification`.
+- **The account-recovery cascade must be decomposed.** Customers owns recovery
+  intent, but one restore currently touches invoices, payments, credentials,
+  RADIUS, IP assignments and ONT assignments in the same pass. Only the account
+  rows are cohort 1, and the pass has to be separable before they can move.
+- **`subscribers.metadata` has seven writers and no declared shape.** Decided:
+  it crosses as an opaque key inventory plus a digest until an owner declares
+  its keys. That is a standing rule, not a pending question — but the seven
+  writers still have to route through `customer.accounts`.
 - **`organizations` and `organization_memberships` have no counted writer.**
   Historical B2B account records with no live owner. Do they migrate, stay in
-  Sub as history, or retire with evidence?
-- **`subscribers.metadata` has seven writers and no declared shape.** Either an
-  owner declares its keys — after which a later schema version can carry them
-  typed — or it crosses permanently as an opaque inventory.
-- **`subscribers.mrr_total` has no declared owner.** Confirm the target
-  recomputes it and the column does not migrate.
-  (`app/services/mrr_snapshot.py`, `UNDECIDED`.)
-- **`addresses` has no declared owner at all**, so
-  `app/services/customer_location_requests.py` has no service to route through
-  before the cohort can be shadowed. (`UNDECIDED`.)
-- **Account recovery has no counterpart in the target.** Does
-  `app/services/web_system_restore_tool.py` move with the cohort, stay in Sub
-  against migrated-away rows, or retire? (`UNDECIDED`.)
-- **`subscriber_nin_verifications` is excluded from the contract.** Regulatory
-  identity evidence with its own retention rules; it needs a disposition
-  decision of its own before any export carries it.
-- **Ten cohort-adjacent tables are deliberately unmapped.** Each is recorded in
-  `surfaces.UNMAPPED_ADJACENT_TABLES` with its reason; each still needs a
-  disposition before the cohort can claim every source row is accounted for.
+  Sub as history, or retire with evidence? Still open.
+- **`subscriber_nin_verifications`.** Decided: a Compliance/Records retention
+  disposition rather than a cohort-1 migration one. It stays out of the export
+  and is governed by retention policy; the cohort carries only a presence flag
+  on the account.
+- **Nine other cohort-adjacent tables are deliberately unmapped.** Each is
+  recorded in `surfaces.UNMAPPED_ADJACENT_TABLES` with its reason; each still
+  needs a disposition before the cohort can claim every source row is
+  accounted for.
 
 ## Operating the export
 

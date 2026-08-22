@@ -85,7 +85,7 @@
         <input type="hidden" name="lifecycle" value="{{ lifecycle or 'current' }}">
         <div class="flex-1">
             <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search Devices</label>
-            {{ search_input("search", search or '', "Search by serial, MAC, name, or IP...", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "input changed delay:300ms", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
+            {{ search_input("search", search or '', "Search by serial, MAC, name, or IP...", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "input changed delay:300ms", "hx-target": "#devices-content", "hx-include": "#devices-filter-form"}) }}
         </div>
         {% if lifecycle != 'archived' %}
         <div class="w-full lg:w-44">
@@ -93,7 +93,7 @@
                 {"value": "", "label": "All Status"},
                 {"value": "working", "label": "Working"},
                 {"value": "not_working", "label": "Not working"}
-            ], status or '', "Status", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
+            ], status or '', "Status", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-content", "hx-include": "#devices-filter-form"}) }}
         </div>
         {% endif %}
         <div class="w-full lg:w-44">
@@ -104,7 +104,7 @@
                 {"value": "nokia", "label": "Nokia"},
                 {"value": "calix", "label": "Calix"},
                 {"value": "mikrotik", "label": "MikroTik"}
-            ], vendor or '', "Vendor", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
+            ], vendor or '', "Vendor", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-content", "hx-include": "#devices-filter-form"}) }}
         </div>
         {% if search or status or vendor %}
         {{ action_button("Clear", "/admin/network/devices?type=" ~ (type or 'all') ~ "&lifecycle=" ~ (lifecycle or 'current'), '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>', "secondary", "slate") }}
@@ -114,30 +114,7 @@
 
     {# Devices Table #}
     <div id="devices-content" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">
-        <div class="overflow-x-auto">
-            <table class="min-w-full">
-                <thead>
-                    <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-800/40">
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Device</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Type</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">IP Address</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Subscriber</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Last Seen</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="devices-table-body" class="divide-y divide-slate-100 dark:divide-slate-700/50">
-                    {% include "admin/network/devices/_table_rows.html" %}
-                </tbody>
-            </table>
-        </div>
-
-        {% if pagination %}
-        <div class="border-t border-slate-200 px-4 py-3 dark:border-slate-800 sm:px-6">
-            {% include "components/data/table_pagination.html" %}
-        </div>
-        {% endif %}
+        {% include "admin/network/devices/_table_content.html" %}
     </div>
     <div id="core-device-archive-modal"></div>
 </div>

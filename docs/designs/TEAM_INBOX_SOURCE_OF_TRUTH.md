@@ -23,7 +23,7 @@ combined Inbox/Support workspace.
 
 | Concern | Canonical owner | Responsibility |
 | --- | --- | --- |
-| Inbound provider facts and deduplication | `communications.team_inbox_observations` | Commits one normalized, fingerprinted provider observation before consequences |
+| Inbound provider facts, deduplication, and identity-collision quarantine | `communications.team_inbox_observations` | Commits one normalized provider observation before consequences and durably quarantines conflicting SMTP candidates |
 | Consequence coordination | `communications.team_inbox_processing` | Locks a committed observation and invokes the relevant participants once |
 | Conversation identity and threading | `communications.team_inbox_threads` | Resolves provider message/thread identity and writes conversations/messages |
 | Contact, subscriber, reseller, and reviewed context | `communications.team_inbox_contact_resolution` | Produces explicit matched, ambiguous, suppressed, or unmatched outcomes and owns reviewed links |
@@ -55,10 +55,10 @@ Campaign materialization remains the flush-only
 `communications.team_inbox_campaigns` participant under the campaign and
 outbound-intent owners.
 
-The Inbox **All** status filter includes every lifecycle status, including
-resolved conversations. The separate **Active** shortcut is the operational
-non-resolved cohort. Explicit status filters still narrow the queue to one
-status.
+The Inbox default queue is the operational active cohort and excludes resolved
+conversations. The explicit **All** view (`view=all`) includes every lifecycle
+status, including resolved conversations, for history review. Explicit status
+filters still narrow the queue to one status.
 
 ## Inbound flow and idempotency
 
@@ -68,13 +68,29 @@ status.
    preserves validated latitude and longitude plus optional place name and
    address; it is not treated as downloadable media.
 2. `InboxProviderObservation` is committed using the unique
-   `(provider, provider_account_scope, provider_event_id)` identity and a
-   fingerprint of normalized evidence. Exact retries replay the observation;
-   the same identity with different evidence fails closed.
-3. A separate processing owner locks the observation. It resolves threading,
+   `(provider, provider_account_scope, provider_event_id)` identity. It retains
+   an exact normalized-evidence fingerprint and a separately versioned semantic
+   fingerprint. Semantic v2 uses an explicit field contract, treats legacy
+   HTML-in-`body` and the current `html_body` plus readable-`body` shape as the
+   same evidence, and excludes SMTP authentication and relay-hop evidence.
+   Those transport fields remain in persisted normalized evidence but do not
+   turn the same upstream message into a collision.
+3. A semantic retry replays the observation. A true SMTP semantic mismatch is
+   committed to `InboxProviderObservationCollision` with the first normalized
+   candidate evidence, candidate fingerprints, bounded changed-field names,
+   and retry count. It never overwrites or processes the admitted observation.
+   SMTP returns success only after that quarantine transaction commits, ending
+   deterministic redelivery; transient parsing, database, and processing
+   failures remain retryable. Other provider adapters retain fail-closed
+   rejection until they deliberately adopt a transport disposition.
+4. A separate processing owner locks the observation. It resolves threading,
    contact and routing, then stores the consequence identity on the observation.
-4. A processed observation is a no-op on retry. Existing message and thread
+5. A processed observation is a no-op on retry. Existing message and thread
    constraints provide a second idempotency boundary.
+
+Rows written before semantic v2 are ratcheted lazily when an equivalent retry
+arrives. This avoids a speculative bulk rewrite while still proving equivalence
+from the stored normalized evidence before assigning the v2 fingerprint.
 
 An inbound email that references an active thread joins it. If the exact
 referenced thread is resolved, the message opens a new active conversation and

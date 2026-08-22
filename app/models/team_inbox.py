@@ -131,6 +131,10 @@ class InboxObservationStatus(enum.Enum):
     rejected = "rejected"
 
 
+class InboxObservationCollisionStatus(enum.Enum):
+    quarantined = "quarantined"
+
+
 class TeamInboxEmailRoute(Base):
     __tablename__ = "team_inbox_email_routes"
     __table_args__ = (
@@ -996,6 +1000,8 @@ class InboxProviderObservation(Base):
     external_message_id: Mapped[str | None] = mapped_column(String(255))
     external_thread_id: Mapped[str | None] = mapped_column(String(255))
     payload_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    semantic_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    semantic_fingerprint_version: Mapped[int | None] = mapped_column(Integer)
     normalized_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -1023,6 +1029,54 @@ class InboxProviderObservation(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
         nullable=False,
+    )
+
+
+class InboxProviderObservationCollision(Base):
+    """Durable candidate evidence quarantined under an existing identity."""
+
+    __tablename__ = "inbox_provider_observation_collisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "candidate_semantic_fingerprint",
+            name="uq_inbox_observation_collision_semantic",
+        ),
+        Index(
+            "ix_inbox_observation_collisions_status",
+            "status",
+            "last_seen_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    observation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inbox_provider_observations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    candidate_payload_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    candidate_semantic_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    semantic_fingerprint_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_evidence: Mapped[dict] = mapped_column(JSON, nullable=False)
+    changed_fields: Mapped[list] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(40),
+        default=InboxObservationCollisionStatus.quarantined.value,
+        nullable=False,
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
 

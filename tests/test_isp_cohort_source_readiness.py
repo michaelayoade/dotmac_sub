@@ -85,6 +85,29 @@ def test_no_control_this_work_feeds_is_already_verified() -> None:
     assert supplied and all(control.state == "blocked" for control in supplied)
 
 
+def test_a_decision_cannot_be_open_and_resolved() -> None:
+    """Sub's view mirrors the Governance rule rather than restating it loosely."""
+
+    payload = programme.BINDING.model_dump()
+    payload["resolved_decision_ids"] = ("dec-isp-002",)
+    with pytest.raises(ValidationError) as caught:
+        programme.GovernanceBinding.model_validate(payload)
+    assert "open or answered, never both" in str(caught.value)
+
+
+def test_the_binding_records_the_answered_decisions() -> None:
+    """Answered decisions leave a trace, or the binding reads as unsettled."""
+
+    assert programme.BINDING.resolved_decision_ids == (
+        "dec-isp-003",
+        "dec-isp-004",
+        "dec-isp-005",
+        "dec-isp-006",
+        "dec-isp-007",
+    )
+    assert programme.BINDING.unresolved_decision_ids == ("dec-isp-002",)
+
+
 def test_a_binding_with_no_sub_evidence_is_refused() -> None:
     payload = programme.BINDING.model_dump()
     payload["controls"] = [
@@ -432,14 +455,29 @@ def test_a_token_open_question_is_refused() -> None:
     assert "too short to act on" in str(caught.value)
 
 
-def test_the_undecided_surfaces_are_the_ones_we_expect() -> None:
-    """Three today. Named, so shrinking or growing the set is a reviewed diff."""
+def test_no_surface_is_left_undecided() -> None:
+    """Empty is a claim here, not a default.
 
-    assert [surface.path for surface in surfaces.undecided_surfaces()] == [
-        "app/services/customer_location_requests.py",
-        "app/services/mrr_snapshot.py",
-        "app/services/web_system_restore_tool.py",
-    ]
+    All three open questions were answered by Governance on 2026-08-21:
+    `mrr_total` does not migrate, a product-first `dotmac-addresses` owner
+    takes addresses (dec-isp-007), and Customers owns account-recovery intent.
+
+    If a surface becomes UNDECIDED again this fails, which is the point — the
+    correct response is to answer it or to update this test to name the
+    specific new question, never to delete the assertion. A guard that only
+    ever confirms an empty set would pass just as happily if
+    `undecided_surfaces()` stopped working.
+    """
+
+    assert surfaces.undecided_surfaces() == ()
+    # Sensitivity: the accessor still finds one when there is one to find.
+    planted = _surface(
+        disposition=surfaces.Disposition.UNDECIDED,
+        open_question=(
+            "Does this fact migrate with the cohort or stay in Sub as history?"
+        ),
+    )
+    assert planted.disposition is surfaces.Disposition.UNDECIDED
 
 
 def test_every_displaced_writer_has_a_disposition_that_removes_it() -> None:

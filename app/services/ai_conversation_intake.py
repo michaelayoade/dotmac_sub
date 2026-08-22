@@ -104,8 +104,8 @@ DEFAULT_WELCOME_MESSAGE = (
     "Hello, I am Dotmac Virtual Assistant. I can help understand your request "
     "and connect you to the right team."
 )
-DEFAULT_QUEUE_POSITION_UPDATE_MINUTES = 5
-DEFAULT_QUEUE_HEARTBEAT_MINUTES = 15
+DEFAULT_QUEUE_POSITION_UPDATE_MINUTES = 10
+DEFAULT_QUEUE_HEARTBEAT_MINUTES = 30
 DEFAULT_QUEUE_TEMPLATES = {
     "initial": (
         "All our agents are currently engaged. You are number {position} in the "

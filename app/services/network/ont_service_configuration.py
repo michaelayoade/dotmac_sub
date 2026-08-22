@@ -87,7 +87,10 @@ from app.services.owner_commands import (
 )
 
 if TYPE_CHECKING:
-    from app.services.network.reconcile.state import OntWifiDeliveryScope
+    from app.services.network.reconcile.state import (
+        OntWifiDeliveryScope,
+        ReconcileResult,
+    )
 
 OWNER = "network.ont_service_configuration"
 _COORDINATION_CONCERN = "atomic ONT service configuration coordination"
@@ -898,7 +901,10 @@ def _admit(
     effective_vlan: int | None = None
     vlan_source: WanVlanSource | None = None
     masked_username: str | None = None
-    if not isinstance(command, ConfigureCustomerWifiCommand):
+    if (
+        not isinstance(command, ConfigureCustomerWifiCommand)
+        and section is OntConfigurationSection.wan
+    ):
         resolved_effective = resolve_effective_ont_config(db, ont, olt=_olt)
         effective = resolved_effective if isinstance(resolved_effective, dict) else {}
         config_pack = effective.get("config_pack")
@@ -1193,6 +1199,26 @@ def _force_lan_delivery(revision: OntServiceConfigurationRevision) -> bool:
     )
 
 
+def _only_ppp_delivery_residual_drift(result: ReconcileResult) -> bool:
+    if not result.drift_after:
+        return True
+    return all(
+        str(getattr(drift, "field", "") or "").startswith("ppp_delivery[")
+        for drift in result.drift_after
+    )
+
+
+def _lan_connection_request_pending(
+    revision: OntServiceConfigurationRevision, result: ReconcileResult
+) -> bool:
+    failure = result.failure
+    return (
+        _force_lan_delivery(revision)
+        and failure is not None
+        and failure.reason == "acs_cr_failed"
+    )
+
+
 def _execution_locked(
     db: Session, command: ExecuteOntServiceConfigurationCommand
 ) -> ExecuteOntServiceConfigurationOutcome:
@@ -1282,9 +1308,11 @@ def _execution_locked(
     )
     delivered_without_readback = (
         result.success
-        and result.sync_status == "synced"
-        and not result.drift_after
         and _force_lan_delivery(revision)
+        and (
+            (result.sync_status == "synced" and not result.drift_after)
+            or _only_ppp_delivery_residual_drift(result)
+        )
     )
     if delivered_without_readback:
         head.phase = OntServiceConfigurationPhase.delivered_unverified
@@ -1362,6 +1390,7 @@ def _execution_locked(
             and isinstance(failure.evidence, dict)
             and failure.evidence.get("readback_pending")
         )
+        lan_cr_pending = _lan_connection_request_pending(revision, result)
         if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
             next_attempt = command.verification_attempt + 1
             head.phase = OntServiceConfigurationPhase.readback_pending
@@ -1391,6 +1420,40 @@ def _execution_locked(
             )
             phase = OntServiceConfigurationPhase.readback_pending
             message = "Configuration applied; fresh readback is pending."
+        elif lan_cr_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
+            next_attempt = command.verification_attempt + 1
+            pending_message = (
+                "The LAN configuration was accepted by ACS, but the ONT rejected "
+                "the immediate Connection Request. The queued ACS task will drain "
+                "on the next Inform or after an OLT ONT reset."
+            )
+            head.phase = OntServiceConfigurationPhase.readback_pending
+            revision.phase = OntServiceConfigurationPhase.readback_pending
+            head.waiting_reason = "awaiting_acs_task_drain"
+            head.failure_code = None
+            head.failure_message = None
+            network_operations.mark_waiting(db, str(operation.id), head.waiting_reason)
+            stage_dispatch(
+                db,
+                operation,
+                NetworkOperationCommand.ont_service_config_apply_v1,
+                dispatch_key=f"verify:{next_attempt}",
+                not_before=datetime.now(UTC) + timedelta(seconds=30 * next_attempt),
+            )
+            _record_execution_event(
+                db,
+                ont=ont,
+                assignment=assignment,
+                head=head,
+                revision=revision,
+                operation_id=operation.id,
+                phase=OntServiceConfigurationPhase.readback_pending,
+                message=pending_message,
+                success=False,
+                waiting=True,
+            )
+            phase = OntServiceConfigurationPhase.readback_pending
+            message = pending_message
         else:
             head.phase = OntServiceConfigurationPhase.failed
             revision.phase = OntServiceConfigurationPhase.failed

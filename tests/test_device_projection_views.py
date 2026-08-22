@@ -15,6 +15,7 @@ from fastapi.routing import APIRoute
 from app.models.network_monitoring import DeviceProjection
 from app.services import device_projection_views
 from app.services import web_network_core_devices_inventory as inventory
+from app.services.list_query import ListQuery
 from app.web.admin import network as network_routes
 
 
@@ -85,6 +86,61 @@ def test_network_devices_route_binds_list_handler_without_required_filters():
         for dependency in route.dependant.dependencies
         for cell in (getattr(dependency.call, "__closure__", None) or ())
     )
+
+
+def test_network_devices_filter_returns_rows_and_fresh_pagination(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def build_page_data(*, db, list_query):
+        captured["db"] = db
+        captured["list_query"] = list_query
+        return {
+            "devices": [],
+            "pagination": True,
+            "offset": list_query.offset,
+            "limit": list_query.per_page,
+            "total": 100,
+            "htmx_url": "/admin/network/devices/filter",
+            "htmx_target": "devices-content",
+            "htmx_include": "#devices-filter-form",
+        }
+
+    def render(template_name, context):
+        captured["template_name"] = template_name
+        captured["context"] = context
+        return object()
+
+    monkeypatch.setattr(
+        network_routes.web_network_core_devices_service,
+        "devices_list_page_data",
+        build_page_data,
+    )
+    monkeypatch.setattr(network_routes.templates, "TemplateResponse", render)
+    db = object()
+
+    network_routes.devices_filter(
+        request=object(),
+        device_type=None,
+        type_filter="core",
+        search="edge",
+        status="working",
+        vendor=None,
+        lifecycle="current",
+        sort_by=None,
+        sort_dir=None,
+        offset=25,
+        limit=25,
+        db=db,
+    )
+
+    list_query = captured["list_query"]
+    assert isinstance(list_query, ListQuery)
+    assert list_query.page == 2
+    assert list_query.offset == 25
+    assert captured["db"] is db
+    assert captured["template_name"] == ("admin/network/devices/_table_content.html")
+    context = captured["context"]
+    assert context["htmx_target"] == "devices-content"
 
 
 # --- Read owner ---
@@ -229,6 +285,7 @@ def test_devices_list_page_data_reads_projection_with_pagination(db_session):
     assert payload["stats"]["total"] == 30
     assert "devices_refreshed_at" not in payload
     assert payload["htmx_url"] == "/admin/network/devices/filter"
+    assert payload["htmx_target"] == "devices-content"
 
 
 # --- Boundary: the list read owner must not derive live status per request ---

@@ -12,6 +12,14 @@
 # write moved between files nets to zero per file only if both sides
 # were already baselined, and the total proves the aggregate did not
 # drift while the per-file diff looked innocent.
+#
+# 2026-08-22 — `service|app/services/gis_sync.py` ADDED deliberately. It is
+# not a new parallel writer: `gis.spatial_sync` is the declared owner of an
+# address coordinate and its map projection, and this is the first release in
+# which it actually performs that write instead of leaving it to callers.
+# `customer_location_requests` fell 6 sites to 1 in the same change and the
+# total fell 101 -> 99, so the surface shrank while ownership concentrated.
+# The census is authority-blind by design; it counts files, not owners.
 
 2 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 2 cli_script|scripts/migration/backfill_party_status.py
@@ -32,9 +40,10 @@
 1 service|app/services/crm_customer_name_repair.py
 1 service|app/services/crm_portal.py
 1 service|app/services/crm_ticket_pull.py
-6 service|app/services/customer_location_requests.py
+1 service|app/services/customer_location_requests.py
 1 service|app/services/customer_portal_contacts.py
 1 service|app/services/customer_portal_notifications.py
+3 service|app/services/gis_sync.py
 1 service|app/services/mrr_snapshot.py
 1 service|app/services/network_subscriber_bridge.py
 1 service|app/services/nin_verifications.py
@@ -47,4 +56,4 @@
 1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 101
+TOTAL 99

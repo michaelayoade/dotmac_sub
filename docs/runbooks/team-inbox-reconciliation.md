@@ -19,8 +19,14 @@ access; the target host must be named explicitly before any production work.
 2. Compare observation counts by provider, kind, and processing status. A
    recorded observation without `processed_at` is a processing work item, not
    permission to bypass the processor.
-3. Review identity collisions separately. Changed evidence under the same
-   provider event identity must remain failed closed.
+3. Review identity collisions separately in
+   `inbox_provider_observation_collisions`. Group by `changed_fields` and inspect
+   the retained candidate only through approved, access-controlled tooling.
+   Do not copy message bodies or addresses into tickets or logs. A changed
+   `payload.body` is a true semantic conflict and remains quarantined; SMTP
+   authentication or relay-hop changes alone must replay under semantic v2.
+   Repeated delivery of one semantic candidate increments `attempt_count`
+   instead of creating unbounded quarantine rows.
 4. Re-run the observation processor by observation UUID. Exact completed
    observations return `already_processed`.
 5. For delivery drift, compare the Inbox message provider identity with receipt
@@ -37,6 +43,8 @@ access; the target host must be named explicitly before any production work.
 ## Verification
 
 - Repeated processing changes no authoritative row.
+- A quarantined SMTP collision receives success only after its candidate row is
+  committed and never creates a second Inbox message.
 - Older receipts cannot regress the current delivery state.
 - Queue KPIs equal their linked filtered cohorts.
 - Unread counts equal conversations with inbound messages newer than the
