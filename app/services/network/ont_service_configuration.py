@@ -1219,6 +1219,28 @@ def _lan_connection_request_pending(
     )
 
 
+def _lan_exact_readback_available(
+    revision: OntServiceConfigurationRevision, result: ReconcileResult
+) -> bool:
+    observed_after = getattr(result, "observed_after", None)
+    if not _force_lan_delivery(revision) or observed_after is None:
+        return False
+    acs = observed_after.acs
+    evidence = revision.desired_change_evidence or {}
+    if "lan.ip" in evidence and acs.acs_observed_lan_gateway_ip is None:
+        return False
+    if "lan.subnet" in evidence and acs.acs_observed_dhcp_subnet_mask is None:
+        return False
+    if "lan.dhcp_enabled" in evidence and acs.acs_observed_dhcp_enabled is None:
+        return False
+    if bool(evidence.get("lan.dhcp_enabled")):
+        return (
+            acs.acs_observed_dhcp_pool_min is not None
+            and acs.acs_observed_dhcp_pool_max is not None
+        )
+    return True
+
+
 def _execution_locked(
     db: Session, command: ExecuteOntServiceConfigurationCommand
 ) -> ExecuteOntServiceConfigurationOutcome:
@@ -1309,6 +1331,7 @@ def _execution_locked(
     delivered_without_readback = (
         result.success
         and _force_lan_delivery(revision)
+        and not _lan_exact_readback_available(revision, result)
         and (
             (result.sync_status == "synced" and not result.drift_after)
             or _only_ppp_delivery_residual_drift(result)

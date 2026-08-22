@@ -782,7 +782,18 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
             },
             "LANDevice": {
                 "1": {
-                    "LANHostConfigManagement": {"DHCPServerEnable": _leaf("true")},
+                    "LANHostConfigManagement": {
+                        "DHCPServerEnable": _leaf("true"),
+                        "MinAddress": _leaf("192.168.100.2"),
+                        "MaxAddress": _leaf("192.168.100.254"),
+                        "SubnetMask": _leaf("255.255.255.0"),
+                        "IPInterface": {
+                            "1": {
+                                "IPInterfaceIPAddress": _leaf("192.168.100.1"),
+                                "IPInterfaceSubnetMask": _leaf("255.255.255.0"),
+                            }
+                        },
+                    },
                     "WLANConfiguration": {
                         "1": {
                             "SSID": _leaf("KURSI"),
@@ -931,6 +942,10 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_wan_vlan == 203
     assert obs.acs_observed_nat_enabled is True
     assert obs.acs_observed_dhcp_enabled is True
+    assert obs.acs_observed_lan_gateway_ip == "192.168.100.1"
+    assert obs.acs_observed_dhcp_pool_min == "192.168.100.2"
+    assert obs.acs_observed_dhcp_pool_max == "192.168.100.254"
+    assert obs.acs_observed_dhcp_subnet_mask == "255.255.255.0"
     assert obs.acs_observed_ssid == "KURSI"
     assert obs.acs_observed_wifi_enabled is True
     assert obs.acs_observed_wifi_channel == 6
