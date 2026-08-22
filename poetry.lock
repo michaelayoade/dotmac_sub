@@ -1128,14 +1128,14 @@ resolved_reference = "a4fe55f4ed704c556c4d1e3cc728ec4ef0dd8042"
 
 [[package]]
 name = "dotmac-kernel"
-version = "0.1.0a90"
+version = "0.1.0a91"
 description = "DotMac platform kernel — multi-tenant FastAPI foundation (config, RLS db, identity/tenancy models, security, platform auth, middleware, settings, features registry, audit)"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main", "dev"]
 files = [
-    {file = "dotmac_kernel-0.1.0a90-py3-none-any.whl", hash = "sha256:49add8154708b8f154ecb9a41f3c97e3810f9d381588a7ec55eff4f5c18fa69f"},
-    {file = "dotmac_kernel-0.1.0a90.tar.gz", hash = "sha256:7c2e506c909b5dc7c72511cd7e886b9e1b21c814663364f78ac6772a18db875e"},
+    {file = "dotmac_kernel-0.1.0a91-py3-none-any.whl", hash = "sha256:870ffa4d8ff40f8ef768dc9271e0ab3e530daf7500ee681a025c896b9315bae3"},
+    {file = "dotmac_kernel-0.1.0a91.tar.gz", hash = "sha256:127d36fb677b8fbab9b8a0b252766e455c60d07a0e8b91b2d9e8533ef46c0759"},
 ]
 
 [package.dependencies]
@@ -1151,6 +1151,27 @@ sqlalchemy = ">=2.0,<3.0"
 licensing = ["cryptography (>=42)"]
 settings-crypto = ["cryptography (>=42)"]
 testing = ["httpx (>=0.27,<0.28)"]
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
+name = "dotmac-service-orders"
+version = "0.1.0a1"
+description = "Service-delivery orders and activation-readiness decisions"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_service_orders-0.1.0a1-py3-none-any.whl", hash = "sha256:0cf0bd1fa14398f3cfbba0689827eed7649aa217a038f61c7f02d3894756abd3"},
+    {file = "dotmac_service_orders-0.1.0a1.tar.gz", hash = "sha256:666085d6a2ac0314bffda1dff0d9d68bb390c77aed405cdfbd323dfe1f5d5c72"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a91"
+sqlalchemy = ">=2.0,<3.0"
 
 [package.source]
 type = "legacy"
@@ -5319,4 +5340,4 @@ test = ["pytest"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "2c214f26c293aaae219e8a909b532c86522a2804873406e26f7847e5cb225a08"
+content-hash = "5653d8f8006230cd4c6140fd65b32367d3c4fb619491ef58959dc37e7ffeb016"
