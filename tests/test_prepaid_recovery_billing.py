@@ -174,6 +174,7 @@ def test_bill_now_recovery_draft_uses_subscription_price_and_account_tax_policy(
         subscription_id=subscription.id,
         effective_at=datetime(2026, 8, 2, 9, 17, tzinfo=UTC),
     )
+    db_session.commit()
     context = CommandContext.system(
         actor="pytest:billing-operator",
         scope="billing:invoice:update",
