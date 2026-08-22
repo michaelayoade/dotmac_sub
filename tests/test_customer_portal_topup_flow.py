@@ -33,6 +33,7 @@ from app.services import billing as billing_service
 from app.services.billing_payment_receipts import get_customer_payment_receipt_context
 from app.services.customer_portal_flow_billing import get_billing_page
 from app.services.customer_portal_flow_payments import (
+    GatewayPaymentIncomplete,
     create_invoice_payment_intent,
     create_topup_intent,
     get_topup_page,
@@ -42,6 +43,13 @@ from app.services.customer_portal_flow_payments import (
     verify_and_record_topup,
 )
 from app.services.integrations.runtime_execution import RuntimeExecutionError
+from app.services.payment_gateway_adapter import (
+    PaymentGatewayProviderStatus,
+    PaymentGatewayVerificationError,
+    PaymentGatewayVerificationObservation,
+    PaymentGatewayVerificationOutcome,
+    PaymentGatewayVerificationReason,
+)
 from app.services.settings_cache import SettingsCache
 from tests.integration_platform_helpers import enable_payment_provider
 
@@ -282,6 +290,11 @@ def test_get_topup_page_uses_owner_active_deposit_state(
         "created_at": intent.created_at,
         "expires_at": intent.expires_at,
         "observed_at": page["active_deposit_request"]["observed_at"],
+        "message": (
+            "Your transfer receipt is under review."
+            if status == "submitted"
+            else "Upload your transfer receipt to continue."
+        ),
         "can_cancel": status == "pending",
         # None here is the point: neither fixture has a rejected proof, so the
         # normal phases stay untouched.
@@ -289,7 +302,7 @@ def test_get_topup_page_uses_owner_active_deposit_state(
     }
 
 
-def test_get_topup_page_ignores_expired_deposit_request(
+def test_get_topup_page_keeps_submitted_receipt_blocking_after_intent_expiry(
     monkeypatch,
     db_session,
     subscriber,
@@ -307,8 +320,9 @@ def test_get_topup_page_ignores_expired_deposit_request(
         {"account_id": str(subscriber.id), "username": "customer@example.com"},
     )
 
-    assert page["deposit_allowed"] is True
-    assert "active_deposit_request" not in page
+    assert page["deposit_allowed"] is False
+    assert page["active_deposit_request"]["phase"] == "under_review"
+    assert page["active_deposit_request"]["can_cancel"] is False
 
 
 def test_get_topup_page_does_not_fallback_to_customer_direct_transfer(
@@ -1521,6 +1535,54 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
         }
     ]
     assert invoice.balance_due == Decimal("0.00")
+
+
+def test_terminal_failure_records_no_money_and_allows_immediate_new_intent(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    first = _create_intent(
+        monkeypatch,
+        db_session,
+        subscriber,
+        amount="5000.00",
+        reference="ref-topup-terminal-failure",
+    )
+    observation = PaymentGatewayVerificationObservation(
+        outcome=PaymentGatewayVerificationOutcome.failed,
+        provider_status=PaymentGatewayProviderStatus.failed,
+        reason_code=PaymentGatewayVerificationReason.provider_reported_failed,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PaymentGatewayVerificationError(observation)
+        ),
+    )
+
+    with pytest.raises(GatewayPaymentIncomplete) as exc:
+        verify_and_record_topup(
+            db_session,
+            {"account_id": str(subscriber.id)},
+            "ref-topup-terminal-failure",
+            provider="paystack",
+        )
+
+    failed = db_session.get(TopupIntent, first["intent_id"])
+    assert failed is not None
+    assert failed.status == "failed"
+    assert exc.value.projection.customer_retry_allowed is True
+    assert db_session.query(Payment).count() == 0
+    assert db_session.query(LedgerEntry).count() == 0
+
+    second = _create_intent(
+        monkeypatch,
+        db_session,
+        subscriber,
+        amount="6000.00",
+        reference="ref-topup-after-terminal-failure",
+    )
+    assert second["intent_id"] != first["intent_id"]
 
 
 def test_verify_and_record_topup_preserves_paystack_gross_and_fee(

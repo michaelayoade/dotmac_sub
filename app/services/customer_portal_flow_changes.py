@@ -56,6 +56,19 @@ _CYCLE_LABELS = {
 }
 
 
+def _available_change_plan_offers(
+    db: Session,
+    subscription: Subscription,
+) -> list[CatalogOffer]:
+    """Resolve one canonical customer self-service change-plan candidate set."""
+    return get_available_portal_offers(
+        db,
+        subscription,
+        apply_reseller_availability=False,
+        require_same_plan_family=True,
+    )
+
+
 def _to_float(value: object, default: float = 0.0) -> float:
     if isinstance(value, bool):
         return default
@@ -365,7 +378,7 @@ def get_change_plan_page(
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return None
 
-    available_offers = get_available_portal_offers(db, subscription)
+    available_offers = _available_change_plan_offers(db, subscription)
 
     current_offer = None
     if subscription.offer_id:
@@ -480,7 +493,7 @@ def get_plan_change_quote(
         target_service_address_id = None
 
     # Only quote offers that are actually offered to this subscription.
-    available_offers = get_available_portal_offers(db, subscription)
+    available_offers = _available_change_plan_offers(db, subscription)
     target_offer = next(
         (o for o in available_offers if str(o.id) == str(offer_id)), None
     )
@@ -536,9 +549,10 @@ def submit_change_plan(
     )
 
     # Fail fast on offers the customer could never change to (hidden, archived,
-    # region-incompatible, reseller-restricted): apply-time validation would only
-    # surface the rejection after the request sat in the approval queue.
-    available = get_available_portal_offers(db, subscription)
+    # region-incompatible, or outside the current plan family): apply-time
+    # validation would only surface the rejection after the request sat in the
+    # approval queue.
+    available = _available_change_plan_offers(db, subscription)
     if str(offer_id) not in {str(offer.id) for offer in available}:
         raise ValueError("This plan is not available for self-service change.")
 
@@ -851,11 +865,11 @@ def confirm_service_change(
     if not offer_has_positive_recurring_price(new_offer):
         raise ValueError("This plan is not available for self-service change.")
     # Gate on the same single source as the deferred path: this enforces
-    # status==active + show_on_customer_portal + reseller
-    # availability, not just is_active — otherwise the instant path could
+    # status==active + show_on_customer_portal + same-family compatibility,
+    # not just is_active — otherwise the instant path could
     # switch a customer onto an archived or hidden offer by POSTing
     # its id directly (the deferred/mobile path was already guarded).
-    available = get_available_portal_offers(db, subscription)
+    available = _available_change_plan_offers(db, subscription)
     if str(new_offer.id) not in {str(o.id) for o in available}:
         raise ValueError("This plan is not available for self-service change.")
 

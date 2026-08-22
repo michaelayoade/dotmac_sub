@@ -1,7 +1,8 @@
 """Admin reseller portal web routes."""
 
+import hashlib
 from urllib.parse import quote_plus
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -11,7 +12,11 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
-from app.services import reseller_onboarding, subscriber_assignments
+from app.services import (
+    offer_reseller_availability,
+    reseller_onboarding,
+    subscriber_assignments,
+)
 from app.services import web_admin_resellers as reseller_svc
 from app.services.auth_dependencies import require_permission
 from app.services.owner_commands import CommandContext
@@ -351,6 +356,81 @@ def reseller_detail(
     context.update(detail)
     context["notice"] = notice
     return templates.TemplateResponse("admin/resellers/detail.html", context)
+
+
+@router.post(
+    "/{reseller_id}/catalog-access",
+    response_class=HTMLResponse,
+)
+def reseller_catalog_access_update(
+    reseller_id: str,
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    auth: dict = Depends(require_permission("reseller:write")),
+    db: Session = Depends(get_db),
+):
+    """Replace explicit reseller offer assignments through the canonical owner."""
+    raw_offer_ids = tuple(
+        value.strip()
+        for value in form.getlist("offer_ids")
+        if isinstance(value, str) and value.strip()
+    )
+    try:
+        reseller_uuid = UUID(reseller_id)
+        offer_ids = tuple(sorted(UUID(value) for value in raw_offer_ids))
+        desired_fingerprint = hashlib.sha256(
+            "\n".join(str(value) for value in offer_ids).encode("utf-8")
+        ).hexdigest()
+        outcome = offer_reseller_availability.set_reseller_offer_availability(
+            db,
+            offer_reseller_availability.SetResellerOfferAvailabilityCommand(
+                context=_command_context(
+                    auth,
+                    scope=(
+                        offer_reseller_availability.RESELLER_OFFER_AVAILABILITY_SCOPE
+                    ),
+                    reason="Update reseller catalog access",
+                    idempotency_key=(
+                        f"reseller-catalog-access:{reseller_uuid}:{desired_fingerprint}"
+                    ),
+                ),
+                reseller_id=reseller_uuid,
+                offer_ids=offer_ids,
+            ),
+        )
+    except Exception as exc:
+        detail = reseller_svc.get_reseller_detail_context(db, reseller_id)
+        if detail is None:
+            return RedirectResponse(
+                url="/admin/resellers?notice=" + quote_plus("Reseller not found."),
+                status_code=303,
+            )
+        context = _base_context(request, db, active_page="resellers")
+        context.update(detail)
+        context["error"] = _error_message(
+            exc,
+            "Unable to update reseller catalog access.",
+        )
+        return templates.TemplateResponse(
+            "admin/resellers/detail.html",
+            context,
+            status_code=400,
+        )
+
+    notice = (
+        "Catalog access updated: "
+        f"{len(outcome.added_offer_ids)} added, "
+        f"{len(outcome.reactivated_offer_ids)} reactivated, and "
+        f"{len(outcome.deactivated_offer_ids)} removed."
+        if outcome.changed
+        else "Catalog access already matched the selected offers."
+    )
+    return RedirectResponse(
+        url=(
+            f"/admin/resellers/{reseller_id}?notice={quote_plus(notice)}#catalog-access"
+        ),
+        status_code=303,
+    )
 
 
 @router.post(

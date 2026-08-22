@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
 
 from app.models.billing import (
     Invoice,
@@ -25,6 +28,7 @@ from app.services.web_billing_invoice_bulk import (
     list_invoices_by_ids,
 )
 from app.services.web_billing_invoices import (
+    InvoiceIssueFromDetailError,
     issue_invoice_from_detail,
     maybe_send_invoice_notification,
 )
@@ -170,6 +174,49 @@ def test_invoice_detail_issue_delegates_to_lifecycle_owner(
     assert captured[0]["apply_available_credit"] is True
     assert captured[0]["require_full_available_credit"] is True
     assert captured[0]["commit"] is True
+
+
+def test_invoice_detail_issue_rejects_exact_prepaid_coverage_before_owner(
+    db_session,
+    subscriber,
+    monkeypatch,
+):
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-DETAIL-PREPAID-CONFLICT",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    message = (
+        "This prepaid draft cannot be issued because this subscription already "
+        "has funded service coverage for the invoice period."
+    )
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices."
+        "web_prepaid_draft_reconciliation_service.preview_for_invoice_detail",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            invoice_issue_notice=message,
+            actionable=True,
+            reason="exact ledger-backed entitlement evidence",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices.billing_service.invoices.issue_draft_system",
+        lambda *_args, **_kwargs: pytest.fail("invoice owner must not issue"),
+    )
+
+    with pytest.raises(InvoiceIssueFromDetailError) as exc_info:
+        issue_invoice_from_detail(db_session, invoice_id=invoice.id)
+
+    assert exc_info.value.code == "admin.invoice.prepaid_coverage_conflict"
+    assert exc_info.value.message == message
+    assert exc_info.value.details["reconciliation_actionable"] is True
 
 
 def test_invoice_pdf_attachment_reference_is_durable_on_email_delivery(

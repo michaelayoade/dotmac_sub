@@ -1004,6 +1004,7 @@ contract used by the invoice table; internal account UUIDs are not exported.
     "pdf_export": PdfExport | None,
     "is_proforma": bool,
     "prepaid_draft_reconciliation_preview": PrepaidDraftReconciliationPreview | None,
+    "prepaid_draft_issue_notice": str | None,
     "active_page": "billing",
 }
 ```
@@ -1014,6 +1015,11 @@ payment/opening-funding breakdown and a shared `ActionForm`. Confirmation sends
 the owner fingerprint plus an actor-bound, expiring signed token; the command
 owner rechecks classification, funding, locking, and idempotency before one
 atomic transition. Templates do not infer eligibility from account balance.
+One exactly ledger- or adjustment-backed duplicate is actionable and displays
+the owner-provided funded-coverage warning beside **Reconcile prepaid draft**.
+An attempted issue redirects back with the same safe explanation. Ambiguous
+coverage displays the classifier reason and requires Finance review; the page
+does not translate a generic request conflict or decide coverage itself.
 
 #### Invoice Form (New)
 

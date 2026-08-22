@@ -56,7 +56,17 @@ from app.services.integrations.runtime_execution import RuntimeExecutionError
 from app.services.owner_commands import CommandContext
 from app.services.payment_gateway_adapter import (
     PaymentGatewayContext,
+    PaymentGatewayTransaction,
+    PaymentGatewayVerificationError,
     payment_gateway_adapter,
+)
+from app.services.payment_reconciliation import (
+    GATEWAY_OBSERVATION_SCOPE as RECONCILIATION_OBSERVATION_SCOPE,
+)
+from app.services.payment_reconciliation import (
+    ReconcileGatewayObservationCommand,
+    TopupReconciliationCandidate,
+    record_reconciled_gateway_observation,
 )
 from app.services.payment_routing import (
     GatewayOption,
@@ -75,9 +85,12 @@ from app.services.topup_intents import (
     DirectTransferAccountMapping,
     DirectTransferAdapterSettings,
     DirectTransferBankAccountEvidence,
+    GatewayTopupObservationSource,
     TopupIntentCompletionSource,
+    TopupIntentLifecycleProjection,
     TopupIntentStatus,
     direct_transfer_configuration,
+    project_topup_intent_lifecycle,
     stage_topup_intent_completion,
 )
 
@@ -88,6 +101,71 @@ _ONLINE_PROVIDER_LABELS = {
 }
 _DIRECT_TRANSFER_LABEL = "Direct bank transfer"
 _DEFAULT_TOPUP_PRESET_AMOUNTS = (1000, 2000, 5000, 10000, 20000, 50000)
+
+
+class GatewayPaymentIncomplete(ValueError):
+    """Safe owner projection for a gateway verification without settlement."""
+
+    def __init__(self, projection: TopupIntentLifecycleProjection) -> None:
+        super().__init__(projection.customer_message)
+        self.projection = projection
+
+
+def _observe_gateway_for_customer(
+    db: Session,
+    *,
+    intent: TopupIntent,
+    provider_type: str,
+    account_id: uuid.UUID,
+) -> PaymentGatewayTransaction:
+    observed_at = datetime.now(UTC)
+    # ``release_read_transaction`` commits and expires ORM instances. Keep only
+    # immutable scalar evidence so constructing the owner command cannot
+    # silently refresh ``intent`` and open another caller transaction.
+    intent_id = intent.id
+    reference = intent.reference
+    capability_binding_id = (
+        str(intent.capability_binding_id) if intent.capability_binding_id else None
+    )
+    try:
+        return payment_gateway_adapter.verify(
+            db,
+            provider_type=provider_type,
+            reference=reference,
+            capability_binding_id=capability_binding_id,
+        )
+    except PaymentGatewayVerificationError as exc:
+        observation = exc.observation
+
+    db_session_adapter.release_read_transaction(db)
+    record_reconciled_gateway_observation(
+        db,
+        ReconcileGatewayObservationCommand(
+            candidate=TopupReconciliationCandidate(
+                intent_id=intent_id,
+                provider_type=PaymentProviderType(provider_type),
+                reference=reference,
+            ),
+            observation=observation,
+            observed_at=observed_at,
+            source=GatewayTopupObservationSource.customer_gateway_verify,
+        ),
+        context=CommandContext.system(
+            actor=f"customer:{account_id}",
+            scope=RECONCILIATION_OBSERVATION_SCOPE,
+            reason="Record customer-requested gateway verification observation",
+            idempotency_key=(
+                f"customer-gateway-observation-{intent_id}-"
+                f"{observation.outcome.value}-{int(observed_at.timestamp())}"
+            ),
+        ),
+    )
+    observed_intent = db.get(TopupIntent, intent_id)
+    if observed_intent is None:
+        raise ValueError("Payment intent is unavailable")
+    raise GatewayPaymentIncomplete(
+        project_topup_intent_lifecycle(observed_intent, observed_at=observed_at)
+    )
 
 
 def _serialize_deposit_preview(preview) -> dict[str, object]:
@@ -134,6 +212,7 @@ def _serialize_active_deposit_request(
         "created_at": request.created_at,
         "expires_at": request.expires_at,
         "observed_at": request.observed_at,
+        "message": request.message,
         "rejection_reason": request.rejection_reason,
         "can_cancel": (
             request.provider_type == "direct_bank_transfer"
@@ -303,10 +382,10 @@ def _resolve_topup_limits(db: Session) -> tuple[int, int]:
     min_amount = resolve_value(db, SettingDomain.billing, "topup_min_amount")
     max_amount = resolve_value(db, SettingDomain.billing, "topup_max_amount")
     min_amount_value = (
-        int(min_amount) if isinstance(min_amount, (str, int, float)) else 1000
+        int(min_amount) if isinstance(min_amount, str | int | float) else 1000
     )
     max_amount_value = (
-        int(max_amount) if isinstance(max_amount, (str, int, float)) else 500000
+        int(max_amount) if isinstance(max_amount, str | int | float) else 500000
     )
     return min_amount_value, max_amount_value
 
@@ -502,13 +581,11 @@ def _verify_and_record_legacy_topup(
             already_recorded=True,
         )
 
-    transaction = payment_gateway_adapter.verify(
+    transaction = _observe_gateway_for_customer(
         db,
+        intent=intent,
         provider_type=provider_type,
-        reference=reference,
-        capability_binding_id=(
-            str(intent.capability_binding_id) if intent.capability_binding_id else None
-        ),
+        account_id=intent.account_id,
     )
     amount = round_money(transaction.amount)
     metadata_intent_id = str((transaction.metadata or {}).get("topup_intent_id") or "")
@@ -1237,13 +1314,11 @@ def verify_and_record_payment(
         raise ValueError("Payment reference does not belong to this account")
     provider_type = provider_for_intent(intent, provider).value
 
-    tx = payment_gateway_adapter.verify(
+    tx = _observe_gateway_for_customer(
         db,
+        intent=intent,
         provider_type=provider_type,
-        reference=reference,
-        capability_binding_id=(
-            str(intent.capability_binding_id) if intent.capability_binding_id else None
-        ),
+        account_id=uuid.UUID(str(intent.account_id)),
     )
     invoice_id = tx.metadata.get("invoice_id")
     expected_invoice_id = str((intent.metadata_ or {}).get("invoice_id") or "")
@@ -1837,13 +1912,11 @@ def verify_and_record_topup(
             reference=reference,
             provider_type=provider_type,
         )
-    tx = payment_gateway_adapter.verify(
+    tx = _observe_gateway_for_customer(
         db,
+        intent=intent,
         provider_type=provider_type,
-        reference=reference,
-        capability_binding_id=(
-            str(intent.capability_binding_id) if intent.capability_binding_id else None
-        ),
+        account_id=account_id,
     )
     metadata = dict(tx.metadata or {})
     metadata_intent_id = str(metadata.get("topup_intent_id") or "")

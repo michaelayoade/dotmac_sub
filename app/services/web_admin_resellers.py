@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
+from uuid import UUID
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import Invoice, Payment, PaymentStatus
-from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    CatalogOffer,
+    OfferStatus,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.offer_availability import OfferResellerAvailability
 from app.models.rbac import Role
 from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
@@ -41,6 +48,20 @@ TERMINAL_TICKET_STATUSES = {
     "canceled",
     "merged",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerCatalogOfferOption:
+    offer_id: UUID
+    name: str
+    code: str | None
+    plan_family: str | None
+    assigned_to_reseller: bool
+    active_assignment_count: int
+
+    @property
+    def is_restricted(self) -> bool:
+        return self.active_assignment_count > 0
 
 
 def _roles_for_form(db: Session) -> list[Role]:
@@ -645,6 +666,10 @@ def get_reseller_detail_context(
         .limit(8)
         .all()
     )
+    reseller_catalog_offer_options = list_reseller_catalog_offer_options(
+        db,
+        reseller_id=reseller_uuid,
+    )
     return {
         "reseller": reseller,
         "reseller_subscribers": reseller_subscribers,
@@ -675,6 +700,7 @@ def get_reseller_detail_context(
         "recent_subscriptions": recent_subscriptions,
         "explicit_available_offers": explicit_available_offers,
         "explicit_available_offers_total": explicit_available_offers_total,
+        "reseller_catalog_offer_options": reseller_catalog_offer_options,
         "policy_sets": _policy_sets_for_form(db),
         **_portal_invite_form_context(db),
         "reseller_urls": {
@@ -693,6 +719,56 @@ def get_reseller_detail_context(
         "per_page": safe_per_page,
         "total_pages": total_pages,
     }
+
+
+def list_reseller_catalog_offer_options(
+    db: Session,
+    *,
+    reseller_id: UUID,
+) -> tuple[ResellerCatalogOfferOption, ...]:
+    """Return active offers with explicit-assignment scope for one reseller."""
+    offers = tuple(
+        db.scalars(
+            select(CatalogOffer)
+            .where(CatalogOffer.is_active.is_(True))
+            .where(CatalogOffer.status == OfferStatus.active)
+            .order_by(CatalogOffer.name.asc(), CatalogOffer.id.asc())
+            .limit(500)
+        ).all()
+    )
+    if not offers:
+        return ()
+
+    offer_ids = tuple(offer.id for offer in offers)
+    assignment_rows = tuple(
+        db.execute(
+            select(
+                OfferResellerAvailability.offer_id,
+                OfferResellerAvailability.reseller_id,
+            ).where(
+                OfferResellerAvailability.is_active.is_(True),
+                OfferResellerAvailability.offer_id.in_(offer_ids),
+            )
+        ).all()
+    )
+    assignment_counts: dict[UUID, int] = {}
+    assigned_offer_ids: set[UUID] = set()
+    for offer_id, assigned_reseller_id in assignment_rows:
+        assignment_counts[offer_id] = assignment_counts.get(offer_id, 0) + 1
+        if assigned_reseller_id == reseller_id:
+            assigned_offer_ids.add(offer_id)
+
+    return tuple(
+        ResellerCatalogOfferOption(
+            offer_id=offer.id,
+            name=offer.name,
+            code=offer.code,
+            plan_family=offer.plan_family,
+            assigned_to_reseller=offer.id in assigned_offer_ids,
+            active_assignment_count=assignment_counts.get(offer.id, 0),
+        )
+        for offer in offers
+    )
 
 
 def link_existing_subscriber_to_reseller(

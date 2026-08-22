@@ -363,6 +363,18 @@ buys it, where, or how it is taxed, they are one offer with a qualifier.
 | Pro bono / staff | discount on the subscription | `DiscountType.percentage` at 100% |
 | Regional price | **gap — see below** | |
 
+`OfferResellerAvailability` is managed from **Admin → Resellers → Catalog
+Access**. Active rows restrict reseller sales and new-service catalog visibility;
+inactive rows remain historical and are reactivated on reassignment. The offer
+detail/edit surfaces show either the active reseller restriction list or an
+explicit unrestricted state.
+
+This mechanism is separate from `allowed_change_plan_ids`. The latter narrows
+which target offers a customer may choose from a current offer, after customer
+self-service eligibility has scoped the choices to the current plan family.
+Reseller assignments never hide an otherwise eligible same-family plan change
+for an existing customer.
+
 `billing_automation.py` already treats the catalog as the service-level tax
 authority (a positive `vat_percent` means taxable) and `CustomerTaxPolicy` as
 the customer-level authority. A "No VAT" offer would be a **third** authority
