@@ -1,7 +1,7 @@
 """Supply `module_database_roles.v1` from Sub's own lineage.
 
-Revision ID: 546_module_database_roles_prerequisite
-Revises: 545_tenant_scope_catalog_prerequisite
+Revision ID: 546_module_db_roles_prereq
+Revises: 545_tenant_scope_catalog_prereq
 Create Date: 2026-08-20
 
 ADR-0011. The second effect every installable module declares. A module never
@@ -48,8 +48,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "546_module_database_roles_prerequisite"
-down_revision: str | None = "545_tenant_scope_catalog_prerequisite"
+revision: str = "546_module_db_roles_prereq"
+down_revision: str | None = "545_tenant_scope_catalog_prereq"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

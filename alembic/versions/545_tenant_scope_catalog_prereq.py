@@ -1,6 +1,6 @@
 """Supply `tenant_scope_catalog.v1` from Sub's own lineage.
 
-Revision ID: 545_tenant_scope_catalog_prerequisite
+Revision ID: 545_tenant_scope_catalog_prereq
 Revises: 544_carried_source_adjudication
 Create Date: 2026-08-20
 
@@ -48,7 +48,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "545_tenant_scope_catalog_prerequisite"
+revision: str = "545_tenant_scope_catalog_prereq"
 down_revision: str | None = "544_carried_source_adjudication"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

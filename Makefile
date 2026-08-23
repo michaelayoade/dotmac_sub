@@ -120,7 +120,7 @@ test-e2e: assert-full-test-host ## Run end-to-end browser tests
 # ─── Database ─────────────────────────────────────────────
 
 migrate: ## Apply all pending migrations
-	poetry run alembic upgrade head
+	poetry run alembic upgrade heads
 
 new-migration: ## Allocate a migration from the current head (usage: make new-migration slug=add_users_table)
 	poetry run python scripts/new_migration.py "$(slug)"
