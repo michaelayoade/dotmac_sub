@@ -36,8 +36,13 @@ from dotmac_kernel.migrations.verify import (
 from dotmac_kernel.prerequisites import (
     MODULE_DATABASE_ROLES_V1,
     TENANT_SCOPE_CATALOG_V1,
+    install_prerequisite_bindings,
 )
 from sqlalchemy.engine import Engine
+
+from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
+
+install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
 
 REQUIRED = (TENANT_SCOPE_CATALOG_V1.name, MODULE_DATABASE_ROLES_V1.name)
 
