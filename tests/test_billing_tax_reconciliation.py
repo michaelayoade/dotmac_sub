@@ -9,6 +9,7 @@ import pytest
 
 from app.models.billing import (
     CreditNote,
+    CreditNoteLine,
     CreditNoteStatus,
     Invoice,
     InvoiceLine,
@@ -304,6 +305,13 @@ def test_confirmed_credit_uses_credit_note_owner_and_preserves_invoice(
     assert result.credit_note.tax_total == Decimal("750.00")
     assert result.credit_note.total == Decimal("750.00")
     assert result.credit_note.funding_ledger_entry_id is not None
+    assert result.application is None
+    assert (
+        db_session.query(CreditNoteLine)
+        .filter(CreditNoteLine.credit_note_id == result.credit_note.id)
+        .count()
+        == 0
+    )
     assert get_tax_reconciliation_candidate(db_session, invoice.id) is None
 
 

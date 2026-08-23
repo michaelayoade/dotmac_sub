@@ -109,6 +109,10 @@ def _credit_payload(
         tax_total=candidate.maximum_remaining_adjustment,
         total=candidate.maximum_remaining_adjustment,
         memo=f"VAT exemption correction for invoice {reference} {marker}",
+        # A tax-only correction has no taxable base. Creating a normal line
+        # would make the credit-note owner recalculate the explicit tax total
+        # back to zero before applying it. Keep the exact tax correction on the
+        # immutable header and retain the original invoice as its line evidence.
         line_description=None,
         line_tax_rate_id=None,
         line_tax_application=TaxApplication.exempt,
@@ -130,7 +134,7 @@ def prepare_tax_credit_review(
     return TaxCreditReview(
         candidate=candidate,
         payload=payload,
-        preview=CreditNotes.preview_issue(db, payload),
+        preview=CreditNotes.preview_issue(db, payload, apply_on_issue=False),
         idempotency_key=secrets.token_urlsafe(24),
     )
 
@@ -149,7 +153,7 @@ def issue_tax_credit(
         candidate_fingerprint=candidate_fingerprint,
     )
     payload = _credit_payload(candidate)
-    current_preview = CreditNotes.preview_issue(db, payload)
+    current_preview = CreditNotes.preview_issue(db, payload, apply_on_issue=False)
     if not hmac.compare_digest(current_preview.fingerprint, preview_fingerprint):
         raise TaxReconciliationCreditError(
             suffix="stale_preview",
@@ -162,4 +166,5 @@ def issue_tax_credit(
             preview_fingerprint=preview_fingerprint,
             idempotency_key=idempotency_key,
         ),
+        apply_on_issue=False,
     )
