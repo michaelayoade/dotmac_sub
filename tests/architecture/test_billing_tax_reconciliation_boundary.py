@@ -44,7 +44,8 @@ def test_correction_coordinator_delegates_to_credit_note_owner() -> None:
     assert "db.add(" not in source
     assert 'tax_total=Decimal("0.00")' in general_credit
     assert "tax_total=candidate.maximum_remaining_adjustment" in source
-    assert "subtotal=0" in source
+    assert 'subtotal=Decimal("0.00")' in source
+    assert "line_description=None" in source
 
 
 def test_tax_reconciliation_routes_are_thin_and_guarded() -> None:
@@ -72,5 +73,5 @@ def test_operator_ui_preserves_evidence_and_requires_explicit_confirmation() -> 
     assert 'type="hidden" name="preview_fingerprint"' in confirmation
     assert 'type="hidden" name="idempotency_key"' in confirmation
     assert "Does not edit, void, replace" in confirmation
-    assert "Does not apply the credit" in confirmation
+    assert "Applies the issued credit to the linked invoice" in confirmation
     assert "Issue {{ review.candidate.currency }}" in confirmation

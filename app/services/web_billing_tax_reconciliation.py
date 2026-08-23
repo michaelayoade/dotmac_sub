@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.billing import TaxApplication
@@ -23,6 +22,18 @@ from app.services.billing_tax_reconciliation import (
     get_tax_reconciliation_candidate,
     list_tax_reconciliation_candidates,
 )
+from app.services.domain_errors import DomainError
+
+
+class TaxReconciliationCreditError(DomainError):
+    """Transport-neutral failure while preparing a VAT correction credit."""
+
+    def __init__(self, *, suffix: str, message: str) -> None:
+        super().__init__(
+            code=f"financial.billing_tax_reconciliation.{suffix}",
+            message=message,
+            details={},
+        )
 
 
 @dataclass(frozen=True)
@@ -62,22 +73,22 @@ def _candidate_or_conflict(
 ) -> TaxReconciliationCandidate:
     candidate = get_tax_reconciliation_candidate(db, invoice_id)
     if candidate is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
+        raise TaxReconciliationCreditError(
+            suffix="candidate_resolved",
+            message=(
                 "This invoice is no longer an unresolved tax-reconciliation "
                 "candidate. Refresh the queue before taking action."
             ),
         )
     if not hmac.compare_digest(candidate.fingerprint, candidate_fingerprint):
-        raise HTTPException(
-            status_code=409,
-            detail="Tax evidence changed after review; refresh the queue",
+        raise TaxReconciliationCreditError(
+            suffix="stale_candidate",
+            message="Tax evidence changed after review; refresh the queue",
         )
     if not candidate.can_prepare_tax_credit:
-        raise HTTPException(
-            status_code=409,
-            detail=(
+        raise TaxReconciliationCreditError(
+            suffix="unproven_exact_correction",
+            message=(
                 "The available evidence does not prove an exact tax correction. "
                 "Review the invoice and customer evidence manually."
             ),
@@ -98,9 +109,9 @@ def _credit_payload(
         tax_total=candidate.maximum_remaining_adjustment,
         total=candidate.maximum_remaining_adjustment,
         memo=f"VAT exemption correction for invoice {reference} {marker}",
-        line_description=f"VAT exemption correction for invoice {reference}",
-        line_tax_rate_id=candidate.source_tax_rate_id,
-        line_tax_application=TaxApplication.exclusive,
+        line_description=None,
+        line_tax_rate_id=None,
+        line_tax_application=TaxApplication.exempt,
     )
 
 
@@ -140,9 +151,9 @@ def issue_tax_credit(
     payload = _credit_payload(candidate)
     current_preview = CreditNotes.preview_issue(db, payload)
     if not hmac.compare_digest(current_preview.fingerprint, preview_fingerprint):
-        raise HTTPException(
-            status_code=409,
-            detail="Financial state changed after preview; preview again",
+        raise TaxReconciliationCreditError(
+            suffix="stale_preview",
+            message="Financial state changed after preview; preview again",
         )
     return CreditNotes.issue_with_evidence(
         db,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,7 +18,7 @@ def test_bulk_tariff_service_has_no_parallel_subscription_writer() -> None:
     assert "preview_subscription_batch(" in source
     assert "execute_subscription_batch(" in source
     assert "SubscriptionEffectiveTiming.next_cycle" in source
-    assert ".offer_id =" not in source
+    assert re.search(r"\.offer_id\s*=(?!=)", source) is None
     assert ".begin_nested(" not in source
     assert ".commit(" not in source
     assert ".rollback(" not in source

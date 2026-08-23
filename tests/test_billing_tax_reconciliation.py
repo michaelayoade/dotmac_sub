@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.billing import (
     CreditNote,
@@ -24,6 +23,7 @@ from app.services.billing_tax_reconciliation import (
     get_tax_reconciliation_candidate,
     list_tax_reconciliation_candidates,
 )
+from app.services.domain_errors import DomainError
 from app.services.web_billing_tax_reconciliation import (
     issue_tax_credit,
     prepare_tax_credit_review,
@@ -277,8 +277,8 @@ def test_confirmed_credit_uses_credit_note_owner_and_preserves_invoice(
         tax_rate=vat_rate,
         issued_at=now - timedelta(days=1),
     )
-    original_status = invoice.status
     original_total = invoice.total
+    original_balance_due = invoice.balance_due
     candidate = get_tax_reconciliation_candidate(db_session, invoice.id)
     assert candidate is not None
     review = prepare_tax_credit_review(
@@ -296,8 +296,9 @@ def test_confirmed_credit_uses_credit_note_owner_and_preserves_invoice(
     )
 
     db_session.refresh(invoice)
-    assert invoice.status == original_status
+    assert invoice.status == InvoiceStatus.partially_paid
     assert invoice.total == original_total
+    assert invoice.balance_due == original_balance_due - Decimal("750.00")
     assert result.credit_note.invoice_id == invoice.id
     assert result.credit_note.subtotal == Decimal("0.00")
     assert result.credit_note.tax_total == Decimal("750.00")
@@ -320,7 +321,7 @@ def test_ambiguous_candidate_cannot_reach_credit_issuance(
     candidate = get_tax_reconciliation_candidate(db_session, invoice.id)
     assert candidate is not None
 
-    with pytest.raises(HTTPException, match="does not prove an exact"):
+    with pytest.raises(DomainError, match="does not prove an exact"):
         prepare_tax_credit_review(
             db_session,
             invoice_id=invoice.id,
@@ -352,7 +353,7 @@ def test_changed_policy_version_invalidates_the_operator_fingerprint(
     policy.version += 1
     db_session.commit()
 
-    with pytest.raises(HTTPException, match="changed after review"):
+    with pytest.raises(DomainError, match="changed after review"):
         prepare_tax_credit_review(
             db_session,
             invoice_id=invoice.id,

@@ -54,7 +54,7 @@
                 <li>Creates an issued credit note tied to this invoice and records {{ review.candidate.currency }} {{ '{:,.2f}'.format(review.candidate.maximum_remaining_adjustment) }} as a tax adjustment.</li>
                 <li>Creates the credit-note funding ledger evidence owned by Financial Credit Notes.</li>
                 <li>Does not edit, void, replace, or silently recalculate the issued invoice.</li>
-                <li>Does not apply the credit to the invoice automatically; review the invoice after issuance and use its credit-application workflow if appropriate.</li>
+                <li>Applies the issued credit to the linked invoice in the same financial transaction.</li>
             </ul>
         </div>
     {% endcall %}

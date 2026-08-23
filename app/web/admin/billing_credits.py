@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -96,11 +96,14 @@ def billing_tax_reconciliation_credit_preview(
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    review = web_billing_tax_reconciliation_service.prepare_tax_credit_review(
-        db,
-        invoice_id=invoice_id,
-        candidate_fingerprint=candidate_fingerprint,
-    )
+    try:
+        review = web_billing_tax_reconciliation_service.prepare_tax_credit_review(
+            db,
+            invoice_id=invoice_id,
+            candidate_fingerprint=candidate_fingerprint,
+        )
+    except web_billing_tax_reconciliation_service.TaxReconciliationCreditError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
     return templates.TemplateResponse(
         "admin/billing/tax_reconciliation_credit_confirm.html",
         {
@@ -125,13 +128,16 @@ def billing_tax_reconciliation_credit_create(
     idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    result = web_billing_tax_reconciliation_service.issue_tax_credit(
-        db,
-        invoice_id=invoice_id,
-        candidate_fingerprint=candidate_fingerprint,
-        preview_fingerprint=preview_fingerprint,
-        idempotency_key=idempotency_key,
-    )
+    try:
+        result = web_billing_tax_reconciliation_service.issue_tax_credit(
+            db,
+            invoice_id=invoice_id,
+            candidate_fingerprint=candidate_fingerprint,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        )
+    except web_billing_tax_reconciliation_service.TaxReconciliationCreditError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
     return RedirectResponse(
         url=(
             f"/admin/billing/invoices/{invoice_id}"
