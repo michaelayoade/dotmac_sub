@@ -1,6 +1,8 @@
 from importlib import import_module
 from logging.config import fileConfig
 
+from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
+
 from alembic import context
 from app.config import settings
 from app.db import Base, resolve_migration_lock_timeout
@@ -46,7 +48,6 @@ from app.models import (  # noqa: F401
     usage,
     wireguard,
 )
-from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
 
 config = context.config
 

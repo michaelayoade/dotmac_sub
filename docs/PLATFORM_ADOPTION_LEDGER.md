@@ -550,6 +550,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.features`
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
+- `dotmac_kernel.prerequisites`
 - `dotmac_kernel.profiles`
 - `dotmac_kernel.providers`
 - `dotmac_kernel.providers.provisioning`
@@ -560,6 +561,18 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
+
+`dotmac_kernel.prerequisites` is admitted for **effect NAMES only**, and only
+in `app/migration_bindings.py`. Composing a module means answering which Sub
+revision supplies each effect the module requires, and the answer has to be
+keyed by something. Keying it by the kernel's own `PrerequisiteSpec.name`
+rather than a string literal means a kernel rename becomes an import error in
+this repository instead of a binding that silently answers nothing.
+
+Nothing else in that module is admitted: `require_prerequisites` — the function
+that PROVES an effect against the live catalog — stays where it is, called by
+the module's own migration inside its own lineage. Sub reads the vocabulary; it
+does not run the check.
 
 `dotmac_kernel.models` is admitted for **two names only** — `Tenant` and
 `TenantDomain` (ADR-0009). Every other name in it, including `Party`,
