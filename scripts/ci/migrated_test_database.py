@@ -165,7 +165,7 @@ def migrate_test_database(target: DatabaseTarget) -> MigratedSchemaState:
     try:
         config = Config(str(ALEMBIC_CONFIG_PATH))
         config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
-        command.upgrade(config, "head")
+        command.upgrade(config, "heads")
     finally:
         if previous_database_url is None:
             os.environ.pop("DATABASE_URL", None)

@@ -339,13 +339,13 @@ def _assert_required_schema() -> None:
         if not inspector.has_table("ont_units"):
             raise RuntimeError(
                 "Database schema is incompatible: required table 'ont_units' is missing. "
-                "Run `alembic upgrade head` before starting the app."
+                "Run `alembic upgrade heads` before starting the app."
             )
         ont_columns = {column["name"] for column in inspector.get_columns("ont_units")}
         if "contact" not in ont_columns:
             raise RuntimeError(
                 "Database schema is incompatible: required column 'ont_units.contact' is missing. "
-                "Run `alembic upgrade head` before starting the app."
+                "Run `alembic upgrade heads` before starting the app."
             )
     finally:
         db.close()
