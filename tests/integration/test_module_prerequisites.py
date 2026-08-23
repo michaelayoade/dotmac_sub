@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import pytest
 import sqlalchemy as sa
-from dotmac_kernel.migrations.verify import require_prerequisites
+from dotmac_kernel.migrations.verify import (
+    PrerequisiteNotSatisfiedError,
+    require_prerequisites,
+)
 from dotmac_kernel.prerequisites import (
     MODULE_DATABASE_ROLES_V1,
     TENANT_SCOPE_CATALOG_V1,
-    PrerequisiteError,
 )
 from sqlalchemy.engine import Engine
 
@@ -116,7 +118,7 @@ def test_the_verifier_bites_when_the_function_is_missing(rollback_connection) ->
     """
     rollback_connection.execute(sa.text("DROP FUNCTION app_current_tenant_id();"))
 
-    with pytest.raises(PrerequisiteError):
+    with pytest.raises(PrerequisiteNotSatisfiedError):
         require_prerequisites(rollback_connection, (TENANT_SCOPE_CATALOG_V1.name,))
 
 
@@ -130,7 +132,7 @@ def test_the_verifier_bites_on_a_wrong_role_posture(rollback_connection) -> None
     """
     rollback_connection.execute(sa.text("ALTER ROLE app_user BYPASSRLS;"))
 
-    with pytest.raises(PrerequisiteError):
+    with pytest.raises(PrerequisiteNotSatisfiedError):
         require_prerequisites(rollback_connection, (MODULE_DATABASE_ROLES_V1.name,))
 
 

@@ -94,6 +94,16 @@ def _alembic_config() -> Config:
     return config
 
 
+def _head_containing(script: ScriptDirectory, revision: str) -> str:
+    for head in script.get_heads():
+        if revision in {
+            item.revision
+            for item in script.iterate_revisions(head, revision, inclusive=True)
+        }:
+            return head
+    raise AssertionError(f"{revision} is not in any Alembic head ancestry")
+
+
 def _revision_rows(database_url: URL) -> set[str]:
     test_engine = create_engine(database_url)
     try:
@@ -145,16 +155,12 @@ def test_postgres_drops_the_obsolete_column_and_keeps_501_resolvable(
 
     command.upgrade(config, "heads")
 
-    # Single-headedness and 501's presence in the head's ancestry — NOT a
-    # literal head revision, which every later migration would falsify. See
+    # 501's presence in Sub's head ancestry — NOT a literal head revision,
+    # which every later migration would falsify. See
     # tests/architecture/test_migration_chain_assertions.py.
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert len(heads) == 1
-    assert REVISION_501 in {
-        item.revision
-        for item in script.iterate_revisions(heads[0], REVISION_501, inclusive=True)
-    }
+    _head_containing(script, REVISION_501)
     expected_heads = set(heads)
     assert _revision_rows(database_url) == expected_heads
     assert not _column_exists(database_url)

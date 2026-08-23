@@ -86,6 +86,16 @@ def _alembic_config() -> Config:
     return config
 
 
+def _head_containing(script: ScriptDirectory, revision: str) -> str:
+    for head in script.get_heads():
+        if revision in {
+            item.revision
+            for item in script.iterate_revisions(head, revision, inclusive=True)
+        }:
+            return head
+    raise AssertionError(f"{revision} is not in any Alembic head ancestry")
+
+
 def _scalar(database_url: URL, statement: str, **params: object) -> object:
     engine = create_engine(database_url)
     try:
@@ -203,12 +213,7 @@ def test_the_enum_becomes_open_text_and_keeps_every_row(
     command.upgrade(config, "heads")
 
     script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
-    assert len(heads) == 1
-    assert REVISION_502 in {
-        item.revision
-        for item in script.iterate_revisions(heads[0], REVISION_502, inclusive=True)
-    }
+    _head_containing(script, REVISION_502)
 
     assert _column_type(database_url) == "character varying"
     assert not _enum_exists(database_url), (

@@ -114,6 +114,16 @@ def _alembic_config() -> Config:
     return config
 
 
+def _head_containing(script: ScriptDirectory, revision: str) -> str:
+    for head in script.get_heads():
+        if revision in {
+            item.revision
+            for item in script.iterate_revisions(head, revision, inclusive=True)
+        }:
+            return head
+    raise AssertionError(f"{revision} is not in any Alembic head ancestry")
+
+
 def _use_database(monkeypatch: pytest.MonkeyPatch, database_url: URL) -> None:
     monkeypatch.setattr(
         app_config,
@@ -291,12 +301,7 @@ def test_the_enum_becomes_open_text_and_a_second_json_type_becomes_writable(
     command.upgrade(config, "heads")
 
     script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
-    assert len(heads) == 1
-    assert REVISION_512 in {
-        item.revision
-        for item in script.iterate_revisions(heads[0], REVISION_512, inclusive=True)
-    }
+    _head_containing(script, REVISION_512)
 
     for table, _ in LEGACY_COLUMNS:
         assert _column_type(database_url, table) == "character varying", (
