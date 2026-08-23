@@ -31,7 +31,7 @@ def test_migration_550_created_one_nullable_uuid_mapping(db_session) -> None:
         )
     ).scalar_one_or_none()
 
-    assert column == ("YES", "uuid")
+    assert tuple(column) == ("YES", "uuid")
     assert constraint == "uq_payment_providers_integrator_installation_ref"
 
 

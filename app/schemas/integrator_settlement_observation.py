@@ -43,7 +43,7 @@ class ObservedMoney(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    amount: Decimal = Field(gt=Decimal("0"), max_digits=18, decimal_places=6)
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
 
 
@@ -52,7 +52,7 @@ class ObservedFee(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    amount: Decimal = Field(ge=Decimal("0"), max_digits=18, decimal_places=6)
+    amount: Decimal = Field(ge=0, max_digits=18, decimal_places=6)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
 
 
@@ -74,7 +74,7 @@ class SettlementObservation(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    capability_id: Literal[SETTLEMENT_CAPABILITY]
+    capability_id: Literal["payments.settlement.observation.v1"]
     observation_kind: Literal["capture", "capture_failed"]
     provider_status: str = Field(min_length=1, max_length=120)
     amount: ObservedMoney
@@ -102,12 +102,12 @@ class IntegratorSettlementEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[PRODUCT_OBSERVATION_SCHEMA_VERSION]
-    capability_id: Literal[SETTLEMENT_CAPABILITY]
+    schema_version: Literal["dotmac.io/product-observation/v1"]
+    capability_id: Literal["payments.settlement.observation.v1"]
     contract_version: Literal[1]
     source: IntegratorObservationSource
     provider_event_id: str = Field(min_length=1, max_length=255)
-    event_type: Literal[SETTLEMENT_CAPABILITY]
+    event_type: Literal["payments.settlement.observation.v1"]
     scope: IntegratorDestinationScope
     observation: SettlementObservation
 
@@ -143,10 +143,10 @@ class SettlementProductPortDescriptorV2(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[PRODUCT_PORT_DESCRIPTOR_SCHEMA_VERSION]
+    schema_version: Literal["dotmac.io/product-port-descriptor/v2"]
     application: Literal["sub"]
     owner_module: str = Field(min_length=1, max_length=160)
-    capability_id: Literal[SETTLEMENT_CAPABILITY]
+    capability_id: Literal["payments.settlement.observation.v1"]
     capability_summary: str = Field(min_length=1, max_length=500)
     contract_version: Literal[1]
     destination_binding_id: UUID

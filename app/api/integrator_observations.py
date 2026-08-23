@@ -69,6 +69,7 @@ from app.schemas.integrator_settlement_observation import (
     IntegratorSettlementReceipt,
     SettlementProductPortDescriptorV2,
 )
+from app.services import payment_webhook_commands as settlement_commands
 from app.services import (
     team_inbox_integrator_envelope as envelopes,
 )
@@ -79,7 +80,6 @@ from app.services import (
     team_inbox_observations,
     team_inbox_processing,
 )
-from app.services import payment_webhook_commands as settlement_commands
 from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import inbox as integration_inbox
@@ -115,9 +115,7 @@ def _settlement_observation(
 ) -> settlement_commands.IntegratorSettlementObservationCommand:
     observation = envelope.observation
     return settlement_commands.IntegratorSettlementObservationCommand(
-        kind=settlement_commands.IntegratorSettlementKind(
-            observation.observation_kind
-        ),
+        kind=settlement_commands.IntegratorSettlementKind(observation.observation_kind),
         provider_status=observation.provider_status,
         amount=settlement_commands.IntegratorObservedMoney(
             amount=observation.amount.amount,
@@ -196,9 +194,7 @@ def read_settlement_product_port_descriptor(
     """Publish the finance-owned generic ProductObservation destination."""
 
     try:
-        return descriptors.settlement_product_port_descriptor(
-            db, capability_binding_id
-        )
+        return descriptors.settlement_product_port_descriptor(db, capability_binding_id)
     except descriptors.ProductPortDescriptorError as exc:
         raise HTTPException(
             status_code=404, detail="Integrator settlement binding not found"
@@ -244,9 +240,7 @@ def receive_integrator_settlement(
     if not should_process:
         consequence = dict(receipt.consequence_json or {})
         return IntegratorSettlementReceipt(
-            observation_id=str(
-                consequence.get("provider_event_id") or receipt.id
-            ),
+            observation_id=str(consequence.get("provider_event_id") or receipt.id),
             outcome=str(consequence.get("status") or "replayed"),
             processing_status=str(
                 consequence.get("processing_status") or receipt.state

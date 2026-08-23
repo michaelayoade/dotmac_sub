@@ -7,15 +7,15 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
-    PaymentProviderEvent,
     PaymentProvider,
+    PaymentProviderEvent,
     PaymentProviderType,
     PaymentStatus,
     TopupIntent,
@@ -210,7 +210,7 @@ class IntegratorSettlementDisagreement:
 
 @dataclass(frozen=True, slots=True)
 class IntegratorSettlementMirrorResult:
-    verdict: str
+    verdict: Literal["match", "missing", "blocked"]
     identity: str
     counterpart_identity: str | None
     blocking_reasons: tuple[str, ...]
@@ -645,9 +645,7 @@ def _result_from_consequence(
     )
 
 
-def _integrator_provider(
-    db: Session, *, installation_id: UUID
-) -> PaymentProvider:
+def _integrator_provider(db: Session, *, installation_id: UUID) -> PaymentProvider:
     provider = db.scalar(
         select(PaymentProvider)
         .where(PaymentProvider.integrator_installation_ref == installation_id)
@@ -715,8 +713,7 @@ def _integrator_receipt(
     if (
         str(headers.get("integrator_installation_id") or "")
         != str(command.source_installation_id)
-        or str(headers.get("integrator_connector_key") or "")
-        != command.connector_key
+        or str(headers.get("integrator_connector_key") or "") != command.connector_key
         or receipt.provider_event_id != command.provider_event_id
     ):
         raise _error(
@@ -759,9 +756,7 @@ def _integrator_prepared(
     settlement = _SettlementObservation(
         status=status,
         amount=(
-            observation.amount.amount
-            if status is PaymentStatus.succeeded
-            else None
+            observation.amount.amount if status is PaymentStatus.succeeded else None
         ),
         provider_fee=(
             observation.provider_fee.amount
@@ -769,9 +764,7 @@ def _integrator_prepared(
             else Decimal("0.00")
         ),
         currency=(
-            observation.amount.currency
-            if status is PaymentStatus.succeeded
-            else None
+            observation.amount.currency if status is PaymentStatus.succeeded else None
         ),
         reference=observation.merchant_reference,
         metadata={},
@@ -983,9 +976,7 @@ def _process_integrator_settlement(
     receipt = _integrator_receipt(db, command)
     if receipt.state == "processed":
         return _integrator_result_from_consequence(receipt)
-    provider = _integrator_provider(
-        db, installation_id=command.source_installation_id
-    )
+    provider = _integrator_provider(db, installation_id=command.source_installation_id)
     prepared = _integrator_prepared(db, command=command, provider=provider)
     event = _stage_provider_event(db, prepared.ingest, context=context)
     if (

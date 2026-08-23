@@ -160,8 +160,7 @@ def _envelope(
 
 def _post(client, binding, envelope, *, token=WRITE_TOKEN, suffix=""):
     return client.post(
-        "/api/v1/integration/observations/payment-settlements/"
-        f"{binding.id}{suffix}",
+        f"/api/v1/integration/observations/payment-settlements/{binding.id}{suffix}",
         json=envelope,
         headers={"X-Api-Key": token} if token else {},
     )
@@ -303,12 +302,9 @@ def test_mirror_compares_without_writing(
     assert _counts(db_session) == before
 
 
-def test_descriptor_declares_the_generic_v2_wire(
-    client, binding
-):
+def test_descriptor_declares_the_generic_v2_wire(client, binding):
     response = client.get(
-        "/api/v1/integration/observations/payment-settlements/"
-        f"{binding.id}/descriptor",
+        f"/api/v1/integration/observations/payment-settlements/{binding.id}/descriptor",
         headers={"X-Api-Key": MIRROR_TOKEN},
     )
 

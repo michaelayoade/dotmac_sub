@@ -1,6 +1,6 @@
 """Map Integrator installations to Sub-owned payment providers.
 
-Revision ID: 550_integrator_payment_provider_ref
+Revision ID: 550_integrator_provider_ref
 Revises: 549_gateway_intent_lifecycle
 Create Date: 2026-08-23
 
@@ -14,10 +14,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "550_integrator_payment_provider_ref"
+from alembic import op
+
+revision: str = "550_integrator_provider_ref"
 down_revision: str | None = "549_gateway_intent_lifecycle"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

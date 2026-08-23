@@ -13,7 +13,7 @@ API = ROOT / "app/api/integrator_observations.py"
 ADMIN_API = ROOT / "app/api/integrations.py"
 OWNER = ROOT / "app/services/payment_webhook_commands.py"
 MAPPING_OWNER = ROOT / "app/services/payment_gateway_finance.py"
-MIGRATION = ROOT / "alembic/versions/550_integrator_payment_provider_ref.py"
+MIGRATION = ROOT / "alembic/versions/550_integrator_provider_ref.py"
 
 
 def _function(path: Path, name: str) -> ast.FunctionDef:
@@ -31,6 +31,16 @@ def _calls(node: ast.AST) -> set[str]:
         for child in ast.walk(node)
         if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
     }
+
+
+def _name_calls(node: ast.AST, name: str) -> int:
+    return sum(
+        1
+        for child in ast.walk(node)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Name)
+        and child.func.id == name
+    )
 
 
 def test_settlement_route_is_a_transaction_neutral_adapter() -> None:
@@ -61,6 +71,15 @@ def test_settlement_owner_has_no_provider_specific_branch() -> None:
     assert "process_flutterwave_webhook" not in source
 
 
+def test_settlement_owner_owns_one_complete_transaction() -> None:
+    public = _function(OWNER, "process_integrator_settlement")
+    implementation = _function(OWNER, "_process_integrator_settlement")
+
+    assert _name_calls(public, "execute_owner_command") == 1
+    assert not {"commit", "rollback", "begin_nested"} & _calls(public)
+    assert not {"commit", "rollback", "begin_nested"} & _calls(implementation)
+
+
 def test_integrator_provider_reference_migration_extends_the_current_chain() -> None:
     tree = ast.parse(MIGRATION.read_text(encoding="utf-8"), filename=str(MIGRATION))
     assignments = {
@@ -71,7 +90,7 @@ def test_integrator_provider_reference_migration_extends_the_current_chain() -> 
         and isinstance(node.value, ast.Constant)
         and isinstance(node.value.value, str)
     }
-    assert assignments["revision"] == "550_integrator_payment_provider_ref"
+    assert assignments["revision"] == "550_integrator_provider_ref"
     assert assignments["down_revision"] == "549_gateway_intent_lifecycle"
 
     config = Config(str(ROOT / "alembic.ini"))
@@ -89,9 +108,9 @@ def test_integrator_provider_reference_migration_extends_the_current_chain() -> 
 
 def test_mapping_is_nullable_unique_and_never_payload_selected() -> None:
     model = (ROOT / "app/models/billing.py").read_text(encoding="utf-8")
-    schema = (
-        ROOT / "app/schemas/integrator_settlement_observation.py"
-    ).read_text(encoding="utf-8")
+    schema = (ROOT / "app/schemas/integrator_settlement_observation.py").read_text(
+        encoding="utf-8"
+    )
     migration = MIGRATION.read_text(encoding="utf-8")
 
     assert "integrator_installation_ref" in model
@@ -105,7 +124,10 @@ def test_mapping_has_one_operator_adapter_and_one_finance_writer() -> None:
     owner = _function(MAPPING_OWNER, "bind_integrator_installation")
 
     assert "bind_integrator_installation" in _calls(adapter)
-    assert "PaymentProvider" not in ast.unparse(adapter)
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "PaymentProvider"
+        for node in ast.walk(adapter)
+    )
     assert "integrator_installation_ref" in ast.unparse(owner)
     assert "commit" not in _calls(owner)
     assert "rollback" not in _calls(owner)

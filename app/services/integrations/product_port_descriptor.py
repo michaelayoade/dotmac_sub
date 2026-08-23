@@ -250,9 +250,7 @@ def settlement_product_port_descriptor(
             },
         }
     )
-    delivery_path = (
-        f"/api/v1/integration/observations/payment-settlements/{binding.id}"
-    )
+    delivery_path = f"/api/v1/integration/observations/payment-settlements/{binding.id}"
     mirror_path = f"{delivery_path}/mirror"
     published: dict[str, object] = {
         "schema_version": SETTLEMENT_DESCRIPTOR_SCHEMA_VERSION,

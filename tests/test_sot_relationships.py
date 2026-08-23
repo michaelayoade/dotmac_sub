@@ -491,6 +491,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "integration.inbox",
         "financial.account_credit_deposits",
+        "financial.payment_gateway_finance",
         "financial.payment_provider_events",
         "financial.topup_intents",
     )
