@@ -1454,7 +1454,12 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             errors=ErrorContract(
-                domain_codes=(),
+                domain_codes=(
+                    "financial.billing_tax_reconciliation.candidate_resolved",
+                    "financial.billing_tax_reconciliation.stale_candidate",
+                    "financial.billing_tax_reconciliation.unproven_exact_correction",
+                    "financial.billing_tax_reconciliation.stale_preview",
+                ),
                 mapping_owner="billing tax-reconciliation web coordinator",
                 retryable_codes=(),
                 fail_closed_on=(

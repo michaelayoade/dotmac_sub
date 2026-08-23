@@ -102,7 +102,7 @@ def billing_tax_reconciliation_credit_preview(
             invoice_id=invoice_id,
             candidate_fingerprint=candidate_fingerprint,
         )
-    except web_billing_tax_reconciliation_service.TaxReconciliationCreditError as exc:
+    except web_billing_tax_reconciliation_service.TaxReconciliationError as exc:
         raise HTTPException(status_code=409, detail=exc.message) from exc
     return templates.TemplateResponse(
         "admin/billing/tax_reconciliation_credit_confirm.html",
@@ -136,7 +136,7 @@ def billing_tax_reconciliation_credit_create(
             preview_fingerprint=preview_fingerprint,
             idempotency_key=idempotency_key,
         )
-    except web_billing_tax_reconciliation_service.TaxReconciliationCreditError as exc:
+    except web_billing_tax_reconciliation_service.TaxReconciliationError as exc:
         raise HTTPException(status_code=409, detail=exc.message) from exc
     return RedirectResponse(
         url=(
