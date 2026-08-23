@@ -177,6 +177,69 @@ jobs:
           retention-days: 1
           compression-level: 0
 
+  langgraph-lock-artifact:
+    name: LangGraph Lock Artifact
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Configure Poetry
+        run: |
+          poetry config virtualenvs.create true
+          poetry config virtualenvs.in-project true
+
+      - name: Regenerate lock and verify imports
+        run: |
+          poetry lock --no-interaction
+          poetry install --no-interaction
+          poetry run python - <<'PY'
+          import importlib.metadata
+          import langgraph
+          import dotmac_kernel
+          import dotmac_ui
+
+          print(f"langgraph={importlib.metadata.version('langgraph')}")
+          print(f"dotmac-kernel={importlib.metadata.version('dotmac-kernel')}")
+          print(f"dotmac-ui={importlib.metadata.version('dotmac-ui')}")
+          print("imports=ok")
+          PY
+
+      - name: Write artifact report
+        run: |
+          mkdir -p "$RUNNER_TEMP/langgraph-lock"
+          cp poetry.lock "$RUNNER_TEMP/langgraph-lock/poetry.lock"
+          {
+            echo "base_sha=${GITHUB_SHA}"
+            poetry run python - <<'PY'
+          import importlib.metadata
+
+          for package in ("langgraph", "dotmac-kernel", "dotmac-ui"):
+              print(f"{package}={importlib.metadata.version(package)}")
+          print("imports=ok")
+          PY
+          } > "$RUNNER_TEMP/langgraph-lock/report.txt"
+
+      - name: Upload lock artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: langgraph-lock-hotfix
+          path: ${{ runner.temp }}/langgraph-lock/
+          retention-days: 1
+
   lint:
     name: Lint & Format
     needs: [changes, python-environment]
