@@ -3,12 +3,13 @@
 A module lineage declares the database effects it needs
 (``ModuleManifest.requires``, ``dotmac_kernel.prerequisites``). It never names a
 foreign revision, because the answer differs per assembly. This file is where
-Sub answers.
+Sub answers, and ``alembic/env.py`` installs it before the revision map is
+built.
 
 Sub is the case the indirection exists for. The Starter reference assembly runs
-the kernel lineage, so both of its answers are kernel ``0001``. Sub does not run
-the kernel lineage at all — ``app/db.py`` owns its engine and ``alembic/`` owns
-its schema, and the platform adoption ledger admits kernel *models* without
+the kernel lineage, so both of its answers are kernel revisions. Sub does not
+run the kernel lineage at all — ``app/db.py`` owns its engine and ``alembic/``
+owns its schema, and the platform adoption ledger admits kernel *models* without
 adopting kernel *migrations*. Sub therefore supplies the same effects from its
 own lineage, in migrations written for that purpose:
 
@@ -19,7 +20,7 @@ own lineage, in migrations written for that purpose:
 
 Both predate any module composition. They were written so that composing a
 module would be a binding rather than a schema migration, which is why this file
-is four lines of data and not a plan.
+is two declarations and not a plan.
 
 Binding is not belief. ``require_prerequisites`` re-proves each effect against
 the live catalog before the requiring migration runs, and the order canary
@@ -36,15 +37,30 @@ from typing import Final
 from dotmac_kernel.prerequisites import (
     MODULE_DATABASE_ROLES_V1,
     TENANT_SCOPE_CATALOG_V1,
+    PrerequisiteBinding,
 )
 
-#: ``{effect name: the Sub revision that supplies it}``.
-#:
-#: Keyed by the prerequisite's declared name rather than a literal string, so a
-#: kernel rename is an import error here instead of a silent unbound effect.
-MIGRATION_BINDINGS: Final[dict[str, str]] = {
-    TENANT_SCOPE_CATALOG_V1.name: "545_tenant_scope_catalog_prerequisite",
-    MODULE_DATABASE_ROLES_V1.name: "546_module_database_roles_prerequisite",
-}
+#: ``provider_owner`` is ``"sub"`` for both, and that is the whole point of the
+#: seam: every other assembly in the fleet answers ``"kernel"`` here.
+ASSEMBLY_PREREQUISITE_BINDINGS: Final[tuple[PrerequisiteBinding, ...]] = (
+    # Migration 545 creates the tenant scope catalog Sub's own tables use, and
+    # composed modules resolve their tenant scope through. Bound to the
+    # revision that makes the effect whole rather than to Sub's head: a
+    # database stopped between 545 and head still satisfies this prerequisite,
+    # and binding to head would refuse a migration that could safely run.
+    PrerequisiteBinding(
+        prerequisite=TENANT_SCOPE_CATALOG_V1.name,
+        provider_revision="545_tenant_scope_catalog_prerequisite",
+        provider_owner="sub",
+    ),
+    # Migration 546 creates the per-module database roles a composed module's
+    # own migration grants against. It depends on 545, so the pair is ordered
+    # by Sub's own lineage rather than by anything declared here.
+    PrerequisiteBinding(
+        prerequisite=MODULE_DATABASE_ROLES_V1.name,
+        provider_revision="546_module_database_roles_prerequisite",
+        provider_owner="sub",
+    ),
+)
 
-__all__ = ["MIGRATION_BINDINGS"]
+__all__ = ["ASSEMBLY_PREREQUISITE_BINDINGS"]

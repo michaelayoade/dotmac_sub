@@ -1,11 +1,13 @@
 from importlib import import_module
 from logging.config import fileConfig
 
+from dotmac_kernel.prerequisites import install_prerequisite_bindings
 from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
 
 from alembic import context
 from app.config import settings
 from app.db import Base, resolve_migration_lock_timeout
+from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
 from app.migration_schema_ops import install_idempotent_schema_ops
 from app.models import (  # noqa: F401
     analytics,
@@ -52,6 +54,12 @@ from app.models import (  # noqa: F401
 config = context.config
 
 config.set_main_option("sqlalchemy.url", settings.database_url)
+
+# Installed BEFORE the revision map is built. A composed module's migration
+# resolves its `depends_on` from these bindings at script-load time, so an
+# assembly that composes a module without answering what it requires fails
+# loudly here rather than ordering wrongly. See `app/migration_bindings.py`.
+install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
 
 # --- composed module lineages -------------------------------------------
 #
