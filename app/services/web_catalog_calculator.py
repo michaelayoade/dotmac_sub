@@ -10,6 +10,7 @@ from app.models.billing import TaxApplication
 from app.models.catalog import BillingCycle
 from app.services import catalog as catalog_service
 from app.services.billing._common import _calculate_tax_amount
+from app.services.billing_tax_resolution import resolve_default_tax_application
 from app.services.catalog.subscriptions import _add_months
 from app.services.common import round_money, to_decimal
 
@@ -80,20 +81,22 @@ def compute_monthly(
     overage_charge,
     with_vat: bool,
     vat_percent,
+    tax_application: TaxApplication = TaxApplication.exclusive,
 ) -> dict[str, Decimal]:
-    """Steady-state monthly total: recurring + overage, plus exclusive VAT.
+    """Steady-state monthly total using the owned default VAT application.
 
-    VAT is applied on top (exclusive) via the shared invoicing helper
-    ``billing._common._calculate_tax_amount``, matching the default
-    ``billing.default_tax_application`` of ``exclusive``.
+    Inclusive VAT is extracted from the displayed price; exclusive VAT is
+    added on top. Untaxable offers remain exempt regardless of the default.
     """
     subtotal = round_money(to_decimal(recurring_subtotal) + to_decimal(overage_charge))
-    application = TaxApplication.exclusive if with_vat else TaxApplication.exempt
+    application = tax_application if with_vat else TaxApplication.exempt
     vat = _calculate_tax_amount(subtotal, to_decimal(vat_percent), application)
     return {
         "subtotal": subtotal,
         "vat_amount": vat,
-        "total": round_money(subtotal + vat),
+        "total": round_money(
+            subtotal if application == TaxApplication.inclusive else subtotal + vat
+        ),
     }
 
 
@@ -106,6 +109,7 @@ def compute_first_bill(
     vat_percent,
     start: datetime | None = None,
     billing_cycle: BillingCycle | str | None = None,
+    tax_application: TaxApplication = TaxApplication.exclusive,
 ) -> dict[str, Decimal]:
     """First-bill total for a new subscription.
 
@@ -129,19 +133,24 @@ def compute_first_bill(
 
     prorated_recurring = round_money(recurring_subtotal * ratio)
     taxable_base = round_money(prorated_recurring + overage_charge + one_time_total)
-    application = TaxApplication.exclusive if with_vat else TaxApplication.exempt
+    application = tax_application if with_vat else TaxApplication.exempt
     vat = _calculate_tax_amount(taxable_base, to_decimal(vat_percent), application)
     return {
         "proration_ratio": ratio,
         "prorated_recurring": prorated_recurring,
         "taxable_base": taxable_base,
         "vat_amount": vat,
-        "total": round_money(taxable_base + vat),
+        "total": round_money(
+            taxable_base
+            if application == TaxApplication.inclusive
+            else taxable_base + vat
+        ),
     }
 
 
 def calculator_page_data(db) -> dict[str, object]:
     """Build payload for pricing calculator page."""
+    tax_application = resolve_default_tax_application(db)
     offers = catalog_service.offers.list(
         db=db,
         service_type=None,
@@ -263,4 +272,5 @@ def calculator_page_data(db) -> dict[str, object]:
         "add_ons": add_ons_with_prices,
         "usage_allowances": usage_allowances_data,
         "offer_addon_map": offer_addon_map,
+        "tax_application": tax_application.value,
     }
