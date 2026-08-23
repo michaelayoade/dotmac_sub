@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
@@ -12,7 +13,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import PaymentProviderType, PaymentStatus, TopupIntent
+from app.models.billing import (
+    PaymentProviderEvent,
+    PaymentProvider,
+    PaymentProviderType,
+    PaymentStatus,
+    TopupIntent,
+)
 from app.models.integration_platform import IntegrationInbox
 from app.services import billing as billing_service
 from app.services.account_credit_deposits import (
@@ -46,11 +53,18 @@ from app.services.topup_intents import (
 )
 
 PROCESS_SCOPE = "payment-webhook:process-claimed-receipt"
+INTEGRATOR_PROCESS_SCOPE = "payment-webhook:process-integrator-settlement"
 
 _PROCESS_COMMAND = OwnerCommandDefinition(
     owner="financial.payment_webhooks",
     concern="billing consequence submission from verified receipts",
     name="process_claimed_payment_webhook",
+)
+
+_INTEGRATOR_PROCESS_COMMAND = OwnerCommandDefinition(
+    owner="financial.payment_webhooks",
+    concern="Integrator settlement observation projection",
+    name="process_integrator_settlement",
 )
 
 
@@ -59,6 +73,20 @@ class PaymentWebhookProvider(StrEnum):
 
     PAYSTACK = "paystack"
     FLUTTERWAVE = "flutterwave"
+
+
+class IntegratorSettlementKind(StrEnum):
+    """Provider-neutral result the connector observed."""
+
+    CAPTURE = "capture"
+    CAPTURE_FAILED = "capture_failed"
+
+
+class IntegratorSettlementArrival(StrEnum):
+    """Which independently verified Integrator path produced the fact."""
+
+    INGRESS = "ingress"
+    POLL = "poll"
 
 
 class PaymentWebhookError(DomainError, ValueError):
@@ -109,6 +137,88 @@ class ProcessedPaymentWebhook:
             ),
             "payment_id": str(self.payment_id) if self.payment_id else None,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class IntegratorObservedMoney:
+    amount: Decimal
+    currency: str
+
+
+@dataclass(frozen=True, slots=True)
+class IntegratorSettlementObservationCommand:
+    """Typed product-owned meaning of one connector-normalized observation."""
+
+    kind: IntegratorSettlementKind
+    provider_status: str
+    amount: IntegratorObservedMoney
+    provider_fee: IntegratorObservedMoney | None
+    occurred_at: datetime
+    arrival: IntegratorSettlementArrival
+    merchant_reference: str | None
+    provider_transaction_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessIntegratorSettlementCommand:
+    """One claimed receipt plus engine-owned source provenance."""
+
+    receipt_id: UUID
+    source_installation_id: UUID
+    connector_key: str
+    provider_event_id: str
+    observation: IntegratorSettlementObservationCommand
+
+
+@dataclass(frozen=True, slots=True)
+class CompareIntegratorSettlementCommand:
+    """Read-only mirror input; it deliberately has no receipt identity."""
+
+    source_installation_id: UUID
+    connector_key: str
+    provider_event_id: str
+    observation: IntegratorSettlementObservationCommand
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessedIntegratorSettlement:
+    receipt_id: UUID
+    provider_id: UUID
+    provider_event_id: UUID | None
+    payment_id: UUID | None
+    processing_status: str
+    replayed: bool = False
+
+    def consequence(self) -> dict[str, object]:
+        return {
+            "status": "ok",
+            "provider_id": str(self.provider_id),
+            "provider_event_id": (
+                str(self.provider_event_id) if self.provider_event_id else None
+            ),
+            "payment_id": str(self.payment_id) if self.payment_id else None,
+            "processing_status": self.processing_status,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class IntegratorSettlementDisagreement:
+    field: str
+    integrator: str | None
+    sub: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class IntegratorSettlementMirrorResult:
+    verdict: str
+    identity: str
+    counterpart_identity: str | None
+    blocking_reasons: tuple[str, ...]
+    disagreements: tuple[IntegratorSettlementDisagreement, ...]
+
+    @property
+    def agrees(self) -> bool:
+        return self.verdict == "match" and not self.blocking_reasons
 
 
 @dataclass(frozen=True, slots=True)
@@ -535,6 +645,377 @@ def _result_from_consequence(
     )
 
 
+def _integrator_provider(
+    db: Session, *, installation_id: UUID
+) -> PaymentProvider:
+    provider = db.scalar(
+        select(PaymentProvider)
+        .where(PaymentProvider.integrator_installation_ref == installation_id)
+        .with_for_update()
+    )
+    if provider is None or not provider.is_active:
+        raise _error(
+            "integrator_provider_not_configured",
+            "No active payment provider is mapped to this Integrator installation",
+            source_installation_id=str(installation_id),
+        )
+    return provider
+
+
+def _integrator_intent(
+    db: Session,
+    *,
+    provider: PaymentProvider,
+    merchant_reference: str | None,
+) -> TopupIntent | None:
+    if not merchant_reference:
+        return None
+    intent = db.scalar(
+        select(TopupIntent)
+        .where(TopupIntent.reference == merchant_reference)
+        .with_for_update()
+    )
+    if intent is None:
+        return None
+    if intent.provider_id is not None and intent.provider_id != provider.id:
+        raise _error(
+            "topup_intent_mismatch",
+            "Settlement reference belongs to another payment provider",
+            intent_id=str(intent.id),
+        )
+    if intent.provider_type != provider.provider_type.value:
+        raise _error(
+            "topup_intent_mismatch",
+            "Settlement provider does not match the selected top-up intent",
+            intent_id=str(intent.id),
+        )
+    return intent
+
+
+def _integrator_receipt(
+    db: Session, command: ProcessIntegratorSettlementCommand
+) -> IntegrationInbox:
+    receipt = lock_for_update(db, IntegrationInbox, command.receipt_id)
+    if receipt is None:
+        raise _error(
+            "receipt_not_found",
+            "Claimed Integrator settlement receipt was not found",
+            receipt_id=str(command.receipt_id),
+        )
+    if receipt.state == "processed":
+        return receipt
+    if receipt.state != "processing":
+        raise _error(
+            "receipt_not_claimed",
+            "Integrator settlement receipt must be claimed before processing",
+            receipt_id=str(receipt.id),
+            state=receipt.state,
+        )
+    headers = receipt.headers_json or {}
+    if (
+        str(headers.get("integrator_installation_id") or "")
+        != str(command.source_installation_id)
+        or str(headers.get("integrator_connector_key") or "")
+        != command.connector_key
+        or receipt.provider_event_id != command.provider_event_id
+    ):
+        raise _error(
+            "receipt_source_mismatch",
+            "Integrator settlement source does not match its claimed receipt",
+            receipt_id=str(receipt.id),
+        )
+    return receipt
+
+
+def _integrator_prepared(
+    db: Session,
+    *,
+    command: ProcessIntegratorSettlementCommand,
+    provider: PaymentProvider,
+) -> _PreparedPaymentWebhook:
+    observation = command.observation
+    intent = _integrator_intent(
+        db,
+        provider=provider,
+        merchant_reference=observation.merchant_reference,
+    )
+    status = (
+        PaymentStatus.succeeded
+        if observation.kind is IntegratorSettlementKind.CAPTURE
+        else PaymentStatus.failed
+    )
+    ingest = PaymentProviderEventCommand(
+        provider_id=provider.id,
+        event_type=(
+            "payment.succeeded"
+            if status is PaymentStatus.succeeded
+            else "payment.failed"
+        ),
+        external_id=observation.provider_transaction_id,
+        idempotency_key=command.provider_event_id,
+        provider_reference=observation.merchant_reference,
+        observed_payment_status=status,
+    )
+    settlement = _SettlementObservation(
+        status=status,
+        amount=(
+            observation.amount.amount
+            if status is PaymentStatus.succeeded
+            else None
+        ),
+        provider_fee=(
+            observation.provider_fee.amount
+            if observation.provider_fee is not None
+            else Decimal("0.00")
+        ),
+        currency=(
+            observation.amount.currency
+            if status is PaymentStatus.succeeded
+            else None
+        ),
+        reference=observation.merchant_reference,
+        metadata={},
+    )
+    if status is PaymentStatus.failed:
+        return _PreparedPaymentWebhook(
+            ingest=ingest,
+            settlement=settlement,
+            topup_intent=intent,
+        )
+    if observation.provider_fee is None:
+        # Some provider contracts do not expose a fee. Retrying the same bytes
+        # cannot manufacture that fact, and treating absence as zero would
+        # falsify net settlement. Keep the receipt retryable until a
+        # product-owned policy or richer provider observation exists.
+        raise _error(
+            "provider_fee_unobserved",
+            "Settlement consequence requires an observed provider fee",
+            source_installation_id=str(command.source_installation_id),
+        )
+    if observation.provider_fee.currency != observation.amount.currency:
+        raise _error(
+            "payload_invalid",
+            "Settlement provider fee currency differs from the gross amount",
+        )
+    if observation.provider_fee.amount > observation.amount.amount:
+        raise _error(
+            "payload_invalid",
+            "Settlement provider fee exceeds the gross amount",
+        )
+    if intent is not None and intent.purpose == "account_credit_deposit":
+        raise _error(
+            "deposit_correlation_unavailable",
+            "Settlement omitted provider-echoed deposit intent correlation",
+            intent_id=str(intent.id),
+        )
+    return _PreparedPaymentWebhook(
+        ingest=replace(
+            ingest,
+            amount=observation.amount.amount,
+            provider_fee=observation.provider_fee.amount,
+            net_amount=(
+                round_money(intent.requested_amount)
+                if intent is not None
+                else round_money(
+                    observation.amount.amount - observation.provider_fee.amount
+                )
+            ),
+            topup_intent_id=(intent.id if intent is not None else None),
+            currency=observation.amount.currency,
+            invoice_id=(intent.invoice_id if intent is not None else None),
+            account_id=(intent.account_id if intent is not None else None),
+            billing_account_id=(
+                intent.billing_account_id if intent is not None else None
+            ),
+        ),
+        settlement=settlement,
+        topup_intent=intent,
+    )
+
+
+def _integrator_result_from_consequence(
+    receipt: IntegrationInbox,
+) -> ProcessedIntegratorSettlement:
+    consequence = receipt.consequence_json or {}
+    provider_id = _optional_uuid(consequence.get("provider_id"))
+    if provider_id is None:
+        raise _error(
+            "receipt_consequence_invalid",
+            "Processed Integrator settlement has no provider identity",
+            receipt_id=str(receipt.id),
+        )
+    return ProcessedIntegratorSettlement(
+        receipt_id=receipt.id,
+        provider_id=provider_id,
+        provider_event_id=_optional_uuid(consequence.get("provider_event_id")),
+        payment_id=_optional_uuid(consequence.get("payment_id")),
+        processing_status=str(consequence.get("processing_status") or "processed"),
+        replayed=True,
+    )
+
+
+def compare_integrator_settlement(
+    db: Session,
+    command: CompareIntegratorSettlementCommand,
+) -> IntegratorSettlementMirrorResult:
+    """Compare normalized evidence with the incumbent owner; write nothing."""
+
+    provider = db.scalar(
+        select(PaymentProvider).where(
+            PaymentProvider.integrator_installation_ref
+            == command.source_installation_id
+        )
+    )
+    identity = command.observation.provider_transaction_id
+    if provider is None or not provider.is_active:
+        return IntegratorSettlementMirrorResult(
+            verdict="blocked",
+            identity=identity,
+            counterpart_identity=None,
+            blocking_reasons=("integrator_provider_not_configured",),
+            disagreements=(),
+        )
+    counterpart = db.scalar(
+        select(PaymentProviderEvent)
+        .where(PaymentProviderEvent.provider_id == provider.id)
+        .where(PaymentProviderEvent.external_id == identity)
+    )
+    if counterpart is None:
+        return IntegratorSettlementMirrorResult(
+            verdict="missing",
+            identity=identity,
+            counterpart_identity=None,
+            blocking_reasons=(),
+            disagreements=(),
+        )
+
+    observation = command.observation
+    expected_status = (
+        PaymentStatus.succeeded
+        if observation.kind is IntegratorSettlementKind.CAPTURE
+        else PaymentStatus.failed
+    )
+    expected_amount = (
+        round_money(observation.amount.amount)
+        if expected_status is PaymentStatus.succeeded
+        else None
+    )
+    expected_fee = (
+        round_money(observation.provider_fee.amount)
+        if observation.provider_fee is not None
+        else None
+    )
+    values = (
+        (
+            "observed_payment_status",
+            expected_status.value,
+            (
+                counterpart.observed_payment_status.value
+                if counterpart.observed_payment_status
+                else None
+            ),
+        ),
+        (
+            "amount",
+            str(expected_amount) if expected_amount is not None else None,
+            str(round_money(counterpart.amount))
+            if counterpart.amount is not None
+            else None,
+        ),
+        (
+            "provider_fee",
+            str(expected_fee) if expected_fee is not None else None,
+            str(round_money(counterpart.provider_fee)),
+        ),
+        ("currency", observation.amount.currency, counterpart.currency),
+        (
+            "provider_reference",
+            observation.merchant_reference,
+            counterpart.provider_reference,
+        ),
+    )
+    disagreements = tuple(
+        IntegratorSettlementDisagreement(field=field, integrator=left, sub=right)
+        for field, left, right in values
+        if left != right and not (field == "provider_fee" and left is None)
+    )
+    blocking = (
+        ("provider_fee_unobserved",)
+        if observation.provider_fee is None
+        and expected_status is PaymentStatus.succeeded
+        else ()
+    )
+    return IntegratorSettlementMirrorResult(
+        verdict="match" if not disagreements else "blocked",
+        identity=identity,
+        counterpart_identity=str(counterpart.id),
+        blocking_reasons=blocking,
+        disagreements=disagreements,
+    )
+
+
+def process_integrator_settlement(
+    db: Session,
+    command: ProcessIntegratorSettlementCommand,
+    *,
+    context: CommandContext,
+) -> ProcessedIntegratorSettlement:
+    """Commit one product-owned consequence for a claimed Integrator receipt."""
+
+    return execute_owner_command(
+        db,
+        definition=_INTEGRATOR_PROCESS_COMMAND,
+        context=context,
+        operation=lambda: _process_integrator_settlement(
+            db,
+            command=command,
+            context=context,
+        ),
+    )
+
+
+def _process_integrator_settlement(
+    db: Session,
+    *,
+    command: ProcessIntegratorSettlementCommand,
+    context: CommandContext,
+) -> ProcessedIntegratorSettlement:
+    receipt = _integrator_receipt(db, command)
+    if receipt.state == "processed":
+        return _integrator_result_from_consequence(receipt)
+    provider = _integrator_provider(
+        db, installation_id=command.source_installation_id
+    )
+    prepared = _integrator_prepared(db, command=command, provider=provider)
+    event = _stage_provider_event(db, prepared.ingest, context=context)
+    if (
+        prepared.settlement is not None
+        and prepared.settlement.status is PaymentStatus.succeeded
+        and event.payment_id is None
+    ):
+        raise _error(
+            "settlement_unlinked",
+            "Successful settlement did not post or link a payment",
+            provider_event_id=str(event.id),
+        )
+    _stage_topup_consequences(
+        db,
+        prepared=prepared,
+        event=event,
+        context=context,
+    )
+    result = ProcessedIntegratorSettlement(
+        receipt_id=receipt.id,
+        provider_id=provider.id,
+        provider_event_id=event.id,
+        payment_id=event.payment_id,
+        processing_status=event.status.value,
+    )
+    integration_inbox.mark_processed(receipt, consequence=result.consequence())
+    db.flush()
+    return result
+
+
 def process_claimed_payment_webhook(
     db: Session,
     command: ProcessClaimedPaymentWebhookCommand,
@@ -643,12 +1124,24 @@ def _process_claimed_payment_webhook(
 
 
 __all__ = [
+    "CompareIntegratorSettlementCommand",
+    "INTEGRATOR_PROCESS_SCOPE",
     "PROCESS_SCOPE",
+    "IntegratorObservedMoney",
+    "IntegratorSettlementArrival",
+    "IntegratorSettlementKind",
+    "IntegratorSettlementDisagreement",
+    "IntegratorSettlementMirrorResult",
+    "IntegratorSettlementObservationCommand",
     "PaymentWebhookError",
     "PaymentWebhookProvider",
     "PaymentWebhookReceiptIdentity",
     "ProcessClaimedPaymentWebhookCommand",
+    "ProcessIntegratorSettlementCommand",
+    "ProcessedIntegratorSettlement",
     "ProcessedPaymentWebhook",
     "identify_verified_payment_webhook",
+    "compare_integrator_settlement",
     "process_claimed_payment_webhook",
+    "process_integrator_settlement",
 ]

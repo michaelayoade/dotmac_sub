@@ -31,8 +31,13 @@ from app.schemas.integration import (
     IntegrationTargetCreate,
     IntegrationTargetRead,
     IntegrationTargetUpdate,
+    IntegratorPaymentProviderMappingRead,
+    IntegratorPaymentProviderMappingUpsert,
 )
-from app.services import integration as integration_service
+from app.services import (
+    integration as integration_service,
+    payment_gateway_finance,
+)
 from app.services.domain_errors import DomainError
 from app.services.integrations import delivery as integration_delivery
 from app.services.integrations import inbox as integration_inbox
@@ -138,6 +143,33 @@ def get_integration_installation(
         return installations.get_installation(db, installation_id)
     except installations.InstallationError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put(
+    "/payment-provider-mappings/{provider_id}",
+    response_model=IntegratorPaymentProviderMappingRead,
+)
+def bind_integrator_payment_provider(
+    provider_id: UUID,
+    payload: IntegratorPaymentProviderMappingUpsert,
+    db: Session = Depends(get_db),
+    principal: dict[str, Any] = Depends(get_current_user),
+):
+    """Delegate an operator-approved opaque source mapping to its finance owner."""
+
+    try:
+        return _installation_command(
+            db,
+            lambda: payment_gateway_finance.bind_integrator_installation(
+                db,
+                provider_id=provider_id,
+                installation_id=payload.installation_id,
+                actor=_operator_id(principal),
+            ),
+        )
+    except payment_gateway_finance.PaymentGatewayFinanceError as exc:
+        status_code = 404 if exc.code.endswith("provider_not_found") else 409
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
 @router.get(

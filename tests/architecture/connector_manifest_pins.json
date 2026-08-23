@@ -14,8 +14,8 @@
     {
         "current": true,
         "key": "dotmac.integrator.http",
-        "manifest_digest": "66a5963fcffe6e950a496644606225deefabef63533f09409e015d9b153b7b85",
-        "version": "1.0.0"
+        "manifest_digest": "8232754ef5d3757702a9c4477b7ef0894cbf7c3a3fface63b780ad52dd013c52",
+        "version": "1.1.0"
     },
     {
         "current": true,
@@ -75,6 +75,12 @@
         "current": true,
         "key": "freepbx",
         "manifest_digest": "2009f57dda6aec855f50ddb970505365f979fde9eb2e94c93341b3b6efc6772c",
+        "version": "1.0.0"
+    },
+    {
+        "current": false,
+        "key": "dotmac.integrator.http",
+        "manifest_digest": "66a5963fcffe6e950a496644606225deefabef63533f09409e015d9b153b7b85",
         "version": "1.0.0"
     },
     {

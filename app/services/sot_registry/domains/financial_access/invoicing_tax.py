@@ -26,11 +26,13 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "gateway finance provider identity bootstrap",
             "gateway settlement-channel bootstrap",
+            "Integrator installation provider mapping",
         ),
         notes=(
             "This flush-only participant ensures finance attribution "
-            "identities during connector setup. It does not decide "
-            "gateway availability or presentment."
+            "identities during connector setup and owns the operator-approved "
+            "opaque Integrator source mapping. It does not decide gateway "
+            "availability or presentment."
         ),
         contract=ServiceContract(
             concerns=(
@@ -49,6 +51,15 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "payment gateway connector manifest",
                         "payment gateway installation setup",
+                    ),
+                    canonical_writer="financial.payment_gateway_finance",
+                ),
+                ConcernContract(
+                    name="Integrator installation provider mapping",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "operator-approved Integrator installation identity",
+                        "canonical payment provider identity",
                     ),
                     canonical_writer="financial.payment_gateway_finance",
                 ),
@@ -72,23 +83,38 @@ SERVICES: tuple[SOTService, ...] = (
                         "with provider type and complete capability bundle"
                     ),
                 ),
+                AuthorityInput(
+                    name="operator-approved Integrator installation identity",
+                    owner="integration.installations",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "opaque external installation UUID submitted by an "
+                        "authenticated admin integration adapter"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical payment provider identity",
+                    owner="financial.payment_gateway_finance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="locked local PaymentProvider row",
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.PARTICIPANT,
                 boundary=(
                     "integration.installations supplies the transaction; "
-                    "this participant only flushes finance identities and "
-                    "their creation event."
+                    "this participant only flushes finance identities, source "
+                    "mappings, and their evidence events."
                 ),
                 locking=(
-                    "Provider type and canonical provider/channel names "
-                    "are checked before unique constraints arbitrate "
-                    "concurrent setup."
+                    "Provider type, canonical provider/channel names, and the "
+                    "target provider row are locked before unique constraints "
+                    "arbitrate concurrent setup or source mapping."
                 ),
                 idempotency=(
                     "An existing unique provider identity and its first "
-                    "provider-linked channel replay without another row "
-                    "or event."
+                    "provider-linked channel replay without another row or event; "
+                    "an unchanged Integrator mapping emits no second event."
                 ),
                 retries=(
                     "The installation coordinator retries only after a "
@@ -101,6 +127,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_gateway_finance.channel_identity_ambiguous",
                     "financial.payment_gateway_finance.provider_name_conflict",
                     "financial.payment_gateway_finance.channel_name_conflict",
+                    "financial.payment_gateway_finance.provider_not_found",
+                    "financial.payment_gateway_finance.integrator_installation_conflict",
                 ),
                 mapping_owner="payment gateway admin adapter",
                 retryable_codes=(),
@@ -108,15 +136,19 @@ SERVICES: tuple[SOTService, ...] = (
                     "multiple provider identities",
                     "multiple provider-linked settlement channels",
                     "canonical provider or channel name collision",
+                    "unknown provider or duplicate Integrator installation mapping",
                 ),
             ),
             events=EventContract(
-                event_types=("payment_gateway.finance_identity_ensured",),
+                event_types=(
+                    "payment_gateway.finance_identity_ensured",
+                    "payment_gateway.integrator_mapping_changed",
+                ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
-                    "Version 1 carries provider type and canonical finance "
-                    "identity identifiers without connector secrets."
+                    "Version 1 carries provider type, canonical finance identity, "
+                    "and opaque Integrator installation identifiers without secrets."
                 ),
                 replay=(
                     "Provider and channel rows rebuild attribution; event "
@@ -131,12 +163,13 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 new_owner="financial.payment_gateway_finance",
                 verification=(
-                    "Gateway setup, idempotency, secret-reference, routing, "
-                    "and architecture tests."
+                    "Gateway setup, idempotency, secret-reference, routing, opaque "
+                    "source mapping, and architecture tests."
                 ),
                 cutover_gate=(
                     "Connector setup is the only caller that can create "
-                    "Paystack or Flutterwave finance identities."
+                    "Paystack or Flutterwave finance identities; the authenticated "
+                    "admin integration adapter is the only source-mapping writer."
                 ),
                 fallback_retirement=(
                     "Legacy provider CRUD routes, templates, service "
@@ -151,7 +184,9 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_web_integrations_payment_gateways.py",
                 "tests/test_payment_routing.py",
+                "tests/test_integrator_payment_provider_mapping.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
+                "tests/architecture/test_integrator_settlement_boundary.py",
             ),
         ),
     ),

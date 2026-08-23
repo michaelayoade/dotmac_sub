@@ -30,13 +30,19 @@ from app.services.domain_errors import DomainError
 from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_CONNECTOR_KEY,
     INTEGRATOR_RECEIVE_CAPABILITY,
+    INTEGRATOR_SETTLEMENT_CAPABILITY,
 )
 
 DESCRIPTOR_SCHEMA_VERSION = "dotmac.io/product-port-descriptor/v1"
+SETTLEMENT_DESCRIPTOR_SCHEMA_VERSION = "dotmac.io/product-port-descriptor/v2"
 APPLICATION = "sub"
 OWNER_MODULE = "communications.team_inbox_integrator_envelope"
 CAPABILITY_SUMMARY = "Inbound provider message and delivery-state observations"
 CONTRACT_VERSION = 1
+SETTLEMENT_OWNER_MODULE = "financial.payment_webhooks"
+SETTLEMENT_CAPABILITY_SUMMARY = (
+    "Verified provider settlement observations for the financial owner"
+)
 
 
 class ProductPortDescriptorError(DomainError):
@@ -75,7 +81,29 @@ class ProductPortDescriptorV1:
     descriptor_digest: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProductPortDescriptorV2:
+    """Generic ProductObservation destination declared by Sub's finance owner."""
+
+    schema_version: str
+    application: str
+    owner_module: str
+    capability_id: str
+    capability_summary: str
+    contract_version: int
+    destination_binding_id: UUID
+    delivery_path: str
+    mirror_path: str
+    destination_scope: DestinationScope
+    activation_state: str
+    source_revision: str
+    descriptor_digest: str
+
+
 DESTINATION_SCOPE = DestinationScope(kind="inbox", ref="support")
+SETTLEMENT_DESTINATION_SCOPE = DestinationScope(
+    kind="payment_provider_events", ref="verified"
+)
 
 
 def descriptor_digest(document: Mapping[str, object]) -> str:
@@ -177,6 +205,83 @@ def product_port_descriptor(
         delivery_path=delivery_path,
         mirror_path=mirror_path,
         destination_scope=DESTINATION_SCOPE,
+        activation_state=activation_state.value,
+        source_revision=source_revision,
+        descriptor_digest=descriptor_digest(published),
+    )
+
+
+def settlement_product_port_descriptor(
+    db: Session, destination_binding_id: UUID
+) -> ProductPortDescriptorV2:
+    """Return the v2 descriptor for Sub's settlement observation port."""
+
+    binding = db.get(IntegrationCapabilityBinding, destination_binding_id)
+    if binding is None:
+        raise ProductPortDescriptorError(
+            code="financial.integrator_settlement_port.not_found",
+            message="Product port binding not found.",
+        )
+    installation = binding.installation
+    if (
+        installation.connector_key != INTEGRATOR_CONNECTOR_KEY
+        or binding.capability_id != INTEGRATOR_SETTLEMENT_CAPABILITY
+    ):
+        raise ProductPortDescriptorError(
+            code="financial.integrator_settlement_port.not_found",
+            message="Product port binding not found.",
+        )
+
+    activation_state = _activation_state(binding)
+    source_revision = descriptor_digest(
+        {
+            "binding_id": binding.id,
+            "binding_state": binding.state,
+            "binding_updated_at": binding.updated_at,
+            "installation_id": installation.id,
+            "installation_state": installation.state,
+            "installation_updated_at": installation.updated_at,
+            "capability_id": INTEGRATOR_SETTLEMENT_CAPABILITY,
+            "capability_summary": SETTLEMENT_CAPABILITY_SUMMARY,
+            "contract_version": CONTRACT_VERSION,
+            "destination_scope": {
+                "kind": SETTLEMENT_DESTINATION_SCOPE.kind,
+                "ref": SETTLEMENT_DESTINATION_SCOPE.ref,
+            },
+        }
+    )
+    delivery_path = (
+        f"/api/v1/integration/observations/payment-settlements/{binding.id}"
+    )
+    mirror_path = f"{delivery_path}/mirror"
+    published: dict[str, object] = {
+        "schema_version": SETTLEMENT_DESCRIPTOR_SCHEMA_VERSION,
+        "application": APPLICATION,
+        "owner_module": SETTLEMENT_OWNER_MODULE,
+        "capability_id": INTEGRATOR_SETTLEMENT_CAPABILITY,
+        "capability_summary": SETTLEMENT_CAPABILITY_SUMMARY,
+        "contract_version": CONTRACT_VERSION,
+        "destination_binding_id": binding.id,
+        "delivery_path": delivery_path,
+        "mirror_path": mirror_path,
+        "destination_scope": {
+            "kind": SETTLEMENT_DESTINATION_SCOPE.kind,
+            "ref": SETTLEMENT_DESTINATION_SCOPE.ref,
+        },
+        "activation_state": activation_state.value,
+        "source_revision": source_revision,
+    }
+    return ProductPortDescriptorV2(
+        schema_version=SETTLEMENT_DESCRIPTOR_SCHEMA_VERSION,
+        application=APPLICATION,
+        owner_module=SETTLEMENT_OWNER_MODULE,
+        capability_id=INTEGRATOR_SETTLEMENT_CAPABILITY,
+        capability_summary=SETTLEMENT_CAPABILITY_SUMMARY,
+        contract_version=CONTRACT_VERSION,
+        destination_binding_id=binding.id,
+        delivery_path=delivery_path,
+        mirror_path=mirror_path,
+        destination_scope=SETTLEMENT_DESTINATION_SCOPE,
         activation_state=activation_state.value,
         source_revision=source_revision,
         descriptor_digest=descriptor_digest(published),
