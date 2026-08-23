@@ -13,9 +13,9 @@ owns its schema, and the platform adoption ledger admits kernel *models* without
 adopting kernel *migrations*. Sub therefore supplies the same effects from its
 own lineage, in migrations written for that purpose:
 
-- ``545_tenant_scope_catalog_prerequisite`` — "Supply ``tenant_scope_catalog.v1``
+- ``545_tenant_scope_catalog_prereq`` — "Supply ``tenant_scope_catalog.v1``
   from Sub's own lineage"
-- ``546_module_database_roles_prerequisite`` — "Supply ``module_database_roles.v1``
+- ``546_module_db_roles_prereq`` — "Supply ``module_database_roles.v1``
   from Sub's own lineage"
 
 Both predate any module composition. They were written so that composing a
@@ -50,7 +50,7 @@ ASSEMBLY_PREREQUISITE_BINDINGS: Final[tuple[PrerequisiteBinding, ...]] = (
     # and binding to head would refuse a migration that could safely run.
     PrerequisiteBinding(
         prerequisite=TENANT_SCOPE_CATALOG_V1.name,
-        provider_revision="545_tenant_scope_catalog_prerequisite",
+        provider_revision="545_tenant_scope_catalog_prereq",
         provider_owner="sub",
     ),
     # Migration 546 creates the per-module database roles a composed module's
@@ -58,7 +58,7 @@ ASSEMBLY_PREREQUISITE_BINDINGS: Final[tuple[PrerequisiteBinding, ...]] = (
     # by Sub's own lineage rather than by anything declared here.
     PrerequisiteBinding(
         prerequisite=MODULE_DATABASE_ROLES_V1.name,
-        provider_revision="546_module_database_roles_prerequisite",
+        provider_revision="546_module_db_roles_prereq",
         provider_owner="sub",
     ),
 )
