@@ -39,6 +39,7 @@ class ExpiryReminderCandidate:
 
     subscription: "Subscription"
     boundary: datetime
+    boundary_key: str
     source: str
 
 
@@ -155,7 +156,7 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
         for candidate in expiring:
             sub = candidate.subscription
             boundary = candidate.boundary
-            boundary_key = boundary.isoformat()
+            boundary_key = candidate.boundary_key
             try:
                 if sub.subscriber_id in suppressed_subscriber_ids:
                     suppressed += 1
@@ -230,17 +231,23 @@ def _expiry_reminder_candidates(
     candidates: list[ExpiryReminderCandidate] = []
     for subscription in subscriptions:
         source = "end_at"
-        boundary = _as_utc(subscription.end_at)
+        boundary_value = subscription.end_at
+        boundary = _as_utc(boundary_value)
         next_billing_at = _as_utc(subscription.next_billing_at)
         if subscription.billing_mode == BillingMode.prepaid and next_billing_at:
             source = "next_billing_at"
+            boundary_value = subscription.next_billing_at
             boundary = next_billing_at
         if boundary is None or boundary <= now or boundary > cutoff:
+            continue
+        boundary_key = _boundary_key(boundary_value)
+        if boundary_key is None:
             continue
         candidates.append(
             ExpiryReminderCandidate(
                 subscription=subscription,
                 boundary=boundary,
+                boundary_key=boundary_key,
                 source=source,
             )
         )
@@ -282,6 +289,12 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _boundary_key(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
 
 
 def _has_open_infrastructure_down_ticket(session, subscriber_id: object) -> bool:
