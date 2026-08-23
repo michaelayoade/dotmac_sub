@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.vendor_routes import ProjectQuoteStatus
 from app.services import (
     vendor_as_built_review_proposals,
     vendor_project_review_proposals,
@@ -77,10 +78,25 @@ class VendorOperationsTab:
     href: str
 
 
-def _operations_tab_href(*, view: str, search: str) -> str:
+@dataclass(frozen=True, slots=True)
+class VendorQuoteStatusOption:
+    value: str
+    label: str
+
+
+def _quote_status_label(status: ProjectQuoteStatus | str) -> str:
+    value = status.value if isinstance(status, ProjectQuoteStatus) else status
+    return value.replace("_", " ").title()
+
+
+def _operations_tab_href(
+    *, view: str, search: str, quote_status: ProjectQuoteStatus | None = None
+) -> str:
     params = {"view": view}
     if search:
         params["q"] = search
+    if view == "quotes" and quote_status is not None:
+        params["quote_status"] = quote_status.value
     return f"/admin/vendors/operations?{urlencode(params)}"
 
 
@@ -233,6 +249,7 @@ def vendor_operations_queue(
     message: str | None = None,
     view: str | None = Query(default=None, max_length=32),
     q: str | None = Query(default=None, max_length=120),
+    quote_status: ProjectQuoteStatus | None = Query(default=None),
     _auth: dict = Depends(_read),
     db: Session = Depends(get_db),
 ):
@@ -277,7 +294,11 @@ def vendor_operations_queue(
         else []
     )
     quotes = (
-        vendor_portal_operations.list_reviewable_quotes(db, search=search)
+        vendor_portal_operations.list_quotes_for_admin(
+            db,
+            search=search,
+            statuses=(quote_status,) if quote_status is not None else None,
+        )
         if show_field_reviews
         else []
     )
@@ -416,7 +437,11 @@ def vendor_operations_queue(
             key=key,
             label=label,
             count=count,
-            href=_operations_tab_href(view=key, search=search),
+            href=_operations_tab_href(
+                view=key,
+                search=search,
+                quote_status=quote_status,
+            ),
         )
         for key, label, count, _visible in visible_tab_rows
     )
@@ -432,6 +457,14 @@ def vendor_operations_queue(
             "active_vendor_operations_view": requested_view,
             "active_vendor_operations_label": active_tab_label,
             "vendor_operations_tabs": vendor_operations_tabs,
+            "quote_status": quote_status.value if quote_status is not None else "",
+            "quote_status_options": tuple(
+                VendorQuoteStatusOption(
+                    value=status.value,
+                    label=_quote_status_label(status),
+                )
+                for status in ProjectQuoteStatus
+            ),
             "show_field_reviews": show_field_reviews,
             "show_route_reviews": show_route_reviews,
             "show_financial_reviews": show_financial_reviews,

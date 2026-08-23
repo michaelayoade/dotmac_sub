@@ -20,6 +20,7 @@ from app.models.team_inbox import (
     InboxConversationTeam,
     InboxLabel,
     InboxMessage,
+    InboxMessageDirection,
     InboxMessageTemplate,
     InboxReplyMacro,
     InboxSavedFilter,
@@ -1119,6 +1120,18 @@ def set_satisfaction(
     return conversation
 
 
+def _has_human_agent_sender(message: InboxMessage | None) -> bool:
+    if message is None or message.direction != InboxMessageDirection.outbound.value:
+        return False
+    metadata = message.metadata_ or {}
+    sender_type = str(
+        metadata.get("sender_type") or metadata.get("author_type") or ""
+    ).strip()
+    if sender_type in {"ai", "system", "automation"}:
+        return False
+    return bool(str(metadata.get("sent_by_person_id") or "").strip())
+
+
 def auto_resolve_stale_conversations(
     db: Session,
     *,
@@ -1151,7 +1164,7 @@ def auto_resolve_stale_conversations(
     resolved = 0
     for conversation in rows:
         latest = latest_messages.get(conversation.id)
-        if latest is not None and latest.direction == "inbound":
+        if not _has_human_agent_sender(latest):
             continue
         metadata = dict(conversation.metadata_ or {})
         metadata["auto_resolved_at"] = clock.isoformat()
