@@ -112,7 +112,7 @@ def compute_first_bill(
     VAT applies to the *whole* taxable base — the (prorated) recurring charge,
     overage, and any one-time fees — because invoicing tags every line of a
     taxable subscription with the same tax rate (see
-    ``billing_automation._resolve_offer_tax_rate_id`` and
+    ``billing_tax_resolution.resolve_subscription_tax`` and
     ``_add_recurring_addon_lines``); one-time fees are never VAT-free. When a
     ``start`` date lands mid-cycle the recurring portion is prorated
     (``first_bill_proration_ratio``); one-time fees are never prorated. With no

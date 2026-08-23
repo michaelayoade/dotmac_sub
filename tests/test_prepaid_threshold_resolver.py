@@ -366,6 +366,43 @@ def test_threshold_uses_the_same_taxed_contract_charge_as_renewal(db_session):
     assert decision.threshold == Decimal("18812.50")
 
 
+def test_customer_vat_exemption_removes_tax_from_prepaid_renewal_and_threshold(
+    db_session,
+):
+    from app.models.customer_tax_policy import CustomerTaxPolicy
+
+    account = _account(db_session, min_balance="0.00")
+    tax_rate = TaxRate(
+        name="VAT 7.5%",
+        code="VAT75-EXEMPT-CANARY",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    account.tax_rate_id = tax_rate.id
+    db_session.add(
+        CustomerTaxPolicy(
+            account_id=account.id,
+            withholding_tax_enabled=False,
+            vat_exempt=True,
+            version=1,
+            updated_by="pytest",
+        )
+    )
+    offer = _offer(db_session, "17500.00")
+    subscription = _subscription(db_session, account, offer)
+    db_session.commit()
+
+    renewal = resolve_prepaid_monthly_charge(db_session, subscription, NOW)
+    decision = resolve_prepaid_threshold_decision(db_session, account, now=NOW)
+
+    assert renewal is not None
+    assert renewal[0] == Decimal("17500.00")
+    assert decision.unfunded_renewal_requirement == Decimal("17500.00")
+    assert decision.threshold == Decimal("17500.00")
+
+
 def test_unit_price_override_beats_the_catalog_price(db_session):
     account = _account(db_session, min_balance="0.00")
     offer = _offer(db_session, "20000.00")

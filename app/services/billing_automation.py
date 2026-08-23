@@ -20,7 +20,6 @@ from app.models.billing import (
     InvoiceLine,
     InvoiceStatus,
     TaxApplication,
-    TaxRate,
 )
 from app.models.catalog import (
     AddOn,
@@ -38,7 +37,7 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.network import SubscriberAdditionalRoute
-from app.models.subscriber import Address, Subscriber, SubscriberStatus
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.billing import InvoiceCreate, SystemInvoiceLineCreate
 from app.services import enforcement_window, settings_spec
 from app.services.account_lifecycle import (
@@ -56,6 +55,10 @@ from app.services.billing_settings import (
     resolve_payment_due_days,
 )
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
+from app.services.billing_tax_resolution import (
+    BillingTaxResolution,
+    resolve_subscription_tax,
+)
 from app.services.common import coerce_uuid, round_money
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
@@ -420,93 +423,35 @@ def _effective_unit_price(
     return round_money(price)
 
 
-def _active_tax_rate_id(db: Session, tax_rate_id) -> bool:
-    rate = db.get(TaxRate, tax_rate_id)
-    return rate is not None and bool(rate.is_active)
+def _resolve_tax(
+    db: Session,
+    subscription: Subscription,
+) -> BillingTaxResolution:
+    """Return the complete compatibility VAT result and its provenance."""
 
-
-def _tax_rate_for_catalog_percent(db: Session, vat_percent: Decimal | None):
-    if vat_percent is None:
-        return None
-    percent = Decimal(str(vat_percent))
-    if percent <= Decimal("0.00"):
-        return None
-    candidates = {percent}
-    if percent > Decimal("1.00"):
-        candidates.add(percent / Decimal("100"))
-    else:
-        candidates.add(percent * Decimal("100"))
-    rates = db.query(TaxRate).filter(TaxRate.is_active.is_(True)).all()
-    for rate in rates:
-        current = Decimal(str(rate.rate))
-        if any(current == candidate for candidate in candidates):
-            return rate.id
-    return None
-
-
-def _resolve_offer_tax_rate_id(db: Session, offer: CatalogOffer | None):
-    """Resolve tax from the catalog offer's VAT flags.
-
-    The catalog is the service-level source of truth: a positive ``vat_percent``
-    means taxable even when older imported rows still have ``with_vat=false``;
-    ``with_vat=false`` without a positive percent means VAT-exempt.
-    """
-    if offer is None:
-        return _default_tax_rate_id(db)
-
-    percent = Decimal(str(offer.vat_percent or "0"))
-    if percent > Decimal("0.00"):
-        return _tax_rate_for_catalog_percent(db, percent) or _default_tax_rate_id(db)
-    if bool(offer.with_vat):
-        return _default_tax_rate_id(db)
-    return None
+    return resolve_subscription_tax(db, subscription)
 
 
 def _resolve_tax_rate_id(db: Session, subscription: Subscription):
-    def _is_active(tax_rate_id) -> bool:
-        return _active_tax_rate_id(db, tax_rate_id)
+    """Compatibility adapter over the single billing-tax resolution owner."""
 
-    if subscription.service_address_id:
-        address = db.get(Address, subscription.service_address_id)
-        if address and address.tax_rate_id and _is_active(address.tax_rate_id):
-            return address.tax_rate_id
-    subscriber = db.get(Subscriber, subscription.subscriber_id)
-    if subscriber and subscriber.tax_rate_id and _is_active(subscriber.tax_rate_id):
-        return subscriber.tax_rate_id
-    return _resolve_offer_tax_rate_id(db, subscription.offer)
+    return _resolve_tax(db, subscription).tax_rate_id
 
 
 def _default_tax_rate_id(db: Session):
-    """Configurable fallback VAT rate, applied when neither the service address
-    nor the subscriber carries a tax_rate_id. Unset by default → returns None →
-    no tax (current behaviour); set the ``billing.default_tax_rate_id`` setting
-    to a TaxRate id to bill a default VAT."""
-    raw = settings_spec.resolve_value(db, SettingDomain.billing, "default_tax_rate_id")
-    value = str(raw or "").strip()
-    if not value:
-        return None
-    try:
-        rate = db.get(TaxRate, coerce_uuid(value))
-    except (ValueError, TypeError):
-        return None
-    if rate is not None and bool(rate.is_active):
-        return rate.id
-    return None
+    """Compatibility adapter for callers not yet consuming typed provenance."""
+
+    from app.services.billing_tax_resolution import resolve_default_tax_rate_id
+
+    return resolve_default_tax_rate_id(db)
 
 
 def _default_tax_application(db: Session) -> TaxApplication:
-    """Whether default-VAT billing treats catalog prices as tax-exclusive (tax
-    added on top — the default) or tax-inclusive (tax extracted from the price).
-    Controlled by ``billing.default_tax_application`` (exclusive|inclusive)."""
-    raw = settings_spec.resolve_value(
-        db, SettingDomain.billing, "default_tax_application"
-    )
-    value = str(raw or "").strip().lower()
-    if value == "inclusive":
-        return TaxApplication.inclusive
-    if value == "exempt":
-        return TaxApplication.exempt
-    return TaxApplication.exclusive
+    """Compatibility adapter for callers not yet consuming typed provenance."""
+
+    from app.services.billing_tax_resolution import resolve_default_tax_application
+
+    return resolve_default_tax_application(db)
 
 
 def _prorated_amount(
@@ -642,14 +587,9 @@ def preview_postpaid_recurring_charge(
             subscription_id=subscription_id,
         )
 
-    tax_rate_id = _resolve_tax_rate_id(db, subscription)
-    tax_rate = db.get(TaxRate, tax_rate_id) if tax_rate_id is not None else None
-    tax_application = (
-        _default_tax_application(db) if tax_rate is not None else TaxApplication.exempt
-    )
-    tax_rate_percent = (
-        Decimal(str(tax_rate.rate)) if tax_rate is not None else Decimal("0")
-    )
+    tax_resolution = _resolve_tax(db, subscription)
+    tax_application = tax_resolution.tax_application
+    tax_rate_percent = tax_resolution.tax_rate_percent or Decimal("0")
     base_net, base_tax, base_gross = _line_amounts(
         net_or_gross,
         tax_rate_percent=tax_rate_percent,
@@ -915,6 +855,7 @@ def _bill_recurring_addons(
     usage_start: datetime,
     usage_end: datetime,
     tax_rate_id,
+    tax_application: TaxApplication,
 ) -> int:
     """Stage the recurring add-on lines resolved by the current owner formula."""
 
@@ -940,9 +881,6 @@ def _bill_recurring_addons(
             },
         )
     added = 0
-    tax_application = (
-        _default_tax_application(db) if tax_rate_id else TaxApplication.exempt
-    )
     for charge in charges:
         billing_line_key = _billing_line_key(
             subscription.id,
@@ -2008,7 +1946,7 @@ def run_invoice_cycle(
             summary["skipped"] += 1
             continue
 
-        tax_rate_id = _resolve_tax_rate_id(db, subscription)
+        tax_resolution = _resolve_tax(db, subscription)
         InvoiceLines.stage_system_line(
             db,
             SystemInvoiceLineCreate(
@@ -2018,12 +1956,8 @@ def run_invoice_cycle(
                 quantity=Decimal("1.000"),
                 unit_price=round_money(line_amount),
                 amount=round_money(line_amount),
-                tax_rate_id=tax_rate_id,
-                tax_application=(
-                    _default_tax_application(db)
-                    if tax_rate_id
-                    else TaxApplication.exempt
-                ),
+                tax_rate_id=tax_resolution.tax_rate_id,
+                tax_application=tax_resolution.tax_application,
                 metadata_={
                     "kind": "base_subscription",
                     "billing_period_start": period_start.isoformat(),
@@ -2044,7 +1978,8 @@ def run_invoice_cycle(
             period_end,
             usage_start,
             usage_end,
-            tax_rate_id,
+            tax_resolution.tax_rate_id,
+            tax_resolution.tax_application,
         )
         if subscription.billing_mode != BillingMode.prepaid:
             stage_subscription_billing_anchor(
@@ -2362,7 +2297,7 @@ def generate_prorated_invoice(
         reason="prorated_subscription_activation",
     )
 
-    tax_rate_id = _resolve_tax_rate_id(db, subscription)
+    tax_resolution = _resolve_tax(db, subscription)
     offer_name = (
         subscription.offer.name
         if subscription.offer
@@ -2381,8 +2316,8 @@ def generate_prorated_invoice(
             quantity=Decimal("1.000"),
             unit_price=round_money(line_amount),
             amount=round_money(line_amount),
-            tax_rate_id=tax_rate_id,
-            tax_application=_default_tax_application(db),
+            tax_rate_id=tax_resolution.tax_rate_id,
+            tax_application=tax_resolution.tax_application,
         ),
         reason="prorated_subscription_activation",
     )

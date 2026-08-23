@@ -3157,3 +3157,104 @@ def test_bulk_tariff_change_include_suspended_opt_in(
     assert preview["include_suspended"] is True
     ids = {str(s.id) for s in preview["affected_subscriptions"]}
     assert ids == {str(active.id), str(suspended.id)}
+
+
+def test_bulk_tariff_change_is_preview_bound_and_schedules_next_cycle(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.schemas.catalog import CatalogOfferCreate
+    from app.services.bulk_tariff_change import bulk_tariff_change
+    from app.services.subscription_changes import subscription_change_requests
+
+    catalog_offer.plan_family = "std"
+    target = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Reviewed Tariff Target",
+            code=f"BULK-TGT-{uuid4().hex[:6]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            plan_family="std",
+        ),
+    )
+    active, _suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+    active.next_billing_at = datetime.now(UTC) + timedelta(days=15)
+    db_session.commit()
+
+    preview = bulk_tariff_change.preview(
+        db_session,
+        source_offer_id=str(catalog_offer.id),
+        target_offer_id=str(target.id),
+    )
+    assert preview["eligible_count"] == 1
+
+    result = bulk_tariff_change.execute(
+        db_session,
+        source_offer_id=str(catalog_offer.id),
+        target_offer_id=str(target.id),
+        preview_fingerprint=preview["preview_fingerprint"],
+        idempotency_key="reviewed-bulk-tariff",
+        actor_id="operator-1",
+    )
+
+    assert result["changed"] == 1
+    assert result["effective_timing"] == "next_cycle"
+    db_session.refresh(active)
+    assert active.offer_id == catalog_offer.id
+    scheduled = subscription_change_requests.get_scheduled_for_subscription(
+        db_session, str(active.id)
+    )
+    assert scheduled is not None
+    assert scheduled.requested_offer_id == target.id
+
+
+def test_bulk_tariff_change_refuses_a_cohort_changed_after_preview(
+    db_session, subscriber, catalog_offer
+):
+    from fastapi import HTTPException
+
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.schemas.catalog import CatalogOfferCreate
+    from app.services.bulk_tariff_change import bulk_tariff_change
+
+    catalog_offer.plan_family = "std"
+    target = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Stale Tariff Target",
+            code=f"STALE-TGT-{uuid4().hex[:6]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            plan_family="std",
+        ),
+    )
+    active, _suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+    active.next_billing_at = datetime.now(UTC) + timedelta(days=15)
+    db_session.commit()
+    preview = bulk_tariff_change.preview(
+        db_session,
+        source_offer_id=str(catalog_offer.id),
+        target_offer_id=str(target.id),
+    )
+
+    active.next_billing_at = active.next_billing_at + timedelta(days=1)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        bulk_tariff_change.execute(
+            db_session,
+            source_offer_id=str(catalog_offer.id),
+            target_offer_id=str(target.id),
+            preview_fingerprint=preview["preview_fingerprint"],
+            idempotency_key="stale-reviewed-bulk-tariff",
+            actor_id="operator-1",
+        )
+
+    assert exc_info.value.status_code == 409

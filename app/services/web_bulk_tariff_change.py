@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 
 from fastapi import Request
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.services.bulk_tariff_change import bulk_tariff_change
+from app.services.web_admin import get_actor_id
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,7 @@ def preview_context(request: Request, db: Session, form: FormData) -> dict:
         "form_source_offer_id": source_offer_id,
         "form_target_offer_id": target_offer_id,
         "form_include_suspended": include_suspended,
+        "preview_operation_key": f"admin-bulk-tariff:{uuid4()}",
     }
 
 
@@ -87,6 +90,9 @@ def execute_context(request: Request, db: Session, form: FormData) -> dict:
     source_offer_id = str(form.get("source_offer_id") or "").strip()
     target_offer_id = str(form.get("target_offer_id") or "").strip()
     include_suspended = _include_suspended(form)
+    preview_fingerprint = str(form.get("preview_fingerprint") or "").strip()
+    idempotency_key = str(form.get("idempotency_key") or "").strip()
+    actor_id = get_actor_id(request)
 
     offers = bulk_tariff_change.list_offers(db)
     counts = bulk_tariff_change.count_by_offer(db)
@@ -97,6 +103,9 @@ def execute_context(request: Request, db: Session, form: FormData) -> dict:
             source_offer_id=source_offer_id,
             target_offer_id=target_offer_id,
             include_suspended=include_suspended,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            actor_id=actor_id,
         )
     except Exception as e:
         logger.error("Bulk tariff change execution failed: %s", e)
