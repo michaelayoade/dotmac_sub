@@ -16,6 +16,10 @@ def test_vendor_operations_search_and_procurement_controls_are_visibly_spaced():
     assert 'href="{{ tab.href }}"' in template
     assert 'class="mt-4 flex flex-col gap-3 sm:flex-row"' in template
     assert 'id="vendor-operations-search"' in template
+    assert 'id="vendor-quote-status-filter"' in template
+    assert 'name="quote_status"' in template
+    assert "All statuses" in template
+    assert "quote_status_options" in template
     search_input = template.split('id="vendor-operations-search"', maxsplit=1)[1]
     search_input = search_input.split(">", maxsplit=1)[0]
     assert "pl-3" in search_input
@@ -64,11 +68,15 @@ def test_vendor_operations_route_accepts_view_filter_and_builds_tabs():
     route = ADMIN_VENDOR_OPERATIONS.read_text(encoding="utf-8")
 
     assert "class VendorOperationsTab" in route
+    assert "class VendorQuoteStatusOption" in route
     assert "_operations_tab_href" in route
     assert "_matches_queue_search" in route
     assert "view: str | None = Query(default=None, max_length=32)" in route
+    assert "quote_status: ProjectQuoteStatus | None = Query(default=None)" in route
+    assert "list_quotes_for_admin(" in route
     assert '"active_vendor_operations_view": requested_view' in route
     assert '"vendor_operations_tabs": vendor_operations_tabs' in route
+    assert '"quote_status_options": tuple(' in route
     assert 'invoice.get("invoice_number")' in route
     assert "release.project.name" in route
     assert (
