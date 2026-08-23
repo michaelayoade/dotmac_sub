@@ -622,7 +622,7 @@ jobs:
             -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
             -e SECRET_KEY=ci-test-secret-key-not-for-production \
             -e REDIS_URL=redis://ci-redis:6379/0"
-          docker run --rm $common_args dotmac-sub:ci alembic upgrade head
+          docker run --rm $common_args dotmac-sub:ci alembic upgrade heads
           docker run -d --name ci-app $common_args \
             -e CELERY_BROKER_URL=redis://ci-redis:6379/0 dotmac-sub:ci
           for i in $(seq 1 60); do

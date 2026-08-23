@@ -10,7 +10,7 @@
 #
 # Usage:
 #   scripts/testing/test_stack.sh create     # create dotmac_test DB + extensions
-#   scripts/testing/test_stack.sh migrate    # alembic upgrade head (working-tree alembic)
+#   scripts/testing/test_stack.sh migrate    # alembic upgrade heads (working-tree alembic)
 #   scripts/testing/test_stack.sh seed        # load edge-case fixtures
 #   scripts/testing/test_stack.sh up          # (re)start the test app on :8010
 #   scripts/testing/test_stack.sh down        # stop+remove the test app container
@@ -79,8 +79,8 @@ cmd_create() {
 }
 
 cmd_migrate() {
-  echo ">> alembic upgrade head against $TEST_DB"
-  run_in_image 'alembic upgrade head 2>&1 | tail -6; echo "--- current ---"; alembic current 2>&1 | tail -1'
+  echo ">> alembic upgrade heads against $TEST_DB"
+  run_in_image 'alembic upgrade heads 2>&1 | tail -6; echo "--- current ---"; alembic current 2>&1 | tail -1'
 }
 
 cmd_seed() {

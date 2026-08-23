@@ -436,7 +436,7 @@ def test_adding_a_worker_beat_or_router_service_is_refused(
 
 def test_the_migration_service_is_one_shot(compose: ShadowComposeFile) -> None:
     assert compose.services["migrate"].restart == "no"
-    assert compose.services["migrate"].command == ("alembic", "upgrade", "head")
+    assert compose.services["migrate"].command == ("alembic", "upgrade", "heads")
 
 
 def test_a_restarting_migration_service_is_refused(

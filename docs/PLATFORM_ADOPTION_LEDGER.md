@@ -4,8 +4,9 @@
 plan; amended the same day for slice S2 (dependency pinned — see "S2 acceptance
 claim") and slice S3 (composition declared in `app/composition.py` — see "S3
 acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13,
-to `dotmac-kernel==0.1.0a81` on 2026-08-20, and to
-`dotmac-kernel==0.1.0a90` on 2026-08-22 — see "Pin history". Supersedes the
+to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
+`dotmac-kernel==0.1.0a90` on 2026-08-22, and to `dotmac-kernel==0.1.0a91` the
+same day — see "Pin history". Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
 authorized by this document alone.
@@ -105,6 +106,38 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-08-22 — `0.1.0a90` → `0.1.0a91`.** Forced by composition, not chosen.
+`dotmac-service-orders 0.1.0a1` declares `dotmac-kernel >=0.1.0a91`, so
+`poetry lock` refused the a90 pin outright: the module's floor sets the
+assembly's version. This is the first time Sub's kernel pin has been moved by
+something other than a supply decision.
+
+**The a91 entry below is now superseded, and by its own terms.** It recorded
+that a91 was NOT published and that `dotmac_governance` ADR 0013 forbids
+resting a claim on a version merely visible in a repository. That reasoning was
+right and its premise has changed: `dotmac-kernel-v0.1.0a91` is now an
+annotated tag on Starter main `6c6a38b06829cd7904c52d3a10bb429db2e8ba35`, and
+in that repository the tag is written only after the published version is
+installed back from the private index and its manifest registered. The tag is
+the oracle ADR 0013 asks for; the version being on `main` never was.
+
+a91 allocates fourteen module lineages and installs no behaviour —
+`git diff a90..a91 -- packages/dotmac-kernel/src` touches `__init__.py` and
+`namespaces.py` only. Those 151 lines are what reserve `mod_serviceorders` /
+`so` / `service_orders`, so this bump is not incidental to composing Service
+Orders: it is the same change that made the module addressable.
+
+Sub's lock records wheel SHA256
+`870ffa4d8ff40f8ef768dc9271e0ab3e530daf7500ee681a025c896b9315bae3` and sdist
+SHA256 `127d36fb677b8fbab9b8a0b252766e455c60d07a0e8b91b2d9e8533ef46c0759`.
+Re-locking moved no other package: the 25-line lock diff is the kernel version
+and `dotmac-service-orders 0.1.0a1` (wheel SHA256
+`0cf0bd1fa14398f3cfbba0689827eed7649aa217a038f61c7f02d3894756abd3`), nothing
+else.
+
+Still supply plus composition, not adoption of new kernel behaviour. No `app/`
+module gained a kernel import in this change.
 
 **2026-08-22 — `0.1.0a81` → `0.1.0a90`.** Supply, not adoption. Sub's imported
 surface is unchanged and no `app/` module gained a kernel import; the pin moves
@@ -517,6 +550,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.features`
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
+- `dotmac_kernel.prerequisites`
 - `dotmac_kernel.profiles`
 - `dotmac_kernel.providers`
 - `dotmac_kernel.providers.provisioning`
@@ -527,6 +561,36 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
+
+`dotmac_kernel.prerequisites` is admitted for the composition **vocabulary**:
+the effect names `TENANT_SCOPE_CATALOG_V1` and `MODULE_DATABASE_ROLES_V1`, the
+`PrerequisiteBinding` type, and `install_prerequisite_bindings`. Composing a
+module means answering which Sub revision supplies each effect the module
+requires, and the answer has to be keyed by something. Keying it by the
+kernel's own `PrerequisiteSpec.name` rather than a string literal means a
+kernel rename becomes an import error in this repository instead of a binding
+that silently answers nothing.
+
+**Amended 2026-08-23, composing `dotmac-service-orders`.** This clause
+previously read "effect NAMES only, and only in `app/migration_bindings.py`".
+That was written before any module was actually composed, and the real API
+cannot satisfy it: a binding IS a `PrerequisiteBinding` object, and it takes
+effect only when `alembic/env.py` calls `install_prerequisite_bindings` before
+the revision map is built. The clause described an aspiration; two names and a
+second file are what composition costs.
+
+Nothing else in that module is admitted: `require_prerequisites` — the function
+that PROVES an effect against the live catalog — stays where it is, called by
+the module's own migration inside its own lineage. Sub reads the vocabulary; it
+does not run the check.
+
+That last sentence was prose only until this amendment. `dotmac_kernel.prerequisites`
+was on the allowlist with no restricted-name entry, so `require_prerequisites`
+would have imported cleanly into `app/` and the guard would have stayed green.
+It now has a `RESTRICTED_MODULE_NAMES` entry naming exactly the four admitted
+names, with the denial exercised in the negative control. `alembic/` was
+likewise unmonitored rather than exempt — the `app/`-scoped scan never read
+`env.py` — and is now scanned by its own test.
 
 `dotmac_kernel.models` is admitted for **two names only** — `Tenant` and
 `TenantDomain` (ADR-0009). Every other name in it, including `Party`,
