@@ -46,6 +46,7 @@ dependencies = [
     "qrcode[pil] (==7.4.2)",
     "google-auth (>=2.30.0,<3.0.0)",
     "dotmac-integration-client",
+    "langgraph==0.6.6",
     "defusedxml==0.7.1",
     "dotmac-kernel==0.1.0a50",
     "dotmac-ui==0.1.0a7",
