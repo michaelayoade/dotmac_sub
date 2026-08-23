@@ -562,17 +562,35 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
 
-`dotmac_kernel.prerequisites` is admitted for **effect NAMES only**, and only
-in `app/migration_bindings.py`. Composing a module means answering which Sub
-revision supplies each effect the module requires, and the answer has to be
-keyed by something. Keying it by the kernel's own `PrerequisiteSpec.name`
-rather than a string literal means a kernel rename becomes an import error in
-this repository instead of a binding that silently answers nothing.
+`dotmac_kernel.prerequisites` is admitted for the composition **vocabulary**:
+the effect names `TENANT_SCOPE_CATALOG_V1` and `MODULE_DATABASE_ROLES_V1`, the
+`PrerequisiteBinding` type, and `install_prerequisite_bindings`. Composing a
+module means answering which Sub revision supplies each effect the module
+requires, and the answer has to be keyed by something. Keying it by the
+kernel's own `PrerequisiteSpec.name` rather than a string literal means a
+kernel rename becomes an import error in this repository instead of a binding
+that silently answers nothing.
+
+**Amended 2026-08-23, composing `dotmac-service-orders`.** This clause
+previously read "effect NAMES only, and only in `app/migration_bindings.py`".
+That was written before any module was actually composed, and the real API
+cannot satisfy it: a binding IS a `PrerequisiteBinding` object, and it takes
+effect only when `alembic/env.py` calls `install_prerequisite_bindings` before
+the revision map is built. The clause described an aspiration; two names and a
+second file are what composition costs.
 
 Nothing else in that module is admitted: `require_prerequisites` — the function
 that PROVES an effect against the live catalog — stays where it is, called by
 the module's own migration inside its own lineage. Sub reads the vocabulary; it
 does not run the check.
+
+That last sentence was prose only until this amendment. `dotmac_kernel.prerequisites`
+was on the allowlist with no restricted-name entry, so `require_prerequisites`
+would have imported cleanly into `app/` and the guard would have stayed green.
+It now has a `RESTRICTED_MODULE_NAMES` entry naming exactly the four admitted
+names, with the denial exercised in the negative control. `alembic/` was
+likewise unmonitored rather than exempt — the `app/`-scoped scan never read
+`env.py` — and is now scanned by its own test.
 
 `dotmac_kernel.models` is admitted for **two names only** — `Tenant` and
 `TenantDomain` (ADR-0009). Every other name in it, including `Party`,
