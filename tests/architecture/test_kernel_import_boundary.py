@@ -52,6 +52,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.features",
         "dotmac_kernel.models",
         "dotmac_kernel.money",
+        "dotmac_kernel.prerequisites",
         "dotmac_kernel.profiles",
         "dotmac_kernel.providers",
         "dotmac_kernel.providers.provisioning",

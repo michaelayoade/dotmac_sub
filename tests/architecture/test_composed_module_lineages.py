@@ -128,13 +128,14 @@ def test_every_composed_module_has_its_prerequisites_bound() -> None:
     the unit suite rather than a refused migration on a real database.
     """
 
-    from app.migration_bindings import MIGRATION_BINDINGS
+    from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
 
+    bound = {binding.prerequisite for binding in ASSEMBLY_PREREQUISITE_BINDINGS}
     unbound: list[str] = []
     for import_name in _declared_lineages():
         manifest = import_module(f"{import_name}.manifest").module
         for requirement in getattr(manifest, "requires", ()):
-            if requirement not in MIGRATION_BINDINGS:
+            if requirement not in bound:
                 unbound.append(f"{import_name} requires {requirement!r}")
     assert not unbound, (
         "app/migration_bindings.py has no revision supplying these effects:\n  "
@@ -149,16 +150,16 @@ def test_a_bound_revision_exists_in_subs_own_lineage() -> None:
     failure surfaces at `alembic upgrade` on whichever database runs first.
     """
 
-    from app.migration_bindings import MIGRATION_BINDINGS
+    from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
 
     versions = PROJECT_ROOT / "alembic" / "versions"
     revisions = {
         path.stem for path in versions.glob("*.py") if not path.stem.startswith("__")
     }
     dangling = sorted(
-        f"{effect} -> {revision}"
-        for effect, revision in MIGRATION_BINDINGS.items()
-        if revision not in revisions
+        f"{binding.prerequisite} -> {binding.provider_revision}"
+        for binding in ASSEMBLY_PREREQUISITE_BINDINGS
+        if binding.provider_revision not in revisions
     )
     assert not dangling, (
         "these bindings name a revision that is not in alembic/versions:\n  "
