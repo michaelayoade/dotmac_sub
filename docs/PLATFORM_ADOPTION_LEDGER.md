@@ -5,8 +5,8 @@ plan; amended the same day for slice S2 (dependency pinned — see "S2 acceptanc
 claim") and slice S3 (composition declared in `app/composition.py` — see "S3
 acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13,
 to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
-`dotmac-kernel==0.1.0a90` on 2026-08-22, and to `dotmac-kernel==0.1.0a91` the
-same day — see "Pin history". Supersedes the
+`dotmac-kernel==0.1.0a90` on 2026-08-22, to `dotmac-kernel==0.1.0a91` the
+same day, and to `dotmac-kernel==0.1.0a92` on 2026-08-23 — see "Pin history". Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
 authorized by this document alone.
@@ -106,6 +106,34 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-08-23 — `0.1.0a91` → `0.1.0a92`.** Forced by composition again, and by
+a defect Sub's own shape exposed.
+
+`PrerequisiteBinding` validated `provider_revision` against a 32-character
+bound. That bound belongs to a different rule: `namespaces.MAX_REVISION_ID_LENGTH`
+caps a MODULE's own revision ids at 32 so it installs into anyone's assembly,
+including one using Alembic's default `alembic_version` (`String(32)`).
+`provider_revision` names the HOST's revision, in the HOST's own table — and
+Sub's `version_num` is `VARCHAR(255)` by deliberate choice (`ensure_alembic_
+version_table`, which also ALTERs pre-existing tables to match). Sub carries
+dozens of revision ids over 32 characters, longest 44, and the two it wrote
+specifically to supply module prerequisites are 37 and 38:
+
+- `545_tenant_scope_catalog_prerequisite`
+- `546_module_database_roles_prerequisite`
+
+So the correct binding was unexpressible. Every workaround available here was
+worse — rewrite applied migration history, or bind to a shorter revision that
+does not actually supply the effect — which is why this was fixed upstream
+rather than absorbed. Starter PR #364 relaxes the bound to 255 and pins
+`MAX_REVISION_ID_LENGTH == 32` in a test so the two limits cannot be re-merged.
+Pure loosening: no previously valid binding becomes invalid.
+
+`dotmac-kernel-v0.1.0a92` is an annotated tag on Starter main
+`720eeb0a2e5c623ba27837ff9183ffd7958ba5f7`, written only after the published
+version was installed back from the private index and booted — the same oracle
+the a91 entry below relies on, satisfying `dotmac_governance` ADR 0013.
 
 **2026-08-22 — `0.1.0a90` → `0.1.0a91`.** Forced by composition, not chosen.
 `dotmac-service-orders 0.1.0a1` declares `dotmac-kernel >=0.1.0a91`, so
