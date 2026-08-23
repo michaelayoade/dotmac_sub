@@ -177,56 +177,6 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-  langgraph-lock-artifact:
-    name: LangGraph Lock Artifact
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Poetry
-        run: python -m pip install "poetry==${POETRY_VERSION}"
-
-      - name: Resolve lock file
-        run: poetry lock --no-interaction
-
-      - name: Verify lock consistency
-        run: poetry check --lock
-
-      - name: Install dependencies
-        run: poetry install --no-interaction
-
-      - name: Verify runtime imports
-        run: |
-          poetry run python - <<'PY'
-          import importlib.metadata as metadata
-          import dotmac_kernel
-          import dotmac_ui
-          import langgraph
-
-          with open("langgraph-lock-report.txt", "w", encoding="utf-8") as report:
-              report.write(f"langgraph={metadata.version('langgraph')}\n")
-              report.write(f"dotmac-kernel={metadata.version('dotmac-kernel')}\n")
-              report.write(f"dotmac-ui={metadata.version('dotmac-ui')}\n")
-              report.write("imports=ok\n")
-          PY
-
-      - name: Upload lock artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: langgraph-lock-artifact
-          path: |
-            pyproject.toml
-            poetry.lock
-            langgraph-lock-report.txt
-          if-no-files-found: error
-
   lint:
     name: Lint & Format
     needs: [changes, python-environment]
