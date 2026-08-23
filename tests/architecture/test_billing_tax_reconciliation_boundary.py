@@ -50,7 +50,7 @@ def test_correction_coordinator_delegates_to_credit_note_owner() -> None:
 def test_tax_reconciliation_routes_are_thin_and_guarded() -> None:
     source = _read("app/web/admin/billing_credits.py")
     start = source.index("def billing_tax_reconciliation(")
-    end = source.index("\n\n@router.get(\n    \"/credits/new\"", start)
+    end = source.index('\n\n@router.get(\n    "/credits/new"', start)
     reconciliation_routes = source[start:end]
 
     assert "web_billing_tax_reconciliation_service" in reconciliation_routes

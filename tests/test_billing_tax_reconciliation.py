@@ -170,9 +170,7 @@ def test_pre_policy_invoice_is_review_only_because_policy_history_is_missing(
     assert candidate.can_prepare_tax_credit is False
 
 
-def test_mixed_tax_scope_is_review_only(
-    db_session, subscriber, subscription, vat_rate
-):
+def test_mixed_tax_scope_is_review_only(db_session, subscriber, subscription, vat_rate):
     now = datetime.now(UTC)
     _exempt_policy(
         db_session,
