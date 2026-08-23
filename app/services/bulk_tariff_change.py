@@ -22,6 +22,7 @@ from app.services.subscription_lifecycle import (
 )
 from app.services.subscription_lifecycle_batch import (
     MAX_BATCH_SIZE,
+    SubscriptionBatchOutcomeItem,
     SubscriptionBatchPreviewItem,
     execute_subscription_batch,
     preview_subscription_batch,
@@ -192,9 +193,7 @@ class BulkTariffChange:
             "price_delta": price_delta,
             "include_suspended": include_suspended,
             "lifecycle_items": lifecycle_items,
-            "lifecycle_by_id": {
-                item.subscription_id: item for item in lifecycle_items
-            },
+            "lifecycle_by_id": {item.subscription_id: item for item in lifecycle_items},
             "eligible_count": sum(item.eligible for item in lifecycle_items),
             "ineligible_count": sum(not item.eligible for item in lifecycle_items),
             "preview_fingerprint": _preview_fingerprint(
@@ -278,7 +277,7 @@ class BulkTariffChange:
             for item in lifecycle_items
             if item.expected_head is not None
         }
-        outcome_items = []
+        outcome_items: list[SubscriptionBatchOutcomeItem] = []
         subscription_ids = [str(item.subscription_id) for item in lifecycle_items]
         for batch_number, batch in enumerate(_chunks(subscription_ids), start=1):
             outcome = execute_subscription_batch(

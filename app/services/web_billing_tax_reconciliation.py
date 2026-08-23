@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import secrets
 from dataclasses import dataclass
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -12,8 +13,11 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import TaxApplication
 from app.schemas.billing import CreditNoteIssuePreviewRequest, CreditNoteIssueRequest
-from app.services.billing.credit_notes import CreditIssuePreview, CreditIssueResult
-from app.services.billing.credit_notes import CreditNotes
+from app.services.billing.credit_notes import (
+    CreditIssuePreview,
+    CreditIssueResult,
+    CreditNotes,
+)
 from app.services.billing_tax_reconciliation import (
     TaxReconciliationCandidate,
     get_tax_reconciliation_candidate,
@@ -90,7 +94,7 @@ def _credit_payload(
         account_id=candidate.account_id,
         invoice_id=candidate.invoice_id,
         currency=candidate.currency,
-        subtotal=0,
+        subtotal=Decimal("0.00"),
         tax_total=candidate.maximum_remaining_adjustment,
         total=candidate.maximum_remaining_adjustment,
         memo=f"VAT exemption correction for invoice {reference} {marker}",

@@ -112,9 +112,7 @@ def resolve_subscription_taxes(
         return {}
     account_ids = {row.subscriber_id for row in rows}
     address_ids = {
-        row.service_address_id
-        for row in rows
-        if row.service_address_id is not None
+        row.service_address_id for row in rows if row.service_address_id is not None
     }
     offer_ids = {row.offer_id for row in rows}
 
