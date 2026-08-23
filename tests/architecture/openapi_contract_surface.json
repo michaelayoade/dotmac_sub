@@ -5085,6 +5085,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/integration/observations/payment-settlements/{capability_binding_id}/descriptor": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "5850d1410b88",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/integration/observations/{capability_binding_id}/descriptor": {
    "params": [
     "header:authorization",
@@ -14901,6 +14913,30 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/integration/observations/payment-settlements/{capability_binding_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_binding_id!"
+   ],
+   "request": "4c8f62332341",
+   "responses": {
+    "200": "67081136d1a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integration/observations/payment-settlements/{capability_binding_id}/mirror": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_binding_id!"
+   ],
+   "request": "4c8f62332341",
+   "responses": {
+    "200": "a832957590ca",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/integration/observations/{capability_binding_id}": {
    "params": [
     "header:authorization",
@@ -18538,6 +18574,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "PUT /api/v1/integrations/payment-provider-mappings/{provider_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:provider_id!"
+   ],
+   "request": "8d1780e82ae7",
+   "responses": {
+    "200": "c97fdf53320b",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "PUT /api/v1/ont-units/{ont_id}/management-ip": {
    "params": [
     "header:authorization",
@@ -19357,13 +19405,21 @@
   "IntegratorAttachment": "259f0701ae25",
   "IntegratorContactProfile": "887833aaf679",
   "IntegratorDeliveryReceiptObservation": "2d3606b598a3",
+  "IntegratorDestinationScope": "8c731d288799",
   "IntegratorLocation": "ef706cbea459",
   "IntegratorMessageObservation": "b6af1f02f6c4",
   "IntegratorMirrorFieldDisagreement": "780a4e635a4c",
   "IntegratorMirrorReport": "55ef993dbdb9",
   "IntegratorObservationEnvelope": "6bb093cec679",
   "IntegratorObservationReceipt": "2eab03972b4b",
+  "IntegratorObservationSource": "d68cdc17a9e0",
+  "IntegratorPaymentProviderMappingRead": "76c76fce7147",
+  "IntegratorPaymentProviderMappingUpsert": "944c90ee1018",
   "IntegratorScope": "de05e50ec63b",
+  "IntegratorSettlementEnvelope": "68509cc89e56",
+  "IntegratorSettlementMirrorDisagreement": "3776dfd552e1",
+  "IntegratorSettlementMirrorReport": "6c4cf5ced22b",
+  "IntegratorSettlementReceipt": "5aefc8c7f135",
   "InterfaceStatus": "20c251764046",
   "InvoiceBulkActionResponse": "4f4b4d0b09e5",
   "InvoiceBulkVoidRequest": "20ea34f498f7",
@@ -19680,6 +19736,8 @@
   "OLTDeviceCreate": "3fbf11d6798d",
   "OLTDeviceRead": "ff83ff793555",
   "OLTDeviceUpdate": "bd140896b1d1",
+  "ObservedFee": "a4bc2b958df6",
+  "ObservedMoney": "07cb484fbebf",
   "OfferAddOnRead": "45dfa9f2b19f",
   "OfferPriceCreate": "1b52c00cb824",
   "OfferPriceRead": "d19faa8f8e42",
@@ -20036,6 +20094,9 @@
   "SessionRevokeResponse": "6f65989aa4a7",
   "SessionStatus": "da0d2e5253e5",
   "SessionUpdate": "67c007064d12",
+  "SettlementObservation": "c2bf3c0a85cd",
+  "SettlementProductPortDescriptorV2": "28ea93e0d2df",
+  "SettlementTransportEvidence": "c1bc3e9c99ad",
   "ShiftCreate": "60488314a714",
   "ShiftRead": "360213b8ce8f",
   "ShiftUpdate": "0fc6570f0c71",

@@ -496,6 +496,63 @@ def _whatsapp_manifest(
     )
 
 
+def _dotmac_integrator_manifest(
+    *, version: str, include_settlement: bool
+) -> ConnectorManifest:
+    capabilities = [
+        CapabilityManifest(
+            id="messaging.receive.v1",
+            modes=(CapabilityMode.inbound,),
+        )
+    ]
+    emits = ["communications.inbound_message_observation"]
+    classifications = ["customer_contact", "message_content"]
+    if include_settlement:
+        capabilities.append(
+            CapabilityManifest(
+                id="payments.settlement.observation.v1",
+                modes=(CapabilityMode.inbound,),
+            )
+        )
+        emits.append("financial.payment_provider_observation")
+        classifications.append("financial_transaction")
+    return ConnectorManifest(
+        key="dotmac.integrator.http",
+        name="Dotmac Integrator",
+        version=version,
+        connector_type="transport" if include_settlement else "messaging",
+        description=(
+            "Independently deployed Integrator delivering provider-neutral "
+            "typed observations. Sub authenticates the Integrator as a scoped "
+            "machine principal; provider verification happens in the "
+            "Integrator's own deployment, over the bytes it actually covers."
+            if include_settlement
+            else "Independently deployed Integrator delivering provider-neutral "
+            "inbound message observations. Sub authenticates the Integrator as "
+            "a scoped machine principal; the provider signature is verified in "
+            "the Integrator's own deployment, over the bytes it actually covers."
+        ),
+        catalogue_visible=False,
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.integrator_http",
+        ),
+        capabilities=tuple(capabilities),
+        config_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        secrets=(),
+        data_access=DataAccessManifest(
+            emits=tuple(emits),
+            classifications=tuple(classifications),
+        ),
+        egress=EgressManifest(),
+        health=HealthManifest(operation="connection.validate.v1"),
+    )
+
+
 _DEFINITIONS: tuple[ConnectorManifest, ...] = (
     ConnectorManifest(
         key="fiber.inquiry.http",
@@ -577,41 +634,7 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         egress=EgressManifest(),
         health=HealthManifest(operation="connection.validate.v1"),
     ),
-    ConnectorManifest(
-        key="dotmac.integrator.http",
-        name="Dotmac Integrator",
-        version="1.0.0",
-        connector_type="messaging",
-        description=(
-            "Independently deployed Integrator delivering provider-neutral "
-            "inbound message observations. Sub authenticates the Integrator as "
-            "a scoped machine principal; the provider signature is verified in "
-            "the Integrator's own deployment, over the bytes it actually covers."
-        ),
-        catalogue_visible=False,
-        runtime=RuntimeManifest(
-            type=ConnectorRuntimeType.builtin_worker,
-            module="app.services.integrations.connectors.integrator_http",
-        ),
-        capabilities=(
-            CapabilityManifest(
-                id="messaging.receive.v1",
-                modes=(CapabilityMode.inbound,),
-            ),
-        ),
-        config_schema={
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-        secrets=(),
-        data_access=DataAccessManifest(
-            emits=("communications.inbound_message_observation",),
-            classifications=("customer_contact", "message_content"),
-        ),
-        egress=EgressManifest(),
-        health=HealthManifest(operation="connection.validate.v1"),
-    ),
+    _dotmac_integrator_manifest(version="1.1.0", include_settlement=True),
     ConnectorManifest(
         key="webhook.http",
         name="HTTP Webhook",
@@ -783,6 +806,7 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
 )
 
 _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
+    _dotmac_integrator_manifest(version="1.0.0", include_settlement=False),
     _whatsapp_manifest(version="1.0.0", include_phone_number_id=False),
     _dotmac_erp_manifest(version="1.1.0", include_workforce_attendance=True),
     # ERP 1.0.0 remains executable while installations explicitly adopt the

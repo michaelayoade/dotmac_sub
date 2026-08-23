@@ -62,6 +62,14 @@ from app.schemas.integrator_observation import (
     IntegratorObservationReceipt,
     ProductPortDescriptorV1,
 )
+from app.schemas.integrator_settlement_observation import (
+    IntegratorSettlementEnvelope,
+    IntegratorSettlementMirrorDisagreement,
+    IntegratorSettlementMirrorReport,
+    IntegratorSettlementReceipt,
+    SettlementProductPortDescriptorV2,
+)
+from app.services import payment_webhook_commands as settlement_commands
 from app.services import (
     team_inbox_integrator_envelope as envelopes,
 )
@@ -78,6 +86,7 @@ from app.services.integrations import inbox as integration_inbox
 from app.services.integrations import product_port_descriptor as descriptors
 from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_RECEIVE_CAPABILITY,
+    INTEGRATOR_SETTLEMENT_CAPABILITY,
 )
 from app.services.integrations.runtime_execution import (
     RuntimeExecutionError,
@@ -99,6 +108,36 @@ INTEGRATOR_MIRROR_SCOPE = "integration:observations:mirror"
 _require_descriptor_auth = require_any_permission(
     INTEGRATOR_OBSERVATION_SCOPE, INTEGRATOR_MIRROR_SCOPE
 )
+
+
+def _settlement_observation(
+    envelope: IntegratorSettlementEnvelope,
+) -> settlement_commands.IntegratorSettlementObservationCommand:
+    observation = envelope.observation
+    return settlement_commands.IntegratorSettlementObservationCommand(
+        kind=settlement_commands.IntegratorSettlementKind(observation.observation_kind),
+        provider_status=observation.provider_status,
+        amount=settlement_commands.IntegratorObservedMoney(
+            amount=observation.amount.amount,
+            currency=observation.amount.currency,
+        ),
+        provider_fee=(
+            settlement_commands.IntegratorObservedMoney(
+                amount=observation.provider_fee.amount,
+                currency=observation.provider_fee.currency,
+            )
+            if observation.provider_fee is not None
+            else None
+        ),
+        occurred_at=observation.occurred_at,
+        arrival=settlement_commands.IntegratorSettlementArrival(
+            observation.arrival_mode
+        ),
+        merchant_reference=observation.merchant_reference,
+        provider_transaction_id=(
+            observation.transport_evidence.provider_transaction_id
+        ),
+    )
 
 
 def _bind(db: Session, capability_binding_id: UUID, capability_id: str):
@@ -140,6 +179,168 @@ def _refuse(exc: envelopes.IntegratorEnvelopeError) -> HTTPException:
         )
     return HTTPException(
         status_code=400, detail={"code": exc.code, "message": exc.message}
+    )
+
+
+@router.get(
+    "/payment-settlements/{capability_binding_id}/descriptor",
+    response_model=SettlementProductPortDescriptorV2,
+)
+def read_settlement_product_port_descriptor(
+    capability_binding_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(_require_descriptor_auth),
+) -> descriptors.ProductPortDescriptorV2:
+    """Publish the finance-owned generic ProductObservation destination."""
+
+    try:
+        return descriptors.settlement_product_port_descriptor(db, capability_binding_id)
+    except descriptors.ProductPortDescriptorError as exc:
+        raise HTTPException(
+            status_code=404, detail="Integrator settlement binding not found"
+        ) from exc
+
+
+@router.post(
+    "/payment-settlements/{capability_binding_id}",
+    response_model=IntegratorSettlementReceipt,
+)
+def receive_integrator_settlement(
+    capability_binding_id: UUID,
+    envelope: IntegratorSettlementEnvelope,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(require_permission(INTEGRATOR_OBSERVATION_SCOPE)),
+) -> IntegratorSettlementReceipt:
+    """Record, then delegate one normalized settlement to the finance owner."""
+
+    execution = _bind(db, capability_binding_id, INTEGRATOR_SETTLEMENT_CAPABILITY)
+    try:
+        receipt, should_process = integration_inbox.receive_and_claim_verified(
+            db,
+            capability_binding_id=execution.binding.id,
+            provider_event_id=envelope.provider_event_id,
+            event_type=envelope.event_type,
+            payload=envelope.model_dump(mode="json"),
+            headers={
+                "integrator_installation_id": str(envelope.source.installation_id),
+                "integrator_connector_key": envelope.source.connector_key,
+            },
+        )
+    except integration_inbox.ProviderEventIdentityCollision as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "integrator_settlement_identity_collision"},
+        ) from exc
+    except integration_inbox.InboxError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "integrator_settlement_receipt_conflict"},
+        ) from exc
+
+    if not should_process:
+        consequence = dict(receipt.consequence_json or {})
+        return IntegratorSettlementReceipt(
+            observation_id=str(consequence.get("provider_event_id") or receipt.id),
+            outcome=str(consequence.get("status") or "replayed"),
+            processing_status=str(
+                consequence.get("processing_status") or receipt.state
+            ),
+            replayed=True,
+        )
+
+    receipt_id = receipt.id
+    db_session_adapter.release_read_transaction(db)
+    try:
+        result = settlement_commands.process_integrator_settlement(
+            db,
+            settlement_commands.ProcessIntegratorSettlementCommand(
+                receipt_id=receipt_id,
+                source_installation_id=envelope.source.installation_id,
+                connector_key=envelope.source.connector_key,
+                provider_event_id=envelope.provider_event_id,
+                observation=_settlement_observation(envelope),
+            ),
+            context=CommandContext.system(
+                actor="system:integrator-settlement-port",
+                scope=settlement_commands.INTEGRATOR_PROCESS_SCOPE,
+                reason="Process Integrator-delivered settlement observation",
+                idempotency_key=envelope.provider_event_id,
+            ),
+        )
+    except settlement_commands.PaymentWebhookError as exc:
+        terminal = exc.code.endswith(
+            (
+                ".payload_invalid",
+                ".topup_intent_mismatch",
+                ".deposit_correlation_unavailable",
+                ".receipt_source_mismatch",
+            )
+        )
+        integration_inbox.fail_claimed_consequence(
+            db,
+            receipt_id=receipt_id,
+            error_code=exc.code[:120],
+            error_detail=exc.message,
+            max_attempts=1 if terminal else 10,
+        )
+        status_code = 422 if terminal else 503
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except Exception as exc:
+        integration_inbox.fail_claimed_consequence(
+            db,
+            receipt_id=receipt_id,
+            error_code="integrator_settlement_consequence_failed",
+            error_detail=type(exc).__name__,
+        )
+        raise
+
+    return IntegratorSettlementReceipt(
+        observation_id=str(result.provider_event_id or receipt_id),
+        outcome="recorded",
+        processing_status=result.processing_status,
+        replayed=result.replayed,
+    )
+
+
+@router.post(
+    "/payment-settlements/{capability_binding_id}/mirror",
+    response_model=IntegratorSettlementMirrorReport,
+)
+def mirror_integrator_settlement(
+    capability_binding_id: UUID,
+    envelope: IntegratorSettlementEnvelope,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(require_permission(INTEGRATOR_MIRROR_SCOPE)),
+) -> IntegratorSettlementMirrorReport:
+    """Compare against incumbent financial evidence without writing anything."""
+
+    _bind(db, capability_binding_id, INTEGRATOR_SETTLEMENT_CAPABILITY)
+    result = settlement_commands.compare_integrator_settlement(
+        db,
+        settlement_commands.CompareIntegratorSettlementCommand(
+            source_installation_id=envelope.source.installation_id,
+            connector_key=envelope.source.connector_key,
+            provider_event_id=envelope.provider_event_id,
+            observation=_settlement_observation(envelope),
+        ),
+    )
+    return IntegratorSettlementMirrorReport(
+        verdict=result.verdict,
+        identity=result.identity,
+        counterpart_identity=result.counterpart_identity,
+        blocking_reasons=result.blocking_reasons,
+        disagreements=tuple(
+            IntegratorSettlementMirrorDisagreement(
+                field=item.field,
+                integrator=item.integrator,
+                sub=item.sub,
+            )
+            for item in result.disagreements
+        ),
+        agrees=result.agrees,
     )
 
 
