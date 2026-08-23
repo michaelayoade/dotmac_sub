@@ -19,6 +19,7 @@ from app.models.auth import UserCredential
 from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.services import vendor_user_provisioning as provisioning
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field import vendor_capabilities as caps
@@ -28,6 +29,7 @@ from app.services.field.vendor_auth import (
     resolve_vendor_login_eligibility,
 )
 from app.services.operator_tenant import provision_operator_tenant
+from app.services.owner_commands import CommandContext
 
 
 def _vendor(db_session, *, is_active: bool = True) -> FieldVendor:
@@ -180,6 +182,126 @@ def test_an_unknown_role_is_refused_at_provisioning(db_session):
         _provision(db_session, vendor, role="admin")
 
     assert exc.value.code == "unknown_role"
+
+
+def test_crm_contact_import_repairs_profile_and_preserves_selfcare_email(db_session):
+    selfcare_email = f"telepros-{uuid4().hex[:8]}@example.com"
+    vendor = Vendor(
+        name="Telepros Tech",
+        code=f"TP-{uuid4().hex[:8]}",
+        contact_name="Existing Selfcare Contact",
+        contact_email=selfcare_email,
+        contact_phone="+2348000000000",
+        is_active=True,
+    )
+    db_session.add(vendor)
+    db_session.commit()
+    command = provisioning.ImportVendorContactLogin(
+        context=CommandContext.system(
+            actor="system:test",
+            scope=str(vendor.id),
+            reason="Reviewed CRM vendor contact import",
+        ),
+        vendor_id=vendor.id,
+        crm_vendor_user_id=str(uuid4()),
+        crm_person_id=uuid4(),
+        first_name="CRM First",
+        last_name="CRM Last",
+        role="field",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    outcome = provisioning.import_vendor_contact_login(db_session, command)
+
+    field_vendor = db_session.get(FieldVendor, outcome.field_vendor_id)
+    principal = db_session.get(SystemUser, outcome.system_user_id)
+    membership = db_session.get(FieldVendorUser, outcome.vendor_user_id)
+    assert field_vendor.crm_vendor_id == str(vendor.id)
+    assert field_vendor.contact_email == selfcare_email
+    assert principal.email == selfcare_email
+    assert principal.first_name == "CRM First"
+    assert principal.last_name == "CRM Last"
+    assert membership.crm_vendor_user_id == command.crm_vendor_user_id
+    assert db_session.get(Vendor, vendor.id).contact_email == selfcare_email
+
+
+def test_crm_contact_import_refuses_email_collision_atomically(db_session):
+    email = f"collision-{uuid4().hex[:8]}@example.com"
+    vendor = Vendor(name="Collision Vendor", contact_email=email, is_active=True)
+    existing = SystemUser(
+        first_name="Existing",
+        last_name="Principal",
+        display_name="Existing Principal",
+        email=email,
+    )
+    db_session.add_all([vendor, existing])
+    db_session.commit()
+    vendor_id = vendor.id
+    command = provisioning.ImportVendorContactLogin(
+        context=CommandContext.system(
+            actor="system:test",
+            scope=str(vendor_id),
+            reason="Reviewed CRM vendor contact import",
+        ),
+        vendor_id=vendor_id,
+        crm_vendor_user_id=str(uuid4()),
+        crm_person_id=uuid4(),
+        first_name="CRM",
+        last_name="Contact",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(provisioning.VendorUserProvisioningError) as exc:
+        provisioning.import_vendor_contact_login(db_session, command)
+
+    assert exc.value.code == "email_in_use"
+    assert (
+        db_session.query(FieldVendor)
+        .filter(FieldVendor.crm_vendor_id == str(vendor_id))
+        .count()
+        == 0
+    )
+
+
+def test_crm_contact_import_refuses_unlinked_portal_profile(db_session):
+    email = f"profile-{uuid4().hex[:8]}@example.com"
+    code = f"DUP-{uuid4().hex[:8]}"
+    vendor = Vendor(
+        name="Native Vendor", code=code, contact_email=email, is_active=True
+    )
+    existing_profile = FieldVendor(
+        name="Existing Portal Profile",
+        code=code,
+        contact_email=f"other-{email}",
+        is_active=True,
+    )
+    db_session.add_all([vendor, existing_profile])
+    db_session.commit()
+    vendor_id = vendor.id
+    command = provisioning.ImportVendorContactLogin(
+        context=CommandContext.system(
+            actor="system:test",
+            scope=str(vendor_id),
+            reason="Reviewed CRM vendor contact import",
+        ),
+        vendor_id=vendor_id,
+        crm_vendor_user_id=str(uuid4()),
+        crm_person_id=uuid4(),
+        first_name="CRM",
+        last_name="Contact",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    with pytest.raises(provisioning.VendorUserProvisioningError) as exc:
+        provisioning.import_vendor_contact_login(db_session, command)
+
+    assert exc.value.code == "portal_profile_conflict"
+    assert (
+        db_session.query(FieldVendor)
+        .filter(FieldVendor.crm_vendor_id == str(vendor_id))
+        .count()
+        == 0
+    )
 
 
 def test_revoking_a_login_disables_both_rows(db_session):

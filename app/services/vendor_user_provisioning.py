@@ -26,7 +26,7 @@ import secrets
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthenticationBinding, AuthProvider, UserCredential
@@ -39,6 +39,7 @@ from app.models.field_vendor import (
 from app.models.party import PartyDataClassification, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.services import auth_flow as auth_flow_service
 from app.services import credential_party_binding, staff_provisioning
 from app.services import party as party_registry
@@ -68,6 +69,11 @@ _ROLE_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
     concern="vendor organisation role assignment",
     name="set_vendor_user_role",
+)
+_IMPORT_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern="vendor portal profile repair and CRM contact import",
+    name="import_vendor_contact_login",
 )
 _ENABLE_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
@@ -104,6 +110,30 @@ class ProvisionVendorUser:
     last_name: str
     email: str
     role: str | None = None
+    crm_vendor_user_id: str | None = None
+    crm_person_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ImportVendorContactLogin:
+    context: CommandContext
+    vendor_id: UUID
+    crm_vendor_user_id: str
+    crm_person_id: UUID
+    first_name: str
+    last_name: str
+    role: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ImportVendorContactLoginOutcome:
+    vendor_id: UUID
+    field_vendor_id: UUID
+    vendor_user_id: UUID
+    system_user_id: UUID
+    email: str
+    crm_vendor_user_id: str
+    crm_person_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,6 +395,7 @@ def provision(
     membership = FieldVendorUser(
         vendor_id=vendor.id,
         system_user_id=principal.id,
+        crm_vendor_user_id=_clean(command.crm_vendor_user_id),
         role=role,
         is_active=True,
     )
@@ -379,10 +410,123 @@ def provision(
             "field_vendor_id": str(vendor.id),
             "system_user_id": str(principal.id),
             "role": role,
+            "crm_vendor_user_id": membership.crm_vendor_user_id,
+            "crm_person_id": (
+                str(command.crm_person_id) if command.crm_person_id else None
+            ),
         },
         actor=actor,
     )
     return membership
+
+
+def import_vendor_contact_login(
+    db: Session,
+    command: ImportVendorContactLogin,
+) -> ImportVendorContactLoginOutcome:
+    """Repair a missing portal profile and import one reviewed CRM contact.
+
+    The native Selfcare vendor remains authoritative for the login email. CRM
+    contributes only the reviewed person's name, role, and provenance IDs.
+    """
+
+    def operation() -> ImportVendorContactLoginOutcome:
+        vendor = db.scalar(
+            select(Vendor)
+            .where(Vendor.id == coerce_uuid(command.vendor_id))
+            .with_for_update()
+        )
+        if vendor is None:
+            raise VendorUserProvisioningError(
+                "vendor_not_found", "Vendor not found.", kind="not_found"
+            )
+        if not vendor.is_active:
+            raise VendorUserProvisioningError(
+                "vendor_inactive", "Cannot import a login for an inactive vendor."
+            )
+        email = (_clean(vendor.contact_email) or "").lower()
+        if not email or "@" not in email:
+            raise VendorUserProvisioningError(
+                "email_required",
+                "The Selfcare vendor must have a valid contact email.",
+            )
+        crm_vendor_user_id = _clean(command.crm_vendor_user_id)
+        if not crm_vendor_user_id:
+            raise VendorUserProvisioningError(
+                "crm_identity_required",
+                "The reviewed CRM contact must have a vendor-user identifier.",
+            )
+
+        field_vendor = db.scalar(
+            select(FieldVendor)
+            .where(FieldVendor.crm_vendor_id == str(vendor.id))
+            .with_for_update()
+        )
+        if field_vendor is None:
+            conflict_filters = []
+            if vendor.code:
+                conflict_filters.append(FieldVendor.code == vendor.code)
+            if vendor.contact_email:
+                conflict_filters.append(func.lower(FieldVendor.contact_email) == email)
+            conflicting_profile = (
+                db.scalar(
+                    select(FieldVendor.id)
+                    .where(or_(*conflict_filters))
+                    .with_for_update()
+                    .limit(1)
+                )
+                if conflict_filters
+                else None
+            )
+            if conflicting_profile is not None:
+                raise VendorUserProvisioningError(
+                    "portal_profile_conflict",
+                    "An existing portal vendor profile has the same code or email; "
+                    "staff must review it before importing this contact.",
+                )
+            field_vendor = FieldVendor(
+                crm_vendor_id=str(vendor.id),
+                name=vendor.name,
+                code=vendor.code,
+                contact_name=vendor.contact_name,
+                contact_email=vendor.contact_email,
+                contact_phone=vendor.contact_phone,
+                service_area=vendor.service_area,
+                is_active=vendor.is_active,
+            )
+            db.add(field_vendor)
+            db.flush()
+
+        membership = provision(
+            db,
+            ProvisionVendorUser(
+                field_vendor_id=field_vendor.id,
+                first_name=command.first_name,
+                last_name=command.last_name,
+                email=email,
+                role=command.role,
+                crm_vendor_user_id=crm_vendor_user_id,
+                crm_person_id=command.crm_person_id,
+            ),
+            actor=command.context.actor,
+            context=command.context,
+        )
+        return ImportVendorContactLoginOutcome(
+            vendor_id=vendor.id,
+            field_vendor_id=field_vendor.id,
+            vendor_user_id=membership.id,
+            system_user_id=membership.system_user_id,
+            email=email,
+            crm_vendor_user_id=crm_vendor_user_id,
+            crm_person_id=command.crm_person_id,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_IMPORT_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
 
 
 def provision_committed(
