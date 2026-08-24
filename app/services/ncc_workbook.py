@@ -9,8 +9,8 @@ narrow — two sheets, styles, column widths, and data validation.
 
 What the officer relies on, preserved exactly from CRM:
 
-* **Dropdowns** on every constrained column, sourced from a hidden
-  ``_NCC_Dropdowns`` sheet, so a filing cannot carry a value NCC rejects.
+* **Dropdowns** on every constrained column, sourced from the hidden NCC
+  ``Lookups`` sheet, so a filing cannot carry a value NCC rejects.
 * **A per-row VALIDATION STATUS** column reading ``[OK] All validations
   passed`` or ``[FAIL] <reason>; <reason>`` with the offending Excel column
   letters, plus green/red row shading — the officer fixes the reds and files.
@@ -67,6 +67,43 @@ COLUMNS = [
     "Phone Type",
     "VALIDATION STATUS",
 ]
+
+TEMPLATE_COLUMNS = [
+    "MSISDN *",
+    "First Name *",
+    "Last Name *",
+    "Email",
+    "Age *",
+    "Gender *",
+    "created_date_time *",
+    "Subject",
+    "Category *",
+    "category_code (auto)",
+    "sub_category_code *",
+    "Description (auto)",
+    "Ticket_ID *",
+    "Complaint_type *",
+    "Status *",
+    "Resolved_date",
+    "Resolved within SLA",
+    "Resolution Note",
+    "User_Note",
+    "user_notes_datetime",
+    "Language *",
+    "Ticket_source *",
+    "alt_phone_number",
+    "created_by",
+    "State *",
+    "LGA *",
+    "Town",
+    "Phone Type",
+    "VALIDATION STATUS",
+]
+
+TEMPLATE_COLUMN_BY_INTERNAL = dict(zip(COLUMNS, TEMPLATE_COLUMNS, strict=True))
+INTERNAL_COLUMN_BY_TEMPLATE = {
+    template: internal for internal, template in TEMPLATE_COLUMN_BY_INTERNAL.items()
+}
 
 CATEGORY_SLA: dict[str, dict[str, int | str]] = {
     "Billing": {"code": "A", "feedback_hours": 4, "resolution_hours": 24},
@@ -674,14 +711,23 @@ REQUIRED_COLUMNS = {
 
 REQUIRED_DROPDOWN_COLUMNS = {
     "Gender",
+    "Gender *",
     "Category",
+    "Category *",
     "sub category code",
+    "sub_category_code *",
     "Complaint type",
+    "Complaint_type *",
     "Status",
+    "Status *",
     "Language",
+    "Language *",
     "Ticket source",
+    "Ticket_source *",
     "State",
+    "State *",
     "LGA",
+    "LGA *",
 }
 
 STATE_LGAS: dict[str, tuple[str, ...]] = {
@@ -1639,6 +1685,13 @@ def _excel_column_letter(index: int) -> str:
 _COLUMN_LETTERS = {
     column: _excel_column_letter(index) for index, column in enumerate(COLUMNS, start=1)
 }
+_TEMPLATE_COLUMN_LETTERS = {
+    column: _excel_column_letter(index)
+    for index, column in enumerate(TEMPLATE_COLUMNS, start=1)
+}
+
+_DATA_ENTRY_FIRST_ROW = 4
+_DATA_ENTRY_LAST_ROW = 1048576
 
 
 def excel_serial_from_display_timestamp(value: str) -> float | None:
@@ -1688,39 +1741,73 @@ def export_rows(records: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
 
 
+def template_export_rows(records: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Project internal NCC rows into the official validated-template headers."""
+    rows: list[dict[str, str]] = []
+    for record in export_rows(records):
+        rows.append(
+            {
+                TEMPLATE_COLUMN_BY_INTERNAL[column]: str(record.get(column, ""))
+                for column in COLUMNS
+            }
+        )
+    return rows
+
+
 def _export_column_widths(
     records: list[dict[str, str]], columns: list[str]
 ) -> list[float]:
     fixed_widths = {
         "MSISDN": 18,
+        "MSISDN *": 22,
         "First Name": 22,
+        "First Name *": 18,
         "Last Name": 22,
-        "Email": 28,
+        "Last Name *": 18,
+        "Email": 26,
         "Age": 10,
+        "Age *": 8,
         "Gender": 12,
+        "Gender *": 12,
         "created date time": 22,
+        "created_date_time *": 26,
         "Subject": 28,
         "Category": 24,
+        "Category *": 28,
         "category code (auto)": 20,
+        "category_code (auto)": 22,
         "sub category code": 22,
-        "Description (auto)": 42,
+        "sub_category_code *": 32,
+        "Description (auto)": 55,
         "Ticket ID": 16,
+        "Ticket_ID *": 22,
         "Complaint type": 24,
+        "Complaint_type *": 18,
         "Status": 18,
+        "Status *": 14,
         "Resolved date": 22,
-        "Resolved within SLA": 20,
-        "Resolution Note": 36,
+        "Resolved_date": 28,
+        "Resolved within SLA": 12,
+        "Resolution Note": 45,
         "User Note": 36,
+        "User_Note": 40,
         "user notes datetime": 22,
+        "user_notes_datetime": 26,
         "Language": 14,
+        "Language *": 14,
         "Ticket source": 18,
+        "Ticket_source *": 16,
         "alt phone number": 20,
+        "alt_phone_number": 22,
         "created by": 24,
+        "created_by": 16,
         "State": 14,
+        "State *": 22,
         "LGA": 14,
+        "LGA *": 26,
         "Town": 18,
         "Phone Type": 28,
-        "VALIDATION STATUS": 28,
+        "VALIDATION STATUS": 60,
     }
     widths: list[float] = []
     for column in columns:
@@ -1740,19 +1827,19 @@ def _status_style_id(status_variant: str) -> int:
 
 
 def workbook_dropdown_lists() -> dict[str, list[str]]:
-    """The accepted-value lists backing the hidden dropdown sheet."""
+    """The accepted-value lists backing the hidden Lookups sheet."""
     return {
-        "Gender": ["Female", "Male", "N/A"],
-        "Category": list(CATEGORY_SLA),
-        "category code (auto)": [str(value["code"]) for value in CATEGORY_SLA.values()],
-        "sub category code": [
+        "Gender *": ["Male", "Female"],
+        "Category *": list(CATEGORY_SLA),
+        "category_code (auto)": [str(value["code"]) for value in CATEGORY_SLA.values()],
+        "sub_category_code *": [
             f"{row['issue_code']} - {row['name']}" for row in SUBCATEGORY_ROWS
         ],
-        "Complaint type": ["First Level", "Second Level"],
-        "Status": ["Resolved", "Pending"],
+        "Complaint_type *": ["First Level", "Second Level"],
+        "Status *": ["Resolved", "Pending"],
         "Resolved within SLA": ["Yes", "No"],
-        "Language": ["English", "Hausa", "Igbo", "Yoruba", "Pidgin", "Others"],
-        "Ticket source": [
+        "Language *": ["English", "Hausa", "Igbo", "Yoruba", "Pidgin", "Others"],
+        "Ticket_source *": [
             "Phone Call",
             "Email",
             "Web Portal",
@@ -1762,8 +1849,8 @@ def workbook_dropdown_lists() -> dict[str, list[str]]:
             "Social Media",
             "Other",
         ],
-        "State": list(STATE_LGAS),
-        "LGA": sorted({lga for lgas in STATE_LGAS.values() for lga in lgas}),
+        "State *": list(STATE_LGAS),
+        "LGA *": sorted({lga for lgas in STATE_LGAS.values() for lga in lgas}),
     }
 
 
@@ -1874,13 +1961,104 @@ _WORKBOOK_RELS_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>"""
 
-_WORKBOOK_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+_LOOKUPS_CATEGORY_COLUMN = 38  # AL
+_LOOKUPS_CATEGORY_CODE_COLUMN = 39  # AM
+_LOOKUPS_STATE_COLUMN = 40  # AN
+_LOOKUPS_CATEGORY_LIST_START_COLUMN = 41  # AO
+_LOOKUPS_SUBCATEGORY_CODE_COLUMN = 60  # BH
+_LOOKUPS_SUBCATEGORY_DESCRIPTION_COLUMN = 61  # BI
+_LOOKUPS_INTERNATIONAL_COLUMN = 62  # BJ
+
+
+def _excel_defined_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.]", "_", value.strip())
+
+
+def _subcategory_options_by_category() -> dict[str, list[str]]:
+    options: dict[str, list[str]] = {category: [] for category in CATEGORY_SLA}
+    for row in SUBCATEGORY_ROWS:
+        category = str(row["category"])
+        options.setdefault(category, []).append(f"{row['issue_code']} - {row['name']}")
+    return options
+
+
+def _defined_names_xml() -> str:
+    state_lga_states = [state for state in STATE_LGAS if state != "INTERNATIONAL"]
+    category_options = _subcategory_options_by_category()
+    defined_names: list[str] = []
+
+    for column_index, state in enumerate(state_lga_states, start=1):
+        values = STATE_LGAS[state]
+        if not values:
+            continue
+        column_letter = _excel_column_letter(column_index)
+        name = _excel_defined_name(state.replace(" ", "_"))
+        defined_names.append(
+            f'<definedName name="{escape(name)}">'
+            f"Lookups!${column_letter}$2:${column_letter}${len(values) + 1}"
+            "</definedName>"
+        )
+
+    category_letter = _excel_column_letter(_LOOKUPS_CATEGORY_COLUMN)
+    category_code_letter = _excel_column_letter(_LOOKUPS_CATEGORY_CODE_COLUMN)
+    state_letter = _excel_column_letter(_LOOKUPS_STATE_COLUMN)
+    subcategory_code_letter = _excel_column_letter(_LOOKUPS_SUBCATEGORY_CODE_COLUMN)
+    subcategory_description_letter = _excel_column_letter(
+        _LOOKUPS_SUBCATEGORY_DESCRIPTION_COLUMN
+    )
+    international_letter = _excel_column_letter(_LOOKUPS_INTERNATIONAL_COLUMN)
+    defined_names.extend(
+        (
+            f'<definedName name="NCC_CATEGORIES">'
+            f"Lookups!${category_letter}$2:${category_letter}${len(CATEGORY_SLA) + 1}"
+            "</definedName>",
+            f'<definedName name="NCC_CAT_CODES">'
+            f"Lookups!${category_code_letter}$2:${category_code_letter}"
+            f"{len(CATEGORY_SLA) + 1}</definedName>",
+            f'<definedName name="NCC_STATES">'
+            f"Lookups!${state_letter}$2:${state_letter}${len(STATE_LGAS) + 1}"
+            "</definedName>",
+        )
+    )
+
+    for offset, (category, config) in enumerate(CATEGORY_SLA.items()):
+        options = category_options.get(category, [])
+        if not options:
+            continue
+        column_letter = _excel_column_letter(
+            _LOOKUPS_CATEGORY_LIST_START_COLUMN + offset
+        )
+        name = f"CAT_{config['code']}"
+        defined_names.append(
+            f'<definedName name="{escape(str(name))}">'
+            f"Lookups!${column_letter}$2:${column_letter}${len(options) + 1}"
+            "</definedName>"
+        )
+
+    defined_names.extend(
+        (
+            f'<definedName name="SUBCAT_DESC">'
+            f"Lookups!${subcategory_code_letter}$2:"
+            f"${subcategory_description_letter}${len(SUBCATEGORY_ROWS) + 1}"
+            "</definedName>",
+            f'<definedName name="INTERNATIONAL">'
+            f"Lookups!${international_letter}$2:${international_letter}$2"
+            "</definedName>",
+        )
+    )
+    return f"<definedNames>{''.join(defined_names)}</definedNames>"
+
+
+def _workbook_xml() -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="NCC Reports" sheetId="1" r:id="rId1"/>
-    <sheet name="_NCC_Dropdowns" sheetId="2" state="hidden" r:id="rId2"/>
+    <sheet name="Lookups" sheetId="1" state="hidden" r:id="rId1"/>
+    <sheet name="Data Entry" sheetId="2" r:id="rId2"/>
   </sheets>
+  {_defined_names_xml()}
 </workbook>"""
+
 
 # Style ids consumed below: 1 header, 2 cell, 3 wrapped cell, 4 date,
 # 5-9 status variants (_status_style_id), 10 row OK (green), 11 row FAIL (red).
@@ -1947,7 +2125,13 @@ _STYLES_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   </cellStyles>
 </styleSheet>"""
 
-_LONG_TEXT_COLUMNS = {"Description (auto)", "Resolution Note", "User Note"}
+_LONG_TEXT_COLUMNS = {
+    "Description (auto)",
+    "Resolution Note",
+    "User Note",
+    "User_Note",
+    "VALIDATION STATUS",
+}
 
 
 def _cell_xml(ref: str, value: str, style_id: int) -> str:
@@ -1957,34 +2141,64 @@ def _cell_xml(ref: str, value: str, style_id: int) -> str:
     )
 
 
-def _dropdown_sheet_xml(dropdown_lists: dict[str, list[str]]) -> str:
-    """The hidden sheet the dropdown formulas point at — one column per
-    constrained field, values down the rows."""
-    dropdown_columns = list(dropdown_lists)
-    max_values = max((len(values) for values in dropdown_lists.values()), default=0)
-    rows: list[str] = []
-    header_cells = [
-        _cell_xml(f"{_excel_column_letter(index)}1", column, 1)
-        for index, column in enumerate(dropdown_columns, start=1)
-    ]
-    rows.append(f'<row r="1">{"".join(header_cells)}</row>')
-    for row_number in range(2, max_values + 2):
-        cells: list[str] = []
-        for column_index, dropdown_column in enumerate(dropdown_columns, start=1):
-            values = dropdown_lists[dropdown_column]
-            value_index = row_number - 2
-            if value_index >= len(values):
-                continue
-            cells.append(
-                _cell_xml(
-                    f"{_excel_column_letter(column_index)}{row_number}",
-                    values[value_index],
-                    2,
-                )
+def _lookups_sheet_xml() -> str:
+    """The hidden NCC lookup grid used by the validated template."""
+    state_lga_states = [state for state in STATE_LGAS if state != "INTERNATIONAL"]
+    category_options = _subcategory_options_by_category()
+    cells_by_row: dict[int, list[str]] = {}
+
+    def add_cell(
+        row_number: int, column_index: int, value: object, style_id: int
+    ) -> None:
+        cells_by_row.setdefault(row_number, []).append(
+            _cell_xml(
+                f"{_excel_column_letter(column_index)}{row_number}",
+                str(value),
+                style_id,
             )
-        rows.append(f'<row r="{row_number}">{"".join(cells)}</row>')
-    last_column = _excel_column_letter(len(dropdown_columns))
-    last_row = max_values + 1
+        )
+
+    for column_index, state in enumerate(state_lga_states, start=1):
+        add_cell(1, column_index, _excel_defined_name(state.replace(" ", "_")), 1)
+        for row_index, lga in enumerate(STATE_LGAS[state], start=2):
+            add_cell(row_index, column_index, lga, 2)
+
+    add_cell(1, _LOOKUPS_CATEGORY_COLUMN, "NCC_CATEGORIES", 1)
+    add_cell(1, _LOOKUPS_CATEGORY_CODE_COLUMN, "NCC_CAT_CODES", 1)
+    add_cell(1, _LOOKUPS_STATE_COLUMN, "NCC_STATES", 1)
+    for row_index, (category, config) in enumerate(CATEGORY_SLA.items(), start=2):
+        add_cell(row_index, _LOOKUPS_CATEGORY_COLUMN, category, 2)
+        add_cell(row_index, _LOOKUPS_CATEGORY_CODE_COLUMN, config["code"], 2)
+    for row_index, state in enumerate(STATE_LGAS, start=2):
+        add_cell(row_index, _LOOKUPS_STATE_COLUMN, state, 2)
+
+    for offset, (category, config) in enumerate(CATEGORY_SLA.items()):
+        column_index = _LOOKUPS_CATEGORY_LIST_START_COLUMN + offset
+        add_cell(1, column_index, f"CAT_{config['code']}", 1)
+        for row_index, option in enumerate(category_options.get(category, []), start=2):
+            add_cell(row_index, column_index, option, 2)
+
+    add_cell(1, _LOOKUPS_SUBCATEGORY_CODE_COLUMN, "sub_category_code", 1)
+    add_cell(1, _LOOKUPS_SUBCATEGORY_DESCRIPTION_COLUMN, "Description", 1)
+    for row_index, row in enumerate(SUBCATEGORY_ROWS, start=2):
+        add_cell(row_index, _LOOKUPS_SUBCATEGORY_CODE_COLUMN, row["issue_code"], 2)
+        add_cell(
+            row_index,
+            _LOOKUPS_SUBCATEGORY_DESCRIPTION_COLUMN,
+            row["description"],
+            2,
+        )
+
+    add_cell(1, _LOOKUPS_INTERNATIONAL_COLUMN, "INTERNATIONAL", 1)
+    for row_index, lga in enumerate(STATE_LGAS.get("INTERNATIONAL", ()), start=2):
+        add_cell(row_index, _LOOKUPS_INTERNATIONAL_COLUMN, lga, 2)
+
+    rows = [
+        f'<row r="{row_number}">{"".join(cells)}</row>'
+        for row_number, cells in sorted(cells_by_row.items())
+    ]
+    last_column = _excel_column_letter(_LOOKUPS_INTERNATIONAL_COLUMN)
+    last_row = max(cells_by_row, default=1)
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <dimension ref="A1:{last_column}{last_row}"/>
@@ -1994,54 +2208,207 @@ def _dropdown_sheet_xml(dropdown_lists: dict[str, list[str]]) -> str:
 </worksheet>"""
 
 
-def _data_validations_xml(
-    columns: list[str], dropdown_lists: dict[str, list[str]], max_row: int
+def _data_validation_xml(
+    *,
+    validation_type: str,
+    sqref: str,
+    formula1: str,
+    allow_blank: bool,
+    error_title: str,
+    error: str,
+    operator: str | None = None,
+    prompt_title: str | None = None,
+    prompt: str | None = None,
 ) -> str:
-    dropdown_columns = list(dropdown_lists)
-    validations: list[str] = []
-    if "Age" in columns:
-        age_letter = _excel_column_letter(columns.index("Age") + 1)
-        validations.append(
-            f'<dataValidation type="custom" allowBlank="0" showErrorMessage="1" '
-            f'errorTitle="Invalid Age" error="Age must be N/A or a whole number from 13 to 150." '
-            f'sqref="{age_letter}2:{age_letter}{max_row}">'
-            f'<formula1>OR({age_letter}2="N/A",AND(ISNUMBER({age_letter}2),'
-            f"{age_letter}2=INT({age_letter}2),{age_letter}2&gt;=13,{age_letter}2&lt;=150))</formula1>"
-            "</dataValidation>"
+    operator_xml = f' operator="{operator}"' if operator else ""
+    prompt_xml = ""
+    if prompt_title or prompt:
+        prompt_xml = (
+            f' showInputMessage="1" promptTitle="{escape(prompt_title or "")}"'
+            f' prompt="{escape(prompt or "")}"'
         )
-    for column in columns:
-        values = dropdown_lists.get(column)
-        if not values:
-            continue
-        report_column_index = columns.index(column) + 1
-        list_column_index = dropdown_columns.index(column) + 1
-        report_letter = _excel_column_letter(report_column_index)
-        list_letter = _excel_column_letter(list_column_index)
-        formula = f"'_NCC_Dropdowns'!${list_letter}$2:${list_letter}${len(values) + 1}"
-        allow_blank = "0" if column in REQUIRED_DROPDOWN_COLUMNS else "1"
-        validations.append(
-            # noqa is for S608: this is generated spreadsheet XML, not SQL —
-            # "sqref" is Excel's cell-range attribute. Values are escaped above.
-            f'<dataValidation type="list" allowBlank="{allow_blank}" showErrorMessage="1" '  # noqa: S608  # nosec B608
-            f'errorTitle="Invalid {escape(column)}" '
-            f'error="Select an accepted NCC value from the dropdown." '
-            f'sqref="{report_letter}2:{report_letter}{max_row}">'
-            f"<formula1>{escape(formula)}</formula1>"
-            "</dataValidation>"
-        )
-    if not validations:
+    return (
+        f'<dataValidation type="{validation_type}" allowBlank="'
+        f'{1 if allow_blank else 0}" showErrorMessage="1"{prompt_xml}{operator_xml} '
+        f'errorTitle="{escape(error_title)}" error="{escape(error)}" '
+        f'sqref="{sqref}"><formula1>{escape(formula1)}</formula1></dataValidation>'
+    )
+
+
+def _list_validation_xml(
+    *,
+    column: str,
+    formula1: str,
+    allow_blank: bool,
+    error_title: str | None = None,
+) -> str:
+    letter = _TEMPLATE_COLUMN_LETTERS[column]
+    return _data_validation_xml(
+        validation_type="list",
+        allow_blank=allow_blank,
+        error_title=error_title or f"Invalid {column}",
+        error="Select an accepted NCC value from the dropdown.",
+        sqref=f"{letter}{_DATA_ENTRY_FIRST_ROW}:{letter}{_DATA_ENTRY_LAST_ROW}",
+        formula1=formula1,
+    )
+
+
+def _data_validations_xml(columns: list[str]) -> str:
+    if columns != TEMPLATE_COLUMNS:
         return ""
-    return f'<dataValidations count="{len(validations)}">{"".join(validations)}</dataValidations>'
+
+    validations = [
+        _data_validation_xml(
+            validation_type="custom",
+            allow_blank=False,
+            error_title="Invalid MSISDN",
+            error=(
+                "Enter a Nigerian MSISDN starting 234, 11 to 14 digits, or an "
+                "accepted ISP device identifier without a leading plus sign."
+            ),
+            sqref=f"A{_DATA_ENTRY_FIRST_ROW}:A{_DATA_ENTRY_LAST_ROW}",
+            formula1=(
+                'AND(LEFT(A4,1)<>"+",OR(NOT(ISNUMBER(VALUE(A4))),'
+                'AND(LEFT(A4,3)="234",LEN(A4)>=11,LEN(A4)<=14)))'
+            ),
+        ),
+        _data_validation_xml(
+            validation_type="textLength",
+            allow_blank=False,
+            operator="greaterThanOrEqual",
+            error_title="Required field",
+            error="This NCC field is required.",
+            sqref=(
+                f"M{_DATA_ENTRY_FIRST_ROW}:M{_DATA_ENTRY_LAST_ROW} "
+                f"B{_DATA_ENTRY_FIRST_ROW}:C{_DATA_ENTRY_LAST_ROW}"
+            ),
+            formula1="1",
+        ),
+        _data_validation_xml(
+            validation_type="custom",
+            allow_blank=True,
+            error_title="Invalid Email",
+            error="Enter a valid email address or leave blank.",
+            sqref=f"D{_DATA_ENTRY_FIRST_ROW}:D{_DATA_ENTRY_LAST_ROW}",
+            formula1=(
+                'OR(D4="",AND(ISNUMBER(SEARCH("@",D4)),'
+                'ISNUMBER(SEARCH(".",D4)),LEN(D4)<=100))'
+            ),
+        ),
+        _data_validation_xml(
+            validation_type="whole",
+            allow_blank=False,
+            operator="between",
+            error_title="Invalid Age",
+            error="Age must be a whole number from 13 to 150.",
+            sqref=f"E{_DATA_ENTRY_FIRST_ROW}:E{_DATA_ENTRY_LAST_ROW}",
+            formula1="13",
+        ).replace("</dataValidation>", "<formula2>150</formula2></dataValidation>"),
+        _list_validation_xml(
+            column="Gender *", formula1='"Male,Female"', allow_blank=False
+        ),
+        _data_validation_xml(
+            validation_type="custom",
+            allow_blank=False,
+            error_title="Invalid created_date_time",
+            error="Enter a date and time value.",
+            sqref=f"G{_DATA_ENTRY_FIRST_ROW}:G{_DATA_ENTRY_LAST_ROW}",
+            formula1="AND(G4>=DATE(2000,1,1),G4<=DATE(2099,12,31),MOD(G4,1)>0)",
+        ),
+        _list_validation_xml(
+            column="Category *", formula1="NCC_CATEGORIES", allow_blank=False
+        ),
+        _list_validation_xml(
+            column="sub_category_code *",
+            formula1='INDIRECT("CAT_"&$J4)',
+            allow_blank=False,
+        ),
+        _list_validation_xml(
+            column="Complaint_type *",
+            formula1='"First Level,Second Level"',
+            allow_blank=False,
+        ),
+        _list_validation_xml(
+            column="Status *", formula1='"Resolved,Pending"', allow_blank=False
+        ),
+        _data_validation_xml(
+            validation_type="custom",
+            allow_blank=True,
+            error_title="Invalid Resolved_date",
+            error="Enter a date and time value or leave blank.",
+            sqref=f"P{_DATA_ENTRY_FIRST_ROW}:P{_DATA_ENTRY_LAST_ROW}",
+            formula1='OR(P4="",AND(P4>=DATE(2000,1,1),P4<=DATE(2099,12,31),MOD(P4,1)>0))',
+        ),
+        _list_validation_xml(
+            column="Resolved within SLA", formula1='"Yes,No"', allow_blank=True
+        ),
+        _data_validation_xml(
+            validation_type="custom",
+            allow_blank=True,
+            error_title="Invalid user_notes_datetime",
+            error="Enter a date and time value or leave blank.",
+            sqref=f"T{_DATA_ENTRY_FIRST_ROW}:T{_DATA_ENTRY_LAST_ROW}",
+            formula1='OR(T4="",AND(T4>=DATE(2000,1,1),T4<=DATE(2099,12,31),MOD(T4,1)>0))',
+        ),
+        _list_validation_xml(
+            column="Language *",
+            formula1='"English,Hausa,Igbo,Yoruba,Pidgin,Others"',
+            allow_blank=False,
+        ),
+        _list_validation_xml(
+            column="Ticket_source *",
+            formula1='"Phone Call,Email,Web Portal,Mobile App,Walk-in,SMS,Social Media,Other"',
+            allow_blank=False,
+        ),
+        _data_validation_xml(
+            validation_type="custom",
+            allow_blank=True,
+            error_title="Invalid alt_phone_number",
+            error="Enter a valid phone number without a leading plus sign or leave blank.",
+            sqref=f"W{_DATA_ENTRY_FIRST_ROW}:W{_DATA_ENTRY_LAST_ROW}",
+            formula1=(
+                'OR(W4="",AND(LEFT(W4,1)<>"+",'
+                'OR(NOT(ISNUMBER(VALUE(W4))),AND(LEFT(W4,3)="234",'
+                "LEN(W4)>=11,LEN(W4)<=14))))"
+            ),
+        ),
+        _list_validation_xml(
+            column="State *", formula1="NCC_STATES", allow_blank=False
+        ),
+        _list_validation_xml(
+            column="LGA *",
+            formula1='INDIRECT(SUBSTITUTE($Y4," ","_"))',
+            allow_blank=False,
+        ),
+    ]
+    return (
+        f'<dataValidations count="{len(validations)}">'
+        f"{''.join(validations)}</dataValidations>"
+    )
+
+
+def _row_value(row: dict[str, str], column: str) -> str:
+    if column in row:
+        return row[column]
+    internal_column = INTERNAL_COLUMN_BY_TEMPLATE.get(column)
+    if internal_column:
+        return row.get(internal_column, "")
+    template_column = TEMPLATE_COLUMN_BY_INTERNAL.get(column)
+    if template_column:
+        return row.get(template_column, "")
+    return ""
 
 
 def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
-    """The filing workbook: a data sheet plus a hidden dropdown sheet.
+    """The filing workbook: the official Data Entry sheet plus hidden Lookups.
 
     Rows shade green/red from their VALIDATION STATUS so the officer can see
     at a glance what needs fixing before submission.
     """
-    widths = _export_column_widths(records, columns)
-    dropdown_lists = workbook_dropdown_lists()
+    output_columns = [
+        TEMPLATE_COLUMN_BY_INTERNAL.get(column, column) for column in columns
+    ]
+    widths = _export_column_widths(records, output_columns)
     output = io.BytesIO()
 
     with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
@@ -2063,13 +2430,11 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
         )
         archive.writestr("docProps/app.xml", _APP_XML)
         archive.writestr("xl/_rels/workbook.xml.rels", _WORKBOOK_RELS_XML)
-        archive.writestr("xl/workbook.xml", _WORKBOOK_XML)
+        archive.writestr("xl/workbook.xml", _workbook_xml())
         archive.writestr("xl/styles.xml", _STYLES_XML)
 
-        last_column_letter = _excel_column_letter(len(columns))
-        last_row_number = len(records) + 1
-        # Validation extends past the data so pasted-in rows stay constrained.
-        validation_max_row = max(last_row_number, 1000)
+        last_column_letter = _excel_column_letter(len(output_columns))
+        last_row_number = max(1, _DATA_ENTRY_FIRST_ROW + len(records) - 1)
         cols_xml = "".join(
             f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
             for index, width in enumerate(widths, start=1)
@@ -2077,14 +2442,14 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
         rows_xml: list[str] = []
         header_cells = [
             _cell_xml(f"{_excel_column_letter(index)}1", column, 1)
-            for index, column in enumerate(columns, start=1)
+            for index, column in enumerate(output_columns, start=1)
         ]
         rows_xml.append(
             f'<row r="1" ht="24" customHeight="1">{"".join(header_cells)}</row>'
         )
-        for row_number, row in enumerate(records, start=2):
+        for row_number, row in enumerate(records, start=_DATA_ENTRY_FIRST_ROW):
             cells: list[str] = []
-            row_validation = clean_text(row.get("VALIDATION STATUS"))
+            row_validation = clean_text(_row_value(row, "VALIDATION STATUS"))
             row_style_id = (
                 10
                 if row_validation.startswith("[OK]")
@@ -2092,14 +2457,14 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
                 if row_validation.startswith("[FAIL]")
                 else None
             )
-            for column_index, column in enumerate(columns, start=1):
-                value = " ".join(str(row.get(column) or "").strip().split())
+            for column_index, column in enumerate(output_columns, start=1):
+                value = " ".join(str(_row_value(row, column) or "").strip().split())
                 if not value:
                     continue
                 cell_ref = f"{_excel_column_letter(column_index)}{row_number}"
                 if row_style_id is not None:
                     style_id = row_style_id
-                elif column == "Status":
+                elif column in {"Status", "Status *"}:
                     style_id = _status_style_id(str(row.get("_status_variant") or ""))
                 elif column in _LONG_TEXT_COLUMNS:
                     style_id = 3
@@ -2109,25 +2474,23 @@ def build_workbook(records: list[dict[str, str]], columns: list[str]) -> bytes:
             rows_xml.append(f'<row r="{row_number}">{"".join(cells)}</row>')
 
         archive.writestr(
-            "xl/worksheets/sheet1.xml",
+            "xl/worksheets/sheet2.xml",
             f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <dimension ref="A1:{last_column_letter}{last_row_number}"/>
   <sheetViews>
     <sheetView workbookViewId="0">
-      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
-      <selection pane="bottomLeft" activeCell="A2" sqref="A2"/>
+      <pane ySplit="1" topLeftCell="A4" activePane="bottomLeft" state="frozen"/>
+      <selection pane="bottomLeft" activeCell="A4" sqref="A4"/>
     </sheetView>
   </sheetViews>
   <sheetFormatPr defaultRowHeight="18"/>
   <cols>{cols_xml}</cols>
   <sheetData>{"".join(rows_xml)}</sheetData>
   <autoFilter ref="A1:{last_column_letter}{last_row_number}"/>
-  {_data_validations_xml(columns, dropdown_lists, validation_max_row)}
+  {_data_validations_xml(output_columns)}
 </worksheet>""",
         )
-        archive.writestr(
-            "xl/worksheets/sheet2.xml", _dropdown_sheet_xml(dropdown_lists)
-        )
+        archive.writestr("xl/worksheets/sheet1.xml", _lookups_sheet_xml())
 
     return output.getvalue()
