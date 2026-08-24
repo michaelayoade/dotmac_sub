@@ -1,0 +1,30 @@
+{% extends "layouts/admin.html" %}
+{% from "components/forms/action_form.html" import action_form with context %}
+
+{% block title %}Repair prepaid coverage - Admin{% endblock %}
+
+{% block content %}
+{% set preview = review.state.review.preview %}
+<div class="mx-auto max-w-3xl space-y-6">
+    <div>
+        <a href="/admin/billing/invoices/{{ invoice_id }}" class="text-sm text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">← Back to invoice</a>
+        <h1 class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">Repair prepaid service coverage</h1>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Review the exact paid-invoice evidence before creating a missing service entitlement.</p>
+    </div>
+
+    <section class="rounded-lg border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-900/20" aria-labelledby="coverage-decision-title">
+        <h2 id="coverage-decision-title" class="text-base font-semibold text-slate-900 dark:text-white">Owner decision</h2>
+        <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ review.state.reason }}</p>
+        <dl class="mt-4 space-y-2 text-sm text-slate-700 dark:text-slate-200">
+            {% for item in preview.items %}
+            <div class="flex flex-wrap justify-between gap-2 border-t border-amber-200 pt-2 dark:border-amber-900/40">
+                <dt class="font-mono text-xs">Subscription {{ item.subscription_id }}</dt>
+                <dd>{{ item.reason.value }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </section>
+
+    {{ action_form(review.action_form) }}
+</div>
+{% endblock %}

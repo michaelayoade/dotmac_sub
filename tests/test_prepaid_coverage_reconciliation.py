@@ -27,6 +27,7 @@ from app.services.prepaid_coverage_reconciliation import (
     PrepaidCoverageReconciliationError,
     ReconcilePrepaidCoverageCommand,
     preview_prepaid_coverage_reconciliation,
+    preview_prepaid_coverage_reconciliation_for_invoice,
     reconcile_prepaid_service_coverage,
     resolve_prepaid_coverage_enforcement_blockers,
 )
@@ -117,6 +118,22 @@ def test_paid_invoice_requires_projection_before_it_covers_service(
     assert len(blockers) == 1
     assert blockers[0].subscription_id == subscription.id
     assert blockers[0].reason == CoverageReconciliationReason.exact_paid_invoice_line
+
+
+def test_invoice_scoped_preview_keeps_only_the_invoice_subscription_scope(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    invoice, line = _paid_invoice(db_session, subscriber_account, subscription)
+
+    scoped = preview_prepaid_coverage_reconciliation_for_invoice(
+        db_session, invoice_id=invoice.id, as_of=NOW
+    )
+
+    assert scoped.invoice_id == invoice.id
+    assert scoped.invoice_line_ids == (line.id,)
+    assert scoped.preview.subscription_ids == (subscription.id,)
+    assert scoped.preview.items[0].source_id == line.id
 
 
 def test_reconciliation_creates_exact_entitlement_and_immutable_evidence(
