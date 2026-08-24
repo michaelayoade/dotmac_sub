@@ -169,7 +169,8 @@ The contact-data cleaning flow is independent and disabled by default for
 production collection. AI may collect candidate values only when the
 conversation is reliably linked to a directly managed residential
 `user_type=customer` subscriber missing gender, date of birth, or both. AI never
-updates subscriber rows. `customer.profile_commands` validates and saves
+updates subscriber rows. `customer.profile_cleanup` owns the bounded typed
+eligibility projection and validates and saves
 through a typed command, rechecks eligibility under lock, refuses reseller or
 ambiguous identities, prevents overwriting existing values, and appends
 `subscriber_field_verifications` evidence without storing DOB in AI metadata.

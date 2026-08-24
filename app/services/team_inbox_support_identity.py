@@ -50,7 +50,7 @@ class CustomerIdentityQuery:
 @dataclass(frozen=True, slots=True)
 class CustomerIdentityProjection:
     subscriber_id: UUID
-    display_name: str
+    display_name: str | None
     account_number: str | None
     status: str
 

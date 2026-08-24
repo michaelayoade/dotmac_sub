@@ -2062,7 +2062,6 @@ def _process_data_cleanup_turn(
     conversation: InboxConversation,
     inbound: InboxMessage,
 ) -> bool:
-    from app.models.subscriber import Subscriber
     from app.services import subscriber_profile_cleanup
 
     policy = _data_cleanup_policy(version)
@@ -2070,13 +2069,18 @@ def _process_data_cleanup_turn(
         return False
     if conversation.subscriber_id is None:
         return False
-    subscriber = db.get(Subscriber, conversation.subscriber_id)
+    eligibility = subscriber_profile_cleanup.resolve_profile_cleanup_eligibility(
+        db,
+        subscriber_profile_cleanup.ProfileCleanupEligibilityQuery(
+            subscriber_id=conversation.subscriber_id
+        ),
+    )
     if (
-        subscriber is None
-        or not subscriber_profile_cleanup.is_direct_residential_customer(subscriber)
+        eligibility.status
+        is not subscriber_profile_cleanup.ProfileCleanupEligibilityStatus.eligible
     ):
         return False
-    missing = subscriber_profile_cleanup.missing_cleanup_fields(subscriber)
+    missing = eligibility.missing_fields
     if not missing:
         return False
     state = _cleanup_state(session)
@@ -2125,7 +2129,7 @@ def _process_data_cleanup_turn(
                     scope="customer:profile-cleanup",
                     reason="save AI-collected NCC profile cleanup candidates",
                 ),
-                subscriber_id=subscriber.id,
+                subscriber_id=eligibility.subscriber_id,
                 source_conversation_id=conversation.id,
                 candidate_gender=gender,
                 candidate_date_of_birth=dob,

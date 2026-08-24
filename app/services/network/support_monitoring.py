@@ -41,7 +41,7 @@ class OntObservation:
 
     reference: str
     serial_number: str | None
-    effective_state: str
+    effective_state: str | None
     source: str = "network.ont_status"
 
 
