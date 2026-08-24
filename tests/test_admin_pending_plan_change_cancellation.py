@@ -10,6 +10,7 @@ from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.subscription_change_execution import (
     CancelPendingPlanChangeCommand,
@@ -41,9 +42,19 @@ def _pending_request(db_session, subscriber):
     return subscription, request
 
 
-def _command(request, subscription, *, reason="Stale request confirmed by support"):
+def _command(
+    db_session, request, subscription, *, reason="Stale request confirmed by support"
+):
+    """Build the command, then satisfy the public-command boundary.
+
+    Reading `request.id`/`subscription.id` off instances SQLAlchemy expired
+    at the last commit implicitly opens a read transaction; release it here
+    (the same idiom `tests/test_subscriber_party_binding_repair.py` and the
+    real `cancel_pending_plan_change_redirect` caller use) so the owner
+    command sees a transaction-free session at entry.
+    """
     command_id = uuid4()
-    return CancelPendingPlanChangeCommand(
+    command = CancelPendingPlanChangeCommand(
         context=CommandContext(
             command_id=command_id,
             correlation_id=command_id,
@@ -55,12 +66,16 @@ def _command(request, subscription, *, reason="Stale request confirmed by suppor
         request_id=request.id,
         subscription_id=subscription.id,
     )
+    db_session_adapter.release_read_transaction(db_session)
+    return command
 
 
 def test_admin_can_cancel_exact_pending_plan_change(db_session, subscriber):
     subscription, request = _pending_request(db_session, subscriber)
 
-    outcome = cancel_pending_plan_change(db_session, _command(request, subscription))
+    outcome = cancel_pending_plan_change(
+        db_session, _command(db_session, request, subscription)
+    )
 
     assert outcome.status == SubscriptionChangeStatus.canceled
     assert outcome.previous_status == SubscriptionChangeStatus.pending
@@ -72,7 +87,7 @@ def test_admin_can_cancel_exact_pending_plan_change(db_session, subscriber):
 
 def test_cancel_pending_plan_change_is_idempotent(db_session, subscriber):
     subscription, request = _pending_request(db_session, subscriber)
-    command = _command(request, subscription)
+    command = _command(db_session, request, subscription)
     cancel_pending_plan_change(db_session, command)
 
     replay = cancel_pending_plan_change(db_session, command)
@@ -83,12 +98,13 @@ def test_cancel_pending_plan_change_is_idempotent(db_session, subscriber):
 
 def test_admin_cannot_cancel_request_from_another_subscription(db_session, subscriber):
     subscription, request = _pending_request(db_session, subscriber)
-    command = _command(request, subscription)
+    command = _command(db_session, request, subscription)
     wrong_scope = CancelPendingPlanChangeCommand(
         context=command.context,
         request_id=request.id,
         subscription_id=uuid4(),
     )
+    db_session_adapter.release_read_transaction(db_session)
 
     with pytest.raises(PendingPlanChangeCancellationError) as exc:
         cancel_pending_plan_change(db_session, wrong_scope)
@@ -104,7 +120,9 @@ def test_admin_cannot_cancel_approved_plan_change(db_session, subscriber):
     db_session.commit()
 
     with pytest.raises(PendingPlanChangeCancellationError) as exc:
-        cancel_pending_plan_change(db_session, _command(request, subscription))
+        cancel_pending_plan_change(
+            db_session, _command(db_session, request, subscription)
+        )
 
     assert exc.value.code.endswith("service_change_not_pending")
 

@@ -1051,35 +1051,19 @@ def _scheduled_plan_change_context(
 def _pending_plan_change_context(
     db: Session, subscription_id: str
 ) -> dict[str, object] | None:
-    """Summarize the exact pending request eligible for admin cancellation."""
-    from app.models.catalog import CatalogOffer
-    from app.models.subscription_change import (
-        SubscriptionChangeRequest,
-        SubscriptionChangeStatus,
+    """Summarize the exact pending request eligible for admin cancellation.
+
+    Delegates to the owning service (`subscription_change_execution`, the
+    declared owner of "pending service-change cancellation") rather than
+    querying here: this module is an undeclared adapter under
+    `test_adapter_identifiability` and must not gain new direct database
+    access.
+    """
+    from app.services.subscription_change_execution import (
+        pending_plan_change_summary,
     )
 
-    pending = db.scalar(
-        select(SubscriptionChangeRequest)
-        .where(
-            SubscriptionChangeRequest.subscription_id == coerce_uuid(subscription_id),
-            SubscriptionChangeRequest.status == SubscriptionChangeStatus.pending,
-            SubscriptionChangeRequest.is_active.is_(True),
-        )
-        .order_by(SubscriptionChangeRequest.requested_at.asc())
-        .limit(1)
-    )
-    if pending is None:
-        return None
-    target_offer = db.get(CatalogOffer, pending.requested_offer_id)
-    return {
-        "id": str(pending.id),
-        "offer_name": target_offer.name if target_offer else "New plan",
-        "effective_date": pending.effective_date,
-        "requested_at": pending.requested_at,
-        "execution_state": (
-            pending.execution_state.value if pending.execution_state else "not_started"
-        ),
-    }
+    return pending_plan_change_summary(db, coerce_uuid(subscription_id))
 
 
 def _scheduled_status_change_context(

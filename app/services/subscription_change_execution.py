@@ -50,7 +50,7 @@ from app.models.subscription_change import (
 from app.schemas.billing import InvoiceCreate
 from app.schemas.dispatch import WorkOrderHeaderCreate
 from app.services import billing as billing_service
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.owner_commands import (
@@ -417,6 +417,41 @@ def _lock_request(db: Session, request_id: UUID) -> SubscriptionChangeRequest:
     return request
 
 
+def pending_plan_change_summary(
+    db: Session, subscription_id: UUID
+) -> dict[str, object] | None:
+    """Summarize the exact pending request eligible for admin cancellation.
+
+    Read-only presentation helper. It lives on the owning service (rather
+    than the `web_catalog_subscription_workflows` presenter that renders it)
+    because that module is an undeclared adapter and must not gain new direct
+    database access (`test_adapter_identifiability`).
+    """
+
+    pending = db.scalar(
+        select(SubscriptionChangeRequest)
+        .where(
+            SubscriptionChangeRequest.subscription_id == subscription_id,
+            SubscriptionChangeRequest.status == SubscriptionChangeStatus.pending,
+            SubscriptionChangeRequest.is_active.is_(True),
+        )
+        .order_by(SubscriptionChangeRequest.requested_at.asc())
+        .limit(1)
+    )
+    if pending is None:
+        return None
+    target_offer = db.get(CatalogOffer, pending.requested_offer_id)
+    return {
+        "id": str(pending.id),
+        "offer_name": target_offer.name if target_offer else "New plan",
+        "effective_date": pending.effective_date,
+        "requested_at": pending.requested_at,
+        "execution_state": (
+            pending.execution_state.value if pending.execution_state else "not_started"
+        ),
+    }
+
+
 def cancel_pending_plan_change(
     db: Session, command: CancelPendingPlanChangeCommand
 ) -> CancelPendingPlanChangeOutcome:
@@ -457,8 +492,10 @@ def cancel_pending_plan_change(
             action="cancel_pending_plan_change",
             entity_type="subscription_change_request",
             entity_id=str(request.id),
-            actor_type=AuditActorType.user,
-            actor_id=command.context.actor,
+            actor=AuditActor(
+                actor_type=AuditActorType.user,
+                actor_id=command.context.actor,
+            ),
             metadata={
                 "subscription_id": str(request.subscription_id),
                 "previous_status": SubscriptionChangeStatus.pending.value,
