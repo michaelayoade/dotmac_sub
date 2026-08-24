@@ -197,6 +197,53 @@ def test_staff_vendor_queue_searches_reviewable_quotes_by_project_and_vendor(
     assert [str(row.id) for row in by_vendor] == [str(quote.id)]
 
 
+def test_staff_vendor_queue_lists_all_active_quotes_with_status_filter(db_session):
+    installation, vendor, _user = _chain(db_session)
+    installation.project.number = "QSP-ALL"
+    active_statuses = [
+        ProjectQuoteStatus.approved,
+        ProjectQuoteStatus.draft,
+        ProjectQuoteStatus.rejected,
+        ProjectQuoteStatus.revision_requested,
+        ProjectQuoteStatus.submitted,
+        ProjectQuoteStatus.under_review,
+    ]
+    quotes = [
+        ProjectQuote(
+            project_id=installation.id,
+            vendor_id=vendor.id,
+            status=status.value,
+        )
+        for status in active_statuses
+    ]
+    inactive = ProjectQuote(
+        project_id=installation.id,
+        vendor_id=vendor.id,
+        status=ProjectQuoteStatus.approved.value,
+        is_active=False,
+    )
+    db_session.add_all([*quotes, inactive])
+    db_session.commit()
+
+    all_quotes = vendor_portal_operations.list_quotes_for_admin(
+        db_session,
+        search="QSP-ALL",
+    )
+    approved_quotes = vendor_portal_operations.list_quotes_for_admin(
+        db_session,
+        search="QSP-ALL",
+        statuses=(ProjectQuoteStatus.approved,),
+    )
+
+    assert {row.status for row in all_quotes} == {
+        status.value for status in active_statuses
+    }
+    assert [row.status for row in approved_quotes] == [
+        ProjectQuoteStatus.approved.value
+    ]
+    assert [str(row.id) for row in approved_quotes] == [str(quotes[0].id)]
+
+
 def test_open_bidding_requires_an_actual_window(db_session):
     """``list_projects(available=True)`` requires both window bounds. The
     command must not accept a project the listing would never have shown."""

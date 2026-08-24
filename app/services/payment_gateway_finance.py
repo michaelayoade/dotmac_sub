@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +22,12 @@ from app.services.events import EventType, emit_event
 class GatewayFinanceIdentity:
     provider: PaymentProvider
     channel: PaymentChannel
+
+
+@dataclass(frozen=True, slots=True)
+class IntegratorProviderMapping:
+    provider_id: UUID
+    installation_id: UUID
 
 
 class PaymentGatewayFinanceError(DomainError, ValueError):
@@ -132,8 +139,61 @@ def ensure_gateway_identity(
     return GatewayFinanceIdentity(provider=provider, channel=channel)
 
 
+def bind_integrator_installation(
+    db: Session,
+    *,
+    provider_id: UUID,
+    installation_id: UUID,
+    actor: str,
+) -> IntegratorProviderMapping:
+    """Bind one external Integrator installation to one local finance identity.
+
+    The caller supplies an operator-approved control value, never provider
+    payload data. The surrounding integration-installation command owns the
+    transaction; this participant locks, validates, mutates, emits, and flushes.
+    """
+
+    provider = db.scalar(
+        select(PaymentProvider)
+        .where(PaymentProvider.id == provider_id)
+        .with_for_update()
+    )
+    if provider is None:
+        raise _error("provider_not_found", "Payment provider was not found")
+    conflict = db.scalar(
+        select(PaymentProvider)
+        .where(PaymentProvider.integrator_installation_ref == installation_id)
+        .where(PaymentProvider.id != provider.id)
+        .with_for_update()
+    )
+    if conflict is not None:
+        raise _error(
+            "integrator_installation_conflict",
+            "Integrator installation is already mapped to another provider",
+        )
+    if provider.integrator_installation_ref != installation_id:
+        provider.integrator_installation_ref = installation_id
+        emit_event(
+            db,
+            EventType.payment_gateway_integrator_mapping_changed,
+            {
+                "schema_version": 1,
+                "provider_id": str(provider.id),
+                "integrator_installation_ref": str(installation_id),
+            },
+            actor=actor,
+        )
+        db.flush()
+    return IntegratorProviderMapping(
+        provider_id=provider.id,
+        installation_id=installation_id,
+    )
+
+
 __all__ = [
     "GatewayFinanceIdentity",
+    "IntegratorProviderMapping",
     "PaymentGatewayFinanceError",
+    "bind_integrator_installation",
     "ensure_gateway_identity",
 ]

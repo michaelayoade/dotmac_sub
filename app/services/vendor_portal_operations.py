@@ -1257,6 +1257,49 @@ class VendorPortalOperations:
         return projected
 
     @staticmethod
+    def list_quotes_for_admin(
+        db: Session,
+        *,
+        search: str | None = None,
+        statuses: tuple[ProjectQuoteStatus, ...] | None = None,
+        limit: int = 200,
+    ) -> list[ProjectQuote]:
+        query = db.query(ProjectQuote).options(
+            selectinload(ProjectQuote.line_items),
+            joinedload(ProjectQuote.vendor),
+            joinedload(ProjectQuote.project).joinedload(InstallationProject.project),
+        )
+        pattern = _queue_search_pattern(search)
+        if pattern:
+            query = (
+                query.join(
+                    InstallationProject,
+                    ProjectQuote.project_id == InstallationProject.id,
+                )
+                .join(Project, InstallationProject.project_id == Project.id)
+                .join(Vendor, ProjectQuote.vendor_id == Vendor.id)
+                .filter(
+                    or_(
+                        Project.name.ilike(pattern),
+                        Project.code.ilike(pattern),
+                        Project.number.ilike(pattern),
+                        Vendor.name.ilike(pattern),
+                        Vendor.code.ilike(pattern),
+                    )
+                )
+            )
+        if statuses:
+            query = query.filter(
+                ProjectQuote.status.in_(tuple(status.value for status in statuses))
+            )
+        return (
+            query.filter(ProjectQuote.is_active.is_(True))
+            .order_by(ProjectQuote.created_at.desc(), ProjectQuote.id.desc())
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+
+    @staticmethod
     def list_reviewable_quotes(
         db: Session, *, search: str | None = None, limit: int = 200
     ) -> list[ProjectQuote]:

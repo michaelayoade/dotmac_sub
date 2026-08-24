@@ -5,6 +5,28 @@ CRM, ERP, direct Meta WhatsApp, Meta social inbox, Paystack, Flutterwave, and HT
 have completed cutover. Their former direct transports and duplicate delivery
 stores are retired by migration `380_integration_platform_cutover`.
 
+## 2026-08-23 amendment — independently deployed Integrator settlement port
+
+The 2026-07-20 cutover consolidated Sub's then-current connector paths inside
+its local integration platform. It did not prove retirement into the later,
+independently deployed Dotmac Integrator. That external migration is now in its
+shadow phase.
+
+Sub owns a ProductPort descriptor v2 and typed ProductObservation v1 receiver
+for `payments.settlement.observation.v1`. The Integrator authenticates as a
+scoped machine principal and carries its durable installation UUID as opaque
+source provenance. A nullable unique mapping on Sub's `PaymentProvider` selects
+the local financial identity; neither a connector key nor provider payload can
+select that record. The receiver records a deduplicated `integration.inbox`
+fact and delegates the consequence to `financial.payment_webhooks`, which in
+turn uses the existing provider-event and payment participants.
+
+The direct Paystack and Flutterwave callbacks remain the incumbent writers
+during shadow comparison. Cutover requires per-provider parity and explicit
+mapping. Flutterwave v4 does not report provider fee evidence on the current
+connector contract, so Sub refuses to infer zero or move money on that path;
+the mirror can report the gap without recording a consequence.
+
 ## Decision
 
 Dotmac Sub will provide a capability-based integration platform for external

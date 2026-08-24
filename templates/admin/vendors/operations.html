@@ -26,10 +26,19 @@
     <label for="vendor-operations-search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search vendor queue</label>
     <div class="mt-4 flex flex-col gap-3 sm:flex-row">
       <input id="vendor-operations-search" type="search" name="q" value="{{ queue_search }}" maxlength="120" placeholder="Project name, code, number, or vendor" class="min-h-10 flex-1 rounded-md border border-slate-400 bg-white pl-3 text-sm shadow-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+      {% if active_vendor_operations_view == 'quotes' %}
+      <label for="vendor-quote-status-filter" class="sr-only">Quote status</label>
+      <select id="vendor-quote-status-filter" name="quote_status" class="min-h-10 rounded-md border border-slate-400 bg-white px-3 text-sm shadow-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+        <option value="">All statuses</option>
+        {% for option in quote_status_options %}
+        <option value="{{ option.value }}" {% if quote_status == option.value %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
       <button type="submit" class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Search</button>
-      {% if queue_search %}<a href="/admin/vendors/operations?view={{ active_vendor_operations_view }}" class="rounded-md border border-slate-300 px-4 py-2 text-center text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Clear</a>{% endif %}
+      {% if queue_search or quote_status %}<a href="/admin/vendors/operations?view={{ active_vendor_operations_view }}" class="rounded-md border border-slate-300 px-4 py-2 text-center text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Clear</a>{% endif %}
     </div>
-    {% if queue_search %}<p class="mt-2 text-xs text-slate-500">Showing {{ active_vendor_operations_label }} matching "{{ queue_search }}".</p>{% endif %}
+    {% if queue_search or quote_status %}<p class="mt-2 text-xs text-slate-500">Showing {{ active_vendor_operations_label }} matching the active filter.</p>{% endif %}
   </form>
 
   {% if active_vendor_operations_view in ['procurement', 'advances'] %}
@@ -123,13 +132,16 @@
 
   {% if active_vendor_operations_view == 'quotes' %}
   <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-    <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Quotes awaiting review</h2></header>
+    <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Vendor quotes</h2></header>
     {% for quote in quotes %}
     <article class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 p-5 last:border-0 dark:border-slate-800">
-      <div><strong>{{ quote.vendor.name }}</strong><p class="mt-1 text-sm text-slate-500">{{ quote.project.project.name if quote.project and quote.project.project else quote.project_id }} · {{ quote.line_items|length }} line item{{ '' if quote.line_items|length == 1 else 's' }} · {{ quote.currency }} {{ "{:,.2f}".format(quote.total) }}</p></div>
-      <a href="/admin/vendors/operations/quotes/{{ quote.id }}" class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Review quote</a>
+      <div>
+        <div class="flex flex-wrap items-center gap-2"><strong>{{ quote.vendor.name }}</strong><span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ quote.status|replace('_', ' ')|title }}</span></div>
+        <p class="mt-1 text-sm text-slate-500">{{ quote.project.project.name if quote.project and quote.project.project else quote.project_id }} · {{ quote.line_items|length }} line item{{ '' if quote.line_items|length == 1 else 's' }} · {{ quote.currency }} {{ "{:,.2f}".format(quote.total) }}</p>
+      </div>
+      <a href="/admin/vendors/operations/quotes/{{ quote.id }}" class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Open quote</a>
     </article>
-    {% else %}<p class="p-8 text-center text-sm text-slate-500">No quotes waiting.</p>{% endfor %}
+    {% else %}<p class="p-8 text-center text-sm text-slate-500">No quotes match the active filter.</p>{% endfor %}
   </section>
   {% endif %}
 

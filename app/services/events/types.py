@@ -68,6 +68,9 @@ class EventType(enum.Enum):
     payment_gateway_finance_identity_ensured = (
         "payment_gateway.finance_identity_ensured"
     )
+    payment_gateway_integrator_mapping_changed = (
+        "payment_gateway.integrator_mapping_changed"
+    )
     integration_installation_manifest_adopted = (
         "integration.installation.manifest_adopted"
     )
