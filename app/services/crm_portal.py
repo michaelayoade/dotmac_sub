@@ -179,9 +179,9 @@ def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
             [] if description_is_internal else list(ticket.attachments or [])
         ),
         "status": canonical_ticket_status_value(ticket.status),
-        "status_presentation": ticket_status_presentation(ticket.status).model_dump(
-            mode="json"
-        ),
+        "status_presentation": ticket_status_presentation(
+            ticket.display_status
+        ).model_dump(mode="json"),
         "priority": ticket.priority,
         "subscriber_id": str(ticket.subscriber_id) if ticket.subscriber_id else None,
         "due_at": due_at.isoformat() if due_at else None,
