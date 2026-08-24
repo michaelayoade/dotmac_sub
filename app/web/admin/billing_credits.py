@@ -1,17 +1,12 @@
 """Admin billing credit note routes."""
 
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_billing_credits as web_billing_credits_service
-from app.services import (
-    web_billing_tax_reconciliation as web_billing_tax_reconciliation_service,
-)
 from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
@@ -50,100 +45,6 @@ def billing_credits_list(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
-    )
-
-
-@router.get(
-    "/tax-reconciliation",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:tax:read"))],
-)
-def billing_tax_reconciliation(
-    request: Request,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=10, le=100),
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    return templates.TemplateResponse(
-        "admin/billing/tax_reconciliation.html",
-        {
-            "request": request,
-            **web_billing_tax_reconciliation_service.build_tax_reconciliation_data(
-                db,
-                page=page,
-                per_page=per_page,
-            ),
-            "active_page": "tax-reconciliation",
-            "active_menu": "billing",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-        },
-    )
-
-
-@router.post(
-    "/tax-reconciliation/{invoice_id:uuid}/credit/preview",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:credit_note:create"))],
-)
-def billing_tax_reconciliation_credit_preview(
-    request: Request,
-    invoice_id: UUID,
-    candidate_fingerprint: str = Form(...),
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    try:
-        review = web_billing_tax_reconciliation_service.prepare_tax_credit_review(
-            db,
-            invoice_id=invoice_id,
-            candidate_fingerprint=candidate_fingerprint,
-        )
-    except web_billing_tax_reconciliation_service.TaxReconciliationCreditError as exc:
-        raise HTTPException(status_code=409, detail=exc.message) from exc
-    return templates.TemplateResponse(
-        "admin/billing/tax_reconciliation_credit_confirm.html",
-        {
-            "request": request,
-            "review": review,
-            "active_page": "tax-reconciliation",
-            "active_menu": "billing",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-        },
-    )
-
-
-@router.post(
-    "/tax-reconciliation/{invoice_id:uuid}/credit",
-    dependencies=[Depends(require_permission("billing:credit_note:create"))],
-)
-def billing_tax_reconciliation_credit_create(
-    invoice_id: UUID,
-    candidate_fingerprint: str = Form(...),
-    preview_fingerprint: str = Form(...),
-    idempotency_key: str = Form(...),
-    db: Session = Depends(get_db),
-):
-    try:
-        result = web_billing_tax_reconciliation_service.issue_tax_credit(
-            db,
-            invoice_id=invoice_id,
-            candidate_fingerprint=candidate_fingerprint,
-            preview_fingerprint=preview_fingerprint,
-            idempotency_key=idempotency_key,
-        )
-    except web_billing_tax_reconciliation_service.TaxReconciliationCreditError as exc:
-        raise HTTPException(status_code=409, detail=exc.message) from exc
-    return RedirectResponse(
-        url=(
-            f"/admin/billing/invoices/{invoice_id}"
-            f"?notice=Tax+credit+{result.credit_note.credit_number}+issued"
-        ),
-        status_code=303,
     )
 
 

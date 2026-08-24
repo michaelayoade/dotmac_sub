@@ -38,6 +38,14 @@ typed per-currency financial position, and connected to the required service,
 collections, access, customer-statement, and ERP consequences through durable
 owner outputs.
 
+An administrator may cancel an outstanding plan-change request only while its
+authoritative request status is `pending`. The command locks the exact request,
+verifies that it belongs to the subscription shown in the admin UI, records the
+actor and required reason, and transitions it to `canceled` in the same owner
+transaction. Approved, applied, rejected, or already completed changes are not
+revoked through this action; reversal after application is a new commercial
+change with its own billing and provisioning consequences.
+
 The same contract, period, rating, posting, and delivery primitives support
 composable cadence and both prepaid and postpaid collection timing. They do not
 collapse prepaid and postpaid into one accounting state machine.
@@ -188,7 +196,12 @@ Each version records:
 - version, supersession, actor, reason, and idempotency evidence.
 
 At most one version may be effective for one contract line at an instant.
-Historical terms are never rewritten when catalog prices or policies change.
+Historical contract versions, invoices, and rated obligations are never
+rewritten when catalog prices or policies change. An approved base offer-price
+amount edit is a commercial instruction for future renewals: catalog billing
+governance atomically updates the current ``Subscription.unit_price`` renewal
+projection for live, non-version-pinned subscriptions. Existing documents and
+completed service periods retain their recorded amounts.
 
 #### Composable cadence
 

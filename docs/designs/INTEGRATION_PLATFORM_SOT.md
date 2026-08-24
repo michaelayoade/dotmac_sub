@@ -27,6 +27,16 @@ mapping. Flutterwave v4 does not report provider fee evidence on the current
 connector contract, so Sub refuses to infer zero or move money on that path;
 the mirror can report the gap without recording a consequence.
 
+Machine-principal authentication is additive while the legacy API-key verifier
+remains available. Its HMAC key is therefore optional until that fallback is
+retired and lives at the dedicated OpenBao path
+`secret/settings/machine_auth#machine_credential_hmac_key`. This separation is
+part of the boot contract: absence of the optional path means "not provisioned",
+whereas a missing field on an existing required secret path is configuration
+drift and fails closed. The fallback-retirement change must move this material
+into the required boot-secret set at the same time it makes machine principals
+the sole connector authentication path.
+
 ## Decision
 
 Dotmac Sub will provide a capability-based integration platform for external

@@ -90,10 +90,44 @@
   </section>
 
   <section class="grid gap-4 xl:grid-cols-3">
-    <article class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 xl:col-span-2">
-      <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700"><h2 class="font-semibold text-slate-900 dark:text-white">Sales by Agent</h2></div>
-      <div class="overflow-x-auto"><table class="min-w-full text-sm"><thead class="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-900"><tr><th class="px-4 py-2 text-left">Agent</th><th class="px-3 py-2 text-right">Orders</th><th class="px-3 py-2 text-right">Paid</th><th class="px-3 py-2 text-right">Gross Value</th><th class="px-3 py-2 text-right">Collected</th><th class="px-3 py-2 text-right">Outstanding</th></tr></thead>
-      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">{% for row in agent_performance %}<tr><td class="px-4 py-2 font-medium text-slate-800 dark:text-slate-100">{{ row.name }}{% if row.email %}<span class="block text-xs font-normal text-slate-500">{{ row.email }}</span>{% endif %}</td><td class="px-3 py-2 text-right">{{ row.orders }}</td><td class="px-3 py-2 text-right">{{ row.paid_orders }}</td><td class="px-3 py-2 text-right">NGN {{ "{:,.0f}".format(row.gross) }}</td><td class="px-3 py-2 text-right text-emerald-600">NGN {{ "{:,.0f}".format(row.collected) }}</td><td class="px-3 py-2 text-right text-amber-600">NGN {{ "{:,.0f}".format(row.outstanding) }}</td></tr>{% else %}<tr><td colspan="6" class="px-4 py-8 text-center text-slate-500">No agent activity in this period.</td></tr>{% endfor %}</tbody></table></div>
+    <article x-data="{ agentsExpanded: false }" class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 xl:col-span-2">
+      <div class="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Sales by Agent</h2>
+        <label class="relative ml-auto hidden w-full max-w-xs sm:block">
+          <span class="sr-only">Search sales agents</span>
+          <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m21 21-4.35-4.35m2.35-5.65a8 8 0 11-16 0 8 8 0 0116 0z"/></svg>
+          <input type="search" placeholder="Search agents" autocomplete="off" class="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white" data-agent-search>
+        </label>
+        <span class="text-xs font-medium text-slate-500 sm:hidden">{{ agent_performance|length }} agents</span>
+      </div>
+      <div class="hidden overflow-x-auto sm:block" data-agent-table-wrap>
+        <table class="min-w-full text-sm"><thead class="sticky top-0 z-10 bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-900"><tr><th class="px-4 py-2 text-left">Agent</th><th class="px-3 py-2 text-right">Orders</th><th class="px-3 py-2 text-right">Paid</th><th class="px-3 py-2 text-right">Gross Value</th><th class="px-3 py-2 text-right">Collected</th><th class="px-3 py-2 text-right">Outstanding</th></tr></thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700">{% for row in agent_performance %}<tr data-agent-row data-agent-search-text="{{ row.name|lower }} {{ row.email|lower }}"><td class="px-4 py-2 font-medium text-slate-800 dark:text-slate-100">{{ row.name }}{% if row.email %}<span class="block text-xs font-normal text-slate-500">{{ row.email }}</span>{% endif %}</td><td class="px-3 py-2 text-right">{{ row.orders }}</td><td class="px-3 py-2 text-right">{{ row.paid_orders }}</td><td class="px-3 py-2 text-right">NGN {{ "{:,.0f}".format(row.gross) }}</td><td class="px-3 py-2 text-right text-emerald-600">NGN {{ "{:,.0f}".format(row.collected) }}</td><td class="px-3 py-2 text-right text-amber-600">NGN {{ "{:,.0f}".format(row.outstanding) }}</td></tr>{% else %}<tr><td colspan="6" class="px-4 py-8 text-center text-slate-500">No agent activity in this period.</td></tr>{% endfor %}<tr class="hidden" data-agent-no-results><td colspan="6" class="px-4 py-8 text-center text-slate-500">No agents match your search.</td></tr></tbody></table>
+      </div>
+      <div class="hidden border-t border-slate-200 p-3 text-center dark:border-slate-700 sm:block" data-agent-toggle-wrap>
+        <button type="button" class="rounded-lg border border-slate-300 bg-slate-50 px-4 py-2 text-xs font-semibold text-cyan-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-cyan-300 dark:hover:bg-slate-700" aria-expanded="false" data-agent-desktop-toggle>Show all agents</button>
+      </div>
+      <div class="grid gap-2.5 p-3 sm:hidden" data-mobile-agent-list>
+        {% for row in agent_performance %}
+        <article x-show="agentsExpanded || {{ loop.index0 }} < 5" x-collapse.duration.300ms x-cloak class="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900" data-mobile-agent-card>
+          <div class="flex min-w-0 items-center gap-2.5">
+            <span class="grid h-8 w-8 flex-none place-items-center rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300"><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 21a8 8 0 10-16 0m12-11a4 4 0 11-8 0 4 4 0 018 0z"/></svg></span>
+            <div class="min-w-0"><p class="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">{{ row.name }}</p>{% if row.email %}<p class="truncate text-[11px] text-slate-500 dark:text-slate-400">{{ row.email }}</p>{% endif %}</div>
+          </div>
+          <p class="mt-1 pl-[2.625rem] text-[11px] text-slate-500 dark:text-slate-400"><strong class="text-slate-700 dark:text-slate-200">{{ row.orders }}</strong> orders <span class="mx-1 text-slate-400 dark:text-slate-600">•</span> <strong class="text-slate-700 dark:text-slate-200">{{ row.paid_orders }}</strong> paid</p>
+          <dl class="mt-2 grid grid-cols-3 border-t border-slate-200 pt-2 dark:border-slate-800">
+            <div class="min-w-0"><dt class="text-[9px] font-bold uppercase tracking-wide text-slate-500">Gross</dt><dd class="mt-0.5 whitespace-nowrap text-[11px] font-semibold text-slate-700 dark:text-slate-200">NGN {{ "{:,.0f}".format(row.gross) }}</dd></div>
+            <div class="min-w-0 border-l border-slate-200 pl-2 dark:border-slate-800"><dt class="text-[9px] font-bold uppercase tracking-wide text-slate-500">Collected</dt><dd class="mt-0.5 whitespace-nowrap text-[11px] font-semibold text-emerald-600 dark:text-emerald-500">NGN {{ "{:,.0f}".format(row.collected) }}</dd></div>
+            <div class="min-w-0 border-l border-slate-200 pl-2 dark:border-slate-800"><dt class="text-[9px] font-bold uppercase tracking-wide text-slate-500">Outstanding</dt><dd class="mt-0.5 whitespace-nowrap text-[11px] font-semibold text-amber-600 dark:text-amber-500">NGN {{ "{:,.0f}".format(row.outstanding) }}</dd></div>
+          </dl>
+        </article>
+        {% else %}<p class="py-6 text-center text-sm text-slate-500">No agent activity in this period.</p>{% endfor %}
+        {% if agent_performance|length > 5 %}
+        <button type="button" @click="agentsExpanded = !agentsExpanded" :aria-expanded="agentsExpanded.toString()" class="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2.5 text-xs font-semibold text-cyan-700 hover:bg-slate-200 dark:border-slate-600 dark:bg-slate-800 dark:text-cyan-300 dark:hover:bg-slate-700" data-mobile-agent-toggle>
+          <span x-text="agentsExpanded ? 'Show fewer agents' : 'Show all agents ({{ agent_performance|length }})'">Show all agents ({{ agent_performance|length }})</span>
+        </button>
+        {% endif %}
+      </div>
     </article>
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
       {% for title, rows in [('Payment Mix', payment_mix), ('Source Mix', source_mix)] %}
@@ -102,19 +136,30 @@
     </div>
   </section>
 
-  <section id="orders-table" aria-busy="false" class="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+  <section id="orders-table" x-data="{ ordersExpanded: false }" aria-busy="false" class="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+      <div><h2 class="font-semibold text-slate-900 dark:text-white">Sales Orders</h2><p class="text-xs text-slate-500">{{ total }} order{{ '' if total == 1 else 's' }} match the current filters</p></div>
+      <span class="text-xs font-medium text-slate-500">Page {{ page }} of {{ total_pages }}</span>
+    </div>
     <div data-loading class="absolute inset-0 z-10 hidden place-items-center bg-white/80 dark:bg-slate-900/80"><p class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Loading sales orders…</p></div>
-    <div class="overflow-x-auto"><table class="min-w-[1250px] w-full text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900"><tr>
-      {{ sort_header(list_query, '/admin/sales/sales-order', 'order_number', 'Order Number', entity='orders', th_class='px-3 py-2.5 text-left') }}
-      {{ sort_header(list_query, '/admin/sales/sales-order', 'created_at', 'Created Date', entity='orders', th_class='px-3 py-2.5 text-left') }}
-      <th class="px-3 py-2.5 text-left">Customer</th><th class="px-3 py-2.5 text-left">Sales Agent</th><th class="px-3 py-2.5 text-left">Source</th><th class="px-3 py-2.5 text-left">Order Status</th><th class="px-3 py-2.5 text-left">Payment Status</th>
-      {{ sort_header(list_query, '/admin/sales/sales-order', 'total', 'Total', entity='orders', th_class='px-3 py-2.5 text-right') }}
-      <th class="px-3 py-2.5 text-right">Collected</th><th class="px-3 py-2.5 text-right">Outstanding Balance</th><th class="px-3 py-2.5 text-right">Action</th>
+    <div class="overflow-x-auto"><table class="w-full min-w-[760px] text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900"><tr>
+      {{ sort_header(list_query, '/admin/sales/sales-order', 'order_number', 'Order', entity='orders', th_class='w-[16%] px-4 py-2.5 text-left') }}
+      <th class="w-[24%] px-3 py-2.5 text-left">Customer & Agent</th><th class="w-[14%] px-3 py-2.5 text-left">Source</th><th class="w-[18%] px-3 py-2.5 text-left">Status</th>
+      {{ sort_header(list_query, '/admin/sales/sales-order', 'total', 'Financials', entity='orders', th_class='w-[22%] px-3 py-2.5 text-right') }}
+      <th class="w-[6%] px-4 py-2.5 text-right">Action</th>
     </tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-700">
       {% for order in orders %}{% set customer = subscriber_map.get(order.subscriber_id|string) %}{% set agent = agent_map.get(order.owner_agent_id|string) if order.owner_agent_id else none %}
-      <tr class="hover:bg-cyan-50/40 dark:hover:bg-cyan-950/20"><td class="px-3 py-3 font-semibold text-cyan-700 dark:text-cyan-400">{{ order.order_number }}</td><td class="px-3 py-3 text-slate-600 dark:text-slate-300">{{ order.created_at|app_datetime('%Y-%m-%d') }}</td><td class="px-3 py-3 text-slate-700 dark:text-slate-200">{{ customer.display_name or customer.email if customer else 'Unknown customer' }}</td><td class="px-3 py-3">{{ agent.name if agent else ('Unassigned' if not order.owner_agent_id else (order.owner_agent_id|string)[:8]) }}</td><td class="px-3 py-3">{{ 'CRM Quote' if order.quote_id else 'Manual' }}{% if order.source %}<span class="block text-xs text-slate-500">{{ order.source }}</span>{% endif %}</td><td class="px-3 py-3">{{ status_badge((order.status or 'draft')|title, status_variants.get(order.status or 'draft','default'), size='sm') }}</td><td class="px-3 py-3">{{ status_badge((order.payment_status or 'pending')|title, payment_variants.get(order.payment_status or 'pending','default'), size='sm') }}</td><td class="px-3 py-3 text-right tabular-nums">{{ order.currency }} {{ "{:,.2f}".format(order.total or 0) }}</td><td class="px-3 py-3 text-right tabular-nums text-emerald-600">{{ order.currency }} {{ "{:,.2f}".format(order.amount_paid or 0) }}</td><td class="px-3 py-3 text-right tabular-nums text-amber-600">{{ order.currency }} {{ "{:,.2f}".format(order.balance_due or 0) }}</td><td class="px-3 py-3 text-right"><a href="/admin/sales/sales-order/{{ order.id }}" class="font-semibold text-cyan-700 hover:underline dark:text-cyan-400">View</a></td></tr>
-      {% else %}{{ empty_state('No sales orders found', 'Try clearing filters or create the first manual sales order.', colspan=11) }}{% endfor %}
+      <tr x-show="ordersExpanded || {{ loop.index0 }} < 10" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0 -translate-y-1" x-transition:enter-end="opacity-100 translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100 translate-y-0" x-transition:leave-end="opacity-0 -translate-y-1" x-cloak class="align-top hover:bg-cyan-50/40 dark:hover:bg-cyan-950/20" data-compact-order-row>
+        <td class="px-4 py-3"><a href="/admin/sales/sales-order/{{ order.id }}" class="font-semibold text-cyan-700 hover:underline dark:text-cyan-400">{{ order.order_number }}</a><span class="mt-1 block text-xs text-slate-500">{{ order.created_at|app_datetime('%Y-%m-%d') }}</span></td>
+        <td class="px-3 py-3"><p class="font-medium text-slate-800 dark:text-slate-100">{{ customer.display_name or customer.email if customer else 'Unknown customer' }}</p><p class="mt-1 text-xs text-slate-500">Agent: {{ agent.name if agent else ('Unassigned' if not order.owner_agent_id else 'Unknown agent') }}</p></td>
+        <td class="px-3 py-3"><p class="font-medium text-slate-700 dark:text-slate-200">{{ 'CRM Quote' if order.quote_id else 'Manual' }}</p>{% if order.source %}<p class="mt-1 text-xs text-slate-500">{{ order.source }}</p>{% endif %}</td>
+        <td class="space-y-2 px-3 py-3"><div><p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Order status</p>{{ status_badge((order.status or 'draft')|title, status_variants.get(order.status or 'draft','default'), size='sm') }}</div><div><p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Payment status</p>{{ status_badge((order.payment_status or 'pending')|title, payment_variants.get(order.payment_status or 'pending','default'), size='sm') }}</div></td>
+        <td class="px-3 py-3 text-right tabular-nums"><p class="font-semibold text-slate-800 dark:text-slate-100">{{ order.currency }} {{ "{:,.2f}".format(order.total or 0) }}</p><p class="mt-1 text-xs text-emerald-600 dark:text-emerald-400">Collected {{ "{:,.2f}".format(order.amount_paid or 0) }}</p><p class="mt-0.5 text-xs text-amber-600 dark:text-amber-400">Due {{ "{:,.2f}".format(order.balance_due or 0) }}</p></td>
+        <td class="px-4 py-3 text-right"><a href="/admin/sales/sales-order/{{ order.id }}" class="font-semibold text-cyan-700 hover:underline dark:text-cyan-400">View</a></td>
+      </tr>
+      {% else %}{{ empty_state('No sales orders found', 'Try clearing filters or create the first manual sales order.', colspan=6) }}{% endfor %}
     </tbody></table></div>
+    {% if orders|length > 10 %}<div class="border-t border-slate-200 p-3 text-center dark:border-slate-700"><button type="button" @click="ordersExpanded = !ordersExpanded" :aria-expanded="ordersExpanded.toString()" class="rounded-lg border border-slate-300 bg-slate-50 px-4 py-2 text-xs font-semibold text-cyan-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-cyan-300 dark:hover:bg-slate-700" data-orders-toggle><span x-text="ordersExpanded ? 'Show fewer orders' : 'Show all orders ({{ orders|length }})'">Show all orders ({{ orders|length }})</span></button></div>{% endif %}
     {% if total_pages > 1 %}<div class="border-t border-slate-200 p-3 dark:border-slate-700">{{ list_pagination(list_query, page_meta, '/admin/sales/sales-order') }}</div>{% endif %}
   </section>
 </div>
@@ -133,6 +178,67 @@
     table?.setAttribute('aria-busy', 'true');
     table?.querySelector('[data-loading]')?.classList.replace('hidden', 'grid');
   });
+
+  const agentSearch = document.querySelector('[data-agent-search]');
+  const agentRows = [...document.querySelectorAll('[data-agent-row]')];
+  const agentToggle = document.querySelector('[data-agent-desktop-toggle]');
+  const agentToggleWrap = document.querySelector('[data-agent-toggle-wrap]');
+  const agentNoResults = document.querySelector('[data-agent-no-results]');
+  const agentTableWrap = document.querySelector('[data-agent-table-wrap]');
+  let agentsExpanded = false;
+  const syncAgents = () => {
+    const query = (agentSearch?.value || '').trim().toLowerCase();
+    const matches = agentRows.filter(row =>
+      (row.dataset.agentSearchText || '').includes(query)
+    );
+    agentRows.forEach(row => row.classList.add('hidden'));
+    matches.slice(0, agentsExpanded ? matches.length : 10).forEach(row =>
+      row.classList.remove('hidden')
+    );
+    agentNoResults?.classList.toggle('hidden', matches.length > 0 || !query);
+    agentToggleWrap?.classList.toggle('!hidden', matches.length <= 10);
+    if (agentToggle) {
+      agentToggle.setAttribute('aria-expanded', String(agentsExpanded));
+      agentToggle.textContent = agentsExpanded
+        ? 'Show fewer agents'
+        : `Show all agents (${matches.length})`;
+    }
+  };
+  agentSearch?.addEventListener('input', () => {
+    agentsExpanded = false;
+    syncAgents();
+  });
+  agentToggle?.addEventListener('click', () => {
+    const startHeight = agentTableWrap?.getBoundingClientRect().height || 0;
+    agentsExpanded = !agentsExpanded;
+    syncAgents();
+    if (agentTableWrap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const endHeight = agentTableWrap.getBoundingClientRect().height;
+      agentTableWrap.animate(
+        [
+          { height: `${startHeight}px`, opacity: 0.92, overflow: 'hidden' },
+          { height: `${endHeight}px`, opacity: 1, overflow: 'hidden' },
+        ],
+        { duration: 320, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
+      );
+    }
+  });
+  const ordersDisclosure = document.getElementById('orders-table');
+  document.querySelector('[data-orders-toggle]')?.addEventListener('click', () => {
+    if (!ordersDisclosure || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const startHeight = ordersDisclosure.getBoundingClientRect().height;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const endHeight = ordersDisclosure.getBoundingClientRect().height;
+      ordersDisclosure.animate(
+        [
+          { height: `${startHeight}px`, opacity: 0.94, overflow: 'hidden' },
+          { height: `${endHeight}px`, opacity: 1, overflow: 'hidden' },
+        ],
+        { duration: 340, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
+      );
+    }));
+  });
+  syncAgents();
 })();
 </script>
 {% endblock %}

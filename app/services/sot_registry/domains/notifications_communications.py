@@ -2144,6 +2144,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "contact subscriber reseller and ticket association resolution",
                 "reviewed contact association and projection repair",
+                "bounded trusted support customer-identity projection",
             ),
             depends_on=(
                 "party.registry",
@@ -2160,6 +2161,10 @@ DOMAIN = DomainSOT(
                     (
                         "reviewed contact association and projection repair",
                         OwnerRole.PROJECTION_WRITER,
+                    ),
+                    (
+                        "bounded trusted support customer-identity projection",
+                        OwnerRole.RESOLVER,
                     ),
                 ),
                 inputs=(
@@ -3394,7 +3399,11 @@ DOMAIN = DomainSOT(
                         name="current Inbox projection",
                         owner="communications.team_inbox_projection",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Failed outbound, stale conversation, and unmaterialized media worklists.",
+                        source=(
+                            "Failed outbound and unmaterialized media worklists, plus "
+                            "locked stale-conversation candidates whose authoritative "
+                            "routing state has no active assignment."
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical conversation identity",

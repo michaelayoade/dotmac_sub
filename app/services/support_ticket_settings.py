@@ -65,7 +65,7 @@ DEFAULT_SLA_POLICY = {
     "low": {"response_hours": 24, "resolution_hours": 120, "aging_hours": 48},
     "lower": {"response_hours": 24, "resolution_hours": 168, "aging_hours": 72},
 }
-TERMINAL_STATUSES = {"closed", "canceled", "merged"}
+TERMINAL_STATUSES = {"closed", "canceled"}
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _CONFIGURATION_OWNER = "support.ticket_configuration"
@@ -1001,7 +1001,8 @@ def default_priority(db: Session) -> str:
 
 
 def status_is_terminal(value: str | None) -> bool:
-    return str(value or "").strip() in TERMINAL_STATUSES
+    normalized = str(value or "").strip()
+    return normalized in TERMINAL_STATUSES or status_is_merged(normalized)
 
 
 def status_is_merged(value: str | None) -> bool:

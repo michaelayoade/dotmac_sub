@@ -107,6 +107,13 @@ EXPECTED_COLLISIONS = {
     "communication_suppressions",
     "domain_setting_history",
     "domain_settings",
+    # Added 2026-08-24 by `551_machine_credentials`, and unlike every other
+    # entry here this collision was created ON PURPOSE. The others are Sub
+    # tables that happen to overlap the kernel's and have to be reconciled
+    # column by column; this one was written FROM the kernel's definition, so
+    # it is identical by construction rather than by measurement. Its
+    # disposition is STAMP, not union — see the dispositions inventory.
+    "machine_credentials",
     "parties",
     "roles",
     "tenant_domains",

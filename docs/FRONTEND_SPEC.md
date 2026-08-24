@@ -1005,6 +1005,7 @@ contract used by the invoice table; internal account UUIDs are not exported.
     "is_proforma": bool,
     "prepaid_draft_reconciliation_preview": PrepaidDraftReconciliationPreview | None,
     "prepaid_draft_issue_notice": str | None,
+    "prepaid_coverage_reconciliation_state": PrepaidCoverageInvoiceDetailState | None,
     "active_page": "billing",
 }
 ```
@@ -1020,6 +1021,16 @@ the owner-provided funded-coverage warning beside **Reconcile prepaid draft**.
 An attempted issue redirects back with the same safe explanation. Ambiguous
 coverage displays the classifier reason and requires Finance review; the page
 does not translate a generic request conflict or decide coverage itself.
+
+For a paid prepaid invoice with exact missing-entitlement evidence, the same
+detail page exposes **Repair prepaid coverage** only to staff with
+`billing:invoice:update`. Its preview identifies the exact subscription and
+paid invoice line, then supplies an actor-bound, expiring confirmation token
+and owner fingerprint to `financial.prepaid_service_coverage_reconciliation`.
+The owner rechecks and locks that invoice-scoped evidence before creating an
+entitlement; the action never changes payment amounts or forces access status.
+If the invoice cannot support one exact repair, the page explains that Finance
+review is required and provides no forced-confirmation action.
 
 #### Invoice Form (New)
 

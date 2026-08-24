@@ -12,11 +12,9 @@ from datetime import UTC, datetime
 from string import Template
 from typing import Any
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.ai_intake import AiIntakePolicyVersion, AiIntakeSession
-from app.models.subscriber import Subscriber
 from app.models.team_inbox import InboxConversation
 from app.schemas.ai_intake import AiIntakeClassification
 from app.services.common import coerce_uuid
@@ -24,7 +22,14 @@ from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
 )
-from app.services.customer_network_context import get_customer_network_context
+from app.services.network import support_monitoring
+from app.services.team_inbox_support_identity import (
+    CustomerIdentifierKind,
+    CustomerIdentityQuery,
+    CustomerIdentityStatus,
+    SupportReadContext,
+    resolve_customer_identity,
+)
 
 STATE_KEY = "conversation_state"
 EVENTS_KEY = "conversation_events"
@@ -378,6 +383,7 @@ def run_conversational_turn(
             "subscriber_monitoring",
             {"subscriber_id": state.subscriber_id},
             policy=policy,
+            conversation=conversation,
             tool_mode=tool_mode,
         )
         _record_tool_result(state, "subscriber_monitoring", result)
@@ -409,6 +415,7 @@ def run_conversational_turn(
         db,
         state,
         policy,
+        conversation=conversation,
         tool_mode=tool_mode,
     )
     if rule_decision is not None:
@@ -544,6 +551,7 @@ def execute_tool(
     inputs: dict[str, object],
     *,
     policy: dict[str, object],
+    conversation: InboxConversation | None = None,
     tool_mode: str = "live_read_only",
 ) -> dict[str, object]:
     descriptor = TOOL_CATALOG.get(key)
@@ -554,7 +562,7 @@ def execute_tool(
     if tool_mode == "simulation":
         return _simulated_tool_result(key, inputs)
     if key == "customer_lookup":
-        return _customer_lookup(db, inputs)
+        return _customer_lookup(db, inputs, conversation=conversation)
     if key == "subscriber_monitoring":
         return _subscriber_monitoring(db, inputs)
     return {"status": "unavailable", "reason": "tool_not_implemented"}
@@ -576,66 +584,65 @@ def _simulated_tool_result(key: str, inputs: dict[str, object]) -> dict[str, obj
     if key == "subscriber_monitoring":
         return {
             "status": "available",
-            "service_state": "offline",
-            "radius_online": False,
-            "has_access_equipment": True,
-            "active_radius_session_count": 0,
-            "ont_states": [{"online": False, "reason": "simulated_preview"}],
+            "radius_observation": {
+                "source": "network.radius_sessions",
+                "state": "offline",
+                "active_session_count": 0,
+                "framed_ip_addresses": [],
+                "observed_at": None,
+            },
+            "ont_observations": [
+                {
+                    "source": "network.ont_runtime_status",
+                    "reference": "preview-ont",
+                    "serial_number": None,
+                    "effective_state": "offline",
+                }
+            ],
             "simulated": True,
         }
     return {"status": "unavailable", "reason": "simulation_not_available"}
 
 
-def _customer_lookup(db: Session, inputs: dict[str, object]) -> dict[str, object]:
+def _customer_lookup(
+    db: Session,
+    inputs: dict[str, object],
+    *,
+    conversation: InboxConversation | None,
+) -> dict[str, object]:
+    """Verify an identifier only against the trusted Inbox-linked subscriber."""
+    if conversation is None:
+        return {"status": "unavailable", "reason": "trusted_context_required"}
     identifier_type = str(inputs.get("identifier_type") or "").strip()
     identifier_value = str(inputs.get("identifier_value") or "").strip()
     if not identifier_type or not identifier_value:
         return {"status": "unavailable", "reason": "missing_identifier"}
+    identifier_kind = {
+        "registered_email": CustomerIdentifierKind.email,
+        "registered_phone": CustomerIdentifierKind.phone,
+        "portal_id": CustomerIdentifierKind.account_number,
+    }.get(identifier_type)
+    if identifier_kind is None:
+        return {"status": "unauthorized", "reason": "identifier_not_permitted"}
     try:
-        if identifier_type == "registered_email":
-            normalized = normalize_email_identifier(identifier_value)
-            if not normalized:
-                return {"status": "not_found"}
-            rows = (
-                db.query(Subscriber)
-                .filter(func.lower(func.trim(Subscriber.email)) == normalized)
-                .all()
-            )
-        elif identifier_type == "registered_phone":
-            normalized = normalize_phone_identifier(identifier_value)
-            rows = [
-                row
-                for row in db.query(Subscriber).all()
-                if normalize_phone_identifier(row.phone) == normalized
-            ]
-        elif identifier_type == "portal_id":
-            rows = (
-                db.query(Subscriber)
-                .filter(
-                    (Subscriber.account_number == identifier_value)
-                    | (Subscriber.subscriber_number == identifier_value)
-                )
-                .all()
-            )
-        else:
-            return {"status": "unauthorized", "reason": "identifier_not_permitted"}
+        result = resolve_customer_identity(
+            db,
+            CustomerIdentityQuery(
+                context=_support_read_context(conversation),
+                identifier_kind=identifier_kind,
+                identifier_value=identifier_value,
+            ),
+        )
     except Exception:
         return {"status": "unavailable", "reason": "lookup_failed"}
-    active_rows = [row for row in rows if bool(row.is_active)]
-    if not active_rows:
-        return {"status": "not_found"}
-    if len(active_rows) > 1:
-        return {"status": "ambiguous", "matched_count": len(active_rows)}
-    row = active_rows[0]
+    if result.status is not CustomerIdentityStatus.found or result.customer is None:
+        return {"status": result.status.value}
     return {
-        "status": "found",
-        "subscriber_id": str(row.id),
-        "display_name": row.display_name or row.full_name or row.email,
-        "account_number": row.account_number,
-        "subscriber_number": row.subscriber_number,
-        "email": row.email,
-        "phone": row.phone,
-        "subscriber_status": getattr(row.status, "value", row.status),
+        "status": result.status.value,
+        "subscriber_id": str(result.customer.subscriber_id),
+        "display_name": result.customer.display_name,
+        "account_number": result.customer.account_number,
+        "subscriber_status": result.customer.status,
     }
 
 
@@ -644,37 +651,39 @@ def _subscriber_monitoring(db: Session, inputs: dict[str, object]) -> dict[str, 
     if subscriber_id is None:
         return {"status": "unavailable", "reason": "subscriber_required"}
     try:
-        context = get_customer_network_context(db, subscriber_id)
+        projection = support_monitoring.project_support_monitoring(
+            db,
+            support_monitoring.SupportMonitoringQuery(
+                subscriber_id=subscriber_id,
+                authorized=True,
+            ),
+        )
     except Exception:
         return {"status": "unavailable", "reason": "monitoring_query_failed"}
-    ont_states: list[dict[str, object]] = []
-    try:
-        from app.services.network.ont_status import resolve_effective_ont_status
-
-        for assignment in context.ont_assignments[:5]:
-            ont = assignment.ont_unit
-            if ont is None:
-                continue
-            resolved = resolve_effective_ont_status(ont)
-            ont_states.append(
-                {
-                    "serial": ont.serial_number,
-                    "online": resolved.is_online,
-                    "reason": resolved.reason,
-                }
-            )
-    except Exception:
-        ont_states = []
-    return {
-        "status": "available",
-        "service_state": "online" if context.is_online else "offline",
-        "radius_online": context.is_online,
-        "has_access_equipment": context.has_access_equipment,
-        "active_radius_session_count": len(context.active_radius_sessions),
-        "framed_ipv4_addresses": list(context.framed_ipv4_addresses[:3]),
-        "assigned_ipv4_addresses": list(context.assigned_ipv4_addresses[:3]),
-        "ont_states": ont_states,
-    }
+    result: dict[str, object] = {"status": projection.status.value}
+    if projection.radius is not None:
+        result["radius_observation"] = {
+            "source": projection.radius.source,
+            "state": projection.radius.state,
+            "active_session_count": projection.radius.active_session_count,
+            "framed_ip_addresses": list(projection.radius.framed_ip_addresses),
+            "observed_at": (
+                projection.radius.observed_at.isoformat()
+                if projection.radius.observed_at is not None
+                else None
+            ),
+        }
+    if projection.onts:
+        result["ont_observations"] = [
+            {
+                "source": observation.source,
+                "reference": observation.reference,
+                "serial_number": observation.serial_number,
+                "effective_state": observation.effective_state,
+            }
+            for observation in projection.onts
+        ]
+    return result
 
 
 def _policy(version: AiIntakePolicyVersion | None) -> dict[str, object]:
@@ -713,27 +722,37 @@ def _policy(version: AiIntakePolicyVersion | None) -> dict[str, object]:
 def _merge_contact_from_conversation(
     state: ConversationalState, conversation: InboxConversation, db: Session
 ) -> None:
-    if conversation.subscriber_id and not state.subscriber_id:
-        state.subscriber_id = str(conversation.subscriber_id)
-    if state.subscriber_id and not state.service_account_identity:
-        subscriber = db.get(Subscriber, coerce_uuid(state.subscriber_id))
-        if subscriber is not None:
-            state.registered_email = state.registered_email or subscriber.email
-            state.registered_phone = state.registered_phone or subscriber.phone
-            state.portal_id = (
-                state.portal_id
-                or subscriber.account_number
-                or subscriber.subscriber_number
-            )
-            state.service_account_identity = {
-                "subscriber_id": str(subscriber.id),
-                "display_name": subscriber.display_name
-                or subscriber.full_name
-                or subscriber.email,
-                "subscriber_status": getattr(
-                    subscriber.status, "value", subscriber.status
-                ),
-            }
+    if state.subscriber_id and state.service_account_identity:
+        return
+    try:
+        result = resolve_customer_identity(
+            db,
+            CustomerIdentityQuery(
+                context=_support_read_context(conversation),
+                identifier_kind=CustomerIdentifierKind.inbox_linked,
+            ),
+        )
+    except Exception:
+        return
+    if result.status is not CustomerIdentityStatus.found or result.customer is None:
+        return
+    customer = result.customer
+    state.subscriber_id = str(customer.subscriber_id)
+    state.portal_id = state.portal_id or customer.account_number
+    state.service_account_identity = {
+        "subscriber_id": state.subscriber_id,
+        "display_name": customer.display_name,
+        "subscriber_status": customer.status,
+    }
+
+
+def _support_read_context(conversation: InboxConversation) -> SupportReadContext:
+    """Build owner input from the trusted Team Inbox runtime context, never AI output."""
+    return SupportReadContext(
+        conversation_id=conversation.id,
+        actor_person_id=None,
+        can_read_support_context=True,
+    )
 
 
 def _merge_facts(state: ConversationalState, facts: dict[str, object]) -> None:
@@ -789,12 +808,12 @@ def _identify_customer(
                 "conversation_id": str(conversation.id),
             },
             policy=policy,
+            conversation=conversation,
             tool_mode=tool_mode,
         )
         _record_tool_result(state, "customer_lookup", result)
         if result.get("status") == "found":
             state.subscriber_id = str(result["subscriber_id"])
-            conversation.subscriber_id = coerce_uuid(result["subscriber_id"])
             state.service_account_identity = {
                 "subscriber_id": state.subscriber_id,
                 "display_name": result.get("display_name"),
@@ -857,7 +876,8 @@ def _technical_issue(state: ConversationalState) -> bool:
 
 def _monitoring_offline(state: ConversationalState) -> bool:
     latest = state.monitoring_results[-1] if state.monitoring_results else {}
-    return latest.get("service_state") == "offline"
+    radius = latest.get("radius_observation")
+    return isinstance(radius, dict) and radius.get("state") == "offline"
 
 
 def _configured_troubleshooting_decision(
@@ -865,6 +885,7 @@ def _configured_troubleshooting_decision(
     state: ConversationalState,
     policy: dict[str, object],
     *,
+    conversation: InboxConversation,
     tool_mode: str,
 ) -> ConversationEngineDecision | None:
     rules = policy.get("troubleshooting_rules")
@@ -895,6 +916,7 @@ def _configured_troubleshooting_decision(
                 tool_key,
                 inputs,
                 policy=policy,
+                conversation=conversation,
                 tool_mode=tool_mode,
             )
             _record_tool_result(state, tool_key, result)

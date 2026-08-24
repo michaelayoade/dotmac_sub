@@ -150,11 +150,21 @@ log() { printf '\n==> %s\n' "$*"; }
 wait_for_health() {
   local url="$1"
   local label="$2"
+  local watched_container="${3:-}"
   local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+  local state
   while true; do
     if curl -fsS --connect-timeout "${HEALTH_CURL_TIMEOUT}" \
       --max-time "${HEALTH_CURL_TIMEOUT}" -o /dev/null "${url}" 2>/dev/null; then
       return 0
+    fi
+    if [[ -n "${watched_container}" ]]; then
+      state="$(docker inspect "${watched_container}" \
+        --format '{{.State.Status}}' 2>/dev/null || true)"
+      if [[ "${state}" != "running" ]]; then
+        echo "${label} stopped before becoming healthy: ${state:-unavailable}" >&2
+        return 1
+      fi
     fi
     if ((SECONDS >= deadline)); then
       echo "${label} health gate failed: ${url}" >&2
@@ -162,6 +172,31 @@ wait_for_health() {
     fi
     sleep 5
   done
+}
+
+report_candidate_failure() {
+  echo "Warm candidate container state:" >&2
+  if ! docker inspect "${CANDIDATE_CONTAINER}" \
+    --format 'status={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} restarting={{.State.Restarting}} error={{json .State.Error}}' \
+    >&2; then
+    echo "  unavailable (container may have exited before inspection)" >&2
+  fi
+  echo "Warm candidate logs (last 200 lines):" >&2
+  if ! docker logs --tail 200 "${CANDIDATE_CONTAINER}" >&2; then
+    echo "  unavailable (container produced no readable logs)" >&2
+  fi
+}
+
+require_candidate_health() {
+  if wait_for_health \
+    "${CANDIDATE_HEALTH_URL}" "Warm candidate" "${CANDIDATE_CONTAINER}"; then
+    return 0
+  fi
+  # Capture bounded diagnostics before the ERR trap removes the failed
+  # candidate and restores the previous release. Application logging rules
+  # prohibit secret material, so this emits runtime logs rather than env/config.
+  report_candidate_failure
+  return 1
 }
 
 service_container_id() {
@@ -784,13 +819,15 @@ log "Verifying CRM ticket capability readiness"
 
 log "Starting warm candidate on 127.0.0.1:${CANDIDATE_PORT}"
 docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
-"${COMPOSE[@]}" run --rm --no-deps -d \
+# Do not use `--rm`: an early process exit must leave its state and bounded log
+# stream available to `report_candidate_failure` before rollback cleanup.
+"${COMPOSE[@]}" run --no-deps -d \
   --name "${CANDIDATE_CONTAINER}" \
   -p "127.0.0.1:${CANDIDATE_PORT}:8001" \
   app >/dev/null
 CANDIDATE_STARTED=1
 assert_no_source_mount "${CANDIDATE_CONTAINER}"
-wait_for_health "${CANDIDATE_HEALTH_URL}" "Warm candidate"
+require_candidate_health
 
 log "Recreating services: ${APP_SERVICES[*]}"
 PRIMARY_REPLACED=1

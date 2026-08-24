@@ -97,11 +97,32 @@ class SalesReportMetric(TypedDict):
     value: int
 
 
+SalesReportRowKey = Literal[
+    "agent_name",
+    "leads_won",
+    "leads_contacted",
+    "blocked_customers_contacted",
+    "customers_brought_back",
+    "orders_created",
+    "orders_confirmed",
+    "orders_paid",
+    "orders_fulfilled",
+    "orders_cancelled",
+    "order_value",
+    "collected_value",
+]
+
+
+class SalesReportColumn(TypedDict):
+    label: str
+    key: SalesReportRowKey
+
+
 class SalesReportContext(TypedDict):
     report_kind: str
     title: str
     description: str
-    columns: tuple[str, ...]
+    columns: tuple[SalesReportColumn, ...]
     rows: list[SalesReportRow]
     metrics: tuple[SalesReportMetric, ...]
     date_from: str
@@ -541,11 +562,14 @@ def _sales_lead_report_context(
         "title": "Lead Performance",
         "description": "Sales-agent conversion and customer recovery KPIs.",
         "columns": (
-            "Agent",
-            "Leads won",
-            "Leads contacted",
-            "Blocked customers contacted",
-            "Customers brought back",
+            {"label": "Agent", "key": "agent_name"},
+            {"label": "Leads won", "key": "leads_won"},
+            {"label": "Leads contacted", "key": "leads_contacted"},
+            {
+                "label": "Blocked customers contacted",
+                "key": "blocked_customers_contacted",
+            },
+            {"label": "Customers brought back", "key": "customers_brought_back"},
         ),
         "rows": rows,
         "metrics": (
@@ -602,14 +626,14 @@ def _sales_order_report_context(
         "title": "Sales Order Performance",
         "description": "Sales-agent order, payment, and fulfillment KPIs.",
         "columns": (
-            "Agent",
-            "Orders created",
-            "Confirmed",
-            "Paid",
-            "Fulfilled",
-            "Cancelled",
-            "Order value",
-            "Collected value",
+            {"label": "Agent", "key": "agent_name"},
+            {"label": "Orders created", "key": "orders_created"},
+            {"label": "Confirmed", "key": "orders_confirmed"},
+            {"label": "Paid", "key": "orders_paid"},
+            {"label": "Fulfilled", "key": "orders_fulfilled"},
+            {"label": "Cancelled", "key": "orders_cancelled"},
+            {"label": "Order value", "key": "order_value"},
+            {"label": "Collected value", "key": "collected_value"},
         ),
         "rows": rows,
         "metrics": (
@@ -633,32 +657,10 @@ def _sales_order_report_context(
 def _sales_report_csv(context: SalesReportContext) -> str:
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(context["columns"])
+    writer.writerow(column["label"] for column in context["columns"])
     for row in context["rows"]:
-        writer.writerow(
-            [
-                row.get(_sales_report_column_key(column), "")
-                for column in context["columns"]
-            ]
-        )
+        writer.writerow(row.get(column["key"], "") for column in context["columns"])
     return output.getvalue()
-
-
-def _sales_report_column_key(column: str) -> str:
-    return {
-        "Agent": "agent_name",
-        "Leads won": "leads_won",
-        "Leads contacted": "leads_contacted",
-        "Blocked customers contacted": "blocked_customers_contacted",
-        "Customers brought back": "customers_brought_back",
-        "Orders created": "orders_created",
-        "Confirmed": "orders_confirmed",
-        "Paid": "orders_paid",
-        "Fulfilled": "orders_fulfilled",
-        "Cancelled": "orders_cancelled",
-        "Order value": "order_value",
-        "Collected value": "collected_value",
-    }[column]
 
 
 @router.get(
@@ -2149,8 +2151,8 @@ def reports_ncc_complaints_export(
 ):
     start, end = _ncc_complaints_window(date_from, date_to)
     report = ncc_complaints_service.build_report(db, start=start, end=end)
-    rows = ncc_workbook.export_rows(report["records"])
-    content = ncc_workbook.build_workbook(rows, report["columns"])
+    rows = ncc_workbook.template_export_rows(report["records"])
+    content = ncc_workbook.build_workbook(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
     filename = ncc_workbook.export_filename(end)
     return Response(
         content,

@@ -927,6 +927,9 @@ def catalog_subscription_detail(
     context["can_correct_subscription"] = bool(
         auth and has_permission(auth, db, "catalog:write")
     )
+    context["can_cancel_pending_plan_change"] = bool(
+        auth and has_permission(auth, db, "catalog:write")
+    )
     context["can_change_ont"] = bool(
         auth and has_permission(auth, db, "network:ont:write")
     )
@@ -1730,6 +1733,30 @@ def subscription_bulk_change_plan(
             reviewed_heads=reviewed_heads,
             idempotency_key=idempotency_key,
         )
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/pending-change/{request_id}/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def subscription_cancel_pending_change(
+    request: Request,
+    subscription_id: str,
+    request_id: str,
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Cancel a pending plan-change request before automatic finalization."""
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.cancel_pending_plan_change_redirect(
+            db,
+            subscription_id=subscription_id,
+            request_id=request_id,
+            actor_id=_get_actor_id(request),
+            reason=reason,
+        ),
+        status_code=303,
     )
 
 

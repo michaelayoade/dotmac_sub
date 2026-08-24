@@ -33,7 +33,20 @@ class TicketStatus(enum.Enum):
     pending_confirmation = "pending_confirmation"
     closed = "closed"
     canceled = "canceled"
-    merged = "merged"
+
+
+MERGED_TICKET_PRESENTATION_STATUS = "merged"
+
+
+def ticket_status_display_value(
+    status: TicketStatus | str,
+    merged_into_ticket_id: object | None,
+) -> str:
+    """Project merge disposition without inventing a persisted lifecycle state."""
+
+    if merged_into_ticket_id is not None:
+        return MERGED_TICKET_PRESENTATION_STATUS
+    return status.value if isinstance(status, TicketStatus) else str(status)
 
 
 LEGACY_TICKET_STATUS_ALIASES: dict[str, str] = {
@@ -207,6 +220,12 @@ class Ticket(Base):
         if isinstance(csat, dict) and isinstance(csat.get("rating"), int | float):
             return int(csat["rating"])
         return None
+
+    @property
+    def display_status(self) -> str:
+        """User-facing status key; merge is a relation-backed label."""
+
+        return ticket_status_display_value(self.status, self.merged_into_ticket_id)
 
     comments = relationship(
         "TicketComment", back_populates="ticket", cascade="all, delete-orphan"

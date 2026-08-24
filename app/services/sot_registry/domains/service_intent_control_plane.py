@@ -262,7 +262,8 @@ DOMAIN = DomainSOT(
             module="app.services.catalog_billing_governance",
             owns=(
                 "billing-critical catalog mutation policy",
-                "live pricing and cadence immutability",
+                "live catalog cadence immutability",
+                "base offer-price propagation to future subscription renewals",
                 "billing catalog audit and operator alerting",
             ),
             depends_on=(
@@ -783,6 +784,7 @@ DOMAIN = DomainSOT(
                 "remote reprovision verification",
                 "verified service-change finalization",
                 "interrupted execution-chain reconciliation",
+                "pending service-change cancellation",
             ),
             depends_on=(
                 "service_intent.subscription_lifecycle_execution",
@@ -850,6 +852,11 @@ DOMAIN = DomainSOT(
                             "canonical subscription-change execution state",
                             "canonical provisioning-readiness decision",
                         ),
+                    ),
+                    ConcernContract(
+                        name="pending service-change cancellation",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=("canonical subscription-change execution state",),
                     ),
                 ),
                 authoritative_inputs=(
@@ -926,12 +933,15 @@ DOMAIN = DomainSOT(
                         "execution durably records any changed-price review before "
                         "network I/O; confirmed execution coordinates the RADIUS "
                         "projection and commercial owner, then compensates the "
-                        "external projection when commercial finalization fails."
+                        "external projection when commercial finalization fails. "
+                        "Administrative cancellation locks the same exact request "
+                        "and is admitted only while its status remains pending."
                     ),
                     locking="The exact SubscriptionChangeRequest is locked first.",
                     idempotency=(
                         "Unique structural links and deterministic service/work-order "
-                        "keys replay the original outcome."
+                        "keys replay the original outcome; an already canceled exact "
+                        "request replays cancellation without another transition."
                     ),
                     retries=(
                         "Unsettled, unverified, stale-price, or billing-blocked "
@@ -949,6 +959,8 @@ DOMAIN = DomainSOT(
                         "service_intent.subscription_change_execution.remote_reprovision_verification_missing",
                         "service_intent.subscription_change_execution.remote_reprovision_compensation_failed",
                         "service_intent.subscription_change_execution.service_change_not_finalizable",
+                        "service_intent.subscription_change_execution.service_change_scope_mismatch",
+                        "service_intent.subscription_change_execution.service_change_not_pending",
                         "service_intent.subscription_change_execution.reconciliation_head_invalid",
                         "service_intent.subscription_change_execution.reconciliation_head_stale",
                         "service_intent.subscription_change_execution.reconciliation_key_invalid",
@@ -974,6 +986,7 @@ DOMAIN = DomainSOT(
                         "missing, stale, ambiguous, or mismatched RADIUS profile evidence",
                         "changed or unaffordable upgrade pricing not explicitly reconfirmed",
                         "mismatched service-order scope",
+                        "a request that is no longer pending",
                     ),
                 ),
                 events=EventContract(

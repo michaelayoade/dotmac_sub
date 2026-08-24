@@ -137,7 +137,7 @@ def test_ticket_query_normalizes_declared_state_and_rejects_unknown_values():
 def test_canceled_tickets_require_the_explicit_status_filter_and_align_paging(
     db_session,
 ):
-    tickets_per_status = 3
+    tickets_per_status = 4
     db_session.add_all(
         _ticket(
             title=f"{status.value} ticket {index}",
@@ -146,6 +146,8 @@ def test_canceled_tickets_require_the_explicit_status_filter_and_align_paging(
         for status in TicketStatus
         for index in range(tickets_per_status)
     )
+    legacy_merged = _ticket(title="Legacy merged source", status="merged")
+    db_session.add(legacy_merged)
     db_session.commit()
 
     expected_not_closed_statuses = {
@@ -162,12 +164,15 @@ def test_canceled_tickets_require_the_explicit_status_filter_and_align_paging(
     )
 
     assert context["status"] == "not_closed"
+    assert "canceled" not in context["filter_statuses"]
+    assert "canceled" in context["all_statuses"]
     assert context["total"] == len(expected_not_closed_statuses) * tickets_per_status
     assert context["total_pages"] == 2
     assert len(context["tickets"]) == 25
-    assert {
-        ticket.status for ticket in context["tickets"]
-    } == expected_not_closed_statuses
+    assert {ticket.status for ticket in context["tickets"]}.issubset(
+        expected_not_closed_statuses
+    )
+    assert legacy_merged.id not in {ticket.id for ticket in context["tickets"]}
     assert "status=not_closed" in context["list_query"].url(
         "/admin/support/tickets/export.csv"
     )
@@ -192,7 +197,9 @@ def test_canceled_tickets_require_the_explicit_status_filter_and_align_paging(
         list_query=_query(),
         actor_id=None,
     )
-    assert {ticket.status for ticket in default_scope}.isdisjoint({"canceled"})
+    assert {ticket.status for ticket in default_scope}.isdisjoint(
+        {"canceled", "merged"}
+    )
 
     canceled_scope = web_support_tickets.list_tickets_for_scope(
         db_session,
@@ -200,6 +207,35 @@ def test_canceled_tickets_require_the_explicit_status_filter_and_align_paging(
         actor_id=None,
     )
     assert {ticket.status for ticket in canceled_scope} == {"canceled"}
+
+
+def test_not_closed_excludes_relation_backed_merged_sources(db_session):
+    target = _ticket(title="Merge target", status="open")
+    db_session.add(target)
+    db_session.flush()
+    source = _ticket(
+        title="Merged source",
+        status="canceled",
+        merged_into_ticket_id=target.id,
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    not_closed = web_support_tickets.list_tickets_for_scope(
+        db_session,
+        list_query=_query(status="not_closed"),
+        actor_id=None,
+    )
+    canceled = web_support_tickets.list_tickets_for_scope(
+        db_session,
+        list_query=_query(status="canceled"),
+        actor_id=None,
+    )
+
+    assert source.id not in {ticket.id for ticket in not_closed}
+    assert source.id in {ticket.id for ticket in canceled}
+    assert source.status == "canceled"
+    assert source.display_status == "merged"
 
 
 def test_unconfigured_status_remains_visible_in_admin_list_filter(db_session):
@@ -268,12 +304,14 @@ def test_ticket_context_uses_exact_count_clamps_page_and_aligns_status_links(
     assert context["page_meta"].end_item == 2
     assert context["list_query"].page == 1
     cards = {card["value"]: card for card in context["status_summary_cards"]}
+    assert "canceled" not in cards
     assert cards[""]["count"] == 2
     assert cards[""]["active"] is True
     assert cards["open"]["count"] == 1
     assert cards["closed"]["count"] == 1
-    assert cards["canceled"]["count"] == 0
+    assert cards["not_closed"]["count"] == 1
     assert "status=open" in cards["open"]["href"]
+    assert "status=not_closed" in cards["not_closed"]["href"]
     assert "page=1" in cards["open"]["href"]
 
 
@@ -345,6 +383,7 @@ def test_ticket_region_filter_aligns_rows_counts_options_and_status_links(
     assert cards[""]["count"] == 2
     assert cards["open"]["count"] == 2
     assert cards["closed"]["count"] == 0
+    assert cards["not_closed"]["count"] == 2
     assert "region=north" in cards["open"]["href"]
 
 
@@ -612,6 +651,7 @@ def test_ticket_full_and_htmx_views_share_canonical_accessible_partials():
     assert "{% for option in region_options %}" in list_partial
     assert '<option value="not_closed"' in list_partial
     assert ">Not closed</option>" in list_partial
+    assert "{% for s in filter_statuses %}" in list_partial
     assert 'id="ticket-filter-apply"' in list_partial
     assert '@click="open = false"' in list_partial
     assert 'aria-label="Apply ticket filters"' in list_partial
