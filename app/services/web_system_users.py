@@ -17,6 +17,7 @@ from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRo
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.schemas.status_presentation import StatusTone
+from app.services import staff_provisioning
 from app.services.dynamic_filters import (
     DEFAULT_OPERATORS_BY_TYPE,
     NULL_TOKENS,
@@ -89,20 +90,19 @@ def system_user_labels_by_id(
     SystemUser and never invents a label for an unknown UUID.
     """
 
-    if not user_ids:
-        return {}
-    users = db.query(SystemUser).filter(SystemUser.id.in_(user_ids)).all()
+    outcome = staff_provisioning.resolve_staff_display_identities(
+        db,
+        query=staff_provisioning.StaffDisplayIdentityQuery(
+            user_ids=frozenset(user_ids)
+        ),
+    )
     return {
-        str(user.id): {
-            "id": str(user.id),
-            "name": (
-                (user.display_name or "").strip()
-                or f"{user.first_name} {user.last_name}".strip()
-                or user.email
-            ),
-            "email": user.email or "",
+        str(identity.user_id): {
+            "id": str(identity.user_id),
+            "name": identity.display_name,
+            "email": identity.email,
         }
-        for user in users
+        for identity in outcome.identities
     }
 
 

@@ -66,7 +66,10 @@ def test_customer_table_consumes_contract_urls_and_accessibility_state():
     assert "max-w-[188px]" in template
     assert 'aria-label="{{ customer.name }}"' in template
     assert 'aria-label="Select {{ customer.name }}"' in template
-    assert 'class="flex items-center justify-end gap-1" data-customer-row-actions' in template
+    assert (
+        'class="flex items-center justify-end gap-1" data-customer-row-actions'
+        in template
+    )
     assert "opacity-0 transition-opacity group-hover:opacity-100" not in template
     assert (
         "{% if can_activate_subscriptions and "
@@ -133,9 +136,7 @@ def test_customer_expanded_filters_fill_the_card_without_a_gutter():
     assert (
         'class="overflow-hidden rounded-lg bg-white/70 dark:bg-slate-950"' in template
     )
-    assert (
-        'class="px-4 py-5 sm:px-5"' in template
-    )
+    assert 'class="px-4 py-5 sm:px-5"' in template
     assert (
         'class="bg-white/70 px-4 py-5 backdrop-blur-sm dark:bg-slate-950 '
         'dark:backdrop-blur-none sm:px-5"' not in template
@@ -183,7 +184,7 @@ def test_add_customer_icon_does_not_rotate_on_hover():
         encoding="utf-8"
     )
 
-    assert 'animate_icon=False' in page
+    assert "animate_icon=False" in page
 
 
 def test_customer_multi_column_exports_project_the_complete_backend_csv():

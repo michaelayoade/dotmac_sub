@@ -3433,9 +3433,7 @@ def build_sales_orders_list_context(
         )
         if agent_id is not None
     }
-    agent_map = web_system_users.system_user_labels_by_id(
-        db, referenced_agent_ids
-    )
+    agent_map = web_system_users.system_user_labels_by_id(db, referenced_agent_ids)
     agent_performance = []
     for row in agent_rows:
         key = str(row.owner_agent_id) if row.owner_agent_id else ""

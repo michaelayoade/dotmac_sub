@@ -1071,9 +1071,7 @@ def _resolve_and_report_owner_agent_id(
     return resolved
 
 
-def _load_crm_agent_map(
-    crm: Connection, staff_map: dict[str, str]
-) -> dict[str, str]:
+def _load_crm_agent_map(crm: Connection, staff_map: dict[str, str]) -> dict[str, str]:
     """Build crm_agents.id -> system_users.id through the staff person map."""
 
     if not staff_map:

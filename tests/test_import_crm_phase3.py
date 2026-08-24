@@ -153,9 +153,12 @@ def test_resolve_imported_owner_agent_id_maps_crm_agent_to_system_user() -> None
     crm_agent_id = "84bbc105-2a42-45f2-b94c-08c8f0273cab"
     system_user_id = "9a227496-3c65-4ab8-89c6-7d92ac6bc73a"
 
-    assert resolve_imported_owner_agent_id(
-        crm_agent_id.upper(), {crm_agent_id: system_user_id}
-    ) == system_user_id
+    assert (
+        resolve_imported_owner_agent_id(
+            crm_agent_id.upper(), {crm_agent_id: system_user_id}
+        )
+        == system_user_id
+    )
 
 
 def test_resolve_imported_owner_agent_id_preserves_unmapped_provenance() -> None:
