@@ -3394,7 +3394,11 @@ DOMAIN = DomainSOT(
                         name="current Inbox projection",
                         owner="communications.team_inbox_projection",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Failed outbound, stale conversation, and unmaterialized media worklists.",
+                        source=(
+                            "Failed outbound and unmaterialized media worklists, plus "
+                            "locked stale-conversation candidates whose authoritative "
+                            "routing state has no active assignment."
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical conversation identity",
