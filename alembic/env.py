@@ -1,10 +1,14 @@
 from logging.config import fileConfig
 
+from dotmac_kernel.prerequisites import install_prerequisite_bindings
 from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
 
 from alembic import context
 from app.config import settings
 from app.db import Base, resolve_migration_lock_timeout
+from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
+from app.migration_lineages import compose_module_lineages
+from app.migration_schema_ops import install_idempotent_schema_ops
 from app.models import (  # noqa: F401
     analytics,
     audit,
@@ -51,6 +55,20 @@ config = context.config
 
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
+# Installed BEFORE the revision map is built. A composed module's migration
+# resolves its `depends_on` from these bindings at script-load time, so an
+# assembly that composes a module without answering what it requires fails
+# loudly here rather than ordering wrongly. See `app/migration_bindings.py`.
+install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
+
+# --- composed module lineages -------------------------------------------
+#
+# `app/migration_lineages.py` owns WHICH lineages are composed and WHY appending
+# to the live `ScriptDirectory` is the only thing that works here — Alembic has
+# already read `version_locations` by the time this file runs. Four call sites
+# build a revision map and that module is where they agree.
+compose_module_lineages(context.script)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -96,136 +114,6 @@ def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name in {"spatial_ref_sys", *RETIRED_ARCHIVE_TABLES}:
         return False
     return True
-
-
-def _install_idempotent_schema_ops() -> None:
-    """Wrap alembic schema ops so they tolerate already-present state.
-
-    The squashed initial migration (001) builds the full current schema
-    via ``Base.metadata.create_all``. Subsequent migrations were written
-    against the pre-squash incremental schema and unconditionally
-    ``op.add_column`` / ``op.drop_column`` / ``op.create_table`` columns
-    and tables that the squash already produced. Without this wrapper a
-    fresh squash-built DB explodes with DuplicateColumn / DuplicateTable
-    /  UndefinedColumn errors during the migration chain.
-
-    Each wrapped op checks the live schema via ``sa.inspect(op.get_bind())``
-    and no-ops when the target is already in the desired state. Pre-existing
-    production DBs (where the schema is the pre-squash incremental state)
-    see exactly the same behavior as before.
-
-    Post-squash migrations must call the top-level ``op`` schema methods unless
-    they implement equivalent live-schema guards themselves.
-    ``op.batch_alter_table`` returns a separate BatchOperations object whose
-    methods do not pass through these central guards.
-    """
-    import sqlalchemy as sa  # noqa: PLC0415 — alembic env is import-time
-
-    from alembic import op  # noqa: PLC0415
-
-    _original_add_column = op.add_column
-    _original_drop_column = op.drop_column
-    _original_create_table = op.create_table
-    _original_drop_table = op.drop_table
-    _original_create_index = op.create_index
-    _original_drop_index = op.drop_index
-    _original_create_unique_constraint = op.create_unique_constraint
-    _original_create_check_constraint = op.create_check_constraint
-    _original_create_foreign_key = op.create_foreign_key
-
-    def _columns_of(table_name: str) -> set[str]:
-        try:
-            inspector = sa.inspect(op.get_bind())
-            return {c["name"] for c in inspector.get_columns(table_name)}
-        except Exception:
-            return set()
-
-    def _table_exists(table_name: str) -> bool:
-        try:
-            inspector = sa.inspect(op.get_bind())
-            return table_name in inspector.get_table_names()
-        except Exception:
-            return False
-
-    def _index_exists(table_name: str, index_name: str) -> bool:
-        try:
-            inspector = sa.inspect(op.get_bind())
-            return any(
-                ix["name"] == index_name for ix in inspector.get_indexes(table_name)
-            )
-        except Exception:
-            return False
-
-    def _constraint_exists(table_name: str, constraint_name: str) -> bool:
-        try:
-            inspector = sa.inspect(op.get_bind())
-            unique = {c["name"] for c in inspector.get_unique_constraints(table_name)}
-            checks = {c["name"] for c in inspector.get_check_constraints(table_name)}
-            fks = {fk["name"] for fk in inspector.get_foreign_keys(table_name)}
-            return constraint_name in (unique | checks | fks)
-        except Exception:
-            return False
-
-    def _safe_add_column(table_name, column, *args, **kwargs):
-        if column.name in _columns_of(table_name):
-            return None
-        return _original_add_column(table_name, column, *args, **kwargs)
-
-    def _safe_drop_column(table_name, column_name, *args, **kwargs):
-        if column_name not in _columns_of(table_name):
-            return None
-        return _original_drop_column(table_name, column_name, *args, **kwargs)
-
-    def _safe_create_table(table_name, *args, **kwargs):
-        if _table_exists(table_name):
-            return None
-        return _original_create_table(table_name, *args, **kwargs)
-
-    def _safe_drop_table(table_name, *args, **kwargs):
-        if not _table_exists(table_name):
-            return None
-        return _original_drop_table(table_name, *args, **kwargs)
-
-    def _safe_create_index(index_name, table_name, *args, **kwargs):
-        if _index_exists(table_name, index_name):
-            return None
-        return _original_create_index(index_name, table_name, *args, **kwargs)
-
-    def _safe_drop_index(index_name, table_name=None, *args, **kwargs):
-        if table_name and not _index_exists(table_name, index_name):
-            return None
-        return _original_drop_index(index_name, table_name, *args, **kwargs)
-
-    def _safe_create_unique_constraint(constraint_name, table_name, *args, **kwargs):
-        if _constraint_exists(table_name, constraint_name):
-            return None
-        return _original_create_unique_constraint(
-            constraint_name, table_name, *args, **kwargs
-        )
-
-    def _safe_create_check_constraint(constraint_name, table_name, *args, **kwargs):
-        if _constraint_exists(table_name, constraint_name):
-            return None
-        return _original_create_check_constraint(
-            constraint_name, table_name, *args, **kwargs
-        )
-
-    def _safe_create_foreign_key(constraint_name, source_table, *args, **kwargs):
-        if constraint_name and _constraint_exists(source_table, constraint_name):
-            return None
-        return _original_create_foreign_key(
-            constraint_name, source_table, *args, **kwargs
-        )
-
-    op.add_column = _safe_add_column
-    op.drop_column = _safe_drop_column
-    op.create_table = _safe_create_table
-    op.drop_table = _safe_drop_table
-    op.create_index = _safe_create_index
-    op.drop_index = _safe_drop_index
-    op.create_unique_constraint = _safe_create_unique_constraint
-    op.create_check_constraint = _safe_create_check_constraint
-    op.create_foreign_key = _safe_create_foreign_key
 
 
 def run_migrations_offline() -> None:
@@ -277,7 +165,7 @@ def run_migrations_online() -> None:
             include_object=include_object,
         )
 
-        _install_idempotent_schema_ops()
+        install_idempotent_schema_ops()
 
         with context.begin_transaction():
             context.run_migrations()

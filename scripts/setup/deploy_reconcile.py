@@ -20,6 +20,8 @@ logging.basicConfig(level=logging.CRITICAL)
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+
+from app.migration_lineages import compose_module_lineages
 from sqlalchemy import select
 
 from app.db import SessionLocal, get_engine
@@ -80,6 +82,11 @@ def check_release() -> CheckResult:
 def check_migrations() -> CheckResult:
     alembic_cfg = Config("alembic.ini")
     script = ScriptDirectory.from_config(alembic_cfg)
+    # `from_config` does not run `alembic/env.py`, so composed module lineages
+    # must be added here too. Without this the deployed database legitimately
+    # carries a module head this check has never heard of, and every reconcile
+    # reports permanent "schema drift".
+    compose_module_lineages(script)
     expected_heads = sorted(script.get_heads())
 
     engine = get_engine()

@@ -20,6 +20,8 @@ from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+
+from app.migration_lineages import compose_module_lineages
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
@@ -114,11 +116,24 @@ def parse_test_database_target(raw_url: str | None) -> DatabaseTarget:
 
 
 def repository_heads() -> frozenset[str]:
-    """Return the exact checked-in Alembic heads."""
+    """Return the exact checked-in Alembic heads, composed lineages included.
+
+    `ScriptDirectory.from_config` does NOT run `alembic/env.py`, so on its own it
+    sees only Sub's own lineage while `migrate_test_database` below — which goes
+    through `command.upgrade`, and therefore through `env.py` — applies every
+    composed module too. Blind here and sighted there means this contract
+    refuses the exact databases the real chain produces.
+
+    The two were accidentally consistent while `env.py` could not compose a
+    lineage either. That is what made a missing module lineage invisible on both
+    sides at once.
+    """
 
     config = Config(str(ALEMBIC_CONFIG_PATH))
     config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
-    return frozenset(ScriptDirectory.from_config(config).get_heads())
+    script = ScriptDirectory.from_config(config)
+    compose_module_lineages(script)
+    return frozenset(script.get_heads())
 
 
 def migrated_schema_state(engine: Engine) -> MigratedSchemaState:
@@ -165,7 +180,7 @@ def migrate_test_database(target: DatabaseTarget) -> MigratedSchemaState:
     try:
         config = Config(str(ALEMBIC_CONFIG_PATH))
         config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
-        command.upgrade(config, "head")
+        command.upgrade(config, "heads")
     finally:
         if previous_database_url is None:
             os.environ.pop("DATABASE_URL", None)

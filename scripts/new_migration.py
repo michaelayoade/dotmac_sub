@@ -67,6 +67,14 @@ def downgrade() -> None:
 
 
 def _script_directory() -> ScriptDirectory:
+    """SUB's own lineage only — composed module lineages are deliberately absent.
+
+    This allocates a revision in Sub's chain, so Sub's single own head is the
+    right answer. Composing the module lineages here would make the map
+    multi-headed and `_resolve_head` would refuse to allocate anything. The
+    exclusion is a decision, not an oversight: see `app/migration_lineages.py`,
+    which lists every revision-map call site and what each one composes.
+    """
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     return ScriptDirectory.from_config(config)

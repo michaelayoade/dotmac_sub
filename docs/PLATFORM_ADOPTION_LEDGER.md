@@ -3,8 +3,10 @@
 **Status:** Rebaselined 2026-08-02 for slice S1 of the selective kernel-adoption
 plan; amended the same day for slice S2 (dependency pinned — see "S2 acceptance
 claim") and slice S3 (composition declared in `app/composition.py` — see "S3
-acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13 —
-see "Pin history". Supersedes the
+acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13,
+to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
+`dotmac-kernel==0.1.0a90` on 2026-08-22, and to `dotmac-kernel==0.1.0a91` the
+same day — see "Pin history". Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
 authorized by this document alone.
@@ -51,6 +53,23 @@ collision inventory re-verified at each rebase rather than assumed to hold:
   continue to include hosted tables, transient DDL names, and both repositories'
   migration histories.
 
+- against released kernel a81 (Sub unchanged since the a50 measurement), the
+  kernel's declared model tables intersect Sub's `app/models/**` in exactly the
+  same seven names, and the nine current lineage-head overlaps are unchanged.
+  Kernel revisions 0024-0026 add one new lineage-head table
+  (`external_identity_bindings`), alter `auth_sessions`, and re-grant
+  `platform_audit_events`; none of those names exists in Sub, so neither
+  executable ratchet moves. The remeasurement was run against the a81 source
+  tree, not assumed from the changelog.
+
+- against released kernel a90 (Sub unchanged since the a81 collision
+  measurement), the kernel's machine-credential facility adds runtime-loaded
+  `dotmac_kernel.machine_auth` and `dotmac_kernel.machine_models` modules. They
+  are admitted only as reviewed transitive modules in
+  `tests/architecture/test_kernel_compatibility.py`; Sub still does not import
+  them directly from `app/`, mount kernel middleware or endpoints, compose a
+  kernel migration lineage, or move the model/table collision ratchets.
+
 The recon is re-run on every pin and Sub model change because a stale inventory
 would silently under-report the very risk the S7 ADR gate exists to hold.
 
@@ -86,7 +105,204 @@ explicitly named. It does not disposition any collision, move
 per-table cutover decisions.
 
 
+## Service Orders composition — unproven until 2026-08-24, then repaired
+
+**Reclassified 2026-08-24: `dotmac-service-orders` was NOT composed, despite
+every declaration saying it was.** The pin, the lineage declaration and the
+prerequisite binding were all correct and all three checks passed. The module's
+migration never ran.
+
+`alembic/env.py` made its lineage visible with
+`config.set_main_option("version_locations", ...)`. Alembic reads that key in
+`ScriptDirectory.from_config`, which `command.upgrade` calls BEFORE
+`script.run_env()` — so by the time `env.py` executed, the value had already
+been consumed. Confirmed against Alembic 1.13.2, the pinned version
+(`alembic/command.py` and `alembic/script/base.py` at `rel_1_13_2`).
+
+Nothing raised. Sub's own revisions never depend on a module revision, so a
+missing module lineage is not an ordering error — it is an absence.
+`alembic upgrade heads` reported success against a database with no
+`mod_serviceorders` schema.
+
+**Every existing check was blind in the same way.**
+`tests/architecture/test_composed_module_lineages.py` reads source and metadata
+and never runs Alembic. `tests/integration/test_kernel_lineage_rehearsal.py`
+does run Alembic, but builds its own `Config` and sets `version_locations`
+BEFORE `command.upgrade` — the working order, and therefore not the production
+path. `scripts/ci/migrated_test_database.py::repository_heads` and
+`scripts/setup/deploy_reconcile.py::check_migrations` build a `ScriptDirectory`
+without running `env.py` at all, so their expected heads excluded the module
+too. Expectation and reality agreed because both were blind.
+
+### The repair
+
+- `app/migration_lineages.py` is the single owner of which lineages are composed
+  and of appending them to a LIVE `ScriptDirectory` — the only mutation Alembic
+  still reads, because the revision map is lazy.
+- `alembic/env.py`, `repository_heads` and `check_migrations` all compose
+  through it. `scripts/new_migration.py` deliberately does not, and says so: it
+  allocates in Sub's own lineage and needs Sub's single head.
+- `tests/architecture/test_composed_module_lineage_discovery.py` runs `env.py`
+  through `EnvironmentContext` and fails unless every declared lineage is in the
+  map Alembic walks. Against the unrepaired `env.py` it reports
+  `missing: ['so_0001_service_delivery_orders']` with
+  `version_locations in effect: ('<repo>/alembic/versions',)`.
+- `tests/integration/test_composed_module_lineage_rehearsal.py` runs
+  `alembic upgrade heads` on an isolated database through the real entry path
+  and requires the module head recorded, its tables present, and every one of
+  them ENABLE+FORCE row-level security. Head alone would pass for a lineage that
+  created nothing; tables alone would pass for a hand-made schema.
+
+### Evidence, and what is still owed
+
+Executed on Dotmac Observer against installed `dotmac-service-orders==0.1.0a1`
+and PostGIS 16: the discovery canary fails before the repair and passes after;
+`alembic upgrade heads` applies `so_0001_service_delivery_orders`;
+`alembic_version` holds both `550_integrator_provider_ref` and
+`so_0001_service_delivery_orders`; `mod_serviceorders` contains
+`service_orders`, `service_order_readiness_decisions` and
+`service_order_readiness_checks`, all three with `relrowsecurity` and
+`relforcerowsecurity` true.
+
+**Production impact is UNVERIFIED and remains so.** No production or staging
+database was inspected; no host has been named. Any deployed Sub database
+migrated before this repair should be assumed to have no `mod_serviceorders`
+schema, and `deploy_reconcile` would have reported it at expected head while it
+did. Establishing the real state requires an explicitly named host.
+
+**Composition remains unproven for acceptance purposes until GitHub CI runs
+these canaries.** Observer is where the repair was demonstrated; CI is the
+acceptance owner. No Sub composition or deployment claim should rest on Service
+Orders until that passes.
+
+
 ## Pin history
+
+**2026-08-22 — `0.1.0a90` → `0.1.0a91`.** Forced by composition, not chosen.
+`dotmac-service-orders 0.1.0a1` declares `dotmac-kernel >=0.1.0a91`, so
+`poetry lock` refused the a90 pin outright: the module's floor sets the
+assembly's version. This is the first time Sub's kernel pin has been moved by
+something other than a supply decision.
+
+**The a91 entry below is now superseded, and by its own terms.** It recorded
+that a91 was NOT published and that `dotmac_governance` ADR 0013 forbids
+resting a claim on a version merely visible in a repository. That reasoning was
+right and its premise has changed: `dotmac-kernel-v0.1.0a91` is now an
+annotated tag on Starter main `6c6a38b06829cd7904c52d3a10bb429db2e8ba35`, and
+in that repository the tag is written only after the published version is
+installed back from the private index and its manifest registered. The tag is
+the oracle ADR 0013 asks for; the version being on `main` never was.
+
+a91 allocates fourteen module lineages and installs no behaviour —
+`git diff a90..a91 -- packages/dotmac-kernel/src` touches `__init__.py` and
+`namespaces.py` only. Those 151 lines are what reserve `mod_serviceorders` /
+`so` / `service_orders`, so this bump is not incidental to composing Service
+Orders: it is the same change that made the module addressable.
+
+Sub's lock records wheel SHA256
+`870ffa4d8ff40f8ef768dc9271e0ab3e530daf7500ee681a025c896b9315bae3` and sdist
+SHA256 `127d36fb677b8fbab9b8a0b252766e455c60d07a0e8b91b2d9e8533ef46c0759`.
+Re-locking moved no other package: the 25-line lock diff is the kernel version
+and `dotmac-service-orders 0.1.0a1` (wheel SHA256
+`0cf0bd1fa14398f3cfbba0689827eed7649aa217a038f61c7f02d3894756abd3`), nothing
+else.
+
+Still supply plus composition, not adoption of new kernel behaviour. No `app/`
+module gained a kernel import in this change.
+
+**2026-08-22 — `0.1.0a81` → `0.1.0a90`.** Supply, not adoption. Sub's imported
+surface is unchanged and no `app/` module gained a kernel import; the pin moves
+so the machine-credential facility is INSTALLABLE, not because Sub calls it yet.
+
+Protected release run `32579832544` built, inspected, published, installed back
+from the private index and registry-verified a90. The annotated tag
+`dotmac-kernel-v0.1.0a90` peels to Starter main
+`4999bc492f58a2af60dd87d8b4a25fbb76751918`. The lock records wheel SHA256
+`49add8154708b8f154ecb9a41f3c97e3810f9d381588a7ec55eff4f5c18fa69f` and sdist
+SHA256 `7c2e506c909b5dc7c72511cd7e886b9e1b21c814663364f78ac6772a18db875e`;
+re-locking moved no other package.
+
+**a90 was chosen over a91 deliberately.** a91 exists on Starter `main` and is
+NOT published. `dotmac_governance` ADR 0013, accepted 2026-08-22 (merge
+`2d711cd594979ba0bc368382b7f5ea69bf21eaa4`), requires a release, registry or
+production-adoption claim to rest on an authoritative external oracle rather
+than on a version being visible in a repository. A version with no release run
+and no peeled tag is not pinnable, whatever `pyproject.toml` says upstream.
+
+One breaking change to a released surface was crossed in this span, and unlike
+every earlier repin it is **NOT inert for Sub**. a89 made
+`ProvisioningRequest` require `participant_code` and an explicit `Scope`
+(`TenantScope`/`PlatformScope`) — an intentional pre-1.0 break, because an
+ambient or nullable scope and an unowned provider identity stopped being valid
+inputs. Sub's only construction site is the compatibility canary in
+`tests/architecture/test_kernel_compatibility.py`, which now names both. No
+`app/` code constructs a `ProvisioningRequest`, so no product behaviour moved;
+the canary is what carried the break, which is the job it exists to do.
+`dotmac_kernel.cache` is imported inside that test rather than added to
+`ALLOWED_KERNEL_MODULES`, because the boundary scan governs `app/` and a
+compatibility canary is not product surface.
+
+The only other change to a consumed name was a88 re-exporting
+`fingerprint_of` from the persistence-free definition; existing imports are
+explicitly still supported.
+
+**What this pin does NOT authorize.** a90 adds `dotmac_kernel.machine_auth`,
+the kernel-owned `X-Api-Key` seam extracted product-first from Sub and ERP
+after they were found to disagree about what an empty scope list means —
+nothing authorized here, everything authorized there. Sub keeps its own
+verifier until a separate, reviewed cutover. That cutover is credential
+**reissuance**, not a hash migration: a stored digest holds neither the raw key
+nor material to re-key from, and Sub's verification subkey is derived from the
+connector-credential encryption key, so rotating one invalidates the other.
+Nothing in this amendment starts it.
+
+The guarded transitive package surface grows from twenty-four modules to
+twenty-six: `machine_auth` and `machine_models` are loaded by the kernel's own
+machine-credential facility, but they remain outside Sub's direct `app/`
+allowlist and mount no middleware or route in `app.main`.
+
+**2026-08-20 — `0.1.0a50` → `0.1.0a81`.** A deliberate catch-up repin, not a
+new kernel consumption: Sub's imported surface is unchanged and every module
+it actually consumes (`settings_resolver`, `settings_models`,
+`setting_scopes`, `setting_value_types`, `settings_cache`, `settings_crypto`,
+`secret_sources`, `capabilities`, `profiles`, `providers.provisioning`) is
+byte-identical between a50 and a81. Only `assembly`, `features`, `models` and
+the package `__init__` changed, and all four changed additively — no name Sub
+imports was removed, renamed or given a new required argument.
+
+Protected release run `32346291258` built, inspected, published and
+registry-verified a81. The annotated tag `dotmac-kernel-v0.1.0a81` peels to
+Starter main `8f99413826e5adf3d35379ebc6deb79bcb5c8242`. The lock records wheel
+SHA256 `f3b82ed2f1a12897cf7e9b801c905f0f7018fbbb5f9045aa6bef02a3632665bb`
+and sdist SHA256
+`2c4fe080d0d2b31271ca0b0c2d435d0ad2d3a2fb81c25c591a1bc0b3774d3810`;
+re-locking moved no other package.
+
+Two breaking changes to a released surface were crossed and both are inert for
+Sub. a61 replaced a60's implicit plane selector with the explicit
+`ProductAssemblySpec.module_planes` contract (ADR-0028): `SUB_ASSEMBLY`
+declares four `FeatureManifest`s, none of which declares
+`supported_plane_sets`, so `validate_module_plane_selections` requires no
+selection and the field keeps its empty default. a70 made `actor_type` (and
+`actor_id` for every non-system actor) explicit on `write_audit_event` and made
+`resolve_audit_actor` raise on the two former fallback shapes; `app/` calls
+neither — `dotmac_kernel.audit` remains forbidden by the import guard and
+`app/models/audit.py::AuditEvent` remains Sub's own writer.
+
+The guarded transitive package surface grows from nineteen modules to
+twenty-four. `planes` and `prerequisites` arrive through `assembly`/`modules`,
+`external_identity` through `models`, `outbox_event_types` through `features`,
+and the private `_transactions` through the a73 change that stopped
+consent/delivery/idempotency/external-identity importing the eager kernel
+database owner merely to open a SAVEPOINT. Each is LOADED, none is used: no
+kernel middleware is mounted, no kernel endpoint is served, and the top-level
+route prefix set is unchanged.
+
+Sub still does not compose a kernel migration lineage, import a kernel
+authority into `app/`, activate FORCE RLS, move the revision-0001 ratchet, or
+transfer any business owner. The seven competing model declarations and the
+nine current lineage-head overlaps are re-measured and unchanged; see the
+collision inventory below.
 
 **2026-08-13 — `0.1.0a42` → `0.1.0a50`.** Sub takes the first released
 product-manifest contract rather than following the kernel's latest version by
@@ -405,6 +621,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.features`
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
+- `dotmac_kernel.prerequisites`
 - `dotmac_kernel.profiles`
 - `dotmac_kernel.providers`
 - `dotmac_kernel.providers.provisioning`
@@ -415,6 +632,36 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
+
+`dotmac_kernel.prerequisites` is admitted for the composition **vocabulary**:
+the effect names `TENANT_SCOPE_CATALOG_V1` and `MODULE_DATABASE_ROLES_V1`, the
+`PrerequisiteBinding` type, and `install_prerequisite_bindings`. Composing a
+module means answering which Sub revision supplies each effect the module
+requires, and the answer has to be keyed by something. Keying it by the
+kernel's own `PrerequisiteSpec.name` rather than a string literal means a
+kernel rename becomes an import error in this repository instead of a binding
+that silently answers nothing.
+
+**Amended 2026-08-23, composing `dotmac-service-orders`.** This clause
+previously read "effect NAMES only, and only in `app/migration_bindings.py`".
+That was written before any module was actually composed, and the real API
+cannot satisfy it: a binding IS a `PrerequisiteBinding` object, and it takes
+effect only when `alembic/env.py` calls `install_prerequisite_bindings` before
+the revision map is built. The clause described an aspiration; two names and a
+second file are what composition costs.
+
+Nothing else in that module is admitted: `require_prerequisites` — the function
+that PROVES an effect against the live catalog — stays where it is, called by
+the module's own migration inside its own lineage. Sub reads the vocabulary; it
+does not run the check.
+
+That last sentence was prose only until this amendment. `dotmac_kernel.prerequisites`
+was on the allowlist with no restricted-name entry, so `require_prerequisites`
+would have imported cleanly into `app/` and the guard would have stayed green.
+It now has a `RESTRICTED_MODULE_NAMES` entry naming exactly the four admitted
+names, with the denial exercised in the negative control. `alembic/` was
+likewise unmonitored rather than exempt — the `app/`-scoped scan never read
+`env.py` — and is now scanned by its own test.
 
 `dotmac_kernel.models` is admitted for **two names only** — `Tenant` and
 `TenantDomain` (ADR-0009). Every other name in it, including `Party`,
@@ -555,7 +802,7 @@ Rules the guard enforces beyond the module list:
 - `dotmac_kernel.testing.*` is consume-pure for `tests/` and the dev dependency
   group only; it is not on the `app/` allowlist.
 
-## Collision inventory (kernel 0.1.0a50 vs Sub through migration 528)
+## Collision inventory (kernel 0.1.0a90 vs Sub through migration 528)
 
 The authoritative migration-lineage measurement has nine overlaps at current
 lineage head plus one transient name that still needs a chain disposition; see
@@ -626,7 +873,10 @@ Hosted overlaps and non-competing names worth recording: kernel `tenants`,
 `platform_outbox_events`,
 `platform_admins`, `platform_sessions`, `platform_audit_events`,
 `party_role_grants`, and
-`tenant_entitlement_grants` do not collide with a Sub model. The first two are
+`tenant_entitlement_grants` do not collide with a Sub model. Kernel revision
+0024's `external_identity_bindings` (a81) joins that non-colliding list — Sub
+has no table or model of that name, and `dotmac_kernel.external_identity`
+stays off the `app/` allowlist. The first two are
 intentionally hosted through the admitted kernel models; a40 renamed the inbox
 tables to `idempotency_records` / `platform_idempotency_records`, which likewise
 do not collide. `communication_deliveries` and `feature_flag_overrides` are also
@@ -641,8 +891,15 @@ different owners.
   pre-creates the table (`ensure_alembic_version_table`). Composing kernel
   revisions into Sub's `version_locations` would put two independent heads in
   one version table — forbidden before the S7 ADR.
+- The narrower question — composing an installable module's own `mod_*`
+  lineage, which is NOT the kernel's public lineage — is ruled by
+  `docs/adr/0011-module-lineage-composition.md` (accepted 2026-08-20). It binds
+  module prerequisites to Sub's OWN revisions rather than kernel `0001`,
+  following the ERP precedent the kernel documents, and explicitly does not
+  authorize composing the kernel lineage or move the revision-0001 ratchet.
+  The bullet above still stands for the kernel's own revisions.
 - Kernel revision IDs are `0001_initial_tenant_schema` …
-  `0023_audit_actor_and_forensics`
+  `0026_platform_audit_log`
   (four-digit prefixes); Sub's files use three-digit-and-up prefixes
   (`001_squashed_initial_schema` …, 498 files plus `versions_archive`). The ID
   strings do not collide today, but Sub's numeric-prefix guard
