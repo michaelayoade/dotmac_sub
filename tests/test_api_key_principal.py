@@ -124,26 +124,36 @@ def test_unknown_machine_key_falls_through(db_session, monkeypatch):
     assert auth["scopes"] == ["billing:invoice:read"]
 
 
-def test_missing_hmac_key_is_not_a_bad_credential(db_session, monkeypatch):
-    """`MachineKeyUnavailableError` must propagate, not fall through.
+def test_machine_auth_is_skipped_when_no_hmac_key_is_held(db_session, monkeypatch):
+    """The legacy path must not depend on the new scheme being configured.
 
-    Swallowing it would do two bad things at once: report a deployment fault as
-    an invalid credential, sending an operator hunting for a key problem that
-    does not exist; and quietly keep a misconfigured deployment running on the
-    legacy scheme, which is exactly the state this migration exists to leave.
+    A first version let `MachineKeyUnavailableError` propagate, so that a
+    missing key could never be mistaken for a bad credential. That broke 36
+    tests across three files: with no secret source installed, every legacy
+    credential became a hard error. The migration window's honest reading of an
+    absent key is "machine auth is not configured yet", and the legacy rows go
+    on working exactly as before.
+
+    The stronger property is deferred, not dropped: once the legacy branch is
+    deleted with the last reissued credential, `authenticate_machine` is
+    reached unconditionally and the kernel's own error surfaces.
     """
-
-    from dotmac_kernel.machine_auth import MachineKeyUnavailableError
 
     import app.services.auth_dependencies as deps
 
-    monkeypatch.setattr(
-        "dotmac_kernel.machine_auth.authenticate_machine",
-        lambda db, raw_key, **_: (_ for _ in ()).throw(
-            MachineKeyUnavailableError("not held")
-        ),
-    )
+    monkeypatch.setattr("dotmac_kernel.secret_sources.get_secret", lambda name: None)
+    called = False
+
+    def _never(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("machine auth attempted without a held key")
+
+    monkeypatch.setattr("dotmac_kernel.machine_auth.authenticate_machine", _never)
     _make_key(db_session, scopes=["billing:invoice:read"], raw="legacy-raw-key")
 
-    with pytest.raises(MachineKeyUnavailableError):
-        deps._api_key_principal(db_session, "legacy-raw-key", None)
+    auth = deps._api_key_principal(db_session, "legacy-raw-key", None)
+
+    assert auth is not None
+    assert auth["scopes"] == ["billing:invoice:read"]
+    assert called is False

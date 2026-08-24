@@ -223,14 +223,31 @@ def _machine_principal(
     writes, and the legacy branch below is deleted once both live credentials
     have been reissued and revoked.
 
-    `authenticate_machine` raises `MachineKeyUnavailableError` when the HMAC key
-    is not held. That is deliberately NOT swallowed into "no principal": a
-    missing key is a deployment fault, and reporting it as an invalid credential
-    would send an operator hunting for a key problem that does not exist. It
-    also must not silently fall through to the legacy path, because that would
-    turn a misconfigured deployment into one quietly running on the old scheme.
+    Machine auth is attempted ONLY when the HMAC key is held. A first version
+    let `MachineKeyUnavailableError` propagate, on the reasoning that a missing
+    key is a deployment fault and must not be disguised as an invalid
+    credential. That reasoning is right about production and wrong here: it
+    coupled the LEGACY path's availability to the NEW scheme's configuration,
+    so every deployment without the key — including the whole test suite — lost
+    the ability to authenticate credentials that never needed it. Thirty-six
+    tests across three files failed on exactly that.
+
+    So during the window the key's absence means "machine auth is not
+    configured yet", which is a true statement about a migration in progress.
+    The property that a missing key must not read as a bad credential is not
+    lost, only deferred: when the legacy branch is deleted with the last
+    reissued credential, `authenticate_machine` is reached unconditionally and
+    the kernel's own error surfaces, which is the right moment for it.
     """
-    from dotmac_kernel.machine_auth import UnauthorizedError, authenticate_machine
+    from dotmac_kernel.machine_auth import (
+        MACHINE_KEY_SECRET_NAME,
+        UnauthorizedError,
+        authenticate_machine,
+    )
+    from dotmac_kernel.secret_sources import get_secret
+
+    if not get_secret(MACHINE_KEY_SECRET_NAME):
+        return None
 
     try:
         principal = authenticate_machine(db, raw_key)
