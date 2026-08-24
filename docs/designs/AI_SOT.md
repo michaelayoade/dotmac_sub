@@ -209,7 +209,8 @@ The contact-data cleaning flow is independent and disabled by default for
 production collection. AI may collect candidate values only when the
 conversation is reliably linked to a directly managed residential
 `user_type=customer` subscriber missing gender, date of birth, or both. AI never
-updates subscriber rows. `customer.profile_commands` validates and saves
+updates subscriber rows. `customer.profile_cleanup` owns the bounded typed
+eligibility projection and validates and saves
 through a typed command, rechecks eligibility under lock, refuses reseller or
 ambiguous identities, prevents overwriting existing values, and appends
 `subscriber_field_verifications` evidence without storing DOB in AI metadata.
@@ -261,6 +262,20 @@ default-off controls and never send automatically.
   enabled read-only tools.
 
 ## Open work
+
+### Support-safe conversational context
+
+`communications.team_inbox_contact_resolution` owns the bounded customer
+identity projection consumed by conversational AI. `network.radius_sessions`
+owns its bounded RADIUS observation projection; `network.ont_runtime_status`
+owns timestamped OLT observations and the ONT status owner derives effective
+state through its approved helper; it is not a separate authoritative owner.
+The support monitoring projection preserves RADIUS and effective-ONT
+provenance rather than diagnosing their combination. AI and future LangGraph are read-only consumers of these DTOs: they do
+not import customer, RADIUS, or ONT ORM models, choose support scope, or turn
+no-data/unavailable observations into an offline diagnosis. Exact identifier
+lookup remains restricted to the authoritative Inbox-linked Subscriber until a
+separate authenticated support-directory contract is approved.
 
 - **`ai_handling` projection repair.** `ai_intake_sessions` now owns the AI
   lifecycle. The conversation metadata flag is a rebuildable UI/filter

@@ -144,3 +144,23 @@ def test_customer_intake_has_one_non_email_inbound_adapter_and_no_side_effect_po
         and node.func.attr in {"send", "reply", "assign", "enqueue", "dispatch"}
     }
     assert forbidden_calls == set()
+
+
+def test_ai_services_do_not_import_support_identity_or_network_models():
+    """AI consumes owner DTOs; it never becomes a customer/network reader."""
+    forbidden = {"Subscriber", "RadiusActiveSession", "OntUnit"}
+    offenders: list[str] = []
+    for path in _ai_modules():
+        # Existing profile-cleanup eligibility is the explicitly documented
+        # exception; new orchestration must use the owner projections instead.
+        if path.name == "ai_intake.py":
+            continue
+        names = {
+            alias.name.split(".")[-1]
+            for node in ast.walk(python_ast(path))
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        }
+        if names & forbidden:
+            offenders.append(str(path.relative_to(PROJECT_ROOT)))
+    assert offenders == []
