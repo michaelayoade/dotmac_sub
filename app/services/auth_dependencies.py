@@ -213,6 +213,58 @@ def require_audit_auth(
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _machine_principal(
+    db: Session, raw_key: str, request: Request | None
+) -> dict | None:
+    """Authenticate against the kernel's `machine_credentials`, or return None.
+
+    Tried BEFORE the local `api_keys` table so a reissued credential wins while
+    both exist. This is a bounded dual-READ, not two writers: nothing here
+    writes, and the legacy branch below is deleted once both live credentials
+    have been reissued and revoked.
+
+    `authenticate_machine` raises `MachineKeyUnavailableError` when the HMAC key
+    is not held. That is deliberately NOT swallowed into "no principal": a
+    missing key is a deployment fault, and reporting it as an invalid credential
+    would send an operator hunting for a key problem that does not exist. It
+    also must not silently fall through to the legacy path, because that would
+    turn a misconfigured deployment into one quietly running on the old scheme.
+    """
+    from dotmac_kernel.machine_auth import UnauthorizedError, authenticate_machine
+
+    try:
+        principal = authenticate_machine(db, raw_key)
+    except UnauthorizedError:
+        # Not a machine credential — or revoked, expired, inactive, or minted
+        # for another tenant. The kernel returns ONE message for all of those
+        # on purpose, because distinguishing them tells a caller which half of
+        # a guess was right. Fall through to the legacy table; if it is not
+        # there either, the caller gets the same 401 it always did.
+        return None
+    actor_id = str(principal.credential_id)
+    auth = {
+        # A machine principal is not a person. The legacy branch falls back to
+        # the key's own id for `subscriber_id`/`person_id`, which meant two
+        # different things depending on how the row was made; here both are
+        # None and callers that need a human must look elsewhere.
+        "subscriber_id": None,
+        "person_id": None,
+        "principal_id": actor_id,
+        "principal_type": "api_key",
+        "session_id": None,
+        "roles": [],
+        "scopes": sorted(principal.scopes),
+        "impersonated_by": None,
+        "api_key_id": actor_id,
+    }
+    if request is not None:
+        request.state.actor_id = actor_id
+        request.state.actor_type = "api_key"
+        request.state.auth = auth
+    finish_read_transaction(db)
+    return auth
+
+
 def _api_key_principal(
     db: Session, raw_key: str, request: Request | None
 ) -> dict | None:
@@ -221,7 +273,15 @@ def _api_key_principal(
     The key's access is exactly its ``scopes`` (wildcard-aware via
     ``require_permission``); it carries no roles, so there is no admin shortcut.
     Returns the auth dict, or ``None`` if the key is missing/invalid.
+
+    Kernel `machine_credentials` are consulted first; this local `api_keys`
+    branch is the legacy half of a bounded migration and goes away with the
+    last unreissued credential.
     """
+    machine = _machine_principal(db, raw_key, request)
+    if machine is not None:
+        return machine
+
     now = datetime.now(UTC)
     api_key = (
         db.query(ApiKey)

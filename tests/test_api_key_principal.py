@@ -71,3 +71,79 @@ def test_api_key_principal_is_not_admin(db_session):
     assert "admin" not in auth["roles"]
     with pytest.raises(HTTPException):
         require_permission("system:settings:write")(auth=auth, db=db_session)
+
+
+def test_machine_credential_wins_over_legacy(db_session, monkeypatch):
+    """Both tables are read during the migration; the kernel's wins.
+
+    Ordering is the whole safety property. If the legacy table were consulted
+    first, a reissued credential would keep resolving to the old row for as
+    long as that row existed, and the cutover would silently not happen — the
+    traffic would look migrated while still authenticating the old way.
+    """
+
+    import app.services.auth_dependencies as deps
+
+    class _Principal:
+        credential_id = "11111111-1111-1111-1111-111111111111"
+        scopes = frozenset({"billing:invoice:read"})
+
+    monkeypatch.setattr(
+        "dotmac_kernel.machine_auth.authenticate_machine",
+        lambda db, raw_key, **_: _Principal(),
+    )
+
+    auth = deps._api_key_principal(db_session, "whatever", None)
+
+    assert auth is not None
+    assert auth["principal_id"] == _Principal.credential_id
+    assert auth["scopes"] == ["billing:invoice:read"]
+    # A machine principal is not a person. The legacy branch falls back to the
+    # key's own id here, which meant two different things depending on how the
+    # row was made.
+    assert auth["subscriber_id"] is None
+    assert auth["person_id"] is None
+
+
+def test_unknown_machine_key_falls_through(db_session, monkeypatch):
+    """Until both credentials are reissued, the old rows must keep working."""
+
+    from dotmac_kernel.exceptions import UnauthorizedError
+
+    import app.services.auth_dependencies as deps
+
+    monkeypatch.setattr(
+        "dotmac_kernel.machine_auth.authenticate_machine",
+        lambda db, raw_key, **_: (_ for _ in ()).throw(UnauthorizedError("no")),
+    )
+    _make_key(db_session, scopes=["billing:invoice:read"], raw="legacy-raw-key")
+
+    auth = deps._api_key_principal(db_session, "legacy-raw-key", None)
+
+    assert auth is not None
+    assert auth["scopes"] == ["billing:invoice:read"]
+
+
+def test_missing_hmac_key_is_not_a_bad_credential(db_session, monkeypatch):
+    """`MachineKeyUnavailableError` must propagate, not fall through.
+
+    Swallowing it would do two bad things at once: report a deployment fault as
+    an invalid credential, sending an operator hunting for a key problem that
+    does not exist; and quietly keep a misconfigured deployment running on the
+    legacy scheme, which is exactly the state this migration exists to leave.
+    """
+
+    from dotmac_kernel.machine_auth import MachineKeyUnavailableError
+
+    import app.services.auth_dependencies as deps
+
+    monkeypatch.setattr(
+        "dotmac_kernel.machine_auth.authenticate_machine",
+        lambda db, raw_key, **_: (_ for _ in ()).throw(
+            MachineKeyUnavailableError("not held")
+        ),
+    )
+    _make_key(db_session, scopes=["billing:invoice:read"], raw="legacy-raw-key")
+
+    with pytest.raises(MachineKeyUnavailableError):
+        deps._api_key_principal(db_session, "legacy-raw-key", None)
