@@ -59,7 +59,7 @@ def test_live_offer_cadence_cannot_be_mutated_in_place(
     assert catalog_offer.billing_cycle == BillingCycle.monthly
 
 
-def test_live_offer_price_cannot_be_mutated_in_place(
+def test_live_offer_price_amount_applies_to_next_renewal(
     db_session, subscriber, catalog_offer
 ):
     price = OfferPrice(
@@ -72,18 +72,34 @@ def test_live_offer_price_cannot_be_mutated_in_place(
     )
     db_session.add(price)
     db_session.commit()
-    _live_subscription(db_session, subscriber, catalog_offer)
+    subscription = _live_subscription(db_session, subscriber, catalog_offer)
+    subscription.unit_price = Decimal("100.00")
+    db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        catalog_service.offer_prices.update(
-            db_session,
-            str(price.id),
-            OfferPriceUpdate(amount=Decimal("200.00")),
-        )
+    updated = catalog_service.offer_prices.update(
+        db_session,
+        str(price.id),
+        OfferPriceUpdate(amount=Decimal("200.00")),
+    )
 
     db_session.refresh(price)
-    assert exc.value.status_code == 409
-    assert price.amount == Decimal("100.00")
+    db_session.refresh(subscription)
+    assert updated.amount == Decimal("200.00")
+    assert price.amount == Decimal("200.00")
+    assert subscription.unit_price == Decimal("200.00")
+
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "offer_price")
+        .filter(AuditEvent.entity_id == str(price.id))
+        .filter(AuditEvent.action == "catalog_billing_price_updated")
+        .one()
+    )
+    assert event.metadata_["changes"] == {
+        "amount": "200.00",
+        "previous_amount": "100.00",
+        "renewal_subscription_count": 1,
+    }
 
 
 def test_live_offer_price_unit_change_remains_blocked(
@@ -111,6 +127,34 @@ def test_live_offer_price_unit_change_remains_blocked(
 
     assert exc.value.status_code == 409
     assert exc.value.detail["fields"] == ["unit"]
+
+
+def test_base_offer_price_edit_does_not_change_version_pinned_subscription(
+    db_session, subscriber, catalog_offer
+):
+    price = OfferPrice(
+        offer_id=catalog_offer.id,
+        price_type=PriceType.recurring,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        billing_cycle=BillingCycle.monthly,
+        is_active=True,
+    )
+    db_session.add(price)
+    db_session.flush()
+    subscription = _live_subscription(db_session, subscriber, catalog_offer)
+    subscription.offer_version_id = catalog_offer.versions[0].id
+    subscription.unit_price = Decimal("125.00")
+    db_session.commit()
+
+    catalog_service.offer_prices.update(
+        db_session,
+        str(price.id),
+        OfferPriceUpdate(amount=Decimal("200.00")),
+    )
+
+    db_session.refresh(subscription)
+    assert subscription.unit_price == Decimal("125.00")
 
 
 def test_duplicate_active_offer_price_is_rejected(db_session, catalog_offer):

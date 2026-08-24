@@ -262,7 +262,8 @@ DOMAIN = DomainSOT(
             module="app.services.catalog_billing_governance",
             owns=(
                 "billing-critical catalog mutation policy",
-                "live pricing and cadence immutability",
+                "live catalog cadence immutability",
+                "base offer-price propagation to future subscription renewals",
                 "billing catalog audit and operator alerting",
             ),
             depends_on=(

@@ -2,7 +2,7 @@
 
 The workbook is what a compliance officer files, so the tests care about the
 two things they rely on: that the file opens (valid zip, expected parts, the
-hidden dropdown sheet the validation formulas point at) and that the
+hidden Lookups sheet the validation formulas point at) and that the
 VALIDATION STATUS column tells the truth about a row.
 
 Excel itself is not in the loop — we introspect the package with zipfile.
@@ -75,46 +75,66 @@ def test_build_workbook_emits_a_valid_openable_package():
     }
 
 
-def test_dropdown_sheet_is_hidden_and_backs_the_validation_formulas():
+def test_lookup_sheet_is_hidden_and_backs_the_validation_formulas():
     content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
     archive = _workbook_parts(content)
     workbook = archive.read("xl/workbook.xml").decode()
-    assert '<sheet name="_NCC_Dropdowns" sheetId="2" state="hidden"' in workbook
-
-    sheet1 = archive.read("xl/worksheets/sheet1.xml").decode()
-    # Every constrained column points at the hidden sheet, not an inline list.
-    assert "'_NCC_Dropdowns'!" in sheet1
-    assert "<dataValidations count=" in sheet1
+    assert '<sheet name="Lookups" sheetId="1" state="hidden"' in workbook
+    assert '<sheet name="Data Entry" sheetId="2"' in workbook
+    assert 'name="NCC_CATEGORIES"' in workbook
+    assert 'name="CAT_A"' in workbook
+    assert 'name="INTERNATIONAL"' in workbook
 
     sheet2 = archive.read("xl/worksheets/sheet2.xml").decode()
-    for value in ("Female", "Billing", "Resolved", "English"):
-        assert value in sheet2
+    assert "NCC_CATEGORIES" in sheet2
+    assert 'INDIRECT("CAT_"&amp;$J4)' in sheet2
+    assert 'INDIRECT(SUBSTITUTE($Y4," ","_"))' in sheet2
+    assert "<dataValidations count=" in sheet2
+
+    # The validated template splits its lists two ways: the long, formula-driven
+    # ones live on the hidden Lookups sheet and are reached by defined name,
+    # while the short fixed ones are inline literals on the validation itself.
+    sheet1 = archive.read("xl/worksheets/sheet1.xml").decode()
+    state, lga = _state_and_lga()
+    for value in (next(iter(ncc_workbook.CATEGORY_SLA)), state, lga):
+        assert value in sheet1, f"{value} should be backed by the Lookups sheet"
+    for value in ("Female", "Resolved", "English"):
+        assert value in sheet2, f"{value} should be an inline validation list"
 
 
 def test_required_dropdown_columns_disallow_blank():
     content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
-    sheet1 = _workbook_parts(content).read("xl/worksheets/sheet1.xml").decode()
-    status_letter = ncc_workbook._COLUMN_LETTERS["Status"]
+    sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
+    status_letter = ncc_workbook._TEMPLATE_COLUMN_LETTERS["Status *"]
     validation = re.search(
-        rf'<dataValidation type="list" allowBlank="(\d)"[^>]*sqref="{status_letter}2:',
-        sheet1,
+        rf'<dataValidation type="list" allowBlank="(\d)"[^>]*sqref="{status_letter}4:',
+        sheet2,
     )
     assert validation, "Status column has no list validation"
     assert validation.group(1) == "0", "Status is required — it must not allow blank"
 
 
+def test_workbook_headers_match_the_validated_ncc_template():
+    content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
+    sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
+
+    for column in ncc_workbook.TEMPLATE_COLUMNS:
+        assert f">{column}<" in sheet2
+    assert '<row r="4">' in sheet2
+
+
 def test_age_gets_a_custom_range_validation():
     content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
-    sheet1 = _workbook_parts(content).read("xl/worksheets/sheet1.xml").decode()
-    assert 'type="custom"' in sheet1
-    assert "&gt;=13" in sheet1 and "&lt;=150" in sheet1
+    sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
+    assert 'type="whole"' in sheet2
+    assert "<formula1>13</formula1>" in sheet2
+    assert "<formula2>150</formula2>" in sheet2
 
 
 def test_validation_extends_beyond_the_data_so_pasted_rows_stay_constrained():
     content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
-    sheet1 = _workbook_parts(content).read("xl/worksheets/sheet1.xml").decode()
-    # sqref spans to row 1000 (e.g. Z2:Z1000) so pasted rows stay validated.
-    assert re.search(r'sqref="[A-Z]+2:[A-Z]+1000"', sheet1)
+    sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
+    assert re.search(r'sqref="[A-Z]+4:[A-Z]+1048576"', sheet2)
 
 
 def test_row_shading_follows_validation_outcome():
@@ -124,12 +144,12 @@ def test_row_shading_follows_validation_outcome():
     )
     ok_sheet = (
         _workbook_parts(ncc_workbook.build_workbook([ok], ncc_workbook.COLUMNS))
-        .read("xl/worksheets/sheet1.xml")
+        .read("xl/worksheets/sheet2.xml")
         .decode()
     )
     fail_sheet = (
         _workbook_parts(ncc_workbook.build_workbook([fail], ncc_workbook.COLUMNS))
-        .read("xl/worksheets/sheet1.xml")
+        .read("xl/worksheets/sheet2.xml")
         .decode()
     )
     assert 's="10"' in ok_sheet, "passing rows shade green (style 10)"
@@ -139,14 +159,14 @@ def test_row_shading_follows_validation_outcome():
 def test_xml_special_characters_are_escaped():
     record = dict(_valid_record(), Subject='Bad & <ugly> "quote"')
     content = ncc_workbook.build_workbook([record], ncc_workbook.COLUMNS)
-    sheet1 = _workbook_parts(content).read("xl/worksheets/sheet1.xml").decode()
-    assert "Bad &amp; &lt;ugly&gt;" in sheet1
+    sheet2 = _workbook_parts(content).read("xl/worksheets/sheet2.xml").decode()
+    assert "Bad &amp; &lt;ugly&gt;" in sheet2
 
 
 def test_empty_record_set_still_builds():
     content = ncc_workbook.build_workbook([], ncc_workbook.COLUMNS)
     archive = _workbook_parts(content)
-    assert archive.read("xl/worksheets/sheet1.xml")
+    assert archive.read("xl/worksheets/sheet2.xml")
 
 
 # ── filename ─────────────────────────────────────────────────────────────────
@@ -325,13 +345,24 @@ def test_export_rows_drops_internal_styling_keys():
     assert rows == [{"MSISDN": "2348031234567"}]
 
 
+def test_template_export_rows_uses_the_validated_template_headers():
+    rows = ncc_workbook.template_export_rows([_valid_record()])
+
+    assert list(rows[0]) == ncc_workbook.TEMPLATE_COLUMNS
+    assert rows[0]["MSISDN *"] == "2348031234567"
+    assert rows[0]["created_date_time *"] == "2026-07-01 09:00:00 UTC"
+    assert rows[0]["Ticket_ID *"] == "DOTMAC-20260701-1234"
+    assert "_status_variant" not in rows[0]
+
+
 def test_column_widths_are_wider_for_long_text_columns():
-    widths = ncc_workbook._export_column_widths([_valid_record()], ncc_workbook.COLUMNS)
-    by_column = dict(zip(ncc_workbook.COLUMNS, widths, strict=True))
-    assert by_column["Description (auto)"] == 42.0
-    assert by_column["Resolution Note"] == 36.0
-    assert by_column["Age"] == 10.0
-    assert by_column["Description (auto)"] > by_column["Age"]
+    rows = ncc_workbook.template_export_rows([_valid_record()])
+    widths = ncc_workbook._export_column_widths(rows, ncc_workbook.TEMPLATE_COLUMNS)
+    by_column = dict(zip(ncc_workbook.TEMPLATE_COLUMNS, widths, strict=True))
+    assert by_column["Description (auto)"] == 55.0
+    assert by_column["Resolution Note"] == 45.0
+    assert by_column["Age *"] == 8.0
+    assert by_column["Description (auto)"] > by_column["Age *"]
 
 
 def test_excel_column_letters_roll_over_past_z():

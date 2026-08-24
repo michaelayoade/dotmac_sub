@@ -60,6 +60,13 @@ conversations. The explicit **All** view (`view=all`) includes every lifecycle
 status, including resolved conversations, for history review. Explicit status
 filters still narrow the queue to one status.
 
+The stale-conversation policy may resolve an unassigned conversation only when
+its latest non-internal message is a human agent reply older than the configured
+threshold. An active assignment is authoritative unfinished-work evidence and
+always excludes the conversation. The maintenance owner locks each candidate
+conversation and rechecks assignment and message evidence in the owner
+transaction before applying the audited status transition.
+
 ## Inbound flow and idempotency
 
 1. The adapter verifies the provider signature or SMTP envelope and reduces the
