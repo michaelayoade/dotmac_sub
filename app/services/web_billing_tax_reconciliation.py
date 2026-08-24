@@ -19,21 +19,11 @@ from app.services.billing.credit_notes import (
 )
 from app.services.billing_tax_reconciliation import (
     TaxReconciliationCandidate,
+    TaxReconciliationError,
+    TaxReconciliationErrorCode,
     get_tax_reconciliation_candidate,
     list_tax_reconciliation_candidates,
 )
-from app.services.domain_errors import DomainError
-
-
-class TaxReconciliationCreditError(DomainError):
-    """Transport-neutral failure while preparing a VAT correction credit."""
-
-    def __init__(self, *, suffix: str, message: str) -> None:
-        super().__init__(
-            code=f"financial.billing_tax_reconciliation.{suffix}",
-            message=message,
-            details={},
-        )
 
 
 @dataclass(frozen=True)
@@ -73,21 +63,21 @@ def _candidate_or_conflict(
 ) -> TaxReconciliationCandidate:
     candidate = get_tax_reconciliation_candidate(db, invoice_id)
     if candidate is None:
-        raise TaxReconciliationCreditError(
-            suffix="candidate_resolved",
+        raise TaxReconciliationError(
+            code=TaxReconciliationErrorCode.CANDIDATE_RESOLVED,
             message=(
                 "This invoice is no longer an unresolved tax-reconciliation "
                 "candidate. Refresh the queue before taking action."
             ),
         )
     if not hmac.compare_digest(candidate.fingerprint, candidate_fingerprint):
-        raise TaxReconciliationCreditError(
-            suffix="stale_candidate",
+        raise TaxReconciliationError(
+            code=TaxReconciliationErrorCode.STALE_CANDIDATE,
             message="Tax evidence changed after review; refresh the queue",
         )
     if not candidate.can_prepare_tax_credit:
-        raise TaxReconciliationCreditError(
-            suffix="unproven_exact_correction",
+        raise TaxReconciliationError(
+            code=TaxReconciliationErrorCode.UNPROVEN_EXACT_CORRECTION,
             message=(
                 "The available evidence does not prove an exact tax correction. "
                 "Review the invoice and customer evidence manually."
@@ -109,6 +99,10 @@ def _credit_payload(
         tax_total=candidate.maximum_remaining_adjustment,
         total=candidate.maximum_remaining_adjustment,
         memo=f"VAT exemption correction for invoice {reference} {marker}",
+        # A tax-only correction has no taxable base. Creating a normal line
+        # would make the credit-note owner recalculate the explicit tax total
+        # back to zero before applying it. Keep the exact tax correction on the
+        # immutable header and retain the original invoice as its line evidence.
         line_description=None,
         line_tax_rate_id=None,
         line_tax_application=TaxApplication.exempt,
@@ -130,7 +124,7 @@ def prepare_tax_credit_review(
     return TaxCreditReview(
         candidate=candidate,
         payload=payload,
-        preview=CreditNotes.preview_issue(db, payload),
+        preview=CreditNotes.preview_issue(db, payload, apply_on_issue=False),
         idempotency_key=secrets.token_urlsafe(24),
     )
 
@@ -149,10 +143,10 @@ def issue_tax_credit(
         candidate_fingerprint=candidate_fingerprint,
     )
     payload = _credit_payload(candidate)
-    current_preview = CreditNotes.preview_issue(db, payload)
+    current_preview = CreditNotes.preview_issue(db, payload, apply_on_issue=False)
     if not hmac.compare_digest(current_preview.fingerprint, preview_fingerprint):
-        raise TaxReconciliationCreditError(
-            suffix="stale_preview",
+        raise TaxReconciliationError(
+            code=TaxReconciliationErrorCode.STALE_PREVIEW,
             message="Financial state changed after preview; preview again",
         )
     return CreditNotes.issue_with_evidence(
@@ -162,4 +156,5 @@ def issue_tax_credit(
             preview_fingerprint=preview_fingerprint,
             idempotency_key=idempotency_key,
         ),
+        apply_on_issue=False,
     )

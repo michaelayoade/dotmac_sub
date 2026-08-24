@@ -46,6 +46,8 @@ def test_correction_coordinator_delegates_to_credit_note_owner() -> None:
     assert "tax_total=candidate.maximum_remaining_adjustment" in source
     assert 'subtotal=Decimal("0.00")' in source
     assert "line_description=None" in source
+    assert "line_tax_rate_id=None" in source
+    assert source.count("apply_on_issue=False") == 3
 
 
 def test_tax_reconciliation_routes_are_thin_and_guarded() -> None:

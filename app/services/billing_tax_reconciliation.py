@@ -36,6 +36,7 @@ from app.models.billing import (
 from app.models.catalog import CatalogOffer, Subscription
 from app.models.customer_tax_policy import CustomerTaxPolicy
 from app.services.common import round_money
+from app.services.domain_errors import DomainError
 
 _ISSUED_EVIDENCE_STATUSES = frozenset(
     {
@@ -66,6 +67,27 @@ class TaxReconciliationReason(StrEnum):
 class TaxReconciliationConfidence(StrEnum):
     confirmed = "confirmed"
     review_required = "review_required"
+
+
+class TaxReconciliationErrorCode(StrEnum):
+    CANDIDATE_RESOLVED = "financial.billing_tax_reconciliation.candidate_resolved"
+    STALE_CANDIDATE = "financial.billing_tax_reconciliation.stale_candidate"
+    UNPROVEN_EXACT_CORRECTION = (
+        "financial.billing_tax_reconciliation.unproven_exact_correction"
+    )
+    STALE_PREVIEW = "financial.billing_tax_reconciliation.stale_preview"
+
+
+class TaxReconciliationError(DomainError):
+    """Fail-closed error contract for operator-reviewed tax corrections."""
+
+    def __init__(
+        self,
+        *,
+        code: TaxReconciliationErrorCode,
+        message: str,
+    ) -> None:
+        super().__init__(code=code, message=message)
 
 
 @dataclass(frozen=True)
