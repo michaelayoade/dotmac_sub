@@ -23,6 +23,7 @@ from scripts.migration.import_crm_phase3 import (
     plan_referral_referred_unique_conflicts,
     provenance_metadata,
     rekey_ticket_id,
+    resolve_imported_owner_agent_id,
     resolve_party_subscriber,
     resolve_referred_subscriber,
     resolve_sales_order_subscriber,
@@ -146,6 +147,22 @@ def test_merge_party_maps_csv_wins() -> None:
     )
 
     assert merged == {"person-1": "sub-csv", "person-2": "sub-2"}
+
+
+def test_resolve_imported_owner_agent_id_maps_crm_agent_to_system_user() -> None:
+    crm_agent_id = "84bbc105-2a42-45f2-b94c-08c8f0273cab"
+    system_user_id = "9a227496-3c65-4ab8-89c6-7d92ac6bc73a"
+
+    assert resolve_imported_owner_agent_id(
+        crm_agent_id.upper(), {crm_agent_id: system_user_id}
+    ) == system_user_id
+
+
+def test_resolve_imported_owner_agent_id_preserves_unmapped_provenance() -> None:
+    crm_agent_id = "84bbc105-2a42-45f2-b94c-08c8f0273cab"
+
+    assert resolve_imported_owner_agent_id(crm_agent_id, {}) == crm_agent_id
+    assert resolve_imported_owner_agent_id(None, {}) is None
 
 
 # ---- party resolution / blockers policy -----------------------------------------

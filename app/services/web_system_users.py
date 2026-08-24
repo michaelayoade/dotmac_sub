@@ -78,6 +78,34 @@ def customer_experience_user_options(db: Session) -> list[dict[str, str]]:
     ]
 
 
+def system_user_labels_by_id(
+    db: Session, user_ids: set[UUID]
+) -> dict[str, dict[str, str]]:
+    """Resolve persisted staff ownership without applying picker eligibility.
+
+    Historical records must keep rendering their recorded owner after that user
+    becomes inactive or loses the Customer Experience role. Eligibility is a
+    write-time concern; this read projection resolves every referenced native
+    SystemUser and never invents a label for an unknown UUID.
+    """
+
+    if not user_ids:
+        return {}
+    users = db.query(SystemUser).filter(SystemUser.id.in_(user_ids)).all()
+    return {
+        str(user.id): {
+            "id": str(user.id),
+            "name": (
+                (user.display_name or "").strip()
+                or f"{user.first_name} {user.last_name}".strip()
+                or user.email
+            ),
+            "email": user.email or "",
+        }
+        for user in users
+    }
+
+
 def _labels_by_uuid(db: Session, model, label_attr: str, ids: set[str]) -> list[str]:
     values: list[UUID] = []
     for item in ids:

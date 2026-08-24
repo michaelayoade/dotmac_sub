@@ -5263,6 +5263,12 @@ outcome; they do not embed their own geocode lookups or spatial write logic.
 Rule: sales order, self-serve quote/signup, sales service, Quote documents and
 delivery, accepted-Quote conversion, and Refer & Earn referral logic resolve
 through these owners.
+Sales-order agent attribution stores native `SystemUser.id` identity. The
+Customer Experience role controls assignment eligibility only; historical
+display resolves the recorded native user regardless of later activity or role
+changes. Phase 3 migration translates legacy `crm_agents.id` through its staff
+person mapping, retains unresolved provenance for repair, and never presents a
+UUID fragment as an agent name.
 `web_sales`/`web_referrals`
 adapters and API/task callers request an outcome; they do not own pipeline
 ordering or stage interpretation. `customer.accounts` creates or prepares
