@@ -120,8 +120,17 @@ def test_the_verifier_bites_when_the_function_is_missing(rollback_connection) ->
     verifier is inert rather than because Sub satisfies the contract. Dropping
     the function inside a rolled-back transaction is the cheapest way to prove
     it actually inspects this database.
+
+    CASCADE because RLS policies depend on the function, and the number of them
+    grows: `551_machine_credentials` added one and the plain DROP started
+    failing with `DependentObjectsStillExist`. The whole statement runs inside a
+    transaction this fixture rolls back, so cascading is contained — and it
+    makes the proof stronger rather than weaker, since the function is then
+    genuinely absent rather than absent-except-for-its-dependents.
     """
-    rollback_connection.execute(sa.text("DROP FUNCTION app_current_tenant_id();"))
+    rollback_connection.execute(
+        sa.text("DROP FUNCTION app_current_tenant_id() CASCADE;")
+    )
 
     with pytest.raises(PrerequisiteNotSatisfiedError):
         require_prerequisites(rollback_connection, (TENANT_SCOPE_CATALOG_V1.name,))
