@@ -172,6 +172,15 @@ class PrepaidCoverageReconciliationPreview:
 
 
 @dataclass(frozen=True, slots=True)
+class PrepaidCoverageInvoiceReconciliationPreview:
+    """Exact paid-invoice scope for a staff coverage-repair review."""
+
+    invoice_id: UUID
+    invoice_line_ids: tuple[UUID, ...]
+    preview: PrepaidCoverageReconciliationPreview
+
+
+@dataclass(frozen=True, slots=True)
 class PrepaidCoverageEnforcementBlocker:
     """Exact financial evidence that makes suspension unsafe."""
 
@@ -889,6 +898,57 @@ def preview_prepaid_coverage_reconciliation(
     )
 
 
+def preview_prepaid_coverage_reconciliation_for_invoice(
+    db: Session,
+    *,
+    invoice_id: UUID,
+    as_of: datetime | None = None,
+) -> PrepaidCoverageInvoiceReconciliationPreview:
+    """Preview coverage repair only for subscriptions evidenced by one invoice.
+
+    The returned line identifiers let a presentation adapter prove that every
+    proposed repair is backed by the invoice currently being reviewed; it never
+    expands the command scope to other paid invoices on the same account.
+    """
+
+    invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id))
+    if invoice is None:
+        _error(
+            "invoice_not_found",
+            "The invoice was not found.",
+            invoice_id=str(invoice_id),
+        )
+    lines = db.scalars(
+        select(InvoiceLine)
+        .where(
+            InvoiceLine.invoice_id == invoice_id,
+            InvoiceLine.is_active.is_(True),
+            InvoiceLine.amount > Decimal("0.00"),
+            InvoiceLine.subscription_id.is_not(None),
+        )
+        .order_by(InvoiceLine.subscription_id, InvoiceLine.id)
+    ).all()
+    subscription_ids = tuple(
+        sorted(
+            {
+                line.subscription_id
+                for line in lines
+                if line.subscription_id is not None
+            },
+            key=str,
+        )
+    )
+    return PrepaidCoverageInvoiceReconciliationPreview(
+        invoice_id=invoice_id,
+        invoice_line_ids=tuple(line.id for line in lines),
+        preview=preview_prepaid_coverage_reconciliation(
+            db,
+            as_of=as_of,
+            subscription_ids=subscription_ids,
+        ),
+    )
+
+
 def _result(
     run: PrepaidCoverageReconciliationRun, *, replayed: bool
 ) -> PrepaidCoverageReconciliationResult:
@@ -1205,10 +1265,12 @@ __all__ = [
     "CoverageReconciliationReason",
     "CoverageReconciliationSource",
     "PrepaidCoverageReconciliationError",
+    "PrepaidCoverageInvoiceReconciliationPreview",
     "PrepaidCoverageReconciliationPreview",
     "PrepaidCoverageReconciliationPreviewItem",
     "PrepaidCoverageReconciliationResult",
     "ReconcilePrepaidCoverageCommand",
     "preview_prepaid_coverage_reconciliation",
+    "preview_prepaid_coverage_reconciliation_for_invoice",
     "reconcile_prepaid_service_coverage",
 ]
