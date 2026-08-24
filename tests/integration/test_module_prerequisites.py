@@ -122,7 +122,7 @@ def test_the_verifier_bites_when_the_function_is_missing(rollback_connection) ->
     it actually inspects this database.
 
     CASCADE because RLS policies depend on the function, and the number of them
-    grows: `552_machine_credentials` added one and the plain DROP started
+    grows: `551_machine_credentials` added one and the plain DROP started
     failing with `DependentObjectsStillExist`. The whole statement runs inside a
     transaction this fixture rolls back, so cascading is contained — and it
     makes the proof stronger rather than weaker, since the function is then

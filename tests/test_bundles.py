@@ -23,7 +23,6 @@ from app.services import bundles
 def test_create_bundle_and_dedicated_flag(
     db_session, subscriber, subscription, catalog_offer
 ):
-
     b = bundles.create_bundle(
         db_session, str(subscriber.id), str(subscription.id), label="B"
     )

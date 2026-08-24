@@ -185,7 +185,6 @@ def test_vendor_invoice_lifecycle_and_neutral_erp_contract(db_session):
 def test_vendor_invoice_review_rolls_back_when_erp_enqueue_fails(
     db_session, monkeypatch
 ):
-
     install, vendor, reviewer = _chain(db_session)
     invoice = VendorPurchaseInvoice(
         project_id=install.id,

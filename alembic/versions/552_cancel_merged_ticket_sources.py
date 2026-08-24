@@ -19,7 +19,7 @@ Every statement is predicate-bounded and safe to rerun. PostgreSQL lock and
 statement timeouts keep deployment failure bounded. Downgrade is a no-op:
 restoring a fake lifecycle status would discard the new status/relation model.
 
-Revision ID: 551_cancel_merged_ticket_sources
+Revision ID: 552_cancel_merged_ticket_sources
 Revises: 550_integrator_provider_ref
 Create Date: 2026-08-24
 """
@@ -32,8 +32,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "551_cancel_merged_ticket_sources"
-down_revision: str | None = "550_integrator_provider_ref"
+revision: str = "552_cancel_merged_ticket_sources"
+down_revision: str | None = "551_machine_credentials"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
