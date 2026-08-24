@@ -2149,8 +2149,8 @@ def reports_ncc_complaints_export(
 ):
     start, end = _ncc_complaints_window(date_from, date_to)
     report = ncc_complaints_service.build_report(db, start=start, end=end)
-    rows = ncc_workbook.export_rows(report["records"])
-    content = ncc_workbook.build_workbook(rows, report["columns"])
+    rows = ncc_workbook.template_export_rows(report["records"])
+    content = ncc_workbook.build_workbook(rows, list(ncc_workbook.TEMPLATE_COLUMNS))
     filename = ncc_workbook.export_filename(end)
     return Response(
         content,
