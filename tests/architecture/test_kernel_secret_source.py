@@ -37,7 +37,7 @@ def test_the_five_ruled_secrets_are_the_ones_declared() -> None:
     }
 
 
-def test_the_optional_set_holds_only_narrow_per_feature_material() -> None:
+def test_the_optional_set_holds_only_approved_feature_scoped_material() -> None:
     """Optional is a narrow exception, not a second general-purpose set.
 
     A name lands here only when its material belongs to ONE feature, so a
@@ -53,8 +53,8 @@ def test_the_optional_set_holds_only_narrow_per_feature_material() -> None:
     """
 
     assert set(kss.OPTIONAL_SECRET_REFS) == {
-        "prepaid_attestation_public_key",
         "machine_credential_hmac_key",
+        "prepaid_attestation_public_key",
     }
 
 
