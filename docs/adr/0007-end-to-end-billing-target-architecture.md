@@ -188,7 +188,12 @@ Each version records:
 - version, supersession, actor, reason, and idempotency evidence.
 
 At most one version may be effective for one contract line at an instant.
-Historical terms are never rewritten when catalog prices or policies change.
+Historical contract versions, invoices, and rated obligations are never
+rewritten when catalog prices or policies change. An approved base offer-price
+amount edit is a commercial instruction for future renewals: catalog billing
+governance atomically updates the current ``Subscription.unit_price`` renewal
+projection for live, non-version-pinned subscriptions. Existing documents and
+completed service periods retain their recorded amounts.
 
 #### Composable cadence
 
