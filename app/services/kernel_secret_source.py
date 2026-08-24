@@ -90,7 +90,33 @@ SECRET_REFS: Mapping[str, str] = {
 #: that the value WAS a reference, never WHICH reference, so anyone who could
 #: write settings could repoint it at a key they controlled. Holding it puts
 #: the path in code, where the settings surface cannot reach it at all.
+#:
+#: **`machine_credential_hmac_key`** — what `dotmac_kernel.machine_auth` hashes
+#: every presented key with. It belongs with the three encryption keys above by
+#: the same reasoning: it protects `machine_credentials` rows in THIS database,
+#: so storing it here would put the lock beside the door. It is deliberately its
+#: own key rather than a subkey derived from `credential_encryption_key` the way
+#: `_api_key_hmac_secret` does it — deriving one from the other couples two
+#: rotations that have nothing to do with each other, and rotating connector
+#: encryption would invalidate every machine credential at the same instant.
+#:
+#: OPTIONAL *for now*, and the reason is the migration state rather than the end
+#: state. No credential has been minted yet, so a deployment without this key is
+#: not broken — it has a dormant feature, and `_machine_principal` skips to the
+#: legacy verifier. Requiring it today would mean a deploy that reached the
+#: registry before the operator reached OpenBao takes the whole application down
+#: over a feature with zero rows.
+#:
+#: It MOVES to `SECRET_REFS` in the retirement change that deletes the legacy
+#: branch. There machine auth is the only way an integration authenticates,
+#: absence stops being "dormant" and becomes "every integration fails closed",
+#: and a boot that refuses is the correct answer. The gate in
+#: `_machine_principal` goes in that same change: it is live code only while
+#: absence is legitimate, and dead defensive code afterwards.
 OPTIONAL_SECRET_REFS: Mapping[str, str] = {
+    "machine_credential_hmac_key": (
+        "bao://secret/settings/auth#machine_credential_hmac_key"
+    ),
     "prepaid_attestation_public_key": (
         "bao://secret/settings/billing#prepaid_reconstruction_attestation_public_key"
     ),

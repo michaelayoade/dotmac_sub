@@ -35,7 +35,7 @@ def test_the_five_ruled_secrets_are_the_ones_declared() -> None:
     }
 
 
-def test_the_optional_set_holds_only_the_trust_anchor() -> None:
+def test_the_optional_set_holds_only_approved_feature_scoped_material() -> None:
     """Optional is a narrow exception, not a second general-purpose set.
 
     A name lands here only when its material belongs to ONE feature, so a
@@ -44,7 +44,10 @@ def test_the_optional_set_holds_only_the_trust_anchor() -> None:
     value stops the boot.
     """
 
-    assert set(kss.OPTIONAL_SECRET_REFS) == {"prepaid_attestation_public_key"}
+    assert set(kss.OPTIONAL_SECRET_REFS) == {
+        "machine_credential_hmac_key",
+        "prepaid_attestation_public_key",
+    }
 
 
 def test_every_reference_points_at_openbao() -> None:
