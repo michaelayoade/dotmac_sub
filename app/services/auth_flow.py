@@ -39,6 +39,7 @@ from app.models.auth import (
 from app.models.auth import (
     Session as AuthSession,
 )
+from app.models.catalog import AccessCredential
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.rbac import (
     Permission,
@@ -48,7 +49,7 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.models.subscriber import ResellerUser, Subscriber
+from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.request_meta import client_ip
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
@@ -820,6 +821,40 @@ def _principal_for_credential(
     return "subscriber", "", None
 
 
+def _resolve_access_credential_login(
+    db: Session, *, identifier: str, password: str
+) -> tuple[str, str, Subscriber] | None:
+    normalized_identifier = identifier.strip()
+    if not normalized_identifier:
+        return None
+
+    credential = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.username == normalized_identifier)
+        .filter(AccessCredential.is_active.is_(True))
+        .order_by(AccessCredential.created_at.desc())
+        .first()
+    )
+    if not credential or not credential.secret_hash:
+        return None
+
+    try:
+        password_matches = verify_password(password, credential.secret_hash)
+    except ValueError:
+        logger.info(
+            "Access credential login refused: stored PPPoE secret unavailable",
+            extra={"access_credential_id": str(credential.id)},
+        )
+        return None
+    if not password_matches:
+        return None
+
+    subscriber = db.get(Subscriber, credential.subscriber_id)
+    if not subscriber:
+        return None
+    return "subscriber", str(subscriber.id), subscriber
+
+
 def _primary_totp_method(
     db: Session, principal_type: str, principal_id: str
 ) -> MFAMethod | None:
@@ -1139,26 +1174,30 @@ class AuthFlow(ListResponseMixin):
             provider=resolved_provider,
             identifier=username,
         )
-        if not credential:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
 
         # Check the lock before verifying the password: a locked account must
         # answer identically to right and wrong passwords (no correctness
         # oracle), and attempts made while locked must not extend the lock.
         now = _now()
-        locked_until = _as_utc(credential.locked_until)
-        if locked_until and locked_until > now:
-            raise HTTPException(
-                status_code=403,
-                detail=lockout_detail("Account locked", locked_until=locked_until),
-            )
-        if locked_until:
-            # Lock expired: start a fresh window so a single wrong attempt
-            # doesn't immediately re-lock for another full period.
-            credential.failed_login_attempts = 0
-            credential.locked_until = None
+        authenticated_access_credential = False
+        principal_type: str
+        principal_id: str
+        principal: object | None
 
-        if resolved_provider == AuthProvider.radius:
+        if credential:
+            locked_until = _as_utc(credential.locked_until)
+            if locked_until and locked_until > now:
+                raise HTTPException(
+                    status_code=403,
+                    detail=lockout_detail("Account locked", locked_until=locked_until),
+                )
+            if locked_until:
+                # Lock expired: start a fresh window so a single wrong attempt
+                # doesn't immediately re-lock for another full period.
+                credential.failed_login_attempts = 0
+                credential.locked_until = None
+
+        if credential and resolved_provider == AuthProvider.radius:
             try:
                 radius_auth_service.authenticate(
                     db,
@@ -1172,10 +1211,22 @@ class AuthFlow(ListResponseMixin):
                 if exc.status_code in (401, 403):
                     _record_login_failure(db, credential, now)
                 raise
+        elif credential and verify_password(password, credential.password_hash):
+            pass
         else:
-            if not verify_password(password, credential.password_hash):
-                _record_login_failure(db, credential, now)
+            access_result = None
+            if resolved_provider == AuthProvider.local and (
+                credential is None or credential.subscriber_id is not None
+            ):
+                access_result = _resolve_access_credential_login(
+                    db, identifier=username, password=password
+                )
+            if access_result is None:
+                if credential:
+                    _record_login_failure(db, credential, now)
                 raise HTTPException(status_code=401, detail="Invalid credentials")
+            principal_type, principal_id, principal = access_result
+            authenticated_access_credential = True
 
         # Eligibility is decided BEFORE any successful-login mutation. It used to
         # run after `db.commit()` below, so a correct password against a disabled
@@ -1187,23 +1238,35 @@ class AuthFlow(ListResponseMixin):
         # first would answer an unauthenticated caller differently for a disabled
         # account than for a wrong password, which is the account-state oracle the
         # lock check above is careful to avoid.
-        try:
-            principal_type, principal_id, principal = _principal_for_credential(
-                db, credential
-            )
-        except staff_party_authentication.StaffProjectionError as exc:
-            # Fail closed. A staff credential whose Party projection is missing,
-            # conflicting or ambiguous does not authenticate — it does not fall
-            # back to the legacy principal key. The refusal code is logged for
-            # the operator; the caller is told only "Account disabled", so this
-            # cannot be used to probe projection state.
-            logger.error(
-                "Staff login refused: %s (credential=%s)",
-                exc.refusal.value,
-                exc.credential_id,
-            )
-            raise HTTPException(status_code=403, detail="Account disabled") from exc
+        if not authenticated_access_credential:
+            assert credential is not None
+            try:
+                principal_type, principal_id, principal = _principal_for_credential(
+                    db, credential
+                )
+            except staff_party_authentication.StaffProjectionError as exc:
+                # Fail closed. A staff credential whose Party projection is missing,
+                # conflicting or ambiguous does not authenticate — it does not fall
+                # back to the legacy principal key. The refusal code is logged for
+                # the operator; the caller is told only "Account disabled", so this
+                # cannot be used to probe projection state.
+                logger.error(
+                    "Staff login refused: %s (credential=%s)",
+                    exc.refusal.value,
+                    exc.credential_id,
+                )
+                raise HTTPException(status_code=403, detail="Account disabled") from exc
         if not principal or not getattr(principal, "is_active", False):
+            raise HTTPException(status_code=403, detail="Account disabled")
+        if (
+            principal_type == "subscriber"
+            and isinstance(principal, Subscriber)
+            and principal.status
+            in {
+                SubscriberStatus.disabled,
+                SubscriberStatus.canceled,
+            }
+        ):
             raise HTTPException(status_code=403, detail="Account disabled")
         staff_binding = (
             staff_party_authentication.binding_for_principal(principal)
@@ -1211,7 +1274,11 @@ class AuthFlow(ListResponseMixin):
             else None
         )
 
-        if credential.must_change_password:
+        if (
+            credential
+            and not authenticated_access_credential
+            and credential.must_change_password
+        ):
             raise HTTPException(
                 status_code=428,
                 detail={
@@ -1220,10 +1287,11 @@ class AuthFlow(ListResponseMixin):
                 },
             )
 
-        credential.failed_login_attempts = 0
-        credential.locked_until = None
-        credential.last_login_at = now
-        db.commit()
+        if credential:
+            credential.failed_login_attempts = 0
+            credential.locked_until = None
+            credential.last_login_at = now
+            db.commit()
         if _primary_totp_method(db, principal_type, principal_id):
             return {
                 "mfa_required": True,
