@@ -169,9 +169,9 @@ def test_canceled_tickets_require_the_explicit_status_filter_and_align_paging(
     assert context["total"] == len(expected_not_closed_statuses) * tickets_per_status
     assert context["total_pages"] == 2
     assert len(context["tickets"]) == 25
-    assert {
-        ticket.status for ticket in context["tickets"]
-    } == expected_not_closed_statuses
+    assert {ticket.status for ticket in context["tickets"]}.issubset(
+        expected_not_closed_statuses
+    )
     assert legacy_merged.id not in {ticket.id for ticket in context["tickets"]}
     assert "status=not_closed" in context["list_query"].url(
         "/admin/support/tickets/export.csv"

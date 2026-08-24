@@ -926,6 +926,7 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
             "stored_file_id": str(stored_attachment.id),
         }
     ]
+    db_session.commit()
 
     merged = support_service.tickets.merge(
         db_session,
