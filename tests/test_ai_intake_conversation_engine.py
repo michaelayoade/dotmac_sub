@@ -162,7 +162,7 @@ def test_identified_subscriber_does_not_request_portal_id(db_session, monkeypatc
         classification=_classification(),
     )
 
-    assert decision.action == "continue_classifier"
+    assert decision.action == "handoff"
     assert "Portal ID" not in (decision.response_text or "")
     assert decision.state.subscriber_id == str(subscriber.id)
     assert decision.state.monitoring_results == []
