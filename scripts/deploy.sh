@@ -164,6 +164,30 @@ wait_for_health() {
   done
 }
 
+report_candidate_failure() {
+  echo "Warm candidate container state:" >&2
+  if ! docker inspect "${CANDIDATE_CONTAINER}" \
+    --format 'status={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} restarting={{.State.Restarting}} error={{json .State.Error}}' \
+    >&2; then
+    echo "  unavailable (container may have exited before inspection)" >&2
+  fi
+  echo "Warm candidate logs (last 200 lines):" >&2
+  if ! docker logs --tail 200 "${CANDIDATE_CONTAINER}" >&2; then
+    echo "  unavailable (container produced no readable logs)" >&2
+  fi
+}
+
+require_candidate_health() {
+  if wait_for_health "${CANDIDATE_HEALTH_URL}" "Warm candidate"; then
+    return 0
+  fi
+  # Capture bounded diagnostics before the ERR trap removes the failed
+  # candidate and restores the previous release. Application logging rules
+  # prohibit secret material, so this emits runtime logs rather than env/config.
+  report_candidate_failure
+  return 1
+}
+
 service_container_id() {
   local service="$1"
   "${COMPOSE[@]}" ps -q "${service}" 2>/dev/null | tail -n 1
@@ -790,7 +814,7 @@ docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
   app >/dev/null
 CANDIDATE_STARTED=1
 assert_no_source_mount "${CANDIDATE_CONTAINER}"
-wait_for_health "${CANDIDATE_HEALTH_URL}" "Warm candidate"
+require_candidate_health
 
 log "Recreating services: ${APP_SERVICES[*]}"
 PRIMARY_REPLACED=1
