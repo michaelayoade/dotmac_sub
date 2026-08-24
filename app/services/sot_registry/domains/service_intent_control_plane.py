@@ -855,9 +855,8 @@ DOMAIN = DomainSOT(
                     ),
                     ConcernContract(
                         name="pending service-change cancellation",
-                        role=OwnerRole.COMMAND_WRITER,
+                        role=OwnerRole.APPLICATION_COORDINATOR,
                         input_names=("canonical subscription-change execution state",),
-                        canonical_writer="service_intent.subscription_change_execution",
                     ),
                 ),
                 authoritative_inputs=(

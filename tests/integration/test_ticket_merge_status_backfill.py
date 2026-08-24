@@ -40,7 +40,7 @@ def test_upgrade_preserves_merge_relation_and_is_idempotent(
     db_session, subscriber, monkeypatch
 ) -> None:
     migration = _load_migration()
-    assert migration.down_revision == "550_integrator_provider_ref"
+    assert migration.down_revision == "551_machine_credentials"
 
     opened_at = datetime.now(UTC) - timedelta(days=3)
     updated_at = datetime.now(UTC) - timedelta(days=1)
