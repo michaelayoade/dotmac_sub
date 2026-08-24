@@ -1826,34 +1826,6 @@ def _status_style_id(status_variant: str) -> int:
     return mapping.get(status_variant, 9)
 
 
-def workbook_dropdown_lists() -> dict[str, list[str]]:
-    """The accepted-value lists backing the hidden Lookups sheet."""
-    return {
-        "Gender *": ["Male", "Female"],
-        "Category *": list(CATEGORY_SLA),
-        "category_code (auto)": [str(value["code"]) for value in CATEGORY_SLA.values()],
-        "sub_category_code *": [
-            f"{row['issue_code']} - {row['name']}" for row in SUBCATEGORY_ROWS
-        ],
-        "Complaint_type *": ["First Level", "Second Level"],
-        "Status *": ["Resolved", "Pending"],
-        "Resolved within SLA": ["Yes", "No"],
-        "Language *": ["English", "Hausa", "Igbo", "Yoruba", "Pidgin", "Others"],
-        "Ticket_source *": [
-            "Phone Call",
-            "Email",
-            "Web Portal",
-            "Mobile App",
-            "Walk-in",
-            "SMS",
-            "Social Media",
-            "Other",
-        ],
-        "State *": list(STATE_LGAS),
-        "LGA *": sorted({lga for lgas in STATE_LGAS.values() for lga in lgas}),
-    }
-
-
 # ── validation ───────────────────────────────────────────────────────────────
 
 

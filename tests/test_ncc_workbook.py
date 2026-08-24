@@ -91,9 +91,15 @@ def test_lookup_sheet_is_hidden_and_backs_the_validation_formulas():
     assert 'INDIRECT(SUBSTITUTE($Y4," ","_"))' in sheet2
     assert "<dataValidations count=" in sheet2
 
+    # The validated template splits its lists two ways: the long, formula-driven
+    # ones live on the hidden Lookups sheet and are reached by defined name,
+    # while the short fixed ones are inline literals on the validation itself.
     sheet1 = archive.read("xl/worksheets/sheet1.xml").decode()
-    for value in ("Female", "Billing", "Resolved", "English"):
-        assert value in sheet1
+    state, lga = _state_and_lga()
+    for value in (next(iter(ncc_workbook.CATEGORY_SLA)), state, lga):
+        assert value in sheet1, f"{value} should be backed by the Lookups sheet"
+    for value in ("Female", "Resolved", "English"):
+        assert value in sheet2, f"{value} should be an inline validation list"
 
 
 def test_required_dropdown_columns_disallow_blank():
