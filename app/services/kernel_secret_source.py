@@ -66,6 +66,18 @@ SECRET_REFS: Mapping[str, str] = {
     ),
     "jwt_secret": "bao://secret/settings/auth#jwt_secret",
     "radius_auth_shared_secret": "bao://secret/settings/radius#auth_shared_secret",
+    # `dotmac_kernel.machine_auth` hashes every `X-Api-Key` with this and has no
+    # fallback: a missing key raises `MachineKeyUnavailableError`, which is a
+    # deployment fault reported as one rather than as an invalid credential.
+    #
+    # Required, not optional, and deliberately its OWN key rather than a subkey
+    # derived from `credential_encryption_key` the way `_api_key_hmac_secret`
+    # does it. Deriving one from the other couples two rotations that have
+    # nothing to do with each other: rotating connector encryption would
+    # invalidate every machine credential at the same instant.
+    "machine_credential_hmac_key": (
+        "bao://secret/settings/auth#machine_credential_hmac_key"
+    ),
 }
 
 #: Material that is held the same way but whose ABSENCE is a legitimate state,
