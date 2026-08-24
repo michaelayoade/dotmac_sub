@@ -121,8 +121,6 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "online-now session state",
             "active-session NAS observation evidence",
-            "bounded support monitoring RADIUS observation projection",
-            "bounded support monitoring effective ONT observation projection",
             "bounded historical NAS evidence",
             "subscription-scoped live-session binding and freshness projection",
         ),
@@ -149,26 +147,12 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 ConcernContract(
-                    name="bounded support monitoring effective ONT observation projection",
-                    role=OwnerRole.RESOLVER,
-                    input_names=(
-                        "active ONT assignment projection",
-                        "ONT runtime observations",
-                        "approved derived effective ONT status interpretation within network.ont_runtime_status",
-                    ),
-                ),
-                ConcernContract(
                     name="active-session NAS observation evidence",
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "canonical live RADIUS observations",
                         "canonical network identities",
                     ),
-                ),
-                ConcernContract(
-                    name="bounded support monitoring RADIUS observation projection",
-                    role=OwnerRole.RESOLVER,
-                    input_names=("canonical live RADIUS observations",),
                 ),
                 ConcernContract(
                     name="bounded historical NAS evidence",
@@ -227,24 +211,6 @@ SERVICES: tuple[SOTService, ...] = (
                         "exact-binding precedence, single-service unbound "
                         "eligibility, and fifteen-minute freshness window"
                     ),
-                ),
-                AuthorityInput(
-                    name="active ONT assignment projection",
-                    owner="network.ont_assignment_commands",
-                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="Active subscriber-to-ONT assignment identity.",
-                ),
-                AuthorityInput(
-                    name="ONT runtime observations",
-                    owner="network.ont_runtime_status",
-                    kind=AuthorityKind.OBSERVATION,
-                    source="Timestamped OLT runtime observations.",
-                ),
-                AuthorityInput(
-                    name="approved derived effective ONT status interpretation within network.ont_runtime_status",
-                    owner="network.ont_runtime_status",
-                    kind=AuthorityKind.DERIVED_PROJECTION,
-                    source="Approved effective-status helper over runtime observations.",
                 ),
             ),
             transaction=TransactionContract(

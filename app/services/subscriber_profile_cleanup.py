@@ -41,30 +41,6 @@ class ProfileCleanupOutcome(StrEnum):
     conflict = "conflict"
 
 
-class ProfileCleanupEligibilityStatus(StrEnum):
-    eligible = "eligible"
-    ineligible = "ineligible"
-    unavailable = "unavailable"
-
-
-@dataclass(frozen=True, slots=True)
-class ProfileCleanupEligibilityQuery:
-    """Bounded read request for the profile-cleanup owner.
-
-    Callers supply an already-authorized subscriber reference.  The owner
-    alone reads subscriber and reseller state to determine eligibility.
-    """
-
-    subscriber_id: UUID
-
-
-@dataclass(frozen=True, slots=True)
-class ProfileCleanupEligibility:
-    status: ProfileCleanupEligibilityStatus
-    subscriber_id: UUID
-    missing_fields: tuple[str, ...] = ()
-
-
 @dataclass(frozen=True, slots=True)
 class SubmitProfileCleanupCommand:
     context: CommandContext
@@ -124,28 +100,6 @@ def missing_cleanup_fields(subscriber: Subscriber) -> tuple[str, ...]:
     if subscriber.date_of_birth is None:
         fields.append("date_of_birth")
     return tuple(fields)
-
-
-def resolve_profile_cleanup_eligibility(
-    db: Session, query: ProfileCleanupEligibilityQuery
-) -> ProfileCleanupEligibility:
-    """Return the owner-controlled, support-safe cleanup eligibility DTO."""
-    subscriber = db.get(Subscriber, query.subscriber_id)
-    if subscriber is None:
-        return ProfileCleanupEligibility(
-            status=ProfileCleanupEligibilityStatus.unavailable,
-            subscriber_id=query.subscriber_id,
-        )
-    if not is_direct_residential_customer(subscriber):
-        return ProfileCleanupEligibility(
-            status=ProfileCleanupEligibilityStatus.ineligible,
-            subscriber_id=subscriber.id,
-        )
-    return ProfileCleanupEligibility(
-        status=ProfileCleanupEligibilityStatus.eligible,
-        subscriber_id=subscriber.id,
-        missing_fields=missing_cleanup_fields(subscriber),
-    )
 
 
 def submit_profile_cleanup(

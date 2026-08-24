@@ -2014,7 +2014,6 @@ DOMAIN = DomainSOT(
             name="customer.profile_cleanup",
             module="app.services.subscriber_profile_cleanup",
             owns=(
-                "bounded subscriber profile cleanup eligibility projection",
                 "governed subscriber DOB and gender cleanup command",
                 "subscriber profile cleanup field verification evidence",
             ),
@@ -2026,11 +2025,6 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
-                    ConcernContract(
-                        name="bounded subscriber profile cleanup eligibility projection",
-                        role=OwnerRole.RESOLVER,
-                        input_names=("subscriber identity and type",),
-                    ),
                     ConcernContract(
                         name="governed subscriber DOB and gender cleanup command",
                         role=OwnerRole.COMMAND_WRITER,

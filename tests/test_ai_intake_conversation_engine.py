@@ -25,7 +25,6 @@ from app.services import (
 from app.services import (
     ai_intake_conversation_engine as engine,
 )
-from app.services.network import support_monitoring
 from app.services.owner_commands import CommandContext
 
 
@@ -140,18 +139,11 @@ def _classification(
     )
 
 
-def test_identified_subscriber_does_not_request_portal_id(db_session, monkeypatch):
+def test_identified_subscriber_does_not_request_portal_id(db_session):
     subscriber = _subscriber(db_session)
     conversation = _conversation(db_session, subscriber_id=subscriber.id)
     version = _version(db_session)
     session = _session(db_session, conversation, version)
-    monkeypatch.setattr(
-        engine.support_monitoring,
-        "project_support_monitoring",
-        lambda *_args: support_monitoring.SupportMonitoringProjection(
-            support_monitoring.SupportMonitoringStatus.no_data
-        ),
-    )
 
     decision = engine.run_conversational_turn(
         db_session,
@@ -162,14 +154,10 @@ def test_identified_subscriber_does_not_request_portal_id(db_session, monkeypatc
         classification=_classification(),
     )
 
-    assert decision.action == "handoff"
+    assert decision.action == "respond"
     assert "Portal ID" not in (decision.response_text or "")
     assert decision.state.subscriber_id == str(subscriber.id)
-    assert decision.state.monitoring_results == []
-    assert any(
-        item["tool"] == "subscriber_monitoring" and item["status"] == "no_data"
-        for item in decision.state.tool_executions
-    )
+    assert decision.state.monitoring_results[-1]["service_state"] == "offline"
 
 
 def test_portal_id_requested_only_when_needed_and_not_repeated(db_session):
@@ -204,7 +192,7 @@ def test_portal_id_requested_only_when_needed_and_not_repeated(db_session):
     assert second.action == "handoff"
 
 
-def test_unlinked_customer_portal_id_does_not_trigger_directory_search(db_session):
+def test_unknown_customer_can_supply_portal_id_on_second_turn(db_session):
     subscriber = _subscriber(db_session)
     subscriber.account_number = "12345"
     conversation = _conversation(db_session)
@@ -235,152 +223,32 @@ def test_unlinked_customer_portal_id_does_not_trigger_directory_search(db_sessio
     assert first.action == "respond"
     assert "Portal ID" in (first.response_text or "")
     assert second.state.portal_id == "12345"
-    assert second.action == "handoff"
-    assert second.state.subscriber_id is None
+    assert second.state.subscriber_id == str(subscriber.id)
     assert "portal_id" in second.state.already_requested_fields
-    assert any(
-        item["tool"] == "customer_lookup" and item["status"] == "not_found"
-        for item in second.state.tool_executions
-    )
+    assert second.response_text is None or "Portal ID" not in second.response_text
 
 
-def test_registered_email_lookup_only_verifies_linked_customer(db_session):
+def test_registered_email_lookup_identifies_customer(db_session):
     subscriber = _subscriber(db_session, email="lookup@example.test")
-    conversation = _conversation(db_session, subscriber_id=subscriber.id)
-    result = engine.execute_tool(
+    conversation = _conversation(db_session)
+    version = _version(db_session)
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
         db_session,
-        "customer_lookup",
-        {
-            "identifier_type": "registered_email",
-            "identifier_value": "lookup@example.test",
-        },
-        policy={"tools": {"customer_lookup": {"enabled": True}}},
         conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="My registered email is lookup@example.test and internet is down.",
+        classification=_classification(),
     )
 
-    assert result["status"] == "found"
-    assert result["subscriber_id"] == str(subscriber.id)
-    assert set(result) == {
-        "status",
-        "subscriber_id",
-        "display_name",
-        "account_number",
-        "subscriber_status",
-    }
-
-
-def test_phone_email_and_portal_id_only_verify_linked_customer(db_session):
-    subscriber = _subscriber(
-        db_session,
-        email="verified@example.test",
-        phone="2348012345678",
+    assert decision.state.subscriber_id == str(subscriber.id)
+    assert conversation.subscriber_id == subscriber.id
+    assert any(
+        item["tool"] == "customer_lookup" and item["status"] == "found"
+        for item in decision.state.tool_executions
     )
-    subscriber.account_number = "PORTAL-123"
-    conversation = _conversation(db_session, subscriber_id=subscriber.id)
-    policy = {"tools": {"customer_lookup": {"enabled": True}}}
-
-    for identifier_type, identifier_value in (
-        ("registered_phone", "2348012345678"),
-        ("registered_email", "VERIFIED@example.test"),
-        ("portal_id", "PORTAL-123"),
-    ):
-        result = engine.execute_tool(
-            db_session,
-            "customer_lookup",
-            {
-                "identifier_type": identifier_type,
-                "identifier_value": identifier_value,
-            },
-            policy=policy,
-            conversation=conversation,
-        )
-        assert result["status"] == "found"
-        assert result["subscriber_id"] == str(subscriber.id)
-
-
-def test_monitoring_projection_preserves_owner_provenance(db_session, monkeypatch):
-    subscriber = _subscriber(db_session)
-    observed_at = datetime.now(UTC)
-
-    def _projection(_db, query):
-        assert query.subscriber_id == subscriber.id
-        assert query.authorized is True
-        return support_monitoring.SupportMonitoringProjection(
-            support_monitoring.SupportMonitoringStatus.available,
-            radius=support_monitoring.RadiusObservation(
-                state="online",
-                active_session_count=2,
-                framed_ip_addresses=("10.0.0.2",),
-                observed_at=observed_at,
-            ),
-            onts=(
-                support_monitoring.OntObservation(
-                    reference="ont-1",
-                    serial_number="SERIAL-1",
-                    effective_state="offline",
-                ),
-            ),
-        )
-
-    monkeypatch.setattr(
-        engine.support_monitoring, "project_support_monitoring", _projection
-    )
-    result = engine.execute_tool(
-        db_session,
-        "subscriber_monitoring",
-        {"subscriber_id": str(subscriber.id)},
-        policy={"tools": {"subscriber_monitoring": {"enabled": True}}},
-    )
-
-    assert result["status"] == "available"
-    assert result["radius_observation"] == {
-        "source": "network.radius_sessions",
-        "state": "online",
-        "active_session_count": 2,
-        "framed_ip_addresses": ["10.0.0.2"],
-        "observed_at": observed_at.isoformat(),
-    }
-    assert result["ont_observations"] == [
-        {
-            "source": "network.ont_runtime_status",
-            "reference": "ont-1",
-            "serial_number": "SERIAL-1",
-            "effective_state": "offline",
-        }
-    ]
-    assert not {"los", "outage", "cpe_diagnostics", "sla"} & set(result)
-
-
-def test_monitoring_no_data_and_unavailable_are_not_offline(db_session, monkeypatch):
-    subscriber = _subscriber(db_session)
-    policy = {"tools": {"subscriber_monitoring": {"enabled": True}}}
-
-    for status in (
-        support_monitoring.SupportMonitoringStatus.no_data,
-        support_monitoring.SupportMonitoringStatus.unavailable,
-    ):
-        monkeypatch.setattr(
-            engine.support_monitoring,
-            "project_support_monitoring",
-            lambda *_args, status=status: (
-                support_monitoring.SupportMonitoringProjection(status)
-            ),
-        )
-        result = engine.execute_tool(
-            db_session,
-            "subscriber_monitoring",
-            {"subscriber_id": str(subscriber.id)},
-            policy=policy,
-        )
-        state = engine.ConversationalState(
-            conversation_id=str(uuid4()),
-            session_id=str(uuid4()),
-            policy_version_id=None,
-            channel="whatsapp",
-            monitoring_results=[result] if result["status"] == "available" else [],
-        )
-        assert result == {"status": status.value}
-        assert engine._monitoring_offline(state) is False
 
 
 def test_rich_first_message_extracts_existing_facts(db_session):
@@ -453,11 +321,7 @@ def test_monitoring_unavailable_escalates_without_diagnosis(db_session, monkeypa
     def _raise(*_args, **_kwargs):
         raise RuntimeError("monitoring down")
 
-    monkeypatch.setattr(
-        engine.support_monitoring,
-        "project_support_monitoring",
-        _raise,
-    )
+    monkeypatch.setattr(engine, "get_customer_network_context", _raise)
     decision = engine.run_conversational_turn(
         db_session,
         conversation=conversation,
@@ -472,22 +336,28 @@ def test_monitoring_unavailable_escalates_without_diagnosis(db_session, monkeypa
     assert "could not complete" in (decision.response_text or "")
 
 
-def test_duplicate_customer_identifiers_are_not_a_directory_search(db_session):
+def test_ambiguous_lookup_records_tool_result(db_session):
     _subscriber(db_session, email="shared@example.test")
     _subscriber(db_session, email="shared@example.test")
     conversation = _conversation(db_session)
-    result = engine.execute_tool(
+    version = _version(
+        db_session, metadata={"permitted_identifiers": ["registered_email"]}
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
         db_session,
-        "customer_lookup",
-        {
-            "identifier_type": "registered_email",
-            "identifier_value": "shared@example.test",
-        },
-        policy={"tools": {"customer_lookup": {"enabled": True}}},
         conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="My email is shared@example.test and internet is down.",
+        classification=_classification(),
     )
 
-    assert result == {"status": "not_found"}
+    assert any(
+        item["tool"] == "customer_lookup" and item["status"] == "ambiguous"
+        for item in decision.state.tool_executions
+    )
 
 
 def test_red_los_escalates(db_session):

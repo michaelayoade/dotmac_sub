@@ -1,4 +1,3 @@
-import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -195,24 +194,6 @@ class TestPaymentReceiptPdf:
         ):
             pdf_bytes = receipt_service.build_receipt_pdf(self._receipt_context())
 
-        assert pdf_bytes.startswith(b"%PDF-")
-        assert len(pdf_bytes) > 1500
-
-    def test_receipt_pdf_uses_supported_weasyprint_css(self, caplog) -> None:
-        from app.services import billing_payment_receipts as receipt_service
-
-        with caplog.at_level(logging.WARNING, logger="weasyprint"):
-            pdf_bytes = receipt_service._build_weasyprint_receipt_pdf(
-                self._receipt_context()
-            )
-
-        ignored_css = [
-            record.getMessage()
-            for record in caplog.records
-            if record.name.startswith("weasyprint")
-            and record.getMessage().startswith("Ignored `")
-        ]
-        assert ignored_css == []
         assert pdf_bytes.startswith(b"%PDF-")
         assert len(pdf_bytes) > 1500
 

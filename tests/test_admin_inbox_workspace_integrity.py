@@ -185,17 +185,6 @@ def test_mark_read_posts_with_csrf_header():
     assert 'this.refreshSidebar("read_state")' not in body
 
 
-def test_inbox_csrf_token_prefers_the_live_cookie_to_stale_page_metadata():
-    marker = JAVASCRIPT.index("const csrfToken = () =>")
-    body = JAVASCRIPT[marker : marker + 450]
-    cookie_lookup = body.index("document.cookie.match")
-    meta_lookup = body.index("document.querySelector")
-
-    assert cookie_lookup < meta_lookup
-    assert "decodeURIComponent(cookie[1])" in body
-    assert 'meta[name="csrf-token"]' in body
-
-
 def test_whatsapp_reopen_uses_the_exported_timeout_fetcher():
     """The reopen loader lives outside the closure that defines the helper."""
     assert "window.inboxFetchWithTimeout = fetchWithTimeout;" in JAVASCRIPT

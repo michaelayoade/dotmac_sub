@@ -600,7 +600,6 @@ def _execute_tool(runtime: _GraphRuntime):
                 selected,
                 {"subscriber_id": dotmac_state.subscriber_id},
                 policy=policy,
-                conversation=runtime.conversation,
                 tool_mode=runtime.tool_mode,
             )
             engine._record_tool_result(dotmac_state, selected, result)
@@ -673,7 +672,6 @@ def _troubleshoot(runtime: _GraphRuntime):
             runtime.db,
             dotmac_state,
             policy,
-            conversation=runtime.conversation,
             tool_mode=runtime.tool_mode,
         )
         if decision is not None:

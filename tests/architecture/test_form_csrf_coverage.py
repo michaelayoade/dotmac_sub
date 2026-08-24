@@ -227,14 +227,3 @@ def test_htmx_exemption_is_backed_by_base_template():
     assert "X-CSRF-Token" in base
     hook = base.split("htmx:configRequest", 1)[1][:400]
     assert "X-CSRF-Token" in hook, "the header must be set inside the hook"
-
-
-def test_base_csrf_helper_prefers_the_live_cookie_to_stale_page_metadata():
-    """Long-running pages must submit the current double-submit cookie."""
-    base = (TEMPLATES / "base.html").read_text()
-    helper = base.split("function getCsrfToken()", 1)[1].split("}", 1)[0]
-
-    assert helper.index("document.cookie.match") < helper.index(
-        "document.querySelector"
-    )
-    assert "decodeURIComponent(match[1])" in helper
