@@ -262,6 +262,20 @@ default-off controls and never send automatically.
 
 ## Open work
 
+### Support-safe conversational context
+
+`communications.team_inbox_contact_resolution` owns the bounded customer
+identity projection consumed by conversational AI. `network.radius_sessions`
+owns its bounded RADIUS observation projection; `network.ont_runtime_status`
+owns timestamped OLT observations and the ONT status owner derives effective
+state through its approved helper; it is not a separate authoritative owner.
+The support monitoring projection preserves RADIUS and effective-ONT
+provenance rather than diagnosing their combination. AI and future LangGraph are read-only consumers of these DTOs: they do
+not import customer, RADIUS, or ONT ORM models, choose support scope, or turn
+no-data/unavailable observations into an offline diagnosis. Exact identifier
+lookup remains restricted to the authoritative Inbox-linked Subscriber until a
+separate authenticated support-directory contract is approved.
+
 - **`ai_handling` projection repair.** `ai_intake_sessions` now owns the AI
   lifecycle. The conversation metadata flag is a rebuildable UI/filter
   projection and should gain a focused repair command if drift is observed.
