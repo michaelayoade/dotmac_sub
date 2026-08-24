@@ -1542,10 +1542,13 @@ detailed security and delivery boundary is
    they do not derive expiry from a payment receipt. A trigger payment ID is
    correlation only because account credit is pooled and does not assign a
    particular renewal debit to one historical payment.
-   Its positive contracted `Subscription.unit_price`, discount, tax precedence,
+   Its positive renewal `Subscription.unit_price`, discount, tax precedence,
    currency, and cadence produce one exact renewal charge consumed by both the
-   renewal executor and prepaid enforcement. Current catalog amount is not
-   authority for an already-contracted prepaid service. Missing contract or
+   renewal executor and prepaid enforcement. For live subscriptions not pinned
+   to an offer version, an approved base catalog amount edit atomically updates
+   this renewal-price projection and therefore applies at the next charge;
+   historical invoices, obligations, and completed periods are not rewritten.
+   Version-pinned subscriptions retain their version price. Missing contract or
    currency/cadence evidence produces a typed no-action outcome; enforcement
    never guesses a price or suspends the account from incomplete terms.
    The scheduled adapter is permanent and refuses anchors more than two days
