@@ -113,9 +113,15 @@ SECRET_REFS: Mapping[str, str] = {
 #: and a boot that refuses is the correct answer. The gate in
 #: `_machine_principal` goes in that same change: it is live code only while
 #: absence is legitimate, and dead defensive code afterwards.
+#:
+#: While optional, the key deliberately has its own OpenBao path. The optional
+#: resolver recognizes a missing PATH as "not provisioned" but treats a missing
+#: FIELD on an existing path as configuration drift and raises. Co-locating this
+#: field with the required `settings/auth` payload would therefore make its
+#: documented legitimate absence fail every application boot.
 OPTIONAL_SECRET_REFS: Mapping[str, str] = {
     "machine_credential_hmac_key": (
-        "bao://secret/settings/auth#machine_credential_hmac_key"
+        "bao://secret/settings/machine_auth#machine_credential_hmac_key"
     ),
     "prepaid_attestation_public_key": (
         "bao://secret/settings/billing#prepaid_reconstruction_attestation_public_key"
