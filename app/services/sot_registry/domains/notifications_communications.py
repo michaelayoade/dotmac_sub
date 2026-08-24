@@ -2135,6 +2135,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "contact subscriber reseller and ticket association resolution",
                 "reviewed contact association and projection repair",
+                "bounded trusted support customer-identity projection",
             ),
             depends_on=(
                 "party.registry",
@@ -2151,6 +2152,10 @@ DOMAIN = DomainSOT(
                     (
                         "reviewed contact association and projection repair",
                         OwnerRole.PROJECTION_WRITER,
+                    ),
+                    (
+                        "bounded trusted support customer-identity projection",
+                        OwnerRole.RESOLVER,
                     ),
                 ),
                 inputs=(
