@@ -51,7 +51,13 @@ from app.schemas.billing import InvoiceCreate
 from app.schemas.dispatch import WorkOrderHeaderCreate
 from app.services import billing as billing_service
 from app.services.audit_adapter import stage_audit_event
+from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 from app.services.prepaid_plan_changes import (
     PrepaidPlanChangeDecision,
     resolve_prepaid_plan_change,
@@ -65,6 +71,35 @@ class SubscriptionChangeExecutionError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+OWNER = "service_intent.subscription_change_execution"
+_CANCEL_PENDING_CONCERN = "pending service-change cancellation"
+_CANCEL_PENDING = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_CANCEL_PENDING_CONCERN,
+    name="cancel_pending_plan_change",
+)
+
+
+class PendingPlanChangeCancellationError(DomainError):
+    """An administrator cannot safely cancel the selected pending request."""
+
+
+@dataclass(frozen=True, slots=True)
+class CancelPendingPlanChangeCommand:
+    context: CommandContext
+    request_id: UUID
+    subscription_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CancelPendingPlanChangeOutcome:
+    request_id: UUID
+    subscription_id: UUID
+    previous_status: SubscriptionChangeStatus
+    status: SubscriptionChangeStatus
+    replayed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +415,76 @@ def _lock_request(db: Session, request_id: UUID) -> SubscriptionChangeRequest:
             "service_change_not_found", "Service-change request not found"
         )
     return request
+
+
+def cancel_pending_plan_change(
+    db: Session, command: CancelPendingPlanChangeCommand
+) -> CancelPendingPlanChangeOutcome:
+    """Cancel one exact pending request before automatic finalization wins."""
+
+    def operation() -> CancelPendingPlanChangeOutcome:
+        request = _lock_request(db, command.request_id)
+        if request.subscription_id != command.subscription_id:
+            raise PendingPlanChangeCancellationError(
+                code=f"{OWNER}.service_change_scope_mismatch",
+                message="The plan-change request does not belong to this subscription.",
+            )
+        if request.status == SubscriptionChangeStatus.canceled:
+            return CancelPendingPlanChangeOutcome(
+                request.id,
+                request.subscription_id,
+                SubscriptionChangeStatus.canceled,
+                SubscriptionChangeStatus.canceled,
+                True,
+            )
+        if request.status != SubscriptionChangeStatus.pending:
+            raise PendingPlanChangeCancellationError(
+                code=f"{OWNER}.service_change_not_pending",
+                message=(
+                    "Only a pending plan-change request can be canceled. "
+                    f"This request is {request.status.value}."
+                ),
+            )
+        request.status = SubscriptionChangeStatus.canceled
+        cancellation_note = f"Admin cancellation: {command.context.reason}"
+        request.notes = (
+            f"{request.notes}\n{cancellation_note}"
+            if request.notes
+            else cancellation_note
+        )
+        stage_audit_event(
+            db,
+            action="cancel_pending_plan_change",
+            entity_type="subscription_change_request",
+            entity_id=str(request.id),
+            actor_type=AuditActorType.user,
+            actor_id=command.context.actor,
+            metadata={
+                "subscription_id": str(request.subscription_id),
+                "previous_status": SubscriptionChangeStatus.pending.value,
+                "status": SubscriptionChangeStatus.canceled.value,
+                "execution_state": (
+                    request.execution_state.value if request.execution_state else None
+                ),
+                "command_id": str(command.context.command_id),
+                "reason": command.context.reason,
+            },
+        )
+        db.flush()
+        return CancelPendingPlanChangeOutcome(
+            request.id,
+            request.subscription_id,
+            SubscriptionChangeStatus.pending,
+            SubscriptionChangeStatus.canceled,
+            False,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_CANCEL_PENDING,
+        context=command.context,
+        operation=operation,
+    )
 
 
 def stage_relocation_charge(
