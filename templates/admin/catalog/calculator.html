@@ -37,7 +37,7 @@
                             <span class="font-medium text-slate-900 dark:text-white" x-text="selectedOffer?.billing_cycle || '-'"></span>
                         </div>
                         <div class="flex items-center justify-between text-sm">
-                            <span class="text-slate-500 dark:text-slate-400">VAT Included</span>
+                            <span class="text-slate-500 dark:text-slate-400">Taxable under VAT policy</span>
                             <span class="font-medium text-slate-900 dark:text-white" x-text="selectedOffer?.with_vat ? 'Yes (' + selectedOffer.vat_percent + '%)' : 'No'"></span>
                         </div>
                     </div>
@@ -187,7 +187,7 @@
                                 <span class="text-xl font-semibold text-primary-600 dark:text-primary-400" x-text="currency + ' ' + monthlyTotal.toFixed(2)"></span>
                             </div>
                             <div class="flex items-center justify-between py-1 text-sm text-slate-500 dark:text-slate-400">
-                                <span>One-time Charges<span x-show="selectedOffer?.with_vat && oneTimeTotal > 0" class="text-slate-400"> (+ VAT)</span></span>
+                                <span>One-time Charges<span x-show="selectedOffer?.with_vat && oneTimeTotal > 0" class="text-slate-400" x-text="taxApplication === 'inclusive' ? ' (VAT included)' : ' (+ VAT)'"></span></span>
                                 <span x-text="currency + ' ' + oneTimeTotal.toFixed(2)"></span>
                             </div>
                             <div x-show="isProrated" x-cloak class="flex items-center justify-between py-1 text-sm text-slate-500 dark:text-slate-400">
@@ -256,8 +256,10 @@ function pricingCalculator() {
     const addOns = {{ add_ons | tojson }};
     const usageAllowances = {{ usage_allowances | tojson }};
     const offerAddonMap = {{ offer_addon_map | tojson }};
+    const taxApplication = {{ tax_application | tojson }};
 
     return {
+        taxApplication,
         selectedOfferId: '',
         selectedAddOnIds: [],
         estimatedUsageGb: 0,
@@ -350,10 +352,14 @@ function pricingCalculator() {
         },
 
         get vatAmount() {
+            if (this.taxApplication === 'inclusive') {
+                return this.subtotal - (this.subtotal / (1 + this.vatRate));
+            }
             return this.subtotal * this.vatRate;
         },
 
         get monthlyTotal() {
+            if (this.taxApplication === 'inclusive') return this.subtotal;
             return this.subtotal + this.vatAmount;
         },
 
@@ -422,10 +428,14 @@ function pricingCalculator() {
         },
 
         get firstBillVat() {
+            if (this.taxApplication === 'inclusive') {
+                return this.firstBillTaxableBase - (this.firstBillTaxableBase / (1 + this.vatRate));
+            }
             return this.firstBillTaxableBase * this.vatRate;
         },
 
         get firstBillTotal() {
+            if (this.taxApplication === 'inclusive') return this.firstBillTaxableBase;
             return this.firstBillTaxableBase + this.firstBillVat;
         },
 

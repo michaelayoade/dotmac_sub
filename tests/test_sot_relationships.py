@@ -491,6 +491,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "integration.inbox",
         "financial.account_credit_deposits",
+        "financial.payment_gateway_finance",
         "financial.payment_provider_events",
         "financial.topup_intents",
     )
@@ -528,6 +529,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.customer_subledger",
         "financial.invoices",
         "financial.payments",
+        "financial.billing_tax_resolution",
         "financial.prepaid_funding_reconstruction",
         "financial.subscription_billing_grants",
         "financial.subscription_billing_treatments",

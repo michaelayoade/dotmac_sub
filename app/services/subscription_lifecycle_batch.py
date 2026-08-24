@@ -213,7 +213,11 @@ def execute_subscription_batch(
                 effective_at=effective_at,
                 reason=reason,
                 expected_head=expected_head,
-                idempotency_key=idempotency_key,
+                idempotency_key=(
+                    f"{idempotency_key}:{subscription_id}"
+                    if idempotency_key is not None
+                    else None
+                ),
             )
             outcome = execute_subscription_command(
                 db,

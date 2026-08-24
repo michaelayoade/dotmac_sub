@@ -91,11 +91,11 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.contract_term.value | replace('_', ' ') | title }}</dd>
                         </div>
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">VAT Percent</dt>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Legacy VAT percentage</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.vat_percent or '-' }}</dd>
                         </div>
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">With VAT</dt>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Legacy VAT taxable</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Yes' if offer.with_vat else 'No' }}</dd>
                         </div>
                         <div>

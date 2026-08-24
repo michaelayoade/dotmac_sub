@@ -609,6 +609,55 @@ class TestResolveTaxRateId:
 
         assert result is None
 
+    def test_customer_vat_exemption_overrides_address_account_and_offer_tax(
+        self, db_session, subscription, subscriber
+    ):
+        from app.models.billing import TaxRate
+        from app.models.customer_tax_policy import CustomerTaxPolicy
+        from app.models.subscriber import Address
+
+        address_rate = TaxRate(
+            name="Address VAT",
+            code="ADDRESS-VAT",
+            rate=Decimal("7.5000"),
+            is_active=True,
+        )
+        account_rate = TaxRate(
+            name="Account VAT",
+            code="ACCOUNT-VAT",
+            rate=Decimal("5.0000"),
+            is_active=True,
+        )
+        db_session.add_all([address_rate, account_rate])
+        db_session.flush()
+        address = Address(
+            subscriber_id=subscriber.id,
+            address_line1="123 Exempt Street",
+            tax_rate_id=address_rate.id,
+        )
+        db_session.add(address)
+        db_session.flush()
+        subscriber.tax_rate_id = account_rate.id
+        subscription.service_address_id = address.id
+        subscription.offer.with_vat = True
+        subscription.offer.vat_percent = Decimal("7.50")
+        db_session.add(
+            CustomerTaxPolicy(
+                account_id=subscriber.id,
+                withholding_tax_enabled=False,
+                vat_exempt=True,
+                version=1,
+                updated_by="pytest",
+            )
+        )
+        db_session.commit()
+
+        resolution = billing_automation._resolve_tax(db_session, subscription)
+
+        assert resolution.tax_rate_id is None
+        assert resolution.tax_application.value == "exempt"
+        assert resolution.source.value == "customer_vat_exemption"
+
 
 # =============================================================================
 # _prorated_amount Tests

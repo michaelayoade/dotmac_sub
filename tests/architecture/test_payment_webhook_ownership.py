@@ -64,7 +64,7 @@ def test_public_webhook_command_owns_one_complete_transaction() -> None:
     public = _function(OWNER, "process_claimed_payment_webhook")
     implementation = _function(OWNER, "_process_claimed_payment_webhook")
 
-    assert source.count("execute_owner_command(") == 1
+    assert ast.unparse(public).count("execute_owner_command(") == 1
     assert "ProcessClaimedPaymentWebhookCommand" in _names(public)
     assert "CommandContext" in source
     assert "HTTPException" not in source

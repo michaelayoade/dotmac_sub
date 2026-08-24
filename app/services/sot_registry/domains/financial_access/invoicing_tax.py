@@ -26,11 +26,13 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "gateway finance provider identity bootstrap",
             "gateway settlement-channel bootstrap",
+            "Integrator installation provider mapping",
         ),
         notes=(
             "This flush-only participant ensures finance attribution "
-            "identities during connector setup. It does not decide "
-            "gateway availability or presentment."
+            "identities during connector setup and owns the operator-approved "
+            "opaque Integrator source mapping. It does not decide gateway "
+            "availability or presentment."
         ),
         contract=ServiceContract(
             concerns=(
@@ -49,6 +51,15 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "payment gateway connector manifest",
                         "payment gateway installation setup",
+                    ),
+                    canonical_writer="financial.payment_gateway_finance",
+                ),
+                ConcernContract(
+                    name="Integrator installation provider mapping",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "operator-approved Integrator installation identity",
+                        "canonical payment provider identity",
                     ),
                     canonical_writer="financial.payment_gateway_finance",
                 ),
@@ -72,23 +83,38 @@ SERVICES: tuple[SOTService, ...] = (
                         "with provider type and complete capability bundle"
                     ),
                 ),
+                AuthorityInput(
+                    name="operator-approved Integrator installation identity",
+                    owner="integration.installations",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "opaque external installation UUID submitted by an "
+                        "authenticated admin integration adapter"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical payment provider identity",
+                    owner="financial.payment_gateway_finance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="locked local PaymentProvider row",
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.PARTICIPANT,
                 boundary=(
                     "integration.installations supplies the transaction; "
-                    "this participant only flushes finance identities and "
-                    "their creation event."
+                    "this participant only flushes finance identities, source "
+                    "mappings, and their evidence events."
                 ),
                 locking=(
-                    "Provider type and canonical provider/channel names "
-                    "are checked before unique constraints arbitrate "
-                    "concurrent setup."
+                    "Provider type, canonical provider/channel names, and the "
+                    "target provider row are locked before unique constraints "
+                    "arbitrate concurrent setup or source mapping."
                 ),
                 idempotency=(
                     "An existing unique provider identity and its first "
-                    "provider-linked channel replay without another row "
-                    "or event."
+                    "provider-linked channel replay without another row or event; "
+                    "an unchanged Integrator mapping emits no second event."
                 ),
                 retries=(
                     "The installation coordinator retries only after a "
@@ -101,6 +127,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_gateway_finance.channel_identity_ambiguous",
                     "financial.payment_gateway_finance.provider_name_conflict",
                     "financial.payment_gateway_finance.channel_name_conflict",
+                    "financial.payment_gateway_finance.provider_not_found",
+                    "financial.payment_gateway_finance.integrator_installation_conflict",
                 ),
                 mapping_owner="payment gateway admin adapter",
                 retryable_codes=(),
@@ -108,15 +136,19 @@ SERVICES: tuple[SOTService, ...] = (
                     "multiple provider identities",
                     "multiple provider-linked settlement channels",
                     "canonical provider or channel name collision",
+                    "unknown provider or duplicate Integrator installation mapping",
                 ),
             ),
             events=EventContract(
-                event_types=("payment_gateway.finance_identity_ensured",),
+                event_types=(
+                    "payment_gateway.finance_identity_ensured",
+                    "payment_gateway.integrator_mapping_changed",
+                ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
-                    "Version 1 carries provider type and canonical finance "
-                    "identity identifiers without connector secrets."
+                    "Version 1 carries provider type, canonical finance identity, "
+                    "and opaque Integrator installation identifiers without secrets."
                 ),
                 replay=(
                     "Provider and channel rows rebuild attribution; event "
@@ -131,12 +163,13 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 new_owner="financial.payment_gateway_finance",
                 verification=(
-                    "Gateway setup, idempotency, secret-reference, routing, "
-                    "and architecture tests."
+                    "Gateway setup, idempotency, secret-reference, routing, opaque "
+                    "source mapping, and architecture tests."
                 ),
                 cutover_gate=(
                     "Connector setup is the only caller that can create "
-                    "Paystack or Flutterwave finance identities."
+                    "Paystack or Flutterwave finance identities; the authenticated "
+                    "admin integration adapter is the only source-mapping writer."
                 ),
                 fallback_retirement=(
                     "Legacy provider CRUD routes, templates, service "
@@ -151,7 +184,9 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_web_integrations_payment_gateways.py",
                 "tests/test_payment_routing.py",
+                "tests/test_integrator_payment_provider_mapping.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
+                "tests/architecture/test_integrator_settlement_boundary.py",
             ),
         ),
     ),
@@ -1143,6 +1178,326 @@ SERVICES: tuple[SOTService, ...] = (
         name="financial.tax_configuration",
         module="app.services.billing.tax",
         owns=("configurable tax-rate records", "tax-rate activation lifecycle"),
+    ),
+    SOTService(
+        name="financial.billing_tax_resolution",
+        module="app.services.billing_tax_resolution",
+        owns=(
+            "compatibility subscription VAT treatment policy",
+            "bounded subscription VAT treatment resolution",
+        ),
+        depends_on=(
+            "access.subscription_lifecycle",
+            "control.settings_spec",
+            "customer.accounts",
+            "financial.customer_tax_policies",
+            "financial.tax_configuration",
+            "service_intent.catalog_policy",
+        ),
+        notes=(
+            "This read-only containment owner gives recurring and prepaid billing "
+            "one deterministic legacy VAT precedence while dotmac-tax adoption is "
+            "in progress. Customer exemption wins before address, account, catalog, "
+            "or configured defaults. It owns neither statutory tax policy nor "
+            "custom-tax determination and is retired when dotmac-tax cuts over."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="compatibility subscription VAT treatment policy",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "canonical subscription tax scope",
+                        "canonical customer VAT exemption policy",
+                        "active legacy tax-rate records",
+                        "catalog compatibility VAT fields",
+                        "configured compatibility VAT defaults",
+                    ),
+                ),
+                ConcernContract(
+                    name="bounded subscription VAT treatment resolution",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical subscription tax scope",
+                        "canonical customer VAT exemption policy",
+                        "active legacy tax-rate records",
+                        "catalog compatibility VAT fields",
+                        "configured compatibility VAT defaults",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical subscription tax scope",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Subscription identity, account, service-address, and offer "
+                        "references supplied in a bounded billing cohort"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical customer VAT exemption policy",
+                    owner="financial.customer_tax_policies",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "versioned CustomerTaxPolicy vat_exempt decision for the "
+                        "canonical customer account"
+                    ),
+                ),
+                AuthorityInput(
+                    name="active legacy tax-rate records",
+                    owner="financial.tax_configuration",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active TaxRate identifiers and percentages retained until "
+                        "the dotmac-tax read switch"
+                    ),
+                ),
+                AuthorityInput(
+                    name="catalog compatibility VAT fields",
+                    owner="service_intent.catalog_policy",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "CatalogOffer with_vat and vat_percent compatibility values "
+                        "retained only for the staged tax migration"
+                    ),
+                ),
+                AuthorityInput(
+                    name="configured compatibility VAT defaults",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "database-authoritative billing default_tax_rate_id and "
+                        "default_tax_application settings"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "The billing owner supplies the session and bounded cohort; "
+                    "resolution reads canonical evidence without writes, flush, "
+                    "commit, or rollback."
+                ),
+                locking=(
+                    "No row lock is taken for a read projection. A money-writing "
+                    "caller resolves again inside its current authoritative unit "
+                    "of work."
+                ),
+                idempotency=(
+                    "The same visible subscription scope, customer policy, active "
+                    "rates, catalog compatibility values, and settings produce the "
+                    "same typed result and provenance."
+                ),
+                retries=(
+                    "Transient database reads may be retried; missing or inactive "
+                    "legacy configuration remains an explicit unconfigured or "
+                    "exempt result."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="recurring and prepaid billing adapters",
+                retryable_codes=(),
+                fail_closed_on=(),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner=(
+                    "duplicated VAT precedence in billing_automation and "
+                    "prepaid_service_renewals"
+                ),
+                new_owner="financial.billing_tax_resolution",
+                verification=(
+                    "customer-exemption precedence, bounded query, recurring, "
+                    "prepaid, and architecture boundary tests"
+                ),
+                cutover_gate=(
+                    "Both recurring invoice and prepaid renewal paths consume the "
+                    "typed resolver and no longer derive VAT independently."
+                ),
+                fallback_retirement=(
+                    "Caller-local address, account, catalog, and default VAT "
+                    "helpers are removed; this compatibility owner itself retires "
+                    "after dotmac-tax shadow parity and read cutover."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/SOT_RELATIONSHIP_MAP.md",
+                "docs/PLAN_FAMILY_ARCHITECTURE.md",
+            ),
+            test_refs=(
+                "tests/test_billing_tax_resolution.py",
+                "tests/test_billing_automation_services.py",
+                "tests/test_prepaid_threshold_resolver.py",
+                "tests/architecture/test_billing_tax_resolution_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.billing_tax_reconciliation",
+        module="app.services.billing_tax_reconciliation",
+        owns=(
+            "legacy VAT reconciliation candidate policy",
+            "bounded legacy VAT reconciliation projection",
+        ),
+        depends_on=(
+            "access.subscription_lifecycle",
+            "financial.credit_notes",
+            "financial.customer_tax_policies",
+            "financial.invoices",
+            "service_intent.catalog_policy",
+        ),
+        notes=(
+            "This read-only containment resolver identifies unresolved issued "
+            "invoice evidence after the recurring exemption and inclusive-label "
+            "repairs. It never rewrites invoices and never issues money evidence. "
+            "Only a tax point on or after the current exemption-policy version, "
+            "with no non-subscription taxed line, is confirmed for an exact "
+            "operator-reviewed correction; all other cases remain manual-review "
+            "exposure. Corrections delegate to financial.credit_notes."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="legacy VAT reconciliation candidate policy",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "canonical issued invoice tax evidence",
+                        "canonical issued credit-note tax adjustments",
+                        "canonical customer VAT exemption policy",
+                        "canonical subscription invoice-line scope",
+                        "catalog compatibility VAT fields",
+                    ),
+                ),
+                ConcernContract(
+                    name="bounded legacy VAT reconciliation projection",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical issued invoice tax evidence",
+                        "canonical issued credit-note tax adjustments",
+                        "canonical customer VAT exemption policy",
+                        "canonical subscription invoice-line scope",
+                        "catalog compatibility VAT fields",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical issued invoice tax evidence",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active non-proforma issued Invoice status, tax point, "
+                        "currency, tax total, and immutable document identity"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical issued credit-note tax adjustments",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active issued, partially-applied, or applied invoice-linked "
+                        "CreditNote tax totals already reducing the exposure"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical customer VAT exemption policy",
+                    owner="financial.customer_tax_policies",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "current versioned CustomerTaxPolicy vat_exempt decision and "
+                        "updated_at evidence; no historical state is inferred"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical subscription invoice-line scope",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active InvoiceLine subscription references used only to "
+                        "separate subscription tax from mixed invoice scope"
+                    ),
+                ),
+                AuthorityInput(
+                    name="catalog compatibility VAT fields",
+                    owner="service_intent.catalog_policy",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "current CatalogOffer with_vat compatibility value used to "
+                        "flag, never confirm, former inclusive-label ambiguity"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "The operator adapter supplies the session and a bounded page; "
+                    "the resolver reads source documents and returns immutable "
+                    "candidates without write, flush, commit, or rollback."
+                ),
+                locking=(
+                    "No row lock is taken for the projection. A correction preview "
+                    "and confirmation recompute the candidate fingerprint, while "
+                    "financial.credit_notes locks and owns the money transition."
+                ),
+                idempotency=(
+                    "The same invoice version, policy version, issued tax credits, "
+                    "and catalogue compatibility facts produce the same candidate "
+                    "fingerprint and remaining exposure."
+                ),
+                retries=(
+                    "Read retries are safe. Stale, resolved, ambiguous, and "
+                    "partially credited evidence fails closed before correction."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="billing tax-reconciliation web coordinator",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "candidate fingerprint drift",
+                    "unproven exemption timing",
+                    "mixed invoice tax scope",
+                    "inclusive-label ambiguity",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner=(
+                    "no bounded money-impact reconciliation for recurring VAT "
+                    "exemption or former inclusive-label behavior"
+                ),
+                new_owner="financial.billing_tax_reconciliation",
+                verification=(
+                    "confirmed timing, ambiguous timing, mixed scope, label "
+                    "ambiguity, existing-credit subtraction, stale preview, "
+                    "read-only boundary, route, and credit-owner delegation tests"
+                ),
+                cutover_gate=(
+                    "Finance operators can review the bounded queue and only "
+                    "confirmed exact cases reach financial.credit_notes preview and "
+                    "explicit confirmation."
+                ),
+                fallback_retirement=(
+                    "No invoice rewrite or inferred bulk refund path exists; this "
+                    "compatibility queue retires after historical adjudication and "
+                    "dotmac-tax cutover evidence are complete."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/SOT_RELATIONSHIP_MAP.md",
+                "docs/designs/CUSTOMER_VAT_EXEMPTION.md",
+                "docs/PLAN_FAMILY_ARCHITECTURE.md",
+            ),
+            test_refs=(
+                "tests/test_billing_tax_reconciliation.py",
+                "tests/architecture/test_billing_tax_reconciliation_boundary.py",
+            ),
+        ),
     ),
     SOTService(
         name="financial.payment_proofs",

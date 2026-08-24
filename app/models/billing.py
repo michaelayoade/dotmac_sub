@@ -2406,6 +2406,13 @@ class PaymentProvider(Base):
     provider_type: Mapped[PaymentProviderType] = mapped_column(
         Enum(PaymentProviderType), default=PaymentProviderType.custom
     )
+    # Opaque correlation to the independently deployed Integrator.  Sub never
+    # derives this value from a provider payload and never dereferences it into
+    # the Integrator database; it is the locally approved mapping from one
+    # transport installation to this financial owner record.
+    integrator_installation_ref: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), unique=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 

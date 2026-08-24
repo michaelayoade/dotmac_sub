@@ -16,7 +16,6 @@ app.services.billing_cleanup_remediation
 app.services.billing_invoice_pdf
 app.services.billing_prepaid_overlap_repair
 app.services.billing_remediation
-app.services.bulk_tariff_change
 app.services.bundles._core
 app.services.catalog.add_ons
 app.services.catalog.credentials

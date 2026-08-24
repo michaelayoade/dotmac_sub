@@ -37,7 +37,6 @@ from app.models.billing import (
     ServiceEntitlement,
     ServiceEntitlementStatus,
     TaxApplication,
-    TaxRate,
 )
 from app.models.billing_contract import (
     CadenceAlignment,
@@ -65,7 +64,6 @@ from app.models.service_extension import (
     ServiceExtensionEntry,
     ServiceExtensionStatus,
 )
-from app.models.subscriber import Address, Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import AccountAdjustmentPreviewRequest
 from app.services.account_lifecycle import (
@@ -85,6 +83,7 @@ from app.services.billing.adjustments import (
     stage_system_account_adjustment,
 )
 from app.services.billing.cadence import BillingCadence, service_period
+from app.services.billing_tax_resolution import resolve_subscription_taxes
 from app.services.common import coerce_uuid, round_money
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
@@ -305,25 +304,6 @@ def _newest_price(rows: Sequence[OfferPrice | OfferVersionPrice]):
     return max(rows, key=lambda row: (row.created_at, str(row.id))) if rows else None
 
 
-def _matching_catalog_tax_rate_id(
-    rates: Sequence[TaxRate], vat_percent: Decimal | None
-) -> UUID | None:
-    if vat_percent is None:
-        return None
-    percent = Decimal(str(vat_percent))
-    if percent <= Decimal("0.00"):
-        return None
-    candidates = {percent}
-    if percent > Decimal("1.00"):
-        candidates.add(percent / Decimal("100"))
-    else:
-        candidates.add(percent * Decimal("100"))
-    for rate in rates:
-        if Decimal(str(rate.rate)) in candidates:
-            return rate.id
-    return None
-
-
 def _resolve_prepaid_monthly_charge_details(
     db: Session,
     subscriptions: Sequence[Subscription],
@@ -334,14 +314,10 @@ def _resolve_prepaid_monthly_charge_details(
     Both renewal and enforcement consume this owner. Contract amount lives on
     ``Subscription.unit_price``; catalog rows provide currency/cadence metadata
     only. Tax precedence exactly matches recurring invoice billing: service
-    address, account, then offer/default.
+    customer exemption, service address, account, then offer/default.
     """
     from app.services.billing._common import _calculate_tax_amount
-    from app.services.billing_automation import (
-        _default_tax_application,
-        _default_tax_rate_id,
-        _effective_unit_price,
-    )
+    from app.services.billing_automation import _effective_unit_price
 
     rows = list(subscriptions)
     result: dict[UUID, PrepaidMonthlyChargeDetail | None] = {
@@ -382,44 +358,7 @@ def _resolve_prepaid_monthly_charge_details(
         ).all():
             offer_prices[offer_price.offer_id].append(offer_price)
 
-    offers = {
-        offer.id: offer
-        for offer in db.scalars(
-            select(CatalogOffer).where(CatalogOffer.id.in_(offer_ids))
-        ).all()
-    }
-    account_ids = {subscription.subscriber_id for subscription in eligible}
-    account_tax_ids: dict[UUID, UUID | None] = {
-        account_id: tax_rate_id
-        for account_id, tax_rate_id in db.execute(
-            select(Subscriber.id, Subscriber.tax_rate_id).where(
-                Subscriber.id.in_(account_ids)
-            )
-        ).all()
-    }
-    address_ids = {
-        subscription.service_address_id
-        for subscription in eligible
-        if subscription.service_address_id is not None
-    }
-    address_tax_ids: dict[UUID, UUID | None] = (
-        {
-            address_id: tax_rate_id
-            for address_id, tax_rate_id in db.execute(
-                select(Address.id, Address.tax_rate_id).where(
-                    Address.id.in_(address_ids)
-                )
-            ).all()
-        }
-        if address_ids
-        else {}
-    )
-    active_rates = list(
-        db.scalars(select(TaxRate).where(TaxRate.is_active.is_(True))).all()
-    )
-    rates_by_id = {rate.id: rate for rate in active_rates}
-    default_tax_rate_id = _default_tax_rate_id(db)
-    tax_application = _default_tax_application(db)
+    tax_resolutions = resolve_subscription_taxes(db, eligible)
 
     for subscription in eligible:
         price: OfferPrice | OfferVersionPrice | None = None
@@ -435,27 +374,14 @@ def _resolve_prepaid_monthly_charge_details(
         if cycle != BillingCycle.monthly:
             continue
         base = _effective_unit_price(subscription, price.amount, effective_at)
-        tax_rate_id = (
-            address_tax_ids.get(subscription.service_address_id)
-            if subscription.service_address_id is not None
-            else None
-        )
-        if tax_rate_id not in rates_by_id:
-            tax_rate_id = account_tax_ids.get(subscription.subscriber_id)
-        if tax_rate_id not in rates_by_id:
-            offer = offers.get(subscription.offer_id)
-            tax_rate_id = None
-            if offer is not None:
-                tax_rate_id = _matching_catalog_tax_rate_id(
-                    active_rates, offer.vat_percent
-                )
-                if tax_rate_id is None and (
-                    bool(offer.with_vat)
-                    or Decimal(str(offer.vat_percent or "0")) > Decimal("0.00")
-                ):
-                    tax_rate_id = default_tax_rate_id
-        tax_rate = rates_by_id.get(tax_rate_id) if tax_rate_id is not None else None
-        if tax_rate is None or tax_application == TaxApplication.exempt:
+        tax_resolution = tax_resolutions[subscription.id]
+        tax_rate_percent = tax_resolution.tax_rate_percent
+        tax_application = tax_resolution.tax_application
+        if (
+            tax_resolution.tax_rate_id is None
+            or tax_rate_percent is None
+            or tax_application == TaxApplication.exempt
+        ):
             effective_tax_application = TaxApplication.exempt
             tax_amount = Decimal("0.00")
             total = base
@@ -463,7 +389,7 @@ def _resolve_prepaid_monthly_charge_details(
             effective_tax_application = tax_application
             tax_amount = _calculate_tax_amount(
                 base,
-                Decimal(str(tax_rate.rate)),
+                tax_rate_percent,
                 tax_application,
             )
             total = (
@@ -484,7 +410,7 @@ def _resolve_prepaid_monthly_charge_details(
             total=round_money(total),
             currency=(price.currency or "NGN").upper(),
             billing_cycle=cycle,
-            tax_rate_id=tax_rate.id if tax_rate is not None else None,
+            tax_rate_id=tax_resolution.tax_rate_id,
             tax_application=effective_tax_application,
         )
     return result

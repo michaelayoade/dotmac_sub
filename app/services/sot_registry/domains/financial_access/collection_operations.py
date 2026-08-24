@@ -735,6 +735,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.invoices",
             "financial.prepaid_service_renewals",
             "financial.billing_accounts",
+            "financial.billing_tax_resolution",
             "observability.audit_log",
         ),
         notes=(
@@ -754,13 +755,17 @@ SERVICES: tuple[SOTService, ...] = (
                 ConcernContract(
                     name="postpaid recurring charge preview",
                     role=OwnerRole.RESOLVER,
-                    input_names=("canonical billable subscription facts",),
+                    input_names=(
+                        "canonical billable subscription facts",
+                        "effective compatibility tax treatment",
+                    ),
                 ),
                 ConcernContract(
                     name="postpaid invoice batch execution",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical billable subscription facts",
+                        "effective compatibility tax treatment",
                         "confirmed staff batch evidence",
                     ),
                     canonical_writer="financial.billing_automation",
@@ -799,6 +804,16 @@ SERVICES: tuple[SOTService, ...] = (
                         "normalized cycle/date, exact current fingerprint, "
                         "staff principal, explicit confirmation, and optional "
                         "failed source run"
+                    ),
+                ),
+                AuthorityInput(
+                    name="effective compatibility tax treatment",
+                    owner="financial.billing_tax_resolution",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "typed customer-exemption-first VAT resolution with exact "
+                        "TaxRate identity, application, provenance, and customer "
+                        "policy version"
                     ),
                 ),
                 AuthorityInput(

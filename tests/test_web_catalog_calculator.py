@@ -7,6 +7,7 @@ JS mirrors, matching how real invoicing computes VAT and prorated charges.
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from app.models.billing import TaxApplication
 from app.models.catalog import BillingCycle
 from app.services import web_catalog_calculator as calc
 
@@ -22,6 +23,38 @@ def test_monthly_full_period_no_one_time_unchanged():
     assert result["subtotal"] == Decimal("10000.00")
     assert result["vat_amount"] == Decimal("750.00")
     assert result["total"] == Decimal("10750.00")
+
+
+def test_monthly_inclusive_application_extracts_tax_without_adding_it_again():
+    result = calc.compute_monthly(
+        recurring_subtotal=Decimal("10750"),
+        overage_charge=Decimal("0"),
+        with_vat=True,
+        vat_percent=Decimal("7.5"),
+        tax_application=TaxApplication.inclusive,
+    )
+
+    assert result["vat_amount"] == Decimal("750.00")
+    assert result["total"] == Decimal("10750.00")
+
+
+def test_calculator_page_uses_owned_default_tax_application(monkeypatch):
+    monkeypatch.setattr(calc.catalog_service.offers, "list", lambda **_kwargs: [])
+    monkeypatch.setattr(calc.catalog_service.add_ons, "list", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        calc.catalog_service.usage_allowances,
+        "list",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        calc,
+        "resolve_default_tax_application",
+        lambda _db: TaxApplication.inclusive,
+    )
+
+    page = calc.calculator_page_data(object())
+
+    assert page["tax_application"] == TaxApplication.inclusive.value
 
 
 def test_first_bill_full_period_equals_monthly_when_no_one_time():
