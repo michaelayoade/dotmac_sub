@@ -260,8 +260,9 @@ body {{ margin: 0; background: #fff; color: #111827; font-family: Inter, Arial, 
 .receipt-no .number {{ margin-top: 8px; font-size: 18px; font-weight: 900; }}
 .receipt-no .meta {{ margin-top: 8px; font-size: 11px; line-height: 1.7; }}
 .body {{ padding: 22px 22px 28px; }}
-.cards {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }}
-.card {{ border: 1px solid #e5e7eb; border-radius: 8px; padding: 13px; min-height: 58px; }}
+.cards {{ display: flex; }}
+.card {{ flex: 1; margin-right: 12px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 13px; min-height: 58px; }}
+.card:last-child {{ margin-right: 0; }}
 .card.highlight {{ border-color: #7fd0a0; background: #edfff5; }}
 .kicker {{ color: #176f37; font-size: 11px; font-weight: 900; }}
 .value {{ margin-top: 10px; font-size: 13px; font-weight: 700; }}
@@ -273,7 +274,7 @@ th {{ padding: 13px 14px; font-size: 11px; text-align: left; }}
 td {{ padding: 14px; font-size: 13px; height: 38px; border-top: 1px solid #f3f4f6; }}
 .right {{ text-align: right; }}
 .summary {{ margin: 30px 0 30px auto; width: 205px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; }}
-.summary-row {{ display: flex; justify-content: space-between; gap: 12px; font-size: 12px; line-height: 2.1; }}
+.summary-row {{ display: flex; justify-content: space-between; font-size: 12px; line-height: 2.1; }}
 .summary-row strong {{ font-weight: 900; }}
 .green {{ color: #176f37; }}
 .details {{ border-left: 6px solid #22c55e; border-radius: 0 8px 8px 0; background: #edfff5; padding: 14px 16px; font-size: 12px; }}
