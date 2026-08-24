@@ -152,7 +152,7 @@
    ACTION BUTTON
    Primary and secondary buttons with gradients
    ============================================ #}
-{% macro action_button(label, href="#", icon="", variant="primary", color="amber", color2=None, size="md", type="link", hx_attrs={}) %}
+{% macro action_button(label, href="#", icon="", variant="primary", color="amber", color2=None, size="md", type="link", hx_attrs={}, animate_icon=True) %}
 {% set c2 = color2 or color %}
 {% set sizes = {
     'sm': 'px-3 py-1.5 text-xs gap-1.5',
@@ -166,7 +166,7 @@
    class="group inline-flex items-center {{ sizes[size] }} rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ c2 }}-600 font-semibold text-white shadow-lg shadow-{{ color }}-500/25 transition-all hover:shadow-xl hover:shadow-{{ color }}-500/30 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
    {% for key, val in hx_attrs.items() %}{{ key }}="{{ val }}"{% endfor %}>
     {% if icon %}
-    <span class="{{ icon_sizes[size] }} transition-transform group-hover:rotate-90">{{ icon|safe }}</span>
+    <span class="{{ icon_sizes[size] }}{% if animate_icon %} transition-transform group-hover:rotate-90{% endif %}">{{ icon|safe }}</span>
     {% endif %}
     {{ label }}
 </a>

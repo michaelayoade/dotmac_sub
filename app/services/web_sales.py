@@ -3403,7 +3403,6 @@ def build_sales_orders_list_context(
 
     subscriber_map = _subscriber_map(db, [order.subscriber_id for order in orders])
     agents = sales_agent_options(db)
-    agent_map = {agent["id"]: agent for agent in agents}
     agent_rows = (
         _sales_orders_query(db, **filters)
         .with_entities(
@@ -3426,6 +3425,17 @@ def build_sales_orders_list_context(
         .order_by(func.coalesce(func.sum(SalesOrder.total), 0).desc())
         .all()
     )
+    referenced_agent_ids = {
+        agent_id
+        for agent_id in (
+            *(order.owner_agent_id for order in orders),
+            *(row.owner_agent_id for row in agent_rows),
+        )
+        if agent_id is not None
+    }
+    agent_map = web_system_users.system_user_labels_by_id(
+        db, referenced_agent_ids
+    )
     agent_performance = []
     for row in agent_rows:
         key = str(row.owner_agent_id) if row.owner_agent_id else ""
@@ -3434,7 +3444,7 @@ def build_sales_orders_list_context(
             {
                 "name": agent["name"]
                 if agent
-                else ("Unassigned" if not key else key[:8]),
+                else ("Unassigned" if not key else "Unknown agent"),
                 "email": agent["email"] if agent else "",
                 "orders": int(row.orders or 0),
                 "paid_orders": int(row.paid_orders or 0),
@@ -3527,13 +3537,12 @@ def build_sales_order_detail_context(
         offset=0,
     )
     project = _resolve_project_for_sales_order(db, order.id)
-    agent = next(
-        (
-            item
-            for item in sales_agent_options(db)
-            if item["id"] == str(order.owner_agent_id)
-        ),
-        None,
+    agent = (
+        web_system_users.system_user_labels_by_id(db, {order.owner_agent_id}).get(
+            str(order.owner_agent_id)
+        )
+        if order.owner_agent_id
+        else None
     )
     return {
         "order": order,
