@@ -88,6 +88,10 @@ def test_machine_credential_wins_over_legacy(db_session, monkeypatch):
         credential_id = "11111111-1111-1111-1111-111111111111"
         scopes = frozenset({"billing:invoice:read"})
 
+    # Machine auth is only attempted when the HMAC key is held. Without this the
+    # gate skips it, the call falls through to a legacy row that was never
+    # created, and the test fails for a reason unrelated to precedence.
+    monkeypatch.setattr("dotmac_kernel.secret_sources.get_secret", lambda name: "held")
     monkeypatch.setattr(
         "dotmac_kernel.machine_auth.authenticate_machine",
         lambda db, raw_key, **_: _Principal(),
@@ -112,6 +116,10 @@ def test_unknown_machine_key_falls_through(db_session, monkeypatch):
 
     import app.services.auth_dependencies as deps
 
+    # Held, so machine auth is genuinely ATTEMPTED and genuinely refuses. Without
+    # it the gate would skip the attempt and this would pass without ever
+    # exercising the fall-through it claims to test.
+    monkeypatch.setattr("dotmac_kernel.secret_sources.get_secret", lambda name: "held")
     monkeypatch.setattr(
         "dotmac_kernel.machine_auth.authenticate_machine",
         lambda db, raw_key, **_: (_ for _ in ()).throw(UnauthorizedError("no")),
