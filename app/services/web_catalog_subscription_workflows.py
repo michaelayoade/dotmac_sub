@@ -695,6 +695,7 @@ def subscription_detail_page_context(
         "subscription": subscription,
         "activities": build_audit_activities(db, "subscription", str(subscription_id)),
         "offer_options": core.active_offer_options(db),
+        "pending_plan_change": _pending_plan_change_context(db, subscription_id),
         "scheduled_plan_change": _scheduled_plan_change_context(db, subscription_id),
         "scheduled_status_changes": _scheduled_status_change_context(
             db, subscription_id
@@ -1044,6 +1045,40 @@ def _scheduled_plan_change_context(
         "id": str(scheduled.id),
         "offer_name": target_offer.name if target_offer else "New plan",
         "effective_date": scheduled.effective_date,
+    }
+
+
+def _pending_plan_change_context(
+    db: Session, subscription_id: str
+) -> dict[str, object] | None:
+    """Summarize the exact pending request eligible for admin cancellation."""
+    from app.models.catalog import CatalogOffer
+    from app.models.subscription_change import (
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+
+    pending = db.scalar(
+        select(SubscriptionChangeRequest)
+        .where(
+            SubscriptionChangeRequest.subscription_id == coerce_uuid(subscription_id),
+            SubscriptionChangeRequest.status == SubscriptionChangeStatus.pending,
+            SubscriptionChangeRequest.is_active.is_(True),
+        )
+        .order_by(SubscriptionChangeRequest.requested_at.asc())
+        .limit(1)
+    )
+    if pending is None:
+        return None
+    target_offer = db.get(CatalogOffer, pending.requested_offer_id)
+    return {
+        "id": str(pending.id),
+        "offer_name": target_offer.name if target_offer else "New plan",
+        "effective_date": pending.effective_date,
+        "requested_at": pending.requested_at,
+        "execution_state": (
+            pending.execution_state.value if pending.execution_state else "not_started"
+        ),
     }
 
 
@@ -1812,6 +1847,48 @@ def _parse_reviewed_heads(
         for subscription_id, head in parsed.items()
         if str(subscription_id).strip() and str(head).strip()
     }
+
+
+def cancel_pending_plan_change_redirect(
+    db: Session,
+    *,
+    subscription_id: str,
+    request_id: str,
+    actor_id: str | None,
+    reason: str,
+) -> str:
+    """Cancel one exact pending request through the registered owner command."""
+    from app.services.subscription_change_execution import (
+        CancelPendingPlanChangeCommand,
+        cancel_pending_plan_change,
+    )
+
+    base = f"/admin/catalog/subscriptions/{subscription_id}"
+    clean_reason = reason.strip()
+    if not clean_reason:
+        return f"{base}?error={quote_plus('A cancellation reason is required.')}"
+    command_id = uuid4()
+    db_session_adapter.release_read_transaction(db)
+    try:
+        cancel_pending_plan_change(
+            db,
+            CancelPendingPlanChangeCommand(
+                context=CommandContext(
+                    command_id=command_id,
+                    correlation_id=command_id,
+                    actor=f"admin:{actor_id or 'unknown'}",
+                    scope="catalog:write",
+                    reason=clean_reason,
+                    idempotency_key=f"cancel-pending-plan-change:{request_id}",
+                ),
+                request_id=UUID(request_id),
+                subscription_id=UUID(subscription_id),
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return f"{base}?error={quote_plus(message)}"
+    return f"{base}?notice={quote_plus('Pending plan-change request canceled.')}"
 
 
 def cancel_scheduled_plan_change_redirect(

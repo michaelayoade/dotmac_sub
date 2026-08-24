@@ -234,6 +234,13 @@ domain rules; they must not silently become zero.
   progress without claiming an optimistic final state.
 - Audit administrative mutations through the canonical audit/event owner.
 
+The admin subscription detail page presents an outstanding pending plan-change
+request with its target plan, effective date, execution state, request identity,
+and submission time. Operators with `catalog:write` may cancel that pending
+request only after entering a reason and confirming that the subscription stays
+on its current plan. The action is absent after approval or application and does
+not offer a revoke path.
+
 For prepaid recovery, the service page consumes the recovery eligibility
 owner's typed next action. An unresolved service invoice disables Bill Now,
 explains the block, and links to that exact invoice. The invoice page keeps
