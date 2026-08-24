@@ -231,6 +231,29 @@ class StaffIdentityOutcome:
 
 
 @dataclass(frozen=True)
+class StaffDisplayIdentityQuery:
+    """Exact staff principals whose persisted display identity is required."""
+
+    user_ids: frozenset[UUID]
+
+
+@dataclass(frozen=True)
+class StaffDisplayIdentity:
+    """Non-secret staff identity projection for historical ownership labels."""
+
+    user_id: UUID
+    display_name: str
+    email: str
+
+
+@dataclass(frozen=True)
+class StaffDisplayIdentityOutcome:
+    """Deterministically ordered staff display identities."""
+
+    identities: tuple[StaffDisplayIdentity, ...]
+
+
+@dataclass(frozen=True)
 class StaffCredentialPreparationOutcome:
     """Recovery preparation state without returning a password or token."""
 
@@ -1532,6 +1555,38 @@ def list_staff_login_identity_drift(
                 )
             )
     return tuple(drift)
+
+
+def resolve_staff_display_identities(
+    db: Session,
+    *,
+    query: StaffDisplayIdentityQuery,
+) -> StaffDisplayIdentityOutcome:
+    """Resolve persisted staff labels without applying write-time eligibility."""
+
+    if not query.user_ids:
+        return StaffDisplayIdentityOutcome(identities=())
+    users = tuple(
+        db.execute(
+            select(SystemUser)
+            .where(SystemUser.id.in_(query.user_ids))
+            .order_by(SystemUser.id.asc())
+        ).scalars()
+    )
+    return StaffDisplayIdentityOutcome(
+        identities=tuple(
+            StaffDisplayIdentity(
+                user_id=user.id,
+                display_name=(
+                    (user.display_name or "").strip()
+                    or f"{user.first_name} {user.last_name}".strip()
+                    or user.email
+                ),
+                email=user.email or "",
+            )
+            for user in users
+        )
+    )
 
 
 def get_staff_login_identity_view(

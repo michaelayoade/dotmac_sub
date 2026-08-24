@@ -67,6 +67,11 @@ def test_customer_table_consumes_contract_urls_and_accessibility_state():
     assert 'aria-label="{{ customer.name }}"' in template
     assert 'aria-label="Select {{ customer.name }}"' in template
     assert (
+        'class="flex items-center justify-end gap-1" data-customer-row-actions'
+        in template
+    )
+    assert "opacity-0 transition-opacity group-hover:opacity-100" not in template
+    assert (
         "{% if can_activate_subscriptions and "
         "customer.suspended_subscription_count %}" in template
     )
@@ -123,6 +128,22 @@ def test_customer_filter_form_keeps_canonical_query_state_in_browser_history():
     assert "/api/v1/tables/customers" not in template
 
 
+def test_customer_expanded_filters_fill_the_card_without_a_gutter():
+    template = (PROJECT_ROOT / "templates/admin/customers/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'class="overflow-hidden rounded-lg bg-white/70 dark:bg-slate-950"' in template
+    )
+    assert 'class="px-4 py-5 sm:px-5"' in template
+    assert (
+        'class="bg-white/70 px-4 py-5 backdrop-blur-sm dark:bg-slate-950 '
+        'dark:backdrop-blur-none sm:px-5"' not in template
+    )
+    assert "border-slate-100 px-4 pb-4" not in template
+
+
 def test_customer_export_button_renders_accessible_checkbox_options():
     templates = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
 
@@ -133,6 +154,9 @@ def test_customer_export_button_renders_accessible_checkbox_options():
     assert 'aria-haspopup="dialog"' in html
     assert 'aria-controls="customer-export-options"' in html
     assert 'id="customer-export-options"' in html
+    assert 'class="static inline-flex sm:relative"' in html
+    assert "absolute inset-x-0 top-full" in html
+    assert "sm:left-auto sm:right-0 sm:w-80" in html
     assert 'role="dialog"' in html
     assert "Choose export columns" in html
     assert 'type="checkbox"' in html
@@ -144,6 +168,23 @@ def test_customer_export_button_renders_accessible_checkbox_options():
     assert "exportLoading ? 'Preparing…' : 'Export'" in html
     assert 'aria-live="polite"' in html
     assert 'role="alert"' in html
+
+
+def test_customer_export_menu_stacks_above_the_search_filters():
+    page = (PROJECT_ROOT / "templates/admin/customers/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert '<div class="relative z-50" data-customer-page-header>' in page
+    assert '<div class="relative z-40">' in page
+
+
+def test_add_customer_icon_does_not_rotate_on_hover():
+    page = (PROJECT_ROOT / "templates/admin/customers/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "animate_icon=False" in page
 
 
 def test_customer_multi_column_exports_project_the_complete_backend_csv():

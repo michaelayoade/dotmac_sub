@@ -387,13 +387,18 @@ def repair_ticket_comment_attachment_references(
 
 
 # Ticket.status is a free-form string column; these guard every write at the
-# boundary. closed/canceled/merged are terminal — they
-# cannot be reopened except by an explicit admin action (allow_reopen=True),
-# which keeps CRM pull and automation from silently resurrecting a closed
-# ticket. Garbage values are rejected outright.
+# boundary. Closed and canceled are canonical terminal states. The retired
+# merged value stays in the current-state guard only for rolling-deploy safety;
+# it is rejected as a new status. Terminal tickets cannot be reopened except by
+# an explicit admin action (allow_reopen=True), which keeps CRM pull and
+# automation from silently resurrecting them. Garbage values are rejected.
 _VALID_TICKET_STATUSES: frozenset[str] = frozenset(s.value for s in TicketStatus)
 _TICKET_TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {TicketStatus.closed.value, TicketStatus.canceled.value, TicketStatus.merged.value}
+    {
+        TicketStatus.closed.value,
+        TicketStatus.canceled.value,
+        "merged",  # Rolling-deploy compatibility until the backfill completes.
+    }
 )
 
 
@@ -407,7 +412,7 @@ class TicketStatusScope:
     """
 
     exact: TicketStatus | None = None
-    excluded: frozenset[TicketStatus] = frozenset()
+    excluded: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.exact is not None and self.excluded:
@@ -421,7 +426,7 @@ class TicketStatusScope:
     def excluding_canceled(cls) -> TicketStatusScope:
         """Return the operational default scope without canceled tickets."""
 
-        return cls(excluded=frozenset({TicketStatus.canceled}))
+        return cls(excluded=frozenset({TicketStatus.canceled.value, "merged"}))
 
     @classmethod
     def matching(cls, status: TicketStatus) -> TicketStatusScope:
@@ -429,7 +434,11 @@ class TicketStatusScope:
 
     @classmethod
     def not_closed(cls) -> TicketStatusScope:
-        return cls(excluded=frozenset({TicketStatus.closed, TicketStatus.canceled}))
+        return cls(
+            excluded=frozenset(
+                {TicketStatus.closed.value, TicketStatus.canceled.value, "merged"}
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,7 +473,6 @@ def active_ticket_status_values() -> tuple[str, ...]:
         not in {
             TicketStatus.closed,
             TicketStatus.canceled,
-            TicketStatus.merged,
         }
     )
 
@@ -479,9 +487,10 @@ def transition_ticket_status(
     """Guarded write to ``Ticket.status``. Returns True if the status changed.
 
     - Rejects values that are not a real ``TicketStatus`` (raises ``ValueError``).
-    - Refuses to move OUT of a terminal status (closed/canceled/merged) unless
-      ``allow_reopen`` — this is the CRM-vs-local precedence point: a CRM pull or
-      automation rule cannot reopen a locally-closed ticket.
+    - Refuses to move OUT of a canonical terminal status (closed/canceled), or
+      a retired stored merged value during rollout, unless ``allow_reopen``.
+      This is the CRM-vs-local precedence point: a CRM pull or automation rule
+      cannot reopen a locally-terminal ticket.
     - Audits every change (and every blocked reopen) via the log.
     """
     try:
@@ -2789,7 +2798,7 @@ class Tickets:
         if ticket.status == TicketStatus.closed.value:
             return ticket
         _ensure_not_merged_source(ticket)
-        if ticket.status in {TicketStatus.canceled.value, TicketStatus.merged.value}:
+        if ticket.status == TicketStatus.canceled.value:
             raise _ticket_error(
                 "resolution_confirmation_terminal",
                 "Cannot confirm a terminal ticket.",
@@ -3241,9 +3250,7 @@ class Tickets:
                 query = query.filter(Ticket.status == status_scope.exact.value)
             elif status_scope.excluded:
                 query = query.filter(
-                    Ticket.status.notin_(
-                        sorted(item.value for item in status_scope.excluded)
-                    )
+                    Ticket.status.notin_(sorted(status_scope.excluded))
                 )
         elif status:
             query = query.filter(
@@ -3841,6 +3848,19 @@ class Tickets:
         target.attachments = _merge_attachment_dicts(
             target.attachments, source.attachments
         )
+        source.attachments = []
+        db.query(StoredFile).filter(
+            StoredFile.entity_id == str(source.id),
+            StoredFile.entity_type.in_(
+                {
+                    "support_ticket_attachment",
+                    "support_ticket_comment_attachment",
+                }
+            ),
+        ).update(
+            {StoredFile.entity_id: str(target.id)},
+            synchronize_session=False,
+        )
 
         # Merge assignees.
         target_assignee_ids = {
@@ -3892,10 +3912,11 @@ class Tickets:
 
         db.query(TicketAssignee).filter(TicketAssignee.ticket_id == source.id).delete()
 
-        # Merge is an explicit admin action; a closed source can still
-        # be merged (allow_reopen lets it leave a terminal state into merged).
+        # Merge is an explicit admin action. The source is canceled as the
+        # lifecycle consequence; the relation below projects the Merged label.
+        # allow_reopen permits a closed source to move to canceled.
         transition_ticket_status(
-            source, TicketStatus.merged, source="merge", allow_reopen=True
+            source, TicketStatus.canceled, source="merge", allow_reopen=True
         )
         source.merged_into_ticket_id = target.id
 

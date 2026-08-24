@@ -19,9 +19,10 @@ from app.models.auth import (
     UserCredential,
 )
 from app.models.auth import Session as AuthSession
+from app.models.catalog import AccessCredential
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import CommunicationIntentRecord, Notification
-from app.models.subscriber import UserType
+from app.models.subscriber import SubscriberStatus, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.services import auth_flow as auth_flow_service
@@ -179,6 +180,94 @@ def test_login_radius_uses_username_not_subscriber_email(
             AuthProvider.radius,
         )
     assert exc.value.status_code == 401
+
+
+def test_login_accepts_access_credential_password_for_customer_mobile(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    access_credential = AccessCredential(
+        subscriber_id=person.id,
+        username="pppoe-customer-001",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
+    )
+    db_session.add(access_credential)
+    db_session.commit()
+
+    result = AuthFlow.login(
+        db_session,
+        "pppoe-customer-001",
+        "pppoe-secret",
+        _make_request(),
+        None,
+    )
+
+    assert result.get("access_token")
+    assert result.get("refresh_token")
+    session = db_session.query(AuthSession).one()
+    assert session.subscriber_id == person.id
+
+
+@pytest.mark.parametrize(
+    "subscriber_status",
+    [SubscriberStatus.disabled, SubscriberStatus.canceled],
+)
+def test_access_credential_login_blocks_disabled_or_canceled_customers(
+    db_session, person, subscriber_status, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    person.status = subscriber_status
+    access_credential = AccessCredential(
+        subscriber_id=person.id,
+        username=f"pppoe-{subscriber_status.value}",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
+    )
+    db_session.add(access_credential)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(
+            db_session,
+            f"pppoe-{subscriber_status.value}",
+            "pppoe-secret",
+            _make_request(),
+            None,
+        )
+
+    assert exc.value.status_code == 403
+    assert db_session.query(AuthSession).count() == 0
+
+
+def test_access_credential_login_returns_mfa_token_when_enabled(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    access_credential = AccessCredential(
+        subscriber_id=person.id,
+        username="pppoe-mfa-001",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
+    )
+    db_session.add(access_credential)
+    db_session.commit()
+
+    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    code = pyotp.TOTP(setup["secret"]).now()
+    AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+
+    result = AuthFlow.login(
+        db_session,
+        "pppoe-mfa-001",
+        "pppoe-secret",
+        _make_request(),
+        None,
+    )
+
+    assert result["mfa_required"] is True
+    assert result["mfa_token"]
 
 
 def test_mfa_setup_confirm(db_session, person, monkeypatch):

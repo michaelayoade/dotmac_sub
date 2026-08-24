@@ -12,6 +12,7 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
+from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.subscription_engine import SettingValueType
 from app.models.support import (
@@ -199,7 +200,7 @@ def test_ticket_create_uses_configured_routing_and_sla_policy(db_session, subscr
     support_ticket_settings_service.update_ticket_configuration(
         db_session,
         support_ticket_settings_service.TicketConfigurationUpdate(
-            statuses=("open", "closed", "merged"),
+            statuses=("open", "closed", "canceled"),
             priorities=("normal",),
             ticket_types=("incident",),
             regions=("north",),
@@ -371,7 +372,7 @@ def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subsc
     support_ticket_settings_service.update_ticket_configuration(
         db_session,
         support_ticket_settings_service.TicketConfigurationUpdate(
-            statuses=("open", "closed", "merged"),
+            statuses=("open", "closed", "canceled"),
             priorities=("normal",),
             ticket_types=("incident",),
             auto_assign=True,
@@ -907,6 +908,25 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
         ),
         actor_id=str(subscriber.id),
     )
+    stored_attachment = StoredFile(
+        entity_type="support_ticket_attachment",
+        entity_id=str(source.id),
+        original_filename="source.txt",
+        storage_key_or_relative_path="tickets/source.txt",
+        file_size=4,
+        content_type="text/plain",
+        storage_provider="s3",
+    )
+    db_session.add(stored_attachment)
+    db_session.flush()
+    source.attachments = [
+        {
+            "file_name": "source.txt",
+            "storage_key": "tickets/source.txt",
+            "stored_file_id": str(stored_attachment.id),
+        }
+    ]
+    db_session.commit()
 
     merged = support_service.tickets.merge(
         db_session,
@@ -917,8 +937,19 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(
 
     assert merged.id == target.id
     db_session.refresh(source)
-    assert source.status == "merged"
+    assert source.status == "canceled"
+    assert source.display_status == "merged"
     assert source.merged_into_ticket_id == target.id
+    assert source.attachments == []
+    assert target.attachments == [
+        {
+            "file_name": "source.txt",
+            "storage_key": "tickets/source.txt",
+            "stored_file_id": str(stored_attachment.id),
+        }
+    ]
+    db_session.refresh(stored_attachment)
+    assert stored_attachment.entity_id == str(target.id)
 
     target_comments = (
         db_session.query(TicketComment)

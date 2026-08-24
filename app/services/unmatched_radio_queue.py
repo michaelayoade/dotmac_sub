@@ -69,7 +69,7 @@ DEFAULT_GRACE_HOURS = 6
 _CLOSED_STATUSES = {
     TicketStatus.closed.value,
     TicketStatus.canceled.value,
-    TicketStatus.merged.value,
+    "merged",  # Rolling-deploy compatibility until the status backfill completes.
 }
 
 

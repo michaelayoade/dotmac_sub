@@ -36,6 +36,9 @@ from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import invoice_discounts, invoice_draft_authoring
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import (
+    web_prepaid_coverage_reconciliation as web_prepaid_coverage_reconciliation_service,
+)
+from app.services import (
     web_prepaid_draft_reconciliation as web_prepaid_draft_reconciliation_service,
 )
 from app.services.audit_helpers import (
@@ -917,6 +920,11 @@ def load_invoice_detail_data(
             db, invoice_id=UUID(invoice_id)
         )
     )
+    prepaid_coverage_reconciliation_state = (
+        web_prepaid_coverage_reconciliation_service.preview_for_invoice_detail(
+            db, invoice_id=UUID(invoice_id)
+        )
+    )
     return {
         "invoice": invoice,
         "invoice_financial_summary": billing_service.invoices.financial_summary(
@@ -953,6 +961,7 @@ def load_invoice_detail_data(
             if prepaid_draft_reconciliation_preview is not None
             else None
         ),
+        "prepaid_coverage_reconciliation_state": prepaid_coverage_reconciliation_state,
     }
 
 

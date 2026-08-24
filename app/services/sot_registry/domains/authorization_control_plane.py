@@ -1577,6 +1577,7 @@ DOMAIN = DomainSOT(
                 "staff account provisioning",
                 "staff identity bootstrap",
                 "staff identity maintenance",
+                "staff display identity resolution",
                 "staff login identity resolution",
                 "staff field technician profile binding",
             ),
@@ -1596,7 +1597,8 @@ DOMAIN = DomainSOT(
                 "keeps the canonical staff email and the one local credential "
                 "username aligned even while access is inactive, prepares "
                 "credential recovery, resolves credential drift and recovery "
-                "eligibility for adapters, "
+                "eligibility for adapters, and projects persisted staff display "
+                "identity for historical ownership labels, "
                 "creates and binds one Person Party for every new principal, "
                 "delegates managed grants to auth.system_user_assignments, "
                 "stages audit and "
@@ -1647,6 +1649,11 @@ DOMAIN = DomainSOT(
                             "staff-linked field technician profile",
                         ),
                         canonical_writer="auth.staff_provisioning",
+                    ),
+                    ConcernContract(
+                        name="staff display identity resolution",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("canonical staff identity and credential state",),
                     ),
                     ConcernContract(
                         name="staff login identity resolution",

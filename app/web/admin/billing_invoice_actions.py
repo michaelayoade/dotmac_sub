@@ -15,6 +15,9 @@ from app.services import (
 )
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import (
+    web_prepaid_coverage_reconciliation as web_prepaid_coverage_reconciliation_service,
+)
+from app.services import (
     web_prepaid_draft_reconciliation as web_prepaid_draft_reconciliation_service,
 )
 from app.services.auth_dependencies import require_permission
@@ -72,6 +75,28 @@ def _render_prepaid_review(
             "request": request,
             "review": review,
             "invoice_id": review.preview.invoice_id,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+        status_code=status_code,
+    )
+
+
+def _render_prepaid_coverage_review(
+    request: Request,
+    *,
+    db: Session,
+    review: web_prepaid_coverage_reconciliation_service.PrepaidCoverageAdminReview,
+    status_code: int = 200,
+) -> Response:
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/prepaid_coverage_repair_confirm.html",
+        {
+            "request": request,
+            "review": review,
+            "invoice_id": review.state.review.invoice_id,
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
@@ -232,6 +257,74 @@ def invoice_prepaid_draft_reconciliation_confirm(
         )
     return RedirectResponse(
         f"/admin/billing/invoices/{invoice_id}?notice=Prepaid+draft+reconciled",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/prepaid-coverage-reconciliation/preview",
+    response_class=HTMLResponse,
+)
+def invoice_prepaid_coverage_reconciliation_preview(
+    request: Request,
+    invoice_id: UUID,
+    auth: dict = Depends(require_permission("billing:invoice:update")),
+    db: Session = Depends(get_db),
+) -> Response:
+    try:
+        review = web_prepaid_coverage_reconciliation_service.build_admin_review(
+            db, invoice_id=invoice_id, actor=_principal_actor(auth)
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            f"/admin/billing/invoices/{invoice_id}?error={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    return _render_prepaid_coverage_review(request, db=db, review=review)
+
+
+@router.post("/invoices/{invoice_id:uuid}/prepaid-coverage-reconciliation/confirm")
+def invoice_prepaid_coverage_reconciliation_confirm(
+    request: Request,
+    invoice_id: UUID,
+    preview_fingerprint: str = Form(...),
+    confirmation_token: str = Form(...),
+    confirmed: str | None = Form(None),
+    reason: str = Form(""),
+    auth: dict = Depends(require_permission("billing:invoice:update")),
+    db: Session = Depends(get_db),
+) -> Response:
+    actor = _principal_actor(auth)
+    try:
+        web_prepaid_coverage_reconciliation_service.confirm_admin_review(
+            db,
+            invoice_id=invoice_id,
+            actor=actor,
+            preview_fingerprint=preview_fingerprint,
+            confirmation_token=confirmation_token,
+            confirmed=confirmed,
+            reason=reason,
+        )
+    except DomainError as exc:
+        try:
+            review = (
+                web_prepaid_coverage_reconciliation_service.rebuild_review_with_error(
+                    db, invoice_id=invoice_id, actor=actor, reason=reason, error=exc
+                )
+            )
+        except DomainError:
+            return RedirectResponse(
+                f"/admin/billing/invoices/{invoice_id}?error={quote_plus(exc.message)}",
+                status_code=303,
+            )
+        return _render_prepaid_coverage_review(
+            request,
+            db=db,
+            review=review,
+            status_code=_prepaid_review_error_status(exc),
+        )
+    return RedirectResponse(
+        f"/admin/billing/invoices/{invoice_id}?notice=Prepaid+coverage+repaired",
         status_code=303,
     )
 

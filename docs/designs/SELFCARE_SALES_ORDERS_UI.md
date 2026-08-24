@@ -12,7 +12,8 @@
 | Authoritative owner | `sales.orders` (`app.services.sales_orders`) |
 | Authoritative records | `SalesOrder` and `SalesOrderLine` |
 | Customer source | Native `Subscriber` directory |
-| Sales-agent source | Active `SystemUser` records with a `SystemUserRole` grant whose canonical role is Customer Experience |
+| Sales-agent assignment source | Active `SystemUser` records with a `SystemUserRole` grant whose canonical role is Customer Experience |
+| Historical agent display source | The referenced native `SystemUser`, regardless of current activity or role eligibility |
 | Plan source | Active native catalog offers |
 | Inventory observation | Active field-inventory catalog items |
 
@@ -22,6 +23,13 @@ native owner generates order numbers, calculates line amounts, applies payment
 transitions, creates fulfillment scope and records downstream financial
 effects. The form adapter invokes those owner commands and does not reproduce
 those transitions.
+
+CRM-imported ownership is translated from `crm_agents.id` through
+`crm_agents.person_id` and the governed staff-map artifact to native
+`SystemUser.id` values. Re-running the idempotent Phase 3 importer repairs
+previously imported ownership when that mapping is available. An unresolved
+reference is rendered as **Unknown agent** and retained as migration provenance
+for explicit repair; UUID fragments are never used as a person label.
 
 Manual order VAT is fixed at 7.5% and is exposed by
 `app.services.sales_orders.fixed_vat_amount`; the browser calculation is a
@@ -57,9 +65,17 @@ confirmation and retains linked customer, quote and project records.
 ## Responsive behavior
 
 Summary cards and filters collapse from six/four columns to two and then one.
-Analytics panels stack on smaller viewports. The complete eleven-column order
-table remains horizontally scrollable so monetary and lifecycle facts are not
-silently removed.
+Analytics panels stack on smaller viewports. Sales by Agent becomes compact
+mobile cards with five agents shown initially and an explicit Show all/Show
+fewer control. Desktop provides local agent search, shows ten matching agents
+initially, and exposes Show all/Show fewer only when more than ten match. The
+orders table groups date with order identity, agent with customer, lifecycle
+with payment status, and all monetary facts into a financial summary. Its
+minimum width is bounded to limit desktop horizontal scrolling. Ten orders are
+shown initially, with Show all/Show fewer when the current page contains more.
+Both agent and order disclosures ease their container and newly revealed
+content over roughly 300ms. Reduced-motion preferences disable the scripted
+height animation while preserving the same disclosure behavior.
 
 ## Validation evidence
 

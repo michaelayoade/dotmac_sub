@@ -399,5 +399,62 @@ def test_operational_report_template_compiles():
     assert template is not None
 
 
+def test_sales_report_columns_bind_labels_to_exact_row_keys():
+    context: report_routes.SalesReportContext = {
+        "report_kind": "leads",
+        "title": "Lead Performance",
+        "description": "Lead KPIs",
+        "columns": (
+            {"label": "Agent", "key": "agent_name"},
+            {"label": "Leads won", "key": "leads_won"},
+        ),
+        "rows": [{"agent_name": "Ada Agent", "leads_won": 3}],
+        "metrics": (),
+        "date_from": "",
+        "date_to": "",
+        "note": "",
+    }
+    html = report_routes.templates.env.get_template(
+        "admin/reports/_sales_kpi_table.html"
+    ).render(columns=context["columns"], rows=context["rows"])
+
+    assert "Agent" in html
+    assert "Ada Agent" in html
+    assert "Leads won" in html
+    assert ">3<" in html
+    assert report_routes._sales_report_csv(context).splitlines() == [
+        "Agent,Leads won",
+        "Ada Agent,3",
+    ]
+
+
+def test_sales_order_report_columns_render_exact_prefixed_row_keys():
+    columns: tuple[report_routes.SalesReportColumn, ...] = (
+        {"label": "Agent", "key": "agent_name"},
+        {"label": "Confirmed", "key": "orders_confirmed"},
+        {"label": "Paid", "key": "orders_paid"},
+        {"label": "Fulfilled", "key": "orders_fulfilled"},
+        {"label": "Cancelled", "key": "orders_cancelled"},
+    )
+    rows: list[report_routes.SalesReportRow] = [
+        {
+            "agent_name": "Tunde Agent",
+            "orders_confirmed": 4,
+            "orders_paid": 3,
+            "orders_fulfilled": 2,
+            "orders_cancelled": 1,
+        }
+    ]
+
+    html = report_routes.templates.env.get_template(
+        "admin/reports/_sales_kpi_table.html"
+    ).render(columns=columns, rows=rows)
+
+    for expected in ("Tunde Agent", "Confirmed", "Paid", "Fulfilled", "Cancelled"):
+        assert expected in html
+    for expected in (">4<", ">3<", ">2<", ">1<"):
+        assert expected in html
+
+
 def test_crm_report_projection_is_registered_with_a_valid_contract():
     assert registry_validation_errors() == ()

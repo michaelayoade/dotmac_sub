@@ -13,9 +13,9 @@ conventions applied — table names drop the ``crm_`` prefix:
 * Quote and SalesOrder customer FKs re-point at ``subscribers.id``. Revision
   345 makes Lead Party-first: ``party_id`` is reviewed identity and nullable
   ``subscriber_id`` is later account context.
-* Staff FKs are dropped, UUIDs carried verbatim:
-  ``quotes.owner_person_id`` (staff map for display) and the not-yet-native
-  ``owner_agent_id`` columns on leads/sales orders (→ ``crm_agents``).
+* Staff FKs are dropped. ``quotes.owner_person_id`` retains CRM staff-person
+  provenance; lead and SalesOrder ``owner_agent_id`` values are native
+  ``SystemUser.id`` identities, with CRM agent IDs translated during import.
 * ``leads.campaign_id``/``campaign_recipient_id`` project only native Sub
   campaign origins. External provider IDs live in immutable structured origin
   capture; revision 355 materializes deferred campaign FKs.

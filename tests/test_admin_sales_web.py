@@ -915,6 +915,107 @@ def test_sales_order_detail_context(db_session):
     assert context["project"] is None
 
 
+def test_sales_orders_resolve_historical_agent_name_and_email(db_session):
+    subscriber = _make_subscriber(db_session)
+    agent = SystemUser(
+        first_name="Chinelo",
+        last_name="Okoro",
+        display_name="Chinelo Okoro",
+        email="c.okoro@dotmac.ng",
+        is_active=False,
+    )
+    db_session.add(agent)
+    db_session.flush()
+    order = _make_sales_order(db_session, subscriber, owner_agent_id=agent.id)
+
+    context = web_sales.build_sales_orders_list_context(
+        db_session,
+        search=order.order_number,
+        status=None,
+        payment_status=None,
+        source_type=None,
+        page=1,
+        per_page=25,
+    )
+
+    assert context["agent_map"][str(agent.id)] == {
+        "id": str(agent.id),
+        "name": "Chinelo Okoro",
+        "email": "c.okoro@dotmac.ng",
+    }
+    assert context["agent_performance"][0]["name"] == "Chinelo Okoro"
+    assert context["agent_performance"][0]["email"] == "c.okoro@dotmac.ng"
+
+    detail = web_sales.build_sales_order_detail_context(
+        db_session, sales_order_id=str(order.id)
+    )
+    assert detail["agent"]["name"] == "Chinelo Okoro"
+
+
+def test_sales_orders_do_not_expose_unresolved_agent_uuid(db_session):
+    subscriber = _make_subscriber(db_session)
+    unknown_agent_id = uuid.uuid4()
+    order = _make_sales_order(db_session, subscriber, owner_agent_id=unknown_agent_id)
+
+    context = web_sales.build_sales_orders_list_context(
+        db_session,
+        search=order.order_number,
+        status=None,
+        payment_status=None,
+        source_type=None,
+        page=1,
+        per_page=25,
+    )
+
+    assert context["agent_performance"][0]["name"] == "Unknown agent"
+    assert str(unknown_agent_id)[:8] not in str(context["agent_performance"])
+
+
+def test_sales_orders_agent_summary_has_compact_expandable_mobile_contract():
+    template = Path("templates/admin/sales/sales_orders/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'x-data="{ agentsExpanded: false }"' in template
+    assert "data-agent-search" in template
+    assert "data-agent-row" in template
+    assert "data-agent-search-text" in template
+    assert "data-agent-desktop-toggle" in template
+    assert "matches.slice(0, agentsExpanded ? matches.length : 10)" in template
+    assert "Show all agents (${matches.length})" in template
+    assert 'class="hidden overflow-x-auto sm:block"' in template
+    assert "data-mobile-agent-list" in template
+    assert "data-mobile-agent-card" in template
+    assert "agentsExpanded || {{ loop.index0 }} < 5" in template
+    assert "data-mobile-agent-toggle" in template
+    assert "Show all agents ({{ agent_performance|length }})" in template
+    assert "Show fewer agents" in template
+    assert "x-collapse.duration.300ms" in template
+    assert "data-agent-table-wrap" in template
+    assert "cubic-bezier(0.16, 1, 0.3, 1)" in template
+
+
+def test_sales_orders_table_uses_compact_disclosed_layout():
+    template = Path("templates/admin/sales/sales_orders/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'x-data="{ ordersExpanded: false }"' in template
+    assert 'class="w-full min-w-[760px] text-sm"' in template
+    assert "min-w-[1250px]" not in template
+    assert "Customer & Agent" in template
+    assert "'Financials'" in template
+    assert "data-compact-order-row" in template
+    assert "ordersExpanded || {{ loop.index0 }} < 10" in template
+    assert "data-orders-toggle" in template
+    assert "Show all orders ({{ orders|length }})" in template
+    assert "Show fewer orders" in template
+    assert ">Order status</p>" in template
+    assert ">Payment status</p>" in template
+    assert 'x-transition:enter="transition ease-out duration-300"' in template
+    assert "prefers-reduced-motion: reduce" in template
+
+
 def test_sales_agent_options_use_active_customer_experience_system_users(db_session):
     role = Role(name=f"Customer-Experience-{uuid.uuid4().hex[:6]}", is_active=True)
     # Normalize the test role to the supported mapped spelling after making its
