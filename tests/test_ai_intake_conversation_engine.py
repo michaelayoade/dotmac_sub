@@ -140,11 +140,18 @@ def _classification(
     )
 
 
-def test_identified_subscriber_does_not_request_portal_id(db_session):
+def test_identified_subscriber_does_not_request_portal_id(db_session, monkeypatch):
     subscriber = _subscriber(db_session)
     conversation = _conversation(db_session, subscriber_id=subscriber.id)
     version = _version(db_session)
     session = _session(db_session, conversation, version)
+    monkeypatch.setattr(
+        engine.support_monitoring,
+        "project_support_monitoring",
+        lambda *_args: support_monitoring.SupportMonitoringProjection(
+            support_monitoring.SupportMonitoringStatus.no_data
+        ),
+    )
 
     decision = engine.run_conversational_turn(
         db_session,
@@ -335,7 +342,7 @@ def test_monitoring_projection_preserves_owner_provenance(db_session, monkeypatc
     }
     assert result["ont_observations"] == [
         {
-            "source": "network.ont_status",
+            "source": "network.ont_runtime_status",
             "reference": "ont-1",
             "serial_number": "SERIAL-1",
             "effective_state": "offline",

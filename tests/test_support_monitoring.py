@@ -32,7 +32,7 @@ def test_support_monitoring_keeps_radius_and_ont_provenance_separate(monkeypatch
     assert result.status is support_monitoring.SupportMonitoringStatus.available
     assert result.radius is not None
     assert result.radius.source == "network.radius_sessions"
-    assert result.onts[0].source == "network.ont_status"
+    assert result.onts[0].source == "network.ont_runtime_status"
     assert result.onts[0].effective_state == "offline"
 
 

@@ -593,7 +593,7 @@ def _simulated_tool_result(key: str, inputs: dict[str, object]) -> dict[str, obj
             },
             "ont_observations": [
                 {
-                    "source": "network.ont_status",
+                    "source": "network.ont_runtime_status",
                     "reference": "preview-ont",
                     "serial_number": None,
                     "effective_state": "offline",

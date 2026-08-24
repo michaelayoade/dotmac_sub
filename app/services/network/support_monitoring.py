@@ -1,4 +1,4 @@
-"""Support-safe RADIUS observation projection owned by the network domain."""
+"""Support-safe RADIUS and ONT observation projection owned by the network domain."""
 
 from __future__ import annotations
 
@@ -37,12 +37,12 @@ class RadiusObservation:
 
 @dataclass(frozen=True, slots=True)
 class OntObservation:
-    """Effective ONT state, kept separate from RADIUS evidence."""
+    """Effective ONT state derived from the authoritative runtime owner."""
 
     reference: str
     serial_number: str | None
     effective_state: str | None
-    source: str = "network.ont_status"
+    source: str = "network.ont_runtime_status"
 
 
 @dataclass(frozen=True, slots=True)
