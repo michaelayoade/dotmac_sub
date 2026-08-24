@@ -43,6 +43,12 @@ The on-screen complaints table uses the canonical typed list contract and shows
 screen: workbook exports and weekly delivery continue to use the complete
 bounded report snapshot.
 
+The XLSX artifact follows the NCC validated Excel workbook template: hidden
+`Lookups` sheet, visible `Data Entry` sheet, official required-field headers,
+named lookup ranges, and row-4-to-end validation ranges. The screen keeps the
+internal readable column labels, then projects rows to the template headers for
+on-demand export and weekly email attachment generation.
+
 The complaints resolver excludes tickets carrying a source approved by the
 support owner as internal operational work. It does not use missing customer or
 classification data as an exclusion shortcut: incomplete customer complaints
