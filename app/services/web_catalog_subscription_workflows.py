@@ -1086,7 +1086,6 @@ def _scheduled_status_change_context(
     db: Session,
     subscription_id: str,
 ) -> list[dict[str, object]]:
-
     from app.models.subscription_lifecycle_schedule import (
         SubscriptionLifecycleSchedule,
         SubscriptionLifecycleScheduleStatus,

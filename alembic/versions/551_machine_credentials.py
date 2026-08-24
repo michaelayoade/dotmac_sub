@@ -47,8 +47,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "552_machine_credentials"
-down_revision = "551_cancel_merged_ticket_sources"
+revision = "551_machine_credentials"
+down_revision = "550_integrator_provider_ref"
 branch_labels = None
 depends_on = None
 

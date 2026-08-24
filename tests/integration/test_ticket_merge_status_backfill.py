@@ -23,7 +23,7 @@ from app.models.support import (
 from app.services import support_ticket_settings
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "alembic/versions/551_cancel_merged_ticket_sources.py"
+MIGRATION = ROOT / "alembic/versions/552_cancel_merged_ticket_sources.py"
 
 
 def _load_migration() -> ModuleType:

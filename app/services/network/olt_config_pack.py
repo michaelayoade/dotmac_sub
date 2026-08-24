@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy.orm import Session
 
@@ -242,11 +242,16 @@ def resolve_standard_olt_config_pack_profile(
         return None
 
     try:
+        from app.models.network import OLTDevice
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
         )
 
-        command_profile_name = get_huawei_command_profile(olt).name
+        # ``olt`` is accepted as ``object`` so callers may pass duck-typed
+        # stand-ins (see tests/test_olt_standard_config_pack_resolution.py);
+        # get_huawei_command_profile only reads attributes via getattr, so
+        # this cast is safe for any object shaped like an OLTDevice.
+        command_profile_name = get_huawei_command_profile(cast(OLTDevice, olt)).name
     except Exception:
         logger.exception(
             "Failed to resolve Huawei command profile while selecting config pack"

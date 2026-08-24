@@ -153,14 +153,14 @@ def _claims(
 
 def _form_contract_state(state: PrepaidCoverageInvoiceDetailState) -> dict[str, object]:
     return PREPAID_COVERAGE_RECONCILIATION_FORM.state(
-        (
+        [
             FormPrerequisite(
                 key="exact_paid_invoice_evidence",
                 label="The owner found exact paid invoice evidence for every selected subscription",
                 met=state.actionable,
                 reason=None if state.actionable else state.reason,
             ),
-        )
+        ]
     )
 
 
