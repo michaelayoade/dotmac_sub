@@ -24,8 +24,11 @@
         (target.matches("input, textarea, select, [contenteditable='true']") ||
           target.closest("[contenteditable='true']")),
     );
-  const csrfToken = () =>
-    document.querySelector('meta[name="csrf-token"]')?.content || "";
+  const csrfToken = () => {
+    const cookie = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    if (cookie?.[1]) return decodeURIComponent(cookie[1]);
+    return document.querySelector('meta[name="csrf-token"]')?.content || "";
+  };
   const fetchWithTimeout = async (url, options = {}, timeoutMs = 15000) => {
     const controller = new AbortController();
     const upstreamSignal = options.signal;
