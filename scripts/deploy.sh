@@ -150,11 +150,21 @@ log() { printf '\n==> %s\n' "$*"; }
 wait_for_health() {
   local url="$1"
   local label="$2"
+  local watched_container="${3:-}"
   local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+  local state
   while true; do
     if curl -fsS --connect-timeout "${HEALTH_CURL_TIMEOUT}" \
       --max-time "${HEALTH_CURL_TIMEOUT}" -o /dev/null "${url}" 2>/dev/null; then
       return 0
+    fi
+    if [[ -n "${watched_container}" ]]; then
+      state="$(docker inspect "${watched_container}" \
+        --format '{{.State.Status}}' 2>/dev/null || true)"
+      if [[ "${state}" != "running" ]]; then
+        echo "${label} stopped before becoming healthy: ${state:-unavailable}" >&2
+        return 1
+      fi
     fi
     if ((SECONDS >= deadline)); then
       echo "${label} health gate failed: ${url}" >&2
@@ -178,7 +188,8 @@ report_candidate_failure() {
 }
 
 require_candidate_health() {
-  if wait_for_health "${CANDIDATE_HEALTH_URL}" "Warm candidate"; then
+  if wait_for_health \
+    "${CANDIDATE_HEALTH_URL}" "Warm candidate" "${CANDIDATE_CONTAINER}"; then
     return 0
   fi
   # Capture bounded diagnostics before the ERR trap removes the failed
@@ -808,7 +819,9 @@ log "Verifying CRM ticket capability readiness"
 
 log "Starting warm candidate on 127.0.0.1:${CANDIDATE_PORT}"
 docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
-"${COMPOSE[@]}" run --rm --no-deps -d \
+# Do not use `--rm`: an early process exit must leave its state and bounded log
+# stream available to `report_candidate_failure` before rollback cleanup.
+"${COMPOSE[@]}" run --no-deps -d \
   --name "${CANDIDATE_CONTAINER}" \
   -p "127.0.0.1:${CANDIDATE_PORT}:8001" \
   app >/dev/null

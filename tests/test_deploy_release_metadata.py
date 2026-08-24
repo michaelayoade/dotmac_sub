@@ -380,10 +380,15 @@ def test_deploy_reports_candidate_before_health_failure_rollback(
     assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_text
     assert "GIT_SHA=old0000000000000000000000000000000000000" in env_text
     commands = docker_log.read_text().splitlines()
+    candidate_command = next(
+        command for command in commands if "127.0.0.1:18001:8001" in command
+    )
     diagnostic_logs = commands.index("logs --tail 200 dotmac_sub_app_candidate")
     rollback_cleanup = commands.index(
         "rm -f dotmac_sub_app_candidate", diagnostic_logs + 1
     )
+    assert "run --no-deps -d" in candidate_command
+    assert "run --rm --no-deps -d" not in candidate_command
     assert diagnostic_logs < rollback_cleanup
 
 
@@ -419,11 +424,14 @@ def test_deploy_verifies_schema_then_warms_candidate_before_recreate(
         for index, command in enumerate(commands)
         if "127.0.0.1:18001:8001" in command
     )
+    candidate_command = commands[candidate]
     recreate = next(
         index for index, command in enumerate(commands) if " up -d app" in command
     )
 
     assert migration < verification < manifest_pins < crm_ticket < candidate < recreate
+    assert "run --no-deps -d" in candidate_command
+    assert "run --rm --no-deps -d" not in candidate_command
 
 
 def test_deploy_rejects_unavailable_manifest_pin_before_candidate(
