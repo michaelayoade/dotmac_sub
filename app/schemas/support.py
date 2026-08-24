@@ -19,6 +19,7 @@ from app.models.support import (
     TicketPriority,
     TicketStatus,
     canonical_ticket_status_value,
+    ticket_status_display_value,
 )
 from app.schemas.portal import CustomerSelfCareAction
 from app.schemas.status_presentation import StatusPresentation
@@ -218,7 +219,14 @@ class TicketRead(BaseModel):
         """Canonical label/tone/icon projection for ticket rendering."""
         from app.services.status_presentation import ticket_status_presentation
 
-        return ticket_status_presentation(self.status)
+        return ticket_status_presentation(self.display_status)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def display_status(self) -> str:
+        """Return ``merged`` only as a relation-backed presentation value."""
+
+        return ticket_status_display_value(self.status, self.merged_into_ticket_id)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

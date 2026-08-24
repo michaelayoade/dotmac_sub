@@ -44,7 +44,7 @@
                     {% if unavailable_status_filter %}
                     <option value="{{ unavailable_status_filter.value }}" selected hidden>{{ unavailable_status_filter.label }} (not selectable)</option>
                     {% endif %}
-                    {% for s in all_statuses %}
+                    {% for s in filter_statuses %}
                     <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
                     {% endfor %}
                 </select>

@@ -47,6 +47,19 @@ Migration 517 repairs matching Ticket rows plus exact status fields in operator
 configuration and automation JSON; it does not rewrite Ticket timestamps,
 timeline records, tags, comments, attachments, metadata, or audit history.
 
+Merge is not a Ticket lifecycle status. Merging source A into target B stores A
+as canonical `canceled` and records B in A's `merged_into_ticket_id`; that
+relation makes A immutable and projects the user-facing `Merged` label and
+target link. An ordinary canceled Ticket has no merge relation and continues to
+display `Canceled`. The merge command moves the existing merge-owned timeline,
+assignment, attachment, and link information to B and records system timeline
+evidence on both sides. Migration 551 backfills exact legacy `merged` rows to
+`canceled`, repairs a missing relation from existing `TicketMerge` evidence
+where possible, rebinds already-moved private attachments to the target and
+clears their source metadata, removes the retired configured choice, and
+disables automation rules that would otherwise reinterpret merge as ordinary
+cancellation.
+
 `support.ticket_configuration` owns operator-managed status choices,
 priorities, types, routing inputs, service-team membership configuration, and
 priority/type SLA targets. It may only expose statuses from the ticket
@@ -67,6 +80,10 @@ and may preserve that unchanged value while another field is edited; the UI
 presents it as a non-selectable current value. Canceled tickets are returned
 only by the exact `canceled` list filter. Default and `not_closed` list scopes
 exclude canonical `canceled`; `not_closed` also excludes canonical `closed`.
+The admin ticket-list quick statuses are All, Open, Closed, and Not closed; the
+basic status select also omits Canceled. Exact `canceled` URLs remain supported
+for audit and reconciliation, so relation-backed merged sources remain in that
+scope and never reappear as active work.
 
 Regional routing configuration is replaced through the typed
 `TicketConfigurationUpdate` command. Region keys are normalized to lowercase.
@@ -283,6 +300,11 @@ procedure is `docs/runbooks/SUPPORT_TICKET_COMMENT_ATTACHMENT_RECONCILIATION.md`
 Migration 517 is also the idempotent drift repair for the retired `resolved`
 status: rerunning it updates only exact legacy status values that reappeared and
 leaves canonical `closed` rows untouched.
+
+Migration 551 is the idempotent drift repair for the retired stored `merged`
+status. Rerunning it repairs only exact legacy rows, their attachment ownership,
+and configuration references; it never changes ordinary canceled Tickets or
+invents a merge target without existing `TicketMerge` evidence.
 
 ## Staff Talk consequences
 

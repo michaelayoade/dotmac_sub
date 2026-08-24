@@ -9,7 +9,7 @@
     {% if ticket.merged_into_ticket_id %}
     <div class="rounded-2xl border border-amber-200 bg-amber-50/90 p-4 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-100">
         This ticket has been merged into
-        <a href="/admin/support/tickets/{{ ticket.merged_into_ticket_id }}" class="font-semibold underline">{{ ticket.merged_into_ticket_id }}</a>.
+        <a href="/admin/support/tickets/{{ ticket.merged_into_ticket_id }}" class="font-semibold underline">{{ merged_into_ticket.number or merged_into_ticket.id if merged_into_ticket else ticket.merged_into_ticket_id }}</a>.
     </div>
     {% endif %}
     {% if handoff_notice %}
@@ -24,7 +24,7 @@
         color='amber',
         color2='orange',
         back_href='/admin/support/tickets',
-        status=ticket_status_badge(status_presentations.get(ticket.status))
+        status=ticket_status_badge(status_presentations.get(ticket.display_status))
     ) %}
         {{ ticket_priority_badge(ticket.priority) }}
         {% if can(request, 'support:ticket:update') and can(request, 'operations:dispatch:write') %}
@@ -353,7 +353,7 @@
             {% endcall %}
 
             {% call support_card(title='Merge Ticket', subtitle='Merge this ticket into a canonical ticket.') %}
-            <form method="post" action="/admin/support/tickets/{{ ticket.id }}/merge" class="space-y-2" onsubmit="return confirm('Merge this ticket into the target ticket? Comments, attachments, and links will move, and this source ticket will be closed as merged.')">
+            <form method="post" action="/admin/support/tickets/{{ ticket.id }}/merge" class="space-y-2" onsubmit="return confirm('Merge this ticket into the target ticket? Comments, attachments, and links will move, and this source ticket will be canceled and linked to the target.')">
                 <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
                 <input name="target_ticket_id" placeholder="Target ticket UUID" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <textarea name="reason" rows="2" placeholder="Reason for merge" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
