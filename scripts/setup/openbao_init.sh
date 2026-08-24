@@ -217,9 +217,10 @@ seed_group settings/auth \
     "jwt_secret=${JWT_SECRET:-}" \
     "totp_encryption_key=${TOTP_ENCRYPTION_KEY:-}"
 
-# Machine-credential verification (`dotmac_kernel.machine_auth`). Patched onto
-# the same path as the group above — `kv patch` merges fields, so the two calls
-# do not overwrite one another.
+# Machine-credential verification (`dotmac_kernel.machine_auth`). Its dedicated
+# path is part of the optionality contract: the application recognizes a
+# missing path as "not provisioned", while a missing field on the required
+# settings/auth path is configuration drift and correctly fails boot.
 #
 # Optional while the legacy `api_keys` verifier is still the fallback: a
 # deployment that has minted no machine credential has nothing to provision, and
@@ -229,7 +230,7 @@ seed_group settings/auth \
 # Generate with `openssl rand -hex 32`. It is NOT derived from
 # CREDENTIAL_ENCRYPTION_KEY: rotating connector encryption must not invalidate
 # every machine credential at the same instant.
-seed_optional_group settings/auth \
+seed_optional_group settings/machine_auth \
     "MACHINE_CREDENTIAL_HMAC_KEY" \
     "machine_credential_hmac_key=${MACHINE_CREDENTIAL_HMAC_KEY:-}"
 

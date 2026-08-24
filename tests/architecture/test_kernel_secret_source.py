@@ -104,6 +104,25 @@ def test_no_name_is_both_required_and_optional() -> None:
     assert not set(kss.SECRET_REFS) & set(kss.OPTIONAL_SECRET_REFS)
 
 
+def test_optional_secrets_do_not_share_required_paths() -> None:
+    """Optional means the entire secret path may be absent.
+
+    `resolve_openbao_ref_optional` deliberately returns ``None`` only for a
+    missing path. A missing field on an existing required path is treated as
+    drift and raises, so co-locating optional material there would turn a
+    legitimate unprovisioned feature into an application-wide boot failure.
+    """
+
+    required_paths = {
+        reference.rsplit("#", 1)[0] for reference in kss.SECRET_REFS.values()
+    }
+    optional_paths = {
+        reference.rsplit("#", 1)[0] for reference in kss.OPTIONAL_SECRET_REFS.values()
+    }
+
+    assert required_paths.isdisjoint(optional_paths)
+
+
 @pytest.fixture
 def stub_openbao(monkeypatch):
     """Both readers stubbed. The optional set uses `_optional`, which returns
