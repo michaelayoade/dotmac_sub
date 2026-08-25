@@ -374,6 +374,14 @@ consumed by shadow-composed commercial modules but installs no worker, route,
 webhook or runtime module import. Existing Sub delivery paths do not enqueue
 into or drain the new tables, so no event or money authority moves here.
 
+Revisions 556 and 557 deliberately add four names to the executable
+kernel-lineage collision inventory: `idempotency_records`,
+`platform_idempotency_records`, `outbox_events`, and
+`platform_outbox_events`. They are verified kernel storage providers whose
+disposition is STAMP, not competing business authorities. The reviewed current
+head inventory therefore grows from ten names to fourteen; the rehearsal
+ratchet records that classification explicitly.
+
 ## Amendment — 2026-08-25: Subscriptions tenant storage is shadow-composed
 
 Sub now exact-pins tagged `dotmac-subscriptions==0.1.0a3` artifacts and its

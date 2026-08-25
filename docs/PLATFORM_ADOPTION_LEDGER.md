@@ -130,6 +130,13 @@ and Collections now consume the effect in their tenant-only shadow composition,
 but cannot move authority until their backfill, parity and sealed cutover gates
 pass.
 
+The two provider revisions intentionally add four kernel-identical names to
+Sub's lineage-head collision inventory: `idempotency_records`,
+`platform_idempotency_records`, `outbox_events`, and
+`platform_outbox_events`. Each is classified STAMP because Sub hosts and
+verifies the kernel contract; none represents a second business authority. The
+executable current-head ratchet consequently contains fourteen names.
+
 **2026-08-25 — `dotmac-subscriptions==0.1.0a3` tenant storage composed,
 shadow only.** Sub exact-pins the tagged Subscriptions a3 artifacts recorded in
 the Poetry lock and its required `dotmac-kernel==0.1.0a94`. The annotated

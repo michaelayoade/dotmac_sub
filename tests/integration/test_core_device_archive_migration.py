@@ -113,7 +113,7 @@ def _assert_candidate_contract(url: URL) -> None:
 def test_fresh_head_has_core_device_archive_contract(
     migrated_database: URL,
 ) -> None:
-    _alembic("head")
+    _alembic("heads")
     _assert_candidate_contract(migrated_database)
 
 

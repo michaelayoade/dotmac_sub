@@ -198,7 +198,7 @@ def _seed_subscription(url: URL) -> uuid.UUID:
 def test_head_has_the_authority_columns_constraints_and_trigger(
     engine, migrated_database
 ):
-    _alembic("head")
+    _alembic("heads")
 
     required = {
         "ck_subscription_lifecycle_events_evidence_grade",
@@ -286,7 +286,7 @@ def test_incremental_upgrade_preserves_legacy_rows_and_appends_one_baseline(
 
 
 def test_raw_insert_defaults_to_unsupported_observation(engine, migrated_database):
-    _alembic("head")
+    _alembic("heads")
     subscription_id = _seed_subscription(migrated_database)
     evidence_id = uuid.uuid4()
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
@@ -306,7 +306,7 @@ def test_raw_insert_defaults_to_unsupported_observation(engine, migrated_databas
 
 
 def test_database_rejects_an_incomplete_trusted_claim(engine, migrated_database):
-    _alembic("head")
+    _alembic("heads")
     subscription_id = _seed_subscription(migrated_database)
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
@@ -328,7 +328,7 @@ def test_database_rejects_an_incomplete_trusted_claim(engine, migrated_database)
 def test_subscription_identity_cannot_be_deleted_behind_retained_evidence(
     engine, migrated_database
 ):
-    _alembic("head")
+    _alembic("heads")
     subscription_id = _seed_subscription(migrated_database)
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         conn.execute(
