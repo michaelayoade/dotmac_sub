@@ -35,6 +35,21 @@ At delivery time the worker:
 The generated document is therefore the same branded/template-backed PDF used
 by admin and customer portal downloads.
 
+## PDF payment action
+
+Current invoice renders present one **Pay with Paystack** action and do not
+print bank-transfer account details. The action links to the public,
+invoice-scoped checkout hand-off at `/pay/invoices/{invoice_id}`. Opening the
+link rechecks that the invoice remains payable, creates a fresh Paystack
+checkout intent for its current balance, and redirects directly to Paystack;
+the customer does not need to sign in to the portal. The PDF stores only the
+stable Dotmac hand-off URL, never an expiring provider authorization URL. The
+normal signed webhook/reconciliation path remains the settlement authority.
+
+Changing the invoice template freshness marker invalidates cached exports so
+new downloads and invoice email attachments do not retain the retired bank
+details.
+
 ## Failure and retry
 
 A missing, invalid, stale/unavailable, oversized, or account-mismatched PDF is a
