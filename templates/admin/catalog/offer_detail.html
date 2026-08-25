@@ -4,6 +4,7 @@
 {% block title %}{{ offer.name }} - Tariffs - Admin{% endblock %}
 
 {% block content %}
+{% set offer_status = offer.status.value if offer.status is not string else offer.status %}
 <div class="space-y-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -40,6 +41,19 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                 Edit
             </a>
+            {% if can(request, "catalog:write") and can(request, "catalog:billing_write") %}
+            {% if offer_status == "archived" %}
+            <form method="post" action="/admin/catalog/offers/{{ offer.id }}/restore" data-confirm="Restore this tariff for new selections?" data-confirm-variant="warning" data-confirm-label="Restore tariff">
+                {% include "components/forms/csrf_input.html" %}
+                <button class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:bg-slate-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20">Restore</button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/catalog/offers/{{ offer.id }}/archive" data-confirm="Archive this tariff? Existing subscriptions are unaffected; it will be hidden from new selections." data-confirm-variant="warning" data-confirm-label="Archive tariff">
+                {% include "components/forms/csrf_input.html" %}
+                <button class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:bg-slate-800 dark:text-amber-300 dark:hover:bg-amber-900/20">Archive</button>
+            </form>
+            {% endif %}
+            {% endif %}
         </div>
     </div>
 
