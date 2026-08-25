@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -527,6 +527,19 @@ def list_handoff_queue(
         .limit(limit)
     ).all()
     return [_queue_item(handoff) for handoff in handoffs]
+
+
+def count_handoff_queue(db: Session) -> dict[str, int]:
+    counts = {status.value: 0 for status in CustomerExperienceHandoffStatus}
+    rows = db.execute(
+        select(CustomerExperienceHandoff.status, func.count())
+        .select_from(CustomerExperienceHandoff)
+        .group_by(CustomerExperienceHandoff.status)
+    ).all()
+    for status, count in rows:
+        counts[str(status)] = int(count or 0)
+    counts["all"] = sum(counts.values())
+    return counts
 
 
 # --- receipted lifecycle-output consumption --------------------------------

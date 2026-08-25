@@ -184,6 +184,9 @@ def test_verified_implementation_to_provisioning_to_cx_acceptance(
     assert queue[0].subscription_status == SubscriptionStatus.active.value
     assert queue[0].service_order_status == ServiceOrderStatus.active.value
     assert queue[0].next_action == "accept_or_needs_attention"
+    queue_counts = customer_experience_handoffs.count_handoff_queue(db_session)
+    assert queue_counts[CustomerExperienceHandoffStatus.ready.value] == 1
+    assert queue_counts["all"] == 1
 
     customer_experience_handoffs.accept_handoff(
         db_session,

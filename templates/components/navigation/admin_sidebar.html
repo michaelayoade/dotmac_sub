@@ -211,6 +211,9 @@
     {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
     {{ nav_link("Workqueue", "/admin/workqueue", icon_workqueue, "agent-workqueue") }}
     {{ nav_link("Inbox", "/admin/inbox", icon_inbox, "team-inbox") }}
+    {% if can(request, "customer_experience:handoff:read") %}
+    {{ nav_link("CX Handoffs", "/admin/customer-experience/handoffs", icon_support, "customer-experience-handoffs") }}
+    {% endif %}
     {{ nav_link("Surveys", "/admin/surveys", icon_reports, "surveys") }}
     {{ nav_link("Sales", "/admin/sales", icon_sales, "sales") }}
     {{ nav_link("Service Requests", "/admin/service-requests", icon_provisioning, "service-requests") }}
