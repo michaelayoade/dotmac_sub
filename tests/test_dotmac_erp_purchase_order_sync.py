@@ -8,7 +8,7 @@ prod — tests set ``sync_flow_ownership.purchase_order = sub`` in-test only. Th
 default (crm) path is asserted to send nothing (the inert guarantee).
 
 Anchor = installation project / accepted quote (design doc 32 §D): the idempotency
-key is ``po-ip-{install.id}`` and ``omni_work_order_id`` carries the install UUID.
+key is ``po-ip-{install.id}`` and ``source_work_order_id`` carries the install UUID.
 """
 
 from __future__ import annotations
@@ -176,8 +176,8 @@ def test_payload_built_from_accepted_quote(db_session):
     payload = purchase_order_sync.build_purchase_order_payload(install)
 
     # Anchored on the installation project (design doc 32 §D).
-    assert payload["omni_work_order_id"] == str(install.id)
-    assert payload["omni_quote_id"] == str(install.approved_quote_id)
+    assert payload["source_work_order_id"] == str(install.id)
+    assert payload["source_quote_id"] == str(install.approved_quote_id)
 
     # Vendor identity from the native Vendor on the accepted quote.
     assert payload["vendor_erp_id"] == "SUP-001"
@@ -191,7 +191,7 @@ def test_payload_built_from_accepted_quote(db_session):
     assert payload["total"] == "268750.00"
 
     # Project context via installation_project.project.
-    assert payload["omni_project_id"] == str(install.project_id)
+    assert payload["source_project_id"] == str(install.project_id)
     assert payload["project_code"] == "PRJ-42"
     assert payload["project_name"] == "Fiber install — Ngozi"
     assert payload["title"] == "Fiber install — Ngozi"
@@ -266,7 +266,7 @@ def test_enqueue_writes_one_outbox_row(db_session):
     assert row.entity_type == "installation_project"
     assert row.idempotency_key == f"po-ip-{install.id}"
     assert row.status == FieldErpSyncStatus.pending.value
-    assert row.payload["omni_work_order_id"] == str(install.id)
+    assert row.payload["source_work_order_id"] == str(install.id)
     assert len(_outbox_rows(db_session, install)) == 1
 
 
@@ -301,7 +301,7 @@ def test_delivery_writes_erp_po_id_back(db_session):
                 "purchase_order_id": "PO-ERP-1",
                 "po_id": str(uuid4()),
                 "status": "draft",
-                "omni_work_order_id": str(install.id),
+                "source_work_order_id": str(install.id),
             }
         ]
     )
