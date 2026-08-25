@@ -64,6 +64,7 @@
    - selectable: Show row checkboxes (default: false)
    - column_picker: Show column toggle dropdown (default: true)
    - show_count: Show total count badge (default: true)
+   - compact: Reduce table cell padding for dense operational lists (default: false)
 #}
 
 {% from "components/ui/macros.html" import status_badge %}
@@ -99,7 +100,8 @@
     current_dir="desc",
     selectable=false,
     column_picker=true,
-    show_count=true
+    show_count=true,
+    compact=false
 ) %}
 {# Compute default visible columns #}
 {% set ns = namespace(visible=[]) %}
@@ -232,7 +234,7 @@
                         {% for col in columns %}
                         <th x-show="visibleCols.includes('{{ col.key }}')"
                             scope="col"
-                            class="px-5 py-3.5 text-{{ col.get('align', 'left') }} text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 {{ col.get('class', '') }}">
+                            class="{{ 'px-3 py-3' if compact else 'px-5 py-3.5' }} text-{{ col.get('align', 'left') }} text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 {{ col.get('class', '') }}">
                             {% if col.get("sortable", false) and htmx_url %}
                             <button class="group inline-flex items-center gap-1.5 transition-colors hover:text-slate-700 dark:hover:text-slate-200"
                                     hx-get="{{ htmx_url }}?sort={{ col.key }}&dir={{ 'desc' if current_sort == col.key and current_dir == 'asc' else 'asc' }}"
@@ -385,18 +387,18 @@
 
 
 {# ── Plain text cell ── #}
-{% macro cell(col, value="", class="") %}
+{% macro cell(col, value="", class="", compact=false) %}
 <td x-show="visibleCols.includes('{{ col }}')"
-    class="whitespace-nowrap px-5 py-4 {{ class }}">
+    class="whitespace-nowrap {{ 'px-3 py-3' if compact else 'px-5 py-4' }} {{ class }}">
     <span class="text-sm text-slate-900 dark:text-white">{{ value if value is not none and value != "" else "—" }}</span>
 </td>
 {% endmacro %}
 
 
 {# ── Linked text with optional secondary line ── #}
-{% macro cell_link(col, label, href, secondary="", color="slate") %}
+{% macro cell_link(col, label, href, secondary="", color="slate", compact=false) %}
 <td x-show="visibleCols.includes('{{ col }}')"
-    class="whitespace-nowrap px-5 py-4">
+    class="whitespace-nowrap {{ 'px-3 py-3' if compact else 'px-5 py-4' }}">
     <div class="min-w-0">
         <a href="{{ href }}" class="group/link inline-flex items-center gap-1.5">
             <span class="text-sm font-semibold text-slate-900 transition-colors group-hover/link:text-{{ color }}-600 dark:text-white dark:group-hover/link:text-{{ color }}-400">
@@ -415,16 +417,16 @@
 
 
 {# ── Status badge (uses the global status_badge macro) ── #}
-{% macro cell_status(col, label, variant="default") %}
+{% macro cell_status(col, label, variant="default", compact=false) %}
 <td x-show="visibleCols.includes('{{ col }}')"
-    class="whitespace-nowrap px-5 py-4">
+    class="whitespace-nowrap {{ 'px-3 py-3' if compact else 'px-5 py-4' }}">
     {{ status_badge(label, variant) }}
 </td>
 {% endmacro %}
 
 
 {# ── Simple colored badge (for type indicators, categories) ── #}
-{% macro cell_badge(col, label, variant="default") %}
+{% macro cell_badge(col, label, variant="default", compact=false) %}
 {% set styles = {
     "info":    "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
     "success": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
@@ -434,7 +436,7 @@
     "default": "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300"
 } %}
 <td x-show="visibleCols.includes('{{ col }}')"
-    class="whitespace-nowrap px-5 py-4">
+    class="whitespace-nowrap {{ 'px-3 py-3' if compact else 'px-5 py-4' }}">
     <span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-medium {{ styles.get(variant, styles['default']) }}">
         {{ label }}
     </span>
@@ -503,9 +505,9 @@
 
 
 {# ── Bandwidth display (ISP-specific: download / upload) ── #}
-{% macro cell_bandwidth(col, download, upload=none) %}
+{% macro cell_bandwidth(col, download, upload=none, compact=false) %}
 <td x-show="visibleCols.includes('{{ col }}')"
-    class="whitespace-nowrap px-5 py-4">
+    class="whitespace-nowrap {{ 'px-3 py-3' if compact else 'px-5 py-4' }}">
     {% if download %}
     <div class="flex items-center gap-1.5 text-sm">
         <svg class="h-3.5 w-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
@@ -576,9 +578,9 @@
        </div>
    {% endcall %}
 #}
-{% macro cell_custom(col, align="left", class="") %}
+{% macro cell_custom(col, align="left", class="", compact=false) %}
 <td x-show="visibleCols.includes('{{ col }}')"
-    class="whitespace-nowrap px-5 py-4 text-{{ align }} {{ class }}">
+    class="whitespace-nowrap {{ 'px-3 py-3' if compact else 'px-5 py-4' }} text-{{ align }} {{ class }}">
     {{ caller() }}
 </td>
 {% endmacro %}

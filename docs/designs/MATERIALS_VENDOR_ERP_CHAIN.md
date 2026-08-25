@@ -75,3 +75,19 @@ best-effort enqueue whose only trace was a metadata breadcrumb.
 - Materials timers deferred: the ERP boundary is covered by durable
   pending deliveries; an "approved but never issued" escalation timer is a
   candidate once an escalation consumer is defined.
+
+## Staff creation page contract
+
+- Audience and job: authorized field-operations staff describe one contextual
+  material need and submit its eligible ERP item lines without issuing stock.
+- Authority: `operations.material_dependencies` owns submission eligibility and
+  state; `operations.material_catalog` owns eligible item and warehouse
+  projections. The route and template only render those owner-provided facts.
+- First viewport: breadcrumb, task-specific title, contextual source, work-order
+  scope, priority, warehouse, fulfillment channel, notes, and requested items.
+- Primary action: one submit action at the end of the form. ERP issuance and
+  technician assignment remain separate owner actions.
+- Responsive projection: the form uses the same centered editor width, label,
+  control, validation, section-divider, and footer-action conventions as other
+  admin editors. Two-column fields and material lines stack without losing
+  context, required-field meaning, or the primary action.
