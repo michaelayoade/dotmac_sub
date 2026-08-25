@@ -1,7 +1,7 @@
 """Add AI Intake canary scenario library and run evidence.
 
-Revision ID: 553_ai_intake_canary_library
-Revises: 552_cancel_merged_ticket_sources
+Revision ID: 554_ai_intake_canary_library
+Revises: 553_invoice_sent_review_email
 Create Date: 2026-08-25
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "553_ai_intake_canary_library"
-down_revision: str | None = "552_cancel_merged_ticket_sources"
+revision: str = "554_ai_intake_canary_library"
+down_revision: str | None = "553_invoice_sent_review_email"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
