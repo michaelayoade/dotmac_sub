@@ -400,6 +400,13 @@ caller cutover.
 | `pagination` | `page, total_pages, total, per_page, base_url, hx_target, color, extra_params` | HTMX-powered pagination |
 | `status_filter_card` | `label, value, icon, href, color, color2, is_active` | Clickable filter card |
 
+The full-featured `components/data/data_grid.html` component accepts
+`compact=true` for dense operational lists. Compact mode reduces header and
+body cell padding while preserving column visibility, sorting, pagination,
+empty-state dimensions, and mobile horizontal overflow as a fallback. Use it
+only when the bounded default columns fit at standard desktop widths; do not
+use density to retain irrelevant columns or duplicate row actions.
+
 ### Buttons & Forms
 
 | Macro | Parameters | Purpose |
@@ -1286,6 +1293,14 @@ full-value payment experience.
 ---
 
 ### Catalog — Offers
+
+The admin catalog list defaults to Tariff, Category, Family, Type, Bandwidth,
+Subscriptions, and Status. Tariff name is the row drill-down, so the list does
+not duplicate view/edit/archive controls in an Actions column. Edit and the
+permission-scoped archive/restore lifecycle actions remain on the tariff detail
+page. At standard desktop widths the bounded defaults use compact grid density
+and fit the work surface without horizontal scrolling; mobile retains overflow
+as a responsive fallback.
 
 #### `GET /admin/catalog/offers`
 **Template:** `admin/catalog/offers/index.html`
