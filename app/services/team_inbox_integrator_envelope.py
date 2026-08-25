@@ -68,6 +68,7 @@ from app.services.team_inbox_observations import (
     InboundMessageObservation,
     InboxProvider,
     RecordProviderObservationCommand,
+    inbound_location_observation,
 )
 
 OWNER = "communications.team_inbox_integrator_envelope"
@@ -233,6 +234,16 @@ def _attachments(
             caption=item.caption,
             file_size=item.file_size,
             download_status=item.download_status,
+            location=(
+                inbound_location_observation(
+                    latitude=item.location.latitude,
+                    longitude=item.location.longitude,
+                    name=item.location.name,
+                    address=item.location.address,
+                )
+                if item.location is not None
+                else None
+            ),
         )
         for item in message.attachments
     )
@@ -250,6 +261,15 @@ def scoped_provider_event_id(
     one for the same upstream event.
     """
 
+    if kind is InboxObservationKind.message and provider_event_id.startswith("wa:msg:"):
+        # The connector/module identity is canonical across batches and
+        # products. Sub translates it into the local identity its incumbent
+        # webhook already writes, so the mirror overlap lands on one row.
+        return f"message:{provider_event_id.removeprefix('wa:msg:')}"
+    if kind is InboxObservationKind.delivery_receipt and provider_event_id.startswith(
+        "wa:status:"
+    ):
+        return f"receipt:{provider_event_id.removeprefix('wa:status:')}"
     prefix = "message" if kind is InboxObservationKind.message else "receipt"
     return f"{prefix}:{provider_event_id}"
 
@@ -284,7 +304,7 @@ def normalize(
         payload: InboundMessageObservation | DeliveryReceiptObservation = (
             InboundMessageObservation(
                 contact_address=message.contact_address,
-                body=message.body,
+                body=message.body or "",
                 contact_name=message.contact_name,
                 subject=message.subject,
                 external_thread_id=message.external_thread_id,

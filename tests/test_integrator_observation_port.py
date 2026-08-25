@@ -28,6 +28,7 @@ from app.models.integration_platform import IntegrationInbox
 from app.models.team_inbox import (
     InboxChannelType,
     InboxMessage,
+    InboxObservationKind,
     InboxProviderObservation,
 )
 from app.services.auth import hash_api_key
@@ -35,6 +36,7 @@ from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_CONNECTOR_KEY,
     INTEGRATOR_RECEIVE_CAPABILITY,
 )
+from app.services.team_inbox_integrator_envelope import scoped_provider_event_id
 from tests.integration_platform_helpers import enable_capability
 
 WRITE_TOKEN = "integrator-write-token"
@@ -76,7 +78,7 @@ def _envelope(*, message: dict | None = None, **overrides) -> dict:
         "contract_version": 1,
         "provider": "meta_cloud_api",
         "provider_account_scope": "1234567890",
-        "provider_event_id": "wamid.TEST0001",
+        "provider_event_id": "wa:msg:wamid.TEST0001",
         "channel": "whatsapp",
         "observed_at": datetime(2026, 8, 16, 9, 0, tzinfo=UTC).isoformat(),
         "payload_fingerprint": _fingerprint(body),
@@ -156,6 +158,13 @@ def _post(client, binding, envelope, *, token=WRITE_TOKEN, path="") -> object:
     return client.post(
         f"/api/v1/integration/observations/{binding.id}{path}",
         json=envelope,
+        headers={"X-Api-Key": token} if token else {},
+    )
+
+
+def _get_descriptor(client, binding, *, token=MIRROR_TOKEN):
+    return client.get(
+        f"/api/v1/integration/observations/{binding.id}/descriptor",
         headers={"X-Api-Key": token} if token else {},
     )
 
@@ -301,7 +310,7 @@ def test_envelope_scope_does_not_change_routing(client, db_session, binding):
         binding,
         _envelope(
             message=other,
-            provider_event_id="wamid.TEST0002",
+            provider_event_id="wa:msg:wamid.TEST0002",
             payload_fingerprint=_fingerprint(other),
             scope={"kind": "inbox", "ref": "a-team-that-must-not-be-chosen"},
         ),
@@ -374,13 +383,156 @@ def test_internal_channels_can_never_be_asserted_by_the_caller(
 
 def test_the_identity_matches_subs_own_receiver_convention(client, db_session, binding):
     # The whole overlap window rests on this: Sub's WhatsApp webhook records
-    # `message:{wamid}`, so the Integrator must too, or one upstream event
-    # becomes two observations at cutover.
+    # `message:{wamid}`. The connector/module carries the canonical
+    # `wa:msg:{wamid}` identity and Sub's adapter translates it into the local
+    # namespace, or one upstream event becomes two observations at cutover.
     assert _post(client, binding, _envelope()).status_code == 200
     observation = db_session.query(InboxProviderObservation).one()
     assert observation.provider == "meta_cloud_api"
     assert observation.provider_event_id == "message:wamid.TEST0001"
     assert observation.provider_account_scope == "1234567890"
+
+
+def test_whatsapp_status_identity_keeps_each_provider_transition_distinct() -> None:
+    assert (
+        scoped_provider_event_id(
+            kind=InboxObservationKind.delivery_receipt,
+            provider_event_id="wa:status:wamid.TEST0001:delivered:1783670500",
+        )
+        == "receipt:wamid.TEST0001:delivered:1783670500"
+    )
+
+
+def test_attachment_only_content_is_presented_by_sub_not_the_transport(
+    client, db_session, binding
+):
+    message = _message_body(
+        body=None,
+        attachments=[
+            {
+                "asset_type": "image",
+                "file_name": None,
+                "mime_type": "image/jpeg",
+                "provider_media_id": "media-1",
+                "source_url": None,
+                "caption": None,
+                "file_size": None,
+                "download_status": None,
+                "location": None,
+            }
+        ],
+    )
+    response = _post(
+        client,
+        binding,
+        _envelope(message=message, payload_fingerprint=_fingerprint(message)),
+    )
+
+    assert response.status_code == 200, response.text
+    observation = db_session.query(InboxProviderObservation).one()
+    assert observation.normalized_payload["body"] == ""
+    assert db_session.query(InboxMessage).one().body == "[Image]"
+
+
+def test_location_only_content_preserves_coordinates_and_is_presented_by_sub(
+    client, db_session, binding
+):
+    message = _message_body(
+        body=None,
+        attachments=[
+            {
+                "asset_type": "location",
+                "file_name": None,
+                "mime_type": None,
+                "provider_media_id": None,
+                "source_url": None,
+                "caption": None,
+                "file_size": None,
+                "download_status": None,
+                "location": {
+                    "latitude": 9.0765,
+                    "longitude": 7.3986,
+                    "name": "Abuja",
+                    "address": "FCT",
+                },
+            }
+        ],
+    )
+    response = _post(
+        client,
+        binding,
+        _envelope(message=message, payload_fingerprint=_fingerprint(message)),
+    )
+
+    assert response.status_code == 200, response.text
+    observation = db_session.query(InboxProviderObservation).one()
+    assert observation.normalized_payload["attachments"][0]["location"] == {
+        "latitude": 9.0765,
+        "longitude": 7.3986,
+        "name": "Abuja",
+        "address": "FCT",
+    }
+    assert db_session.query(InboxMessage).one().body == "[Location]"
+
+
+# Product-owned destination provenance.
+
+
+@pytest.mark.parametrize("token", [MIRROR_TOKEN, WRITE_TOKEN])
+def test_sub_publishes_its_product_port_descriptor(client, binding, token):
+    response = _get_descriptor(client, binding, token=token)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "schema_version": "dotmac.io/product-port-descriptor/v1",
+        "application": "sub",
+        "owner_module": "communications.team_inbox_integrator_envelope",
+        "capability_id": "messaging.receive.v1",
+        "capability_summary": (
+            "Inbound provider message and delivery-state observations"
+        ),
+        "contract_version": 1,
+        "destination_binding_id": str(binding.id),
+        "delivery_path": f"/api/v1/integration/observations/{binding.id}",
+        "mirror_path": f"/api/v1/integration/observations/{binding.id}/mirror",
+        "destination_scope": {"kind": "inbox", "ref": "support"},
+        "activation_state": "enabled",
+        "source_revision": response.json()["source_revision"],
+        "descriptor_digest": response.json()["descriptor_digest"],
+    }
+    assert len(response.json()["source_revision"]) == 64
+    assert len(response.json()["descriptor_digest"]) == 64
+
+
+def test_descriptor_digest_covers_every_published_fact(client, binding):
+    from app.services.integrations.product_port_descriptor import descriptor_digest
+
+    descriptor = _get_descriptor(client, binding).json()
+    asserted = descriptor.pop("descriptor_digest")
+
+    assert descriptor_digest(descriptor) == asserted
+    descriptor["destination_scope"]["ref"] = "sales"
+    assert descriptor_digest(descriptor) != asserted
+
+
+def test_descriptor_bootstraps_before_delivery_is_enabled(client, db_session, binding):
+    binding.state = "disabled"
+    db_session.commit()
+
+    descriptor = _get_descriptor(client, binding)
+    delivery = _post(client, binding, _envelope())
+
+    assert descriptor.status_code == 200, descriptor.text
+    assert descriptor.json()["activation_state"] == "configured_disabled"
+    assert delivery.status_code == 404
+
+
+@pytest.mark.parametrize("token", [None, "not-a-real-key", "unscoped-token"])
+def test_descriptor_refuses_a_caller_without_a_product_port_scope(
+    client, binding, token
+):
+    response = _get_descriptor(client, binding, token=token)
+    assert response.status_code in (401, 403)
 
 
 def test_the_shadow_route_writes_nothing(client, db_session, binding):

@@ -88,6 +88,28 @@ def _attachment_metadata(
     }
 
 
+def _product_message_body(
+    payload: team_inbox_observations.InboundMessageObservation,
+) -> str:
+    """Product-owned presentation for message facts without provider text."""
+
+    if payload.body.strip():
+        return payload.body
+    for attachment in payload.attachments:
+        if attachment.caption and attachment.caption.strip():
+            return attachment.caption
+    labels = {
+        "image": "Image",
+        "video": "Video",
+        "audio": "Audio",
+        "document": "Document",
+        "location": "Location",
+    }
+    if payload.attachments:
+        return f"[{labels.get(payload.attachments[0].asset_type, 'Attachment')}]"
+    return "[Attachment]"  # unreachable after observation validation
+
+
 def _message_payload(
     row: InboxProviderObservation,
 ) -> team_inbox_observations.InboundMessageObservation:
@@ -299,7 +321,7 @@ def process_provider_observation(
                     team_inbox_channel_receive.InboundChannelPayload(
                         channel_type=row.channel_type,
                         contact_address=payload.contact_address,
-                        body=payload.body,
+                        body=_product_message_body(payload),
                         contact_name=payload.contact_name,
                         external_message_id=row.external_message_id,
                         external_thread_id=payload.external_thread_id,
