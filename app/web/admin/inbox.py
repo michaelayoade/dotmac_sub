@@ -2099,9 +2099,12 @@ def team_inbox_workflow_action(
     )
 
 
+# Persists a saved view (optionally shared with the whole team), so it takes the
+# same write-tier permission as its sibling ``POST /filters/{filter_id}/delete``
+# — a saved filter is stored state, not a query string.
 @router.post(
     "/filters/save",
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_saved_filter_create(
     request: Request,

@@ -1,6 +1,8 @@
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -30,6 +32,53 @@ from app.services.auth_flow import (
 )
 
 logger = logging.getLogger(__name__)
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+# Attribute the permission-guard factories below stamp onto the dependency they
+# return, so a static consumer can read WHICH permission a guard demands
+# instead of only its callable name. Without it, ``require_permission`` is
+# indistinguishable from ``require_permission`` no matter what key it closes
+# over — which is exactly how a ``:read`` permission ended up guarding
+# ``POST /admin/network/routers/new`` unnoticed. Read it through
+# ``permission_requirement()``; never poke the attribute directly.
+_PERMISSION_REQUIREMENT_ATTR = "__dotmac_permission_requirement__"
+
+
+@dataclass(frozen=True)
+class PermissionRequirement:
+    """The permission keys a guard ACCEPTS, split by HTTP method class.
+
+    ``read_any_of``/``write_any_of`` are *any-of* sets: holding any ONE key in
+    the applicable set satisfies the guard. They are therefore the guard's
+    authorization FLOOR — a guard is only as strong as its weakest accepted
+    key, which is why ``require_any_permission("system:read", ..., "monitoring:read")``
+    on a mutating route is a read-tier guard even though it names three domains.
+
+    ``read_methods`` is empty for guards that demand the same thing regardless
+    of method; only ``require_method_permission`` populates it.
+    """
+
+    read_any_of: tuple[str, ...]
+    write_any_of: tuple[str, ...]
+    read_methods: frozenset[str] = frozenset()
+
+    def any_of_for(self, method: str) -> tuple[str, ...]:
+        """The keys that satisfy this guard for an ``method`` request."""
+        if method.upper() in self.read_methods:
+            return self.read_any_of
+        return self.write_any_of
+
+
+def _declare_permissions(dependency: _F, requirement: PermissionRequirement) -> _F:
+    setattr(dependency, _PERMISSION_REQUIREMENT_ATTR, requirement)
+    return dependency
+
+
+def permission_requirement(dependency: object) -> PermissionRequirement | None:
+    """What ``dependency`` demands, or ``None`` if it is not a permission guard."""
+    requirement = getattr(dependency, _PERMISSION_REQUIREMENT_ATTR, None)
+    return requirement if isinstance(requirement, PermissionRequirement) else None
 
 
 def _claims_from_payload_or_db(
@@ -751,7 +800,12 @@ def require_permission(permission_key: str):
         finish_read_transaction(db)
         return auth
 
-    return _require_permission
+    return _declare_permissions(
+        _require_permission,
+        PermissionRequirement(
+            read_any_of=(permission_key,), write_any_of=(permission_key,)
+        ),
+    )
 
 
 def require_any_permission(*permission_keys: str):
@@ -836,7 +890,12 @@ def require_any_permission(*permission_keys: str):
         finish_read_transaction(db)
         return auth
 
-    return _require_any_permission
+    return _declare_permissions(
+        _require_any_permission,
+        PermissionRequirement(
+            read_any_of=tuple(permission_keys), write_any_of=tuple(permission_keys)
+        ),
+    )
 
 
 def require_method_permission(
@@ -858,7 +917,14 @@ def require_method_permission(
             return require_read(auth=auth, db=db)
         return require_write(auth=auth, db=db)
 
-    return _require_method_permission
+    return _declare_permissions(
+        _require_method_permission,
+        PermissionRequirement(
+            read_any_of=(read_permission_key,),
+            write_any_of=(write_permission_key,),
+            read_methods=frozenset(normalized_read_methods),
+        ),
+    )
 
 
 def grant_scopes_for_permission(auth: dict, db: Session, permission_key: str):
@@ -957,4 +1023,9 @@ def require_scoped_permission(permission_key: str, scope_extractor):
             status_code=403, detail="Forbidden for this region/reseller"
         )
 
-    return _require_scoped_permission
+    return _declare_permissions(
+        _require_scoped_permission,
+        PermissionRequirement(
+            read_any_of=(permission_key,), write_any_of=(permission_key,)
+        ),
+    )
