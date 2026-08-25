@@ -2945,8 +2945,14 @@ def team_inbox_ai_intake_policy_draft_update(
     rule_enabled: list[str] = Form(default=[]),
     fallback_team_id: str | None = Form(default=None),
     data_cleaning_support_team_id: str | None = Form(default=None),
-    display_name: str | None = Form(default="Dotmac Virtual Assistant"),
+    display_name: str | None = Form(default="Dotmac Support"),
     welcome_message: str | None = Form(default=None),
+    greeting_only_message: str | None = Form(default=None),
+    standard_handoff_message: str | None = Form(default=None),
+    media_first_handoff_message: str | None = Form(default=None),
+    direct_ai_question_message: str | None = Form(default=None),
+    direct_human_question_message: str | None = Form(default=None),
+    channel_overrides_json: str | None = Form(default=None),
     generic_clarification_question: str = Form(default=""),
     customer_type_clarification_question: str = Form(default=""),
     business_tone: str | None = Form(default=None),
@@ -3183,12 +3189,27 @@ def team_inbox_ai_intake_policy_draft_update(
             troubleshooting_rules, list
         ):
             raise ValueError("Troubleshooting rules must be a JSON list.")
+        conversation_templates = {
+            "welcome": welcome_message or "",
+            "greeting_only": greeting_only_message or "",
+            "standard_handoff": standard_handoff_message or "",
+            "media_first_handoff": media_first_handoff_message or "",
+            "direct_ai_question": direct_ai_question_message or "",
+            "direct_human_question": direct_human_question_message or "",
+        }
+        channel_overrides = (
+            json.loads(channel_overrides_json) if channel_overrides_json else {}
+        )
+        if channel_overrides and not isinstance(channel_overrides, dict):
+            raise ValueError("Channel overrides must be a JSON object.")
         conversation_policy = {
             "require_identity_before_tools": True,
             "handoff_after_classification": True,
             "max_turns": max(1, min(int(max_conversation_turns), 10)),
             "handoff": {
-                "customer_message": handoff_customer_message or "",
+                "customer_message": (
+                    handoff_customer_message or standard_handoff_message or ""
+                ),
                 "summary_template": handoff_summary_template or "",
                 "announce_destination": bool(announce_destination_team),
             },
@@ -3231,6 +3252,8 @@ def team_inbox_ai_intake_policy_draft_update(
                 permitted_identifiers=permitted_identifiers,
                 tool_config=tool_config,
                 conversation_policy=conversation_policy,
+                conversation_templates=conversation_templates,
+                channel_overrides=channel_overrides,
                 replace_existing_draft=replace_existing_draft,
             ),
         )

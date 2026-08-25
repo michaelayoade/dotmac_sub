@@ -147,7 +147,7 @@
                         <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Troubleshooting and handoff</h3>
                     </div>
                     <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Customer handoff message
-                        <textarea name="handoff_customer_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('customer_message', '') }}</textarea>
+                        <textarea name="handoff_customer_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('customer_message') or ai_intake_conversation_templates.get('standard_handoff', '') }}</textarea>
                         <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used when the conversational engine decides to hand over.</p>
                     </label>
                     <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Internal summary template
@@ -322,12 +322,36 @@
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional team for the separate profile-completion workflow.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">AI display name
-                <input name="display_name" maxlength="120" value="{{ ai_intake_edit_version.display_name if ai_intake_edit_version else 'Dotmac Virtual Assistant' }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">The assistant name shown in customer-facing AI messages.</p>
+                <input name="display_name" maxlength="120" value="{{ ai_intake_edit_version.display_name if ai_intake_edit_version else 'Dotmac Support' }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Customer-facing support identity. It may be Dotmac Support, but must not impersonate a human employee.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Welcome message
-                <textarea name="welcome_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.welcome_message if ai_intake_edit_version else "Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team." }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent first when a new eligible conversation starts AI intake, before any clarification question.</p>
+                <textarea name="welcome_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.welcome_message if ai_intake_edit_version else ai_intake_conversation_templates.get('welcome', 'Welcome to Dotmac Support. How can we help today?') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used only when a welcome is appropriate; issue-first messages should be acknowledged directly.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Greeting-only message
+                <textarea name="greeting_only_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('greeting_only', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used for messages like Hi or Good morning.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Handoff message
+                <textarea name="standard_handoff_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('standard_handoff', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent by AI before Team Inbox routing, assignment and queue messaging take over.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Media-first handoff
+                <textarea name="media_first_handoff_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('media_first_handoff', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used when the first customer message has media but no usable text.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Direct AI question response
+                <textarea name="direct_ai_question_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('direct_ai_question', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Truthful response when a customer asks whether the responder is automated.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Direct human question response
+                <textarea name="direct_human_question_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('direct_human_question', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Truthful response when a customer asks whether they are speaking with a human.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6">Channel overrides JSON
+                <textarea name="channel_overrides_json" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_channel_overrides_json }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional per-channel conversation template overrides for supported messaging channels.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Generic clarification question
                 <textarea name="generic_clarification_question" maxlength="300" required rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_clarification_questions[0] }}</textarea>

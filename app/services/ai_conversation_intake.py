@@ -219,6 +219,8 @@ class AiPolicyVersionDraftCommand:
     permitted_identifiers: tuple[str, ...] = ()
     tool_config: Mapping[str, object] | None = None
     conversation_policy: Mapping[str, object] | None = None
+    conversation_templates: Mapping[str, object] | None = None
+    channel_overrides: Mapping[str, object] | None = None
     replace_existing_draft: bool = True
 
 
@@ -246,6 +248,8 @@ class AiDraftPolicyCommand:
     permitted_identifiers: tuple[str, ...] = ()
     tool_config: Mapping[str, object] | None = None
     conversation_policy: Mapping[str, object] | None = None
+    conversation_templates: Mapping[str, object] | None = None
+    channel_overrides: Mapping[str, object] | None = None
     replace_existing_draft: bool = False
 
 
@@ -577,6 +581,8 @@ def create_draft_policy(
                 permitted_identifiers=command.permitted_identifiers,
                 tool_config=command.tool_config,
                 conversation_policy=command.conversation_policy,
+                conversation_templates=command.conversation_templates,
+                channel_overrides=command.channel_overrides,
                 replace_existing_draft=command.replace_existing_draft,
             ),
         )
@@ -645,6 +651,13 @@ def _copy_version_payload(
                 for key, value in command.conversation_policy.items()
             }
         )
+    if command.conversation_templates is not None:
+        policy_text.update(
+            {
+                f"conversation_templates.{key}": value
+                for key, value in command.conversation_templates.items()
+            }
+        )
     if violations := human_impersonation_violations(policy_text):
         raise ValueError(
             "AI intake policy text cannot impersonate a human employee: "
@@ -669,6 +682,10 @@ def _copy_version_payload(
         metadata["tools"] = dict(command.tool_config)
     if command.conversation_policy is not None:
         metadata["conversation_policy"] = dict(command.conversation_policy)
+    if command.conversation_templates is not None:
+        metadata["conversation_templates"] = dict(command.conversation_templates)
+    if command.channel_overrides is not None:
+        metadata["channel_overrides"] = dict(command.channel_overrides)
     return {
         "display_name": command.display_name
         or (base.display_name if base is not None else DEFAULT_DISPLAY_NAME),
@@ -1293,6 +1310,8 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         else {}
     )
     conversation_policy = dict(version_metadata.get("conversation_policy") or {})
+    conversation_templates = dict(version_metadata.get("conversation_templates") or {})
+    channel_overrides = dict(version_metadata.get("channel_overrides") or {})
     conversation_engine_mode = _normalize_conversation_engine_mode(
         str(
             version_metadata.get("conversation_engine_mode")
@@ -1380,6 +1399,12 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         "ai_intake_engine_metadata": version_metadata,
         "ai_intake_conversation_engine_mode": conversation_engine_mode,
         "ai_intake_conversation_policy": conversation_policy,
+        "ai_intake_conversation_templates": conversation_templates,
+        "ai_intake_channel_overrides_json": json.dumps(
+            channel_overrides,
+            indent=2,
+            sort_keys=True,
+        ),
         "ai_intake_tool_config": tool_config,
         "ai_intake_permitted_identifiers": permitted_identifiers,
         "ai_intake_tool_catalogue": (
@@ -1516,6 +1541,11 @@ def _sync_active_policy_to_legacy_config(
                     intent_definitions=version.intent_definitions or [],
                     clarification_questions=version.clarification_questions or [],
                     queue_templates=queue_templates,
+                    conversation_templates=version_metadata.get(
+                        "conversation_templates"
+                    )
+                    or {},
+                    channel_overrides=version_metadata.get("channel_overrides") or {},
                     escalation_rules=escalation_rules,
                     data_cleanup_enabled=bool(
                         data_cleanup_policy.get("production_collection_enabled", False)
@@ -1557,6 +1587,8 @@ def _sync_active_policy_to_legacy_config(
             )
         ),
         "conversation_policy": version_metadata.get("conversation_policy") or {},
+        "conversation_templates": version_metadata.get("conversation_templates") or {},
+        "channel_overrides": version_metadata.get("channel_overrides") or {},
         "tools": version_metadata.get("tools") or {},
         "permitted_identifiers": version_metadata.get("permitted_identifiers") or [],
     }

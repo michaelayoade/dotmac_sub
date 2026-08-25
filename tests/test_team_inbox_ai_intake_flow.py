@@ -304,7 +304,7 @@ def test_high_confidence_routes_team_and_queues_when_no_agent(db_session, monkey
         .all()
     )
     assert outbound[0].metadata_["sender_type"] == "ai"
-    assert outbound[0].metadata_["ai_display_name"] == "Dotmac Virtual Assistant"
+    assert outbound[0].metadata_["ai_display_name"] == "Dotmac Support"
     reasons = [
         event.reason_code
         for event in db_session.query(InboxStatusTransitionEvent)
@@ -345,7 +345,7 @@ def test_receive_persists_ai_work_without_synchronous_ai_response(
         .filter(InboxMessage.conversation_id == conversation.id)
         .filter(InboxMessage.direction == "outbound")
         .count()
-        == 2
+        == 1
     )
     assert gateway.calls == 1
 
@@ -602,7 +602,7 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
         db_session,
         fallback_team_id=fallback_id,
         threshold=0.8,
-        welcome_message="Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team.",
+        welcome_message="Welcome to Dotmac Support. How can we help?",
         mappings=[_mapping("technical_support", technical, "technical")],
     )
     gateway = _Gateway(confidence=0.3)
@@ -624,11 +624,9 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
         .all()
     )
     assert [message.body for message in outbound] == [
-        "Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team.",
         ai_intake.GENERIC_FOLLOW_UP_QUESTION,
     ]
-    assert outbound[0].metadata_["ai_message_purpose"] == "welcome"
-    follow_up = outbound[1]
+    follow_up = outbound[0]
     notification = db_session.get(Notification, follow_up.notification_id)
     assert follow_up.metadata_["ai_intake_follow_up"] is True
     assert notification is not None
@@ -650,7 +648,7 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
     assert conversation.primary_service_team_id == technical.id
     assert second_message.metadata_["ai_intake_status"] == "classified"
     assert conversation.assignments == []
-    assert _non_queue_outbound_count(db_session) == 2
+    assert _non_queue_outbound_count(db_session) == 1
 
 
 def test_second_uncertain_reply_falls_back_without_another_question(
@@ -675,7 +673,7 @@ def test_second_uncertain_reply_falls_back_without_another_question(
     assert conversation.primary_service_team_id == fallback.id
     assert second_message.metadata_["ai_intake_status"] == "fallback"
     assert second_message.metadata_["ai_intake_reason"] == "follow_up_limit_reached"
-    assert _non_queue_outbound_count(db_session) == 2
+    assert _non_queue_outbound_count(db_session) == 1
 
 
 def test_whatsapp_follow_up_dispatcher_sends_the_approved_question(
@@ -698,8 +696,8 @@ def test_whatsapp_follow_up_dispatcher_sends_the_approved_question(
         db_session, batch_size=10
     )
 
-    assert delivered == 2
-    assert calls[1]["body"] == ai_intake.GENERIC_FOLLOW_UP_QUESTION
+    assert delivered == 1
+    assert calls[0]["body"] == ai_intake.GENERIC_FOLLOW_UP_QUESTION
     outbound = (
         db_session.query(InboxMessage)
         .filter(InboxMessage.direction == "outbound")
@@ -1520,7 +1518,7 @@ def test_stale_follow_up_recovers_to_configured_fallback_without_assignment(
         db_session.query(InboxMessage)
         .filter(InboxMessage.direction == "outbound")
         .count()
-        == 2
+        == 1
     )
     assert outcome.changed == 1
     assert conversation.primary_service_team_id == fallback_id
