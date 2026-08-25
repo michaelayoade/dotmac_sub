@@ -60,9 +60,7 @@ def _command(request, subscription, *, reason="Stale request confirmed by suppor
 def test_admin_can_cancel_exact_pending_plan_change(db_session, subscriber):
     subscription, request = _pending_request(db_session, subscriber)
 
-    outcome = cancel_pending_plan_change(
-        db_session, _command(request, subscription)
-    )
+    outcome = cancel_pending_plan_change(db_session, _command(request, subscription))
 
     assert outcome.status == SubscriptionChangeStatus.canceled
     assert outcome.previous_status == SubscriptionChangeStatus.pending
@@ -83,9 +81,7 @@ def test_cancel_pending_plan_change_is_idempotent(db_session, subscriber):
     assert replay.replayed is True
 
 
-def test_admin_cannot_cancel_request_from_another_subscription(
-    db_session, subscriber
-):
+def test_admin_cannot_cancel_request_from_another_subscription(db_session, subscriber):
     subscription, request = _pending_request(db_session, subscriber)
     command = _command(request, subscription)
     wrong_scope = CancelPendingPlanChangeCommand(
