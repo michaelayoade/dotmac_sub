@@ -1,0 +1,95 @@
+name: External connector surface
+
+# STAGED, NOT LIVE — and deliberately incapable of reporting green today.
+#
+# dotmac_governance ADR 0010 ("External connector surface ratchet") introduces
+# profile schema 6 and the `external_connector_surface` object this job
+# evaluates. That ADR is `Proposed`: it is neither approved by Michael Ayoade
+# nor merged to dotmac_governance canonical `main`, so there is NO accepted
+# revision to pin, and a job that passed against a placeholder would be
+# manufacturing conformance evidence out of an unapproved proposal.
+#
+# `workflow_dispatch`-only is also on purpose. A required check that can only
+# ever be red deadlocks the merge queue rather than protecting anything, so the
+# `pull_request` and `merge_group` triggers land in the SAME change that
+# replaces the placeholder below with the accepted commit.
+# `tests/architecture/test_external_connector_ratchet.py` enforces that
+# coupling in BOTH directions: placeholder + PR triggers is a failure, and a
+# real pin without PR triggers is equally a failure.
+#
+# What enforces Sub's connector baseline in the meantime is Sub's own
+# `Architecture Tests` job in ci.yml, which runs that same test against this
+# tree on every pull request. The fleet sweep in
+# `dotmac_starter_mt/scripts/external_connector_sweep.py` measures sibling
+# repositories from one checkout and reports UNMEASURED for dotmac_sub in
+# starter CI, where no dotmac_sub checkout exists. A central sweep must never
+# be the only gate.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # ─── THE PIN BARRIER ────────────────────────────────────────────────────
+  # Do NOT replace this with a branch name, a tag, `main`, or a guess.
+  #
+  # Replace it with the 40-character lower-case dotmac_governance commit on
+  # canonical `main` that carries
+  # `docs/adr/0010-external-connector-surface-ratchet.md` with status
+  # `Accepted`, in the SAME change that:
+  #   * repins `.github/workflows/engineering-standards.yml` to that commit,
+  #   * writes that commit into `.dotmac/standards-profile.next.json`
+  #     (`governance_model.revision`),
+  #   * moves that staged profile over `.dotmac/standards-profile.json`, and
+  #   * gives this workflow its `pull_request` and `merge_group` triggers.
+  # See `.dotmac/README.md` § "Landing the staged profile".
+  GOVERNANCE_REF: "PENDING-APPROVAL"
+
+jobs:
+  connector-surface:
+    name: External connector surface (staged)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # This is the first step on purpose, and it is a plain shell rather than
+      # an action, so that the failure names the reason instead of surfacing as
+      # an opaque "unable to resolve action" at job setup. The Governance
+      # engine is fetched with `actions/checkout` below rather than
+      # `uses: .../standards-check@<ref>` for the same reason: `uses:` forbids
+      # expressions, so a literal placeholder there would fail before this
+      # message could ever be printed.
+      - name: Refuse an unapproved Governance revision
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${GOVERNANCE_REF}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::GOVERNANCE_REF is '${GOVERNANCE_REF}', which is not an accepted Governance commit."
+            echo "dotmac_governance ADR 0010 is still Proposed: nothing has been approved, so there is nothing to pin."
+            echo "This job fails closed rather than reporting conformance against a placeholder."
+            echo "See .dotmac/README.md for the five steps that land the real pin."
+            exit 1
+          fi
+          echo "Governance revision pinned: ${GOVERNANCE_REF}"
+
+      - name: Check out the evaluated product revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out the accepted Governance conformance engine
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: michaelayoade/dotmac_governance
+          ref: ${{ env.GOVERNANCE_REF }}
+          path: .governance
+          persist-credentials: false
+
+      - name: Evaluate the external connector surface
+        run: |
+          set -euo pipefail
+          python3 .governance/tools/dotmac-standards verify \
+            --root . \
+            --profile .dotmac/standards-profile.next.json \
+            --default-branch "${{ github.event.repository.default_branch }}" \
+            --governance-root .governance \
+            --governance-repository michaelayoade/dotmac_governance \
+            --governance-revision "${GOVERNANCE_REF}"

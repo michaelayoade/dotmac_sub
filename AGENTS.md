@@ -64,6 +64,24 @@ authoritative documents in the same change that updates the contract.
   `Dotmac engineering standards` CI job must execute that exact revision.
   Mutable tags/branches, copied rules, candidate mode, or a missing required
   check are not substitutes.
+- Sub's direct external-connector surface is measured and ratcheted in Sub's
+  own CI. Six closed categories — provider HTTP clients, provider callback
+  surfaces, provider credentials, connector schedules, feed checkpoints and
+  delivery retry machinery — are counted from the parse tree over the runtime
+  roots declared in `.dotmac/standards-profile.next.json`
+  (`external_connector_surface`) and enforced by
+  `tests/architecture/test_external_connector_ratchet.py` in the
+  `Architecture Tests` job. The ratchet is two-directional: a count above its
+  baseline fails because a new direct connector landed, and a count below it
+  fails until the baseline is lowered in the SAME change that deletes the code.
+  Never raise a baseline to absorb a new surface; route the integration through
+  the Integrator instead. The fleet sweep in
+  `dotmac_starter_mt/scripts/external_connector_sweep.py` reports UNMEASURED
+  for this repository in starter CI, so a central sweep is never the only gate.
+  The staged schema-6 profile and
+  `.github/workflows/external-connector-ratchet.yml` both hold the literal
+  `PENDING-APPROVAL` and fail closed until dotmac_governance ADR 0010 is
+  accepted; `.dotmac/README.md` names the five steps that land the real pin.
 - Keep domain values typed internally. Serialize UUIDs, enums, decimals, dates,
   and value objects explicitly at adapter, persistence, or reporting boundaries.
 - Domain services raise domain errors. HTTP responses, redirects, task retries,
