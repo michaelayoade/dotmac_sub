@@ -273,13 +273,15 @@ def test_payload_cannot_name_a_local_provider(
     assert _counts(db_session) == before
 
 
-def test_mirror_compares_without_writing(
+@pytest.mark.parametrize("disabled_plane", ["binding", "installation"])
+def test_configured_disabled_mirror_compares_without_writing(
     client,
     db_session,
     binding,
     source_installation_id,
     provider,
     subscriber,
+    disabled_plane,
 ):
     _intent(db_session, subscriber, provider, reference="DMAC-INTG-1")
     envelope = _envelope(
@@ -287,6 +289,17 @@ def test_mirror_compares_without_writing(
         fee={"amount": "20.00", "currency": "NGN"},
     )
     assert _post(client, binding, envelope).status_code == 200
+    if disabled_plane == "binding":
+        binding.state = "disabled"
+    else:
+        binding.installation.state = "disabled"
+    db_session.commit()
+    descriptor = client.get(
+        f"/api/v1/integration/observations/payment-settlements/{binding.id}/descriptor",
+        headers={"X-Api-Key": MIRROR_TOKEN},
+    )
+    assert descriptor.status_code == 200, descriptor.text
+    assert descriptor.json()["activation_state"] == "configured_disabled"
     before = _counts(db_session)
 
     mirrored = _post(
@@ -299,6 +312,111 @@ def test_mirror_compares_without_writing(
 
     assert mirrored.status_code == 200, mirrored.text
     assert mirrored.json()["agrees"] is True
+    assert _counts(db_session) == before
+
+
+def test_configured_disabled_binding_still_refuses_live_settlement(
+    client,
+    db_session,
+    binding,
+    source_installation_id,
+):
+    binding.state = "disabled"
+    db_session.commit()
+    before = _counts(db_session)
+
+    response = _post(client, binding, _envelope(source_installation_id))
+
+    assert response.status_code == 404
+    assert _counts(db_session) == before
+
+
+def test_configured_disabled_mirror_refuses_a_missing_binding(
+    client,
+    db_session,
+    source_installation_id,
+):
+    before = _counts(db_session)
+
+    response = client.post(
+        f"/api/v1/integration/observations/payment-settlements/{uuid4()}/mirror",
+        json=_envelope(source_installation_id),
+        headers={"X-Api-Key": MIRROR_TOKEN},
+    )
+
+    assert response.status_code == 404
+    assert _counts(db_session) == before
+
+
+def test_configured_disabled_mirror_refuses_a_binding_for_another_capability(
+    client,
+    db_session,
+    binding,
+    source_installation_id,
+):
+    binding.capability_id = "messaging.receive.v1"
+    binding.state = "disabled"
+    db_session.commit()
+    before = _counts(db_session)
+
+    response = _post(
+        client,
+        binding,
+        _envelope(source_installation_id),
+        token=MIRROR_TOKEN,
+        suffix="/mirror",
+    )
+
+    assert response.status_code == 404
+    assert _counts(db_session) == before
+
+
+@pytest.mark.parametrize("installation_state", ["quarantined", "retired"])
+def test_configured_disabled_mirror_refuses_a_nonserviceable_installation(
+    client,
+    db_session,
+    binding,
+    source_installation_id,
+    installation_state,
+):
+    binding.installation.state = installation_state
+    binding.state = "disabled"
+    db_session.commit()
+    before = _counts(db_session)
+
+    response = _post(
+        client,
+        binding,
+        _envelope(source_installation_id),
+        token=MIRROR_TOKEN,
+        suffix="/mirror",
+    )
+
+    assert response.status_code == 404
+    assert _counts(db_session) == before
+
+
+def test_configured_disabled_mirror_refuses_an_unconfigured_installation(
+    client,
+    db_session,
+    binding,
+    source_installation_id,
+):
+    binding.installation.current_config_revision_id = None
+    binding.state = "disabled"
+    db_session.commit()
+    db_session.expire_all()
+    before = _counts(db_session)
+
+    response = _post(
+        client,
+        binding,
+        _envelope(source_installation_id),
+        token=MIRROR_TOKEN,
+        suffix="/mirror",
+    )
+
+    assert response.status_code == 404
     assert _counts(db_session) == before
 
 

@@ -1654,7 +1654,10 @@ detailed security and delivery boundary is
    only and cannot select the provider row. A missing mapping, provider fee, or
    provider-echoed deposit correlation fails closed before money moves. The
    mirror route is read-only and is the cutover evidence path while Sub's direct
-   callbacks remain incumbent.
+   callbacks remain incumbent. It may resolve a configured-but-disabled
+   Integrator binding through the runtime's explicit mirror-only seam so parity
+   can precede activation; the live receipt route remains enabled-only, and
+   missing, invalid, quarantined, retired, or unconfigured bindings fail closed.
 20. Referral rewards are account credits owned by `financial.credit_notes`;
    neither CRM nor referral services post a parallel wallet balance. Automated
    referral issuance uses the same owner-generated preview, locked confirmation,

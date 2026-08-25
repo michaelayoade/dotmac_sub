@@ -89,6 +89,7 @@ from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_SETTLEMENT_CAPABILITY,
 )
 from app.services.integrations.runtime_execution import (
+    RuntimeExecutionContext,
     RuntimeExecutionError,
     build_execution_context,
 )
@@ -140,12 +141,26 @@ def _settlement_observation(
     )
 
 
-def _bind(db: Session, capability_binding_id: UUID, capability_id: str):
-    """Resolve an enabled binding, or refuse without saying which it was."""
+def _bind(
+    db: Session,
+    capability_binding_id: UUID,
+    capability_id: str,
+    *,
+    allow_disabled: bool = False,
+) -> RuntimeExecutionContext:
+    """Resolve one binding, optionally for the read-only mirror path only.
+
+    Live receipt intake keeps the default enabled-only execution contract.  A
+    mirror call may resolve a configured-but-disabled binding because it writes
+    no receipt or financial consequence and is the evidence gate that precedes
+    activation.
+    """
 
     try:
         execution = build_execution_context(
-            db, capability_binding_id=capability_binding_id
+            db,
+            capability_binding_id=capability_binding_id,
+            allow_disabled=allow_disabled,
         )
     except RuntimeExecutionError as exc:
         # A missing, disabled, quarantined or retired binding is reported as
@@ -317,7 +332,12 @@ def mirror_integrator_settlement(
 ) -> IntegratorSettlementMirrorReport:
     """Compare against incumbent financial evidence without writing anything."""
 
-    _bind(db, capability_binding_id, INTEGRATOR_SETTLEMENT_CAPABILITY)
+    _bind(
+        db,
+        capability_binding_id,
+        INTEGRATOR_SETTLEMENT_CAPABILITY,
+        allow_disabled=True,
+    )
     result = settlement_commands.compare_integrator_settlement(
         db,
         settlement_commands.CompareIntegratorSettlementCommand(
