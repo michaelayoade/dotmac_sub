@@ -3,7 +3,19 @@ import 'dart:async';
 /// GPS abstraction. The device implementation lands with the geolocator
 /// plugin at device-testing time; everything upstream depends only on this
 /// interface so transitions and capture flows are testable headless.
-typedef GeoPoint = ({double latitude, double longitude});
+class GeoPoint {
+  const GeoPoint({
+    required this.latitude,
+    required this.longitude,
+    this.accuracyM = 1000,
+    this.capturedAt,
+  });
+
+  final double latitude;
+  final double longitude;
+  final double accuracyM;
+  final DateTime? capturedAt;
+}
 
 abstract class LocationSource {
   /// Best-effort current position; null when unavailable/denied.

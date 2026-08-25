@@ -144,6 +144,12 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
 
 
 HANDLER_CONTROLS: dict[str, HandlerControl] = {
+    "FieldGeofencePolicyHandler": HandlerControl(
+        "FieldGeofencePolicyHandler",
+        HandlerStage.state,
+        8,
+        ("field_geofence_policy",),
+    ),
     "LifecycleHandler": HandlerControl(
         "LifecycleHandler", HandlerStage.state, 10, ("subscription_lifecycle",)
     ),
@@ -297,6 +303,12 @@ def event_relationship_mode(event_type: str) -> RelationshipMode:
 
 def handler_event_types(handler_name: str) -> frozenset[str] | None:
     """Return the handler's executable event scope; ``None`` means wildcard."""
+    if handler_name == "FieldGeofencePolicyHandler":
+        from app.services.events.handlers.field_geofence_policy import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "LifecycleHandler":
         from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP
 

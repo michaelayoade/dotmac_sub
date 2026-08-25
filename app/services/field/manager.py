@@ -136,7 +136,8 @@ class FieldManager:
     ) -> list[dict]:
         safe_limit = max(1, min(int(limit or 500), 500))
         window = max(int(stale_after_seconds or DEFAULT_STALE_AFTER_SECONDS), 30)
-        cutoff = _now() - timedelta(seconds=window)
+        now = _now()
+        cutoff = now - timedelta(seconds=window)
 
         rows = (
             db.query(TechnicianProfile, FieldTechPresence)
@@ -155,9 +156,18 @@ class FieldManager:
         items: list[dict] = []
         for profile, presence in rows:
             last_location_at = _as_utc(presence.last_location_at) if presence else None
-            is_live = bool(
+            collection_expires_at = (
+                _as_utc(presence.collection_expires_at) if presence else None
+            )
+            sharing_active = bool(
                 presence
                 and presence.location_sharing_enabled
+                and presence.collection_purpose == "field_operations"
+                and collection_expires_at is not None
+                and collection_expires_at > now
+            )
+            is_live = bool(
+                sharing_active
                 and last_location_at is not None
                 and last_location_at >= cutoff
             )
@@ -172,16 +182,18 @@ class FieldManager:
                     "title": profile.title,
                     "region": profile.region,
                     "status": presence.status if presence else "off_shift",
-                    "location_sharing_enabled": bool(
-                        presence and presence.location_sharing_enabled
-                    ),
+                    "location_sharing_enabled": sharing_active,
                     "is_live": is_live,
-                    "last_latitude": presence.last_latitude if presence else None,
-                    "last_longitude": presence.last_longitude if presence else None,
-                    "accuracy_m": (
-                        presence.last_location_accuracy_m if presence else None
+                    "last_latitude": (
+                        presence.last_latitude if sharing_active else None
                     ),
-                    "last_location_at": last_location_at,
+                    "last_longitude": (
+                        presence.last_longitude if sharing_active else None
+                    ),
+                    "accuracy_m": (
+                        presence.last_location_accuracy_m if sharing_active else None
+                    ),
+                    "last_location_at": last_location_at if sharing_active else None,
                     "last_seen_at": _as_utc(presence.last_seen_at)
                     if presence
                     else None,

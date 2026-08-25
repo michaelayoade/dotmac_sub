@@ -620,17 +620,23 @@ class FieldRouteResponse(BaseModel):
 
 
 class LocationPingInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    client_observation_id: UUID
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
-    accuracy_m: float | None = Field(default=None, ge=0)
-    captured_at: datetime | None = None
-    crm_work_order_id: str | None = Field(default=None, max_length=64)
+    accuracy_m: float = Field(ge=0)
+    captured_at: datetime
+    work_order_id: str | None = Field(
+        default=None,
+        max_length=64,
+        validation_alias=AliasChoices("work_order_id", "crm_work_order_id"),
+    )
     source: str = Field(default="mobile", max_length=32)
-    status: str | None = Field(default=None, max_length=20)
 
 
 class LocationPingBatch(BaseModel):
-    pings: list[LocationPingInput] = Field(min_length=1, max_length=200)
+    pings: list[LocationPingInput] = Field(min_length=1)
 
 
 class LocationSharingUpdate(BaseModel):
@@ -644,6 +650,9 @@ class FieldPresenceRead(BaseModel):
     person_id: UUID
     status: str
     location_sharing_enabled: bool
+    collection_purpose: str | None = None
+    collection_granted_at: datetime | None = None
+    collection_expires_at: datetime | None = None
     last_latitude: float | None = None
     last_longitude: float | None = None
     last_location_accuracy_m: float | None = None
@@ -651,9 +660,17 @@ class FieldPresenceRead(BaseModel):
     last_seen_at: datetime | None = None
 
 
+class LocationIngestError(BaseModel):
+    index: int
+    client_observation_id: UUID | None = None
+    code: str
+    detail: str
+
+
 class LocationIngestResponse(BaseModel):
     accepted: int
-    errors: list[dict[str, Any]] = Field(default_factory=list)
+    replayed: int
+    errors: list[LocationIngestError] = Field(default_factory=list)
     presence: FieldPresenceRead
     transitions: list[dict[str, Any]] = Field(default_factory=list)
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -73,6 +73,9 @@ def test_location_reads_native_assignment_presence_and_public_identity(db_sessio
                 person_id=technician.person_id,
                 status="busy",
                 location_sharing_enabled=True,
+                collection_purpose="field_operations",
+                collection_granted_at=datetime.now(UTC),
+                collection_expires_at=datetime.now(UTC) + timedelta(hours=8),
                 last_latitude=9.0765,
                 last_longitude=7.3986,
                 last_location_at=datetime.now(UTC),
@@ -89,6 +92,80 @@ def test_location_reads_native_assignment_presence_and_public_identity(db_sessio
     assert result.work_order_id == visit.public_id
     assert result.latitude == 9.0765
     assert result.updated_at is not None
+
+
+def test_location_hides_stale_fix_from_customer(db_session):
+    customer = _customer(db_session)
+    technician = _technician(db_session)
+    visit = _visit(db_session, customer, status="in_progress")
+    db_session.add_all(
+        [
+            WorkOrderAssignmentQueue(
+                work_order_mirror_id=visit.id,
+                status="assigned",
+                assigned_technician_id=technician.id,
+            ),
+            FieldTechPresence(
+                technician_id=technician.id,
+                person_id=technician.person_id,
+                status="busy",
+                location_sharing_enabled=True,
+                collection_purpose="field_operations",
+                collection_granted_at=datetime.now(UTC),
+                collection_expires_at=datetime.now(UTC) + timedelta(hours=8),
+                last_latitude=9.0765,
+                last_longitude=7.3986,
+                last_location_at=datetime.now(UTC) - timedelta(minutes=5),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = customer_work_order_selfcare.technician_location(
+        db_session, str(customer.id), visit.public_id
+    )
+
+    assert result.available is False
+    assert result.reason == "stale_fix"
+    assert result.latitude is None
+    assert result.longitude is None
+
+
+def test_location_hides_fix_after_collection_lease_expires(db_session):
+    customer = _customer(db_session)
+    technician = _technician(db_session)
+    visit = _visit(db_session, customer, status="in_progress")
+    db_session.add_all(
+        [
+            WorkOrderAssignmentQueue(
+                work_order_mirror_id=visit.id,
+                status="assigned",
+                assigned_technician_id=technician.id,
+            ),
+            FieldTechPresence(
+                technician_id=technician.id,
+                person_id=technician.person_id,
+                status="busy",
+                location_sharing_enabled=True,
+                collection_purpose="field_operations",
+                collection_granted_at=datetime.now(UTC) - timedelta(hours=9),
+                collection_expires_at=datetime.now(UTC) - timedelta(hours=1),
+                last_latitude=9.0765,
+                last_longitude=7.3986,
+                last_location_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = customer_work_order_selfcare.technician_location(
+        db_session, str(customer.id), visit.public_id
+    )
+
+    assert result.available is False
+    assert result.reason == "collection_grant_expired"
+    assert result.latitude is None
+    assert result.longitude is None
 
 
 def test_rating_is_native_audited_and_idempotent(db_session):

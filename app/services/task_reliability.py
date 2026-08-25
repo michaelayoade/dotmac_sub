@@ -290,6 +290,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
     ),
     "app.tasks.events.cleanup_old_events": _c("events", SWEEP, IDEMP, LOG),
+    "app.tasks.field_location.prune_field_location_pings": _c(
+        "field", SWEEP, IDEMP, LOG
+    ),
     "app.tasks.events.dispatch_pending_events": _c(
         "events",
         SWEEP,

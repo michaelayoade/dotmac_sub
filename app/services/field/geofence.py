@@ -12,21 +12,78 @@ from __future__ import annotations
 import logging
 import math
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.dispatch import TechnicianProfile
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.field_location import FieldTechLocationPing, FieldTechPresence
 from app.models.work_order import WorkOrder
 from app.services.field.jobs import _location, _profile_from_principal, _scoped_query
 from app.services.field.transitions import field_transitions
+from app.services.settings_spec import resolve_integer
 
 logger = logging.getLogger(__name__)
 
 _GEOFENCE_NS = uuid.UUID("9f1c0d2e-7b3a-4c6e-9a8d-1e2f3a4b5c6d")
 DEFAULT_ARRIVAL_RADIUS_M = 120.0
 _ARRIVABLE_STATUSES = {"scheduled", "dispatched"}
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def consume_position_observation(
+    db: Session,
+    observation_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Apply Sub's product policy to one committed positioning observation.
+
+    The durable event carries only this opaque identity. This resolver loads
+    the retained evidence, ignores observations that did not become the
+    current projection, applies a server-configured freshness bound, and only
+    then asks the canonical field-transition owner to act.
+    """
+
+    ping = db.get(FieldTechLocationPing, observation_id)
+    if ping is None:
+        return []
+    presence = (
+        db.query(FieldTechPresence)
+        .filter(FieldTechPresence.technician_id == ping.technician_id)
+        .one_or_none()
+    )
+    if presence is None or presence.last_location_at is None:
+        return []
+    if (
+        _as_utc(presence.last_location_at) != _as_utc(ping.captured_at)
+        or presence.last_latitude != ping.latitude
+        or presence.last_longitude != ping.longitude
+    ):
+        return []
+    stale_after_seconds = resolve_integer(
+        db,
+        SettingDomain.field,
+        "location_geofence_stale_seconds",
+    )
+    if _as_utc(ping.captured_at) < datetime.now(UTC) - timedelta(
+        seconds=stale_after_seconds
+    ):
+        return []
+
+    profile = db.get(TechnicianProfile, ping.technician_id)
+    if profile is None or not profile.is_active:
+        return []
+    principal = {
+        "principal_id": str(profile.system_user_id or profile.person_id),
+        "person_id": str(profile.person_id),
+        "crm_person_id": profile.crm_person_id,
+    }
+    return evaluate(db, principal, ping.latitude, ping.longitude)
 
 
 def geofence_enabled(db: Session) -> bool:

@@ -466,5 +466,6 @@ bandwidth_settings = DomainSettings(SettingDomain.bandwidth)
 # app/models/domain_settings.py.
 gis_settings = DomainSettings(SettingDomain.gis)
 scheduler_settings = DomainSettings(SettingDomain.scheduler)
+field_settings = DomainSettings(SettingDomain.field)
 modules_settings = DomainSettings(SettingDomain.modules)
 integration_settings = DomainSettings(SettingDomain.integration)

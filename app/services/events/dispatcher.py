@@ -410,6 +410,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
         CredentialSessionProjectionHandler,
     )
     from app.services.events.handlers.enforcement import EnforcementHandler
+    from app.services.events.handlers.field_geofence_policy import (
+        FieldGeofencePolicyHandler,
+    )
     from app.services.events.handlers.identity_lifecycle_projection import (
         IdentityLifecycleProjectionHandler,
     )
@@ -451,6 +454,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(MaterialsLifecycleProjectionHandler())
     dispatcher.register_handler(IdentityLifecycleProjectionHandler())
     dispatcher.register_handler(EnforcementHandler())
+    dispatcher.register_handler(FieldGeofencePolicyHandler())
     dispatcher.register_handler(IPAssignmentProjectionHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())
     dispatcher.register_handler(ArrangementHandler())

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -84,11 +84,25 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
 
 
 def _presence(db_session, profile: TechnicianProfile, **overrides) -> FieldTechPresence:
+    sharing_enabled = overrides.pop("location_sharing_enabled", True)
+    granted_at = datetime.now(UTC)
     presence = FieldTechPresence(
         technician_id=profile.id,
         person_id=profile.person_id,
         status=overrides.pop("status", "on_shift"),
-        location_sharing_enabled=overrides.pop("location_sharing_enabled", True),
+        location_sharing_enabled=sharing_enabled,
+        collection_purpose=overrides.pop(
+            "collection_purpose",
+            "field_operations" if sharing_enabled else None,
+        ),
+        collection_granted_at=overrides.pop(
+            "collection_granted_at",
+            granted_at if sharing_enabled else None,
+        ),
+        collection_expires_at=overrides.pop(
+            "collection_expires_at",
+            granted_at + timedelta(hours=12) if sharing_enabled else None,
+        ),
         last_latitude=overrides.pop("last_latitude", 9.0765),
         last_longitude=overrides.pop("last_longitude", 7.3986),
         last_location_at=overrides.pop("last_location_at", datetime.now(UTC)),
@@ -176,6 +190,30 @@ def test_manager_me_summary_and_technicians(db_session):
         "tone": "info",
         "icon": "clock",
     }
+
+
+def test_manager_hides_position_after_collection_grant_expires(db_session):
+    tech_user = _user(db_session, "Expired")
+    profile = _profile(db_session, tech_user, crm_person_id="crm-expired-tech")
+    _presence(
+        db_session,
+        profile,
+        collection_granted_at=datetime.now(UTC) - timedelta(hours=13),
+        collection_expires_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    db_session.commit()
+
+    technicians = field_manager.list_technicians(db_session)
+    item = next(
+        entry for entry in technicians if entry["person_id"] == profile.person_id
+    )
+
+    assert item["location_sharing_enabled"] is False
+    assert item["is_live"] is False
+    assert item["last_latitude"] is None
+    assert item["last_longitude"] is None
+    assert item["accuracy_m"] is None
+    assert item["last_location_at"] is None
 
 
 def test_manager_jobs_and_assign_flow(db_session):

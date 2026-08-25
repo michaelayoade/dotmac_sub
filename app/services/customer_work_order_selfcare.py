@@ -7,7 +7,7 @@ every operation to the subscriber before returning data.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,11 +17,13 @@ from app.models.dispatch import (
     TechnicianProfile,
     WorkOrderAssignmentQueue,
 )
+from app.models.domain_settings import SettingDomain
 from app.models.field_location import FieldTechPresence
 from app.models.work_order import WorkOrder
 from app.schemas.portal import TechnicianLocation, TechnicianRatingResponse
 from app.services.audit_helpers import log_audit_event
 from app.services.common import coerce_uuid
+from app.services.settings_spec import resolve_integer
 
 _TRACKABLE_STATUSES = frozenset({"in_progress"})
 _RATABLE_STATUSES = frozenset({"completed"})
@@ -88,10 +90,44 @@ def technician_location(
             reason="sharing_off",
             work_order_id=row.public_id,
         )
+    now = datetime.now(UTC)
+    collection_expires_at = presence.collection_expires_at
+    if collection_expires_at is not None and collection_expires_at.tzinfo is None:
+        collection_expires_at = collection_expires_at.replace(tzinfo=UTC)
+    if (
+        presence.collection_purpose != "field_operations"
+        or collection_expires_at is None
+        or collection_expires_at <= now
+    ):
+        return TechnicianLocation(
+            available=False,
+            reason="collection_grant_expired",
+            work_order_id=row.public_id,
+        )
     if presence.last_latitude is None or presence.last_longitude is None:
         return TechnicianLocation(
             available=False,
             reason="no_fix",
+            work_order_id=row.public_id,
+        )
+    last_location_at = presence.last_location_at
+    if last_location_at is None:
+        return TechnicianLocation(
+            available=False,
+            reason="no_fix",
+            work_order_id=row.public_id,
+        )
+    if last_location_at.tzinfo is None:
+        last_location_at = last_location_at.replace(tzinfo=UTC)
+    stale_after_seconds = resolve_integer(
+        db,
+        SettingDomain.field,
+        "location_customer_stale_seconds",
+    )
+    if last_location_at < now - timedelta(seconds=stale_after_seconds):
+        return TechnicianLocation(
+            available=False,
+            reason="stale_fix",
             work_order_id=row.public_id,
         )
     return TechnicianLocation(

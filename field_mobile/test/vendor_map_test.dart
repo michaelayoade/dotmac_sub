@@ -66,7 +66,7 @@ void main() {
         overrides: [
           apiClientProvider.overrideWithValue(client),
           locationSourceProvider.overrideWithValue(
-            FakeLocation((latitude: 6.6, longitude: 3.35)),
+            FakeLocation(const GeoPoint(latitude: 6.6, longitude: 3.35)),
           ),
         ],
       );

@@ -316,6 +316,9 @@ def test_technician_positions_feed_shape(db_session):
             person_id=user.id,
             status="on_shift",
             location_sharing_enabled=True,
+            collection_purpose="field_operations",
+            collection_granted_at=datetime.now(UTC),
+            collection_expires_at=datetime.now(UTC) + timedelta(hours=12),
             last_latitude=6.5244,
             last_longitude=3.3792,
             last_location_accuracy_m=8.0,
@@ -349,6 +352,9 @@ def test_technician_positions_marks_stale(db_session):
             person_id=user.id,
             status="on_shift",
             location_sharing_enabled=True,
+            collection_purpose="field_operations",
+            collection_granted_at=datetime.now(UTC),
+            collection_expires_at=datetime.now(UTC) + timedelta(hours=12),
             last_latitude=6.5,
             last_longitude=3.3,
             last_location_at=datetime.now(UTC) - timedelta(minutes=30),
@@ -374,6 +380,34 @@ def test_technician_positions_excludes_disabled_location_sharing(db_session):
             person_id=user.id,
             status="on_shift",
             location_sharing_enabled=False,
+            last_latitude=6.5,
+            last_longitude=3.3,
+            last_location_at=datetime.now(UTC),
+        )
+    )
+    db_session.flush()
+
+    feed = field_maps_service.list_technician_positions(
+        db_session,
+        FieldLiveMapFeedQuery(),
+    )
+
+    assert feed.count == 0
+    assert feed.items == []
+
+
+def test_technician_positions_excludes_expired_collection_grant(db_session):
+    user = _user(db_session)
+    profile = _technician(db_session, user)
+    db_session.add(
+        FieldTechPresence(
+            technician_id=profile.id,
+            person_id=user.id,
+            status="on_shift",
+            location_sharing_enabled=True,
+            collection_purpose="field_operations",
+            collection_granted_at=datetime.now(UTC) - timedelta(hours=13),
+            collection_expires_at=datetime.now(UTC) - timedelta(hours=1),
             last_latitude=6.5,
             last_longitude=3.3,
             last_location_at=datetime.now(UTC),

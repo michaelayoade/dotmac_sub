@@ -43,7 +43,7 @@ void main() {
     queue = PhotoQueue(
       db: db,
       source: source,
-      location: FakeLocation((latitude: 6.43, longitude: 3.42)),
+      location: FakeLocation(const GeoPoint(latitude: 6.43, longitude: 3.42)),
       storageDir: tempDir,
     );
   });

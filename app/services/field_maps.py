@@ -81,16 +81,18 @@ def list_technician_positions(
 
     Returns a small JSON feed the live-map polls every ~30s.
     """
+    now = _now()
     rows = (
         db.query(FieldTechPresence)
         .filter(FieldTechPresence.location_sharing_enabled.is_(True))
+        .filter(FieldTechPresence.collection_purpose == "field_operations")
+        .filter(FieldTechPresence.collection_expires_at > now)
         .filter(FieldTechPresence.last_latitude.isnot(None))
         .filter(FieldTechPresence.last_longitude.isnot(None))
         .order_by(FieldTechPresence.last_location_at.desc())
         .limit(query.limit)
         .all()
     )
-    now = _now()
     items: list[FieldLiveMapPosition] = []
     live_count = 0
     for presence in rows:
@@ -147,6 +149,7 @@ def search_live_map(
     if not term:
         return FieldLiveMapSearchResponse(query="", count=0, items=[])
     like = f"%{term}%"
+    now = _now()
     items: list[FieldLiveMapSearchResult] = []
 
     technician_rows = (
@@ -157,6 +160,8 @@ def search_live_map(
         )
         .outerjoin(SystemUser, SystemUser.id == TechnicianProfile.system_user_id)
         .filter(FieldTechPresence.location_sharing_enabled.is_(True))
+        .filter(FieldTechPresence.collection_purpose == "field_operations")
+        .filter(FieldTechPresence.collection_expires_at > now)
         .filter(FieldTechPresence.last_latitude.isnot(None))
         .filter(FieldTechPresence.last_longitude.isnot(None))
         .filter(

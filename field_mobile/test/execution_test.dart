@@ -38,7 +38,7 @@ void main() {
     connectivity = FakeConnectivity(
       online: false,
     ); // keep entries queued for inspection
-    location = FakeLocation((latitude: 6.43, longitude: 3.42));
+    location = FakeLocation(const GeoPoint(latitude: 6.43, longitude: 3.42));
     final adapter = FakeHttpAdapter();
     final store = InMemoryTokenStore();
     final dio = Dio(BaseOptions(baseUrl: 'https://test.local'));

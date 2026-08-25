@@ -58,6 +58,7 @@ from app.tasks.events import (
     retry_failed_events,
 )
 from app.tasks.exports import run_export_job, run_scheduled_export
+from app.tasks.field_location import prune_field_location_pings
 from app.tasks.forwarding_control_observations import (
     run_forwarding_control_observation_poll,
 )
@@ -330,6 +331,7 @@ __all__ = [
     "snapshot_mrr",
     "snapshot_ip_pool_utilization",
     "snapshot_infrastructure_availability",
+    "prune_field_location_pings",
     "prune_infrastructure_availability",
     "prune_ip_pool_utilization_snapshots",
     "warm_topology_status",

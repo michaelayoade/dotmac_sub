@@ -24,6 +24,517 @@ DOMAIN = DomainSOT(
     domain="workforce_operations",
     services=(
         SOTService(
+            name="operations.field_presence",
+            module="app.services.field.presence",
+            owns=("field workforce presence status",),
+            depends_on=(
+                "auth.permission_gate",
+                "auth.staff_provisioning",
+                "events.store",
+            ),
+            notes=(
+                "Sub owns technician shift/presence vocabulary and state. The "
+                "positioning owner neither accepts nor mutates workforce status; "
+                "the legacy mixed row is split by canonical column writer until "
+                "the dotmac-positioning cutover gives location its own table."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="field workforce presence status",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "typed field presence status command",
+                            "authenticated field technician principal",
+                            "staff-linked field technician profile",
+                            "current field workforce presence status",
+                        ),
+                        canonical_writer="operations.field_presence",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed field presence status command",
+                        owner="operations.field_presence",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "UpdateFieldPresenceStatusCommand with a Sub-owned "
+                            "workforce status and command context"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authenticated field technician principal",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="authenticated API principal passed as LocationPrincipal",
+                    ),
+                    AuthorityInput(
+                        name="staff-linked field technician profile",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "active TechnicianProfile bound to the authenticated "
+                            "staff identity"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current field workforce presence status",
+                        owner="operations.field_presence",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "FieldTechPresence.status during the mixed-row migration; "
+                            "no positioning caller writes that column"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Each status mutation enters execute_owner_command once on a "
+                        "transaction-free session and commits its event with the status."
+                    ),
+                    locking=(
+                        "Technician identity and its unique presence row arbitrate one "
+                        "current status per technician."
+                    ),
+                    idempotency=(
+                        "Assigning the same canonical status is an equivalent state "
+                        "transition and remains safe to retry."
+                    ),
+                    retries=(
+                        "Retry the complete owner command only after rollback; invalid "
+                        "status or technician identity requires caller correction."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "field_presence_invalid_status",
+                        "field_presence_technician_not_found",
+                        *owner_command_boundary_error_codes(
+                            "operations.field_presence"
+                        ),
+                    ),
+                    mapping_owner="field location API adapter",
+                    fail_closed_on=(
+                        "unknown workforce status",
+                        "missing or inactive technician identity",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("field_presence.changed",),
+                    schema_version=1,
+                    delivery_owner="events.store",
+                    compatibility=(
+                        "Version 1 carries the Sub technician identity and canonical "
+                        "workforce status; it carries no coordinates or collection grant."
+                    ),
+                    replay=(
+                        "Current FieldTechPresence.status plus the durable event log "
+                        "proves the latest applied product status."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner=(
+                        "field location ingestion and collection-grant helpers that "
+                        "also mutated workforce status"
+                    ),
+                    new_owner="operations.field_presence",
+                    verification=(
+                        "architecture, invalid-status, collection separation, and "
+                        "mobile payload tests"
+                    ),
+                    cutover_gate=(
+                        "PositionObservation and UpdateLocationCollectionCommand carry "
+                        "no status, and only app.services.field.presence writes it."
+                    ),
+                    fallback_retirement=(
+                        "Status in position ping payloads and positioning-owner status "
+                        "normalization are removed."
+                    ),
+                ),
+                steward="field operations",
+                design_refs=(
+                    "docs/designs/POSITION_OBSERVATION_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_field_location_tracking.py",
+                    "tests/architecture/test_position_observation_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="operations.field_geofence_policy",
+            module="app.services.field.geofence",
+            owns=("field work-order geofence consequence policy",),
+            depends_on=(
+                "operations.position_observations",
+                "operations.field_completion",
+                "control.domain_settings",
+                "events.store",
+            ),
+            notes=(
+                "A durable opaque position-observation event is the trigger. This "
+                "product policy loads retained evidence, accepts only the current "
+                "fresh projection, and asks operations.field_completion to perform "
+                "the deterministic transition. Positioning never owns or executes "
+                "the work-order consequence."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="field work-order geofence consequence policy",
+                        role=OwnerRole.EVENT_POLICY,
+                        input_names=(
+                            "committed field position observation event",
+                            "retained field position observation",
+                            "current field technician position projection",
+                            "field geofence policy settings",
+                            "current field work-order transition state",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="committed field position observation event",
+                        owner="events.store",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "durable position_observation.recorded event carrying "
+                            "only the opaque observation identity"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="retained field position observation",
+                        owner="operations.position_observations",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "immutable FieldTechLocationPing reloaded by the event's "
+                            "opaque observation identity"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current field technician position projection",
+                        owner="operations.position_observations",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "current-position fields canonically written from the "
+                            "newest credible retained observation"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="field geofence policy settings",
+                        owner="control.domain_settings",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "database-authoritative enablement, arrival-radius, and "
+                            "observation-freshness settings"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current field work-order transition state",
+                        owner="operations.field_completion",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "assigned scheduled/dispatched WorkOrder state plus the "
+                            "canonical field transition engine"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary=(
+                        "The policy writes no state. The durable event dispatcher owns "
+                        "the isolated handler transaction and operations.field_completion "
+                        "owns every accepted work-order transition."
+                    ),
+                    locking=(
+                        "The policy reads retained observation and current projection; "
+                        "the field-transition owner applies its own transition guards."
+                    ),
+                    idempotency=(
+                        "A stable UUIDv5 client-event identity per work-order start makes "
+                        "redelivery an exact field-transition replay."
+                    ),
+                    retries=(
+                        "Retry the durable handler with the same event identity; stale, "
+                        "superseded, disabled, or ineligible evidence remains a no-op."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="durable field geofence event handler",
+                    fail_closed_on=(
+                        "missing retained observation or current projection",
+                        "stale or superseded evidence",
+                        "disabled policy or ineligible work-order state",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner=(
+                        "best-effort geofence evaluation inside location ingestion "
+                        "after an independently committed observation"
+                    ),
+                    new_owner="operations.field_geofence_policy",
+                    verification=(
+                        "durable event, stale evidence, projection currency, exact "
+                        "redelivery, and consequence-separation tests"
+                    ),
+                    cutover_gate=(
+                        "Position ingestion emits only opaque evidence and never imports "
+                        "or invokes the field transition engine."
+                    ),
+                    fallback_retirement=(
+                        "Direct geofence invocation and post-commit mutation in the "
+                        "positioning writer are removed."
+                    ),
+                ),
+                steward="field operations",
+                design_refs=(
+                    "docs/designs/POSITION_OBSERVATION_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_field_location_tracking.py",
+                    "tests/architecture/test_position_observation_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="operations.position_observations",
+            module="app.services.field.location_tracking",
+            owns=(
+                "field position observations",
+                "field technician current-position projection",
+                "field location collection grant",
+                "position observation retention",
+            ),
+            depends_on=(
+                "auth.permission_gate",
+                "auth.staff_provisioning",
+                "events.store",
+            ),
+            notes=(
+                "This product-first source owns provider-neutral location evidence, "
+                "replay identity, and the rebuildable current-position snapshot. It "
+                "does not own work-order, dispatch, attendance, customer-disclosure, "
+                "or other business consequences. Starter ADR-0032 governs extraction "
+                "into dotmac-positioning."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="field position observations",
+                        role=OwnerRole.OBSERVATION_COLLECTOR,
+                        input_names=(
+                            "typed field position observation batch",
+                            "authenticated field technician principal",
+                            "staff-linked field technician profile",
+                        ),
+                        canonical_writer="operations.position_observations",
+                    ),
+                    ConcernContract(
+                        name="field technician current-position projection",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=("current field position observations",),
+                        canonical_writer="operations.position_observations",
+                    ),
+                    ConcernContract(
+                        name="field location collection grant",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "typed field location collection command",
+                            "authenticated field technician principal",
+                            "staff-linked field technician profile",
+                        ),
+                        canonical_writer="operations.position_observations",
+                    ),
+                    ConcernContract(
+                        name="position observation retention",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "typed position observation retention command",
+                            "current field position observations",
+                        ),
+                        canonical_writer="operations.position_observations",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed field position observation batch",
+                        owner="operations.position_observations",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "RecordLocationBatchCommand with immutable client identity, "
+                            "device capture time, coordinates, accuracy, source, and "
+                            "optional opaque product context plus typed product policy"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="typed field location collection command",
+                        owner="operations.position_observations",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "UpdateLocationCollectionCommand with explicit enabled state, "
+                            "purpose, and bounded expiry"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="typed position observation retention command",
+                        owner="operations.position_observations",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "PrunePositionObservationsCommand with the resolved "
+                            "database-authoritative retention window"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authenticated field technician principal",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="authenticated API principal passed as LocationPrincipal",
+                    ),
+                    AuthorityInput(
+                        name="staff-linked field technician profile",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active TechnicianProfile bound to the authenticated staff identity",
+                    ),
+                    AuthorityInput(
+                        name="current field position observations",
+                        owner="operations.position_observations",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "immutable FieldTechLocationPing rows accepted under one "
+                            "technician, source, and client-observation identity"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Each ingest or collection-grant mutation enters "
+                        "execute_owner_command once on a transaction-free session; "
+                        "observation, projection, and grant state commit together."
+                    ),
+                    locking=(
+                        "The technician profile and presence identity are resolved before "
+                        "writes; the technician/source/client-observation unique key "
+                        "arbitrates concurrent evidence."
+                    ),
+                    idempotency=(
+                        "An exact observation-identity and payload-fingerprint replay is a "
+                        "typed no-op; changed evidence under that identity fails closed."
+                    ),
+                    retries=(
+                        "Retry the complete owner command only after rollback; an identity "
+                        "collision requires caller adjudication, never payload replacement."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "position_observation_invalid_principal",
+                        "position_observation_technician_not_found",
+                        "position_observation_invalid_source",
+                        "position_observation_invalid_coordinates",
+                        "position_observation_invalid_accuracy",
+                        "position_observation_future_timestamp",
+                        "position_observation_invalid_context",
+                        "position_observation_invalid_collection_purpose",
+                        "position_observation_invalid_policy",
+                        "position_observation_invalid_collection_grant",
+                        "position_observation_collection_not_granted",
+                        "position_observation_invalid_retention",
+                        "position_observation_identity_collision",
+                        "position_observation_empty_batch",
+                        "position_observation_batch_too_large",
+                        *owner_command_boundary_error_codes(
+                            "operations.position_observations"
+                        ),
+                    ),
+                    mapping_owner="field location API adapter",
+                    fail_closed_on=(
+                        "missing or inactive technician identity",
+                        "missing, expired, or malformed field-operations collection grant",
+                        "invalid coordinates, accuracy, source, policy, or capture time",
+                        "changed evidence under an existing observation identity",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "position_observation.recorded",
+                        "position_observation.pruned",
+                        "position_collection.changed",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.store",
+                    compatibility=(
+                        "Version 1 carries opaque observation and technician identities or "
+                        "collection state; it never duplicates coordinates in the outbox."
+                    ),
+                    replay=(
+                        "Observation identity and payload fingerprint prove evidence replay; "
+                        "collection state is reconstructed from FieldTechPresence."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="field technician current-position projection",
+                        input_names=("current field position observations",),
+                        writer="operations.position_observations",
+                        freshness=(
+                            "Transaction-current newest credible device capture time; an "
+                            "equal-time fix advances only when it has better accuracy."
+                        ),
+                        stale_behavior=(
+                            "Keep the last credible projection and let each authorized "
+                            "reader apply its own server-side freshness cutoff."
+                        ),
+                        drift_signal=(
+                            "Presence coordinates or capture time differ from deterministic "
+                            "selection over retained observations."
+                        ),
+                        rebuild_operation=(
+                            "Select the freshest credible retained observation per technician, "
+                            "breaking equal capture time by best accuracy."
+                        ),
+                        repair_owner="operations.position_observations",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner=(
+                        "uncontracted field location helpers with nested commits and "
+                        "best-effort post-commit geofence mutation"
+                    ),
+                    new_owner="operations.position_observations",
+                    verification=(
+                        "rejected-row, exact-replay, identity-collision, canonical work-order, "
+                        "capture-time, accuracy, transaction-boundary, and architecture tests"
+                    ),
+                    cutover_gate=(
+                        "The API passes typed commands to the registered owner and no location "
+                        "helper commits, rolls back, or executes product consequences."
+                    ),
+                    fallback_retirement=(
+                        "Legacy record_ping, dict batch payloads, crm_work_order_id API output, "
+                        "and post-commit geofence evaluation are removed."
+                    ),
+                ),
+                steward="field operations",
+                design_refs=(
+                    "docs/designs/POSITION_OBSERVATION_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_field_location_tracking.py",
+                    "tests/architecture/test_position_observation_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="operations.service_team_source_retirement",
             module="app.services.service_team_source_retirement",
             owns=(

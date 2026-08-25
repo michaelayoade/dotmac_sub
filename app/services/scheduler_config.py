@@ -427,6 +427,18 @@ def build_beat_schedule() -> dict:
             enabled=credential_rotation_enabled,
             interval_seconds=86400,
         )
+        field_location_retention_interval_seconds = resolve_integer(
+            session,
+            SettingDomain.field,
+            "location_retention_sweep_interval_seconds",
+        )
+        _sync_scheduled_task(
+            session,
+            name="field_location_ping_retention",
+            task_name="app.tasks.field_location.prune_field_location_pings",
+            enabled=True,
+            interval_seconds=field_location_retention_interval_seconds,
+        )
         usage_admission_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.usage,

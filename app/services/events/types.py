@@ -345,6 +345,13 @@ class EventType(enum.Enum):
     ticket_merged = "ticket.merged"
     ticket_work_order_issued = "ticket.work_order_issued"
     work_order_field_outcome_recorded = "work_order.field_outcome_recorded"
+
+    # Provider-neutral location evidence. Payloads carry opaque row identities,
+    # never coordinates; authorized product resolvers load retained evidence.
+    position_observation_recorded = "position_observation.recorded"
+    position_observation_pruned = "position_observation.pruned"
+    position_collection_changed = "position_collection.changed"
+    field_presence_changed = "field_presence.changed"
     customer_password_changed = "customer.password_changed"  # noqa: S105
 
     # Reseller events (5)

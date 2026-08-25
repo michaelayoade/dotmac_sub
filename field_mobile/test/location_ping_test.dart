@@ -55,23 +55,48 @@ void main() {
   group('LocationPingService capture', () {
     test('does not capture off shift', () async {
       final svc = LocationPingService(
-        location: FakeLocation((latitude: 6.5, longitude: 3.3)),
+        location: FakeLocation(const GeoPoint(latitude: 6.5, longitude: 3.3)),
         poster: (_) async => true,
       );
       await svc.captureOnce();
       expect(svc.bufferedCount, 0);
     });
 
-    test('captures a fix on shift with status and work order', () async {
-      final svc = LocationPingService(
-        location: FakeLocation((latitude: 6.5, longitude: 3.3)),
-        poster: (_) async => true,
-        clock: () => DateTime.utc(2026, 6, 13, 9, 0, 0),
-      )..setShift(ShiftState.onShift);
+    test(
+      'captures device evidence and stable identity before upload',
+      () async {
+        final deviceCapturedAt = DateTime.utc(2026, 6, 13, 8, 59, 58);
+        final posted = <Map<String, dynamic>>[];
+        final svc = LocationPingService(
+          location: FakeLocation(
+            GeoPoint(
+              latitude: 6.5,
+              longitude: 3.3,
+              accuracyM: 4.25,
+              capturedAt: deviceCapturedAt,
+            ),
+          ),
+          poster: (pings) async {
+            posted.addAll(pings);
+            return true;
+          },
+          clock: () => DateTime.utc(2026, 6, 13, 9, 0, 0),
+          observationId: () => 'd82c24d7-6f8f-4744-9129-9203dc346870',
+        )..setShift(ShiftState.onShift);
 
-      await svc.captureOnce(hasActiveJob: true, workOrderId: 'wo-1');
-      expect(svc.bufferedCount, 1);
-    });
+        await svc.captureOnce(hasActiveJob: true, workOrderId: 'wo-1');
+        expect(svc.bufferedCount, 1);
+        await svc.flush();
+        expect(posted.single, {
+          'client_observation_id': 'd82c24d7-6f8f-4744-9129-9203dc346870',
+          'latitude': 6.5,
+          'longitude': 3.3,
+          'accuracy_m': 4.25,
+          'captured_at': deviceCapturedAt.toIso8601String(),
+          'work_order_id': 'wo-1',
+        });
+      },
+    );
 
     test('a null fix is skipped without error', () async {
       final svc = LocationPingService(
@@ -84,7 +109,7 @@ void main() {
 
     test('buffer is bounded, dropping oldest', () async {
       final svc = LocationPingService(
-        location: FakeLocation((latitude: 1, longitude: 1)),
+        location: FakeLocation(const GeoPoint(latitude: 1, longitude: 1)),
         poster: (_) async => true,
         maxBuffer: 3,
       )..setShift(ShiftState.onShift);
@@ -129,7 +154,7 @@ void main() {
     test('clears the buffer on success', () async {
       var posted = 0;
       final svc = LocationPingService(
-        location: FakeLocation((latitude: 6.5, longitude: 3.3)),
+        location: FakeLocation(const GeoPoint(latitude: 6.5, longitude: 3.3)),
         poster: (pings) async {
           posted = pings.length;
           return true;
@@ -144,7 +169,7 @@ void main() {
 
     test('retains the buffer on failure', () async {
       final svc = LocationPingService(
-        location: FakeLocation((latitude: 6.5, longitude: 3.3)),
+        location: FakeLocation(const GeoPoint(latitude: 6.5, longitude: 3.3)),
         poster: (_) async => false,
       )..setShift(ShiftState.onShift);
       await svc.captureOnce();
@@ -163,7 +188,7 @@ void main() {
 
   group('background tracking', () {
     test('streamed fixes are buffered and flushed while on shift', () async {
-      final fake = FakeLocation((latitude: 6.5, longitude: 3.3));
+      final fake = FakeLocation(const GeoPoint(latitude: 6.5, longitude: 3.3));
       var posted = 0;
       final svc = LocationPingService(
         location: fake,
@@ -175,7 +200,7 @@ void main() {
 
       svc.startBackgroundTracking(workOrderId: 'wo-1');
       expect(svc.isBackgroundTracking, isTrue);
-      fake.emit((latitude: 6.51, longitude: 3.31));
+      fake.emit(const GeoPoint(latitude: 6.51, longitude: 3.31));
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
       expect(posted, 1);
@@ -191,7 +216,7 @@ void main() {
         poster: (_) async => true,
       );
       svc.startBackgroundTracking();
-      fake.emit((latitude: 1, longitude: 1));
+      fake.emit(const GeoPoint(latitude: 1, longitude: 1));
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(svc.bufferedCount, 0);
       await svc.stopBackgroundTracking();

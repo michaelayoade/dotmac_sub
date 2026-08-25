@@ -56,7 +56,12 @@ class GeolocatorLocationSource implements LocationSource {
       final lastKnown = await Geolocator.getLastKnownPosition();
       if (lastKnown != null &&
           DateTime.now().difference(lastKnown.timestamp).inMinutes < 2) {
-        return (latitude: lastKnown.latitude, longitude: lastKnown.longitude);
+        return GeoPoint(
+          latitude: lastKnown.latitude,
+          longitude: lastKnown.longitude,
+          accuracyM: lastKnown.accuracy,
+          capturedAt: lastKnown.timestamp.toUtc(),
+        );
       }
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -64,7 +69,12 @@ class GeolocatorLocationSource implements LocationSource {
           timeLimit: Duration(seconds: 5),
         ),
       );
-      return (latitude: position.latitude, longitude: position.longitude);
+      return GeoPoint(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracyM: position.accuracy,
+        capturedAt: position.timestamp.toUtc(),
+      );
     } catch (_) {
       // GPS failure must never break a transition or capture.
       return null;
@@ -95,7 +105,14 @@ class GeolocatorLocationSource implements LocationSource {
     }
     yield* Geolocator.getPositionStream(
       locationSettings: _backgroundSettings(),
-    ).map((p) => (latitude: p.latitude, longitude: p.longitude));
+    ).map(
+      (p) => GeoPoint(
+        latitude: p.latitude,
+        longitude: p.longitude,
+        accuracyM: p.accuracy,
+        capturedAt: p.timestamp.toUtc(),
+      ),
+    );
   }
 
   /// Platform settings that keep fixes flowing while backgrounded: an Android

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/location/location_source.dart';
 import '../auth/auth_state.dart';
@@ -24,13 +25,16 @@ class LocationPingService {
     required this.poster,
     this.sharingUpdater,
     DateTime Function()? clock,
+    String Function()? observationId,
     this.maxBuffer = 200,
-  }) : _clock = clock ?? (() => DateTime.now().toUtc());
+  }) : _clock = clock ?? (() => DateTime.now().toUtc()),
+       _observationId = observationId ?? const Uuid().v4;
 
   final LocationSource location;
   final PingPoster poster;
   final SharingUpdater? sharingUpdater;
   final DateTime Function() _clock;
+  final String Function() _observationId;
   final int maxBuffer;
 
   final List<Map<String, dynamic>> _buffer = [];
@@ -73,10 +77,11 @@ class LocationPingService {
 
   void _appendFix(GeoPoint point, {String? workOrderId}) {
     _buffer.add({
+      'client_observation_id': _observationId(),
       'latitude': point.latitude,
       'longitude': point.longitude,
-      'captured_at': _clock().toIso8601String(),
-      'status': _shift.apiValue,
+      'accuracy_m': point.accuracyM,
+      'captured_at': (point.capturedAt ?? _clock()).toUtc().toIso8601String(),
       'work_order_id': ?workOrderId,
     });
     if (_buffer.length > maxBuffer) {

@@ -1,3 +1,4 @@
+import 'package:dotmac_field/core/location/location_source.dart';
 import 'package:dotmac_field/features/vendor/trace_recorder.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -5,12 +6,13 @@ void main() {
   group('trace recorder', () {
     test('accumulates points, filters jitter, computes distance', () {
       final recorder = TraceRecorder()..start();
-      recorder.addPoint((latitude: 6.4281, longitude: 3.4216));
-      recorder.addPoint((
-        latitude: 6.4281,
-        longitude: 3.4216,
-      )); // jitter: dropped
-      recorder.addPoint((latitude: 6.4290, longitude: 3.4216)); // ~100 m north
+      recorder.addPoint(const GeoPoint(latitude: 6.4281, longitude: 3.4216));
+      recorder.addPoint(
+        const GeoPoint(latitude: 6.4281, longitude: 3.4216),
+      ); // jitter: dropped
+      recorder.addPoint(
+        const GeoPoint(latitude: 6.4290, longitude: 3.4216),
+      ); // ~100 m north
       recorder.stop();
 
       expect(recorder.points.length, 2);
@@ -20,8 +22,8 @@ void main() {
 
     test('geojson is a LineString of lng,lat pairs', () {
       final recorder = TraceRecorder()..start();
-      recorder.addPoint((latitude: 6.0, longitude: 3.0));
-      recorder.addPoint((latitude: 6.001, longitude: 3.001));
+      recorder.addPoint(const GeoPoint(latitude: 6.0, longitude: 3.0));
+      recorder.addPoint(const GeoPoint(latitude: 6.001, longitude: 3.001));
       final geojson = recorder.toGeoJson();
 
       expect(geojson['type'], 'LineString');
@@ -33,7 +35,7 @@ void main() {
 
     test('single point is not a usable trace', () {
       final recorder = TraceRecorder()..start();
-      recorder.addPoint((latitude: 6.0, longitude: 3.0));
+      recorder.addPoint(const GeoPoint(latitude: 6.0, longitude: 3.0));
       expect(recorder.hasUsableTrace, isFalse);
     });
   });

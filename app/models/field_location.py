@@ -15,7 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
-FIELD_PRESENCE_STATUSES = ("off_shift", "on_shift", "break", "busy")
+FIELD_PRESENCE_STATUSES = ("off_shift", "on_shift", "on_break", "busy")
 
 
 class FieldTechPresence(Base):
@@ -26,8 +26,16 @@ class FieldTechPresence(Base):
         Index("ix_field_tech_presence_status", "status"),
         Index("ix_field_tech_presence_last_location_at", "last_location_at"),
         CheckConstraint(
-            "status IN ('off_shift', 'on_shift', 'break', 'busy')",
+            "status IN ('off_shift', 'on_shift', 'on_break', 'busy')",
             name="ck_field_tech_presence_status",
+        ),
+        CheckConstraint(
+            "NOT location_sharing_enabled OR ("
+            "collection_purpose IS NOT NULL AND "
+            "collection_granted_at IS NOT NULL AND "
+            "collection_expires_at IS NOT NULL AND "
+            "collection_expires_at > collection_granted_at)",
+            name="ck_field_tech_presence_active_collection_grant",
         ),
     )
 
@@ -41,6 +49,13 @@ class FieldTechPresence(Base):
     status: Mapped[str] = mapped_column(String(20), default="off_shift", nullable=False)
     location_sharing_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
+    )
+    collection_purpose: Mapped[str | None] = mapped_column(String(32))
+    collection_granted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    collection_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
     last_latitude: Mapped[float | None] = mapped_column(Float)
     last_longitude: Mapped[float | None] = mapped_column(Float)
@@ -71,7 +86,14 @@ class FieldTechLocationPing(Base):
             "ix_field_tech_location_pings_person_received", "person_id", "received_at"
         ),
         Index("ix_field_tech_location_pings_received_at", "received_at"),
-        Index("ix_field_tech_location_pings_crm_work_order_id", "crm_work_order_id"),
+        Index("ix_field_tech_location_pings_work_order_id", "work_order_id"),
+        Index(
+            "ux_field_tech_location_pings_observation_identity",
+            "technician_id",
+            "source",
+            "client_observation_id",
+            unique=True,
+        ),
         CheckConstraint(
             "latitude >= -90 AND latitude <= 90",
             name="ck_field_tech_location_pings_lat_range",
@@ -89,7 +111,11 @@ class FieldTechLocationPing(Base):
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
     )
     person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    crm_work_order_id: Mapped[str | None] = mapped_column(String(64))
+    client_observation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    payload_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    work_order_id: Mapped[str | None] = mapped_column(String(64))
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     accuracy_m: Mapped[float | None] = mapped_column(Float)
