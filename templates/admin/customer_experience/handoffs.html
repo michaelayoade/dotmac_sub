@@ -1,0 +1,187 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card,
+    table_row, status_badge,
+    empty_state, animation_styles
+%}
+
+{% block title %}Customer Experience Handoffs - Admin{% endblock %}
+
+{% set cx_icon = '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v8a2 2 0 01-2 2h-8l-4 4v-4H5a2 2 0 01-2-2v-8a2 2 0 012-2h2m2-4h6a2 2 0 012 2v8a2 2 0 01-2 2H9l-4 4V6a2 2 0 012-2z"/></svg>' %}
+
+{% macro handoff_status_badge(value) %}
+    {% if value == 'accepted' %}{{ status_badge("Accepted", variant="success") }}
+    {% elif value == 'ready' %}{{ status_badge("Ready", variant="info") }}
+    {% elif value == 'needs_attention' %}{{ status_badge("Needs attention", variant="error") }}
+    {% elif value == 'pending' %}{{ status_badge("Pending", variant="pending") }}
+    {% elif value == 'canceled' %}{{ status_badge("Canceled", variant="default") }}
+    {% else %}{{ status_badge(value | replace('_', ' ') | title, variant="default") }}{% endif %}
+{% endmacro %}
+
+{% macro readiness_cell(evidence, key, label) %}
+    {% if evidence and evidence.get(key) %}
+    <span class="inline-flex items-center rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-200 dark:ring-emerald-700/60">{{ label }}</span>
+    {% else %}
+    <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-500 ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700">{{ label }}</span>
+    {% endif %}
+{% endmacro %}
+
+{% macro age_label(seconds) %}
+    {% if seconds is none %}-
+    {% elif seconds < 3600 %}{{ (seconds // 60) | int }}m
+    {% elif seconds < 86400 %}{{ (seconds // 3600) | int }}h
+    {% else %}{{ (seconds // 86400) | int }}d{% endif %}
+{% endmacro %}
+
+{% block content %}
+{{ ambient_background("cyan", "emerald") }}
+
+<div class="relative space-y-6">
+    {% call(content) page_header(
+        "Customer Experience Handoffs",
+        subtitle="Sales-to-service customers waiting for CX acceptance",
+        icon=cx_icon,
+        color="cyan",
+        breadcrumbs=[
+            {"label": "Customer Experience"},
+            {"label": "Handoffs"}
+        ]
+    ) %}
+    {% endcall %}
+
+    {% if notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">{{ notice }}</div>
+    {% endif %}
+    {% if error %}
+    <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">{{ error }}</div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+        {{ stats_card("Ready", counts.ready if counts.ready is defined else 0, icon=cx_icon, color="cyan", color2="blue") }}
+        {{ stats_card("Needs attention", counts.needs_attention if counts.needs_attention is defined else 0, icon=cx_icon, color="rose", color2="amber") }}
+        {{ stats_card("Pending", counts.pending if counts.pending is defined else 0, icon=cx_icon, color="amber", color2="orange") }}
+        {{ stats_card("Accepted", counts.accepted if counts.accepted is defined else 0, icon=cx_icon, color="emerald", color2="green") }}
+    </div>
+
+    <div class="rounded-xl border border-slate-200/70 bg-white/85 px-4 py-3 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/80">
+        <nav class="flex flex-wrap gap-2" aria-label="Handoff status">
+            {% set tab_statuses = ['all'] + visible_statuses %}
+            {% for tab in tab_statuses %}
+            {% set tab_count = counts.get(tab, 0) %}
+            {% set tab_label = 'All' if tab == 'all' else tab | replace('_', ' ') | title %}
+            <a href="/admin/customer-experience/handoffs?status={{ tab }}"
+               class="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition {% if status_filter == tab %}border-cyan-500 bg-cyan-50 text-cyan-800 dark:border-cyan-400 dark:bg-cyan-950/50 dark:text-cyan-100{% else %}border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700{% endif %}">
+                <span>{{ tab_label }}</span>
+                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ tab_count }}</span>
+            </a>
+            {% endfor %}
+        </nav>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200/70 bg-white/85 shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/80">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead>
+                    <tr class="bg-slate-50/90 dark:bg-slate-950/40">
+                        <th scope="col" class="sticky left-0 z-30 min-w-64 bg-slate-50 px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 shadow-[1px_0_0_rgba(148,163,184,0.25)] dark:bg-slate-950 dark:text-slate-400 dark:shadow-[1px_0_0_rgba(51,65,85,0.85)]">Customer</th>
+                        <th scope="col" class="min-w-72 px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Lifecycle</th>
+                        <th scope="col" class="min-w-80 px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Readiness</th>
+                        <th scope="col" class="min-w-44 px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Status</th>
+                        <th scope="col" class="min-w-96 px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if handoffs %}
+                    {% for handoff in handoffs %}
+                    {% call table_row(color="cyan") %}
+                        <td class="sticky left-0 z-20 min-w-64 bg-white px-6 py-4 shadow-[1px_0_0_rgba(148,163,184,0.18)] transition-colors group-hover:bg-cyan-50 dark:bg-slate-900 dark:shadow-[1px_0_0_rgba(51,65,85,0.75)] dark:group-hover:bg-slate-800">
+                            <div class="font-semibold text-slate-900 dark:text-white">{{ handoff.customer_display_name or 'Customer' }}</div>
+                            <div class="mt-1 space-y-0.5 text-xs text-slate-500 dark:text-slate-400">
+                                <div>{{ handoff.customer_email or 'No email' }}</div>
+                                <div>{{ handoff.customer_phone or 'No phone' }}</div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-700 dark:text-slate-200">
+                            <div class="font-medium">{{ handoff.offer_name or 'Service offer' }}</div>
+                            <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">Sales order {{ handoff.sales_order_number or handoff.sales_order_id }}</div>
+                            <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ handoff.project_name or 'Project' }}{% if handoff.project_status %} / {{ handoff.project_status | replace('_', ' ') | title }}{% endif %}</div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="flex flex-wrap gap-1.5">
+                                {{ readiness_cell(handoff.readiness_evidence, 'sale_funded', 'Funded') }}
+                                {{ readiness_cell(handoff.readiness_evidence, 'project_completed', 'Project') }}
+                                {{ readiness_cell(handoff.readiness_evidence, 'implementation_verified', 'Install') }}
+                                {{ readiness_cell(handoff.readiness_evidence, 'provisioning_completed', 'Provisioned') }}
+                                {{ readiness_cell(handoff.readiness_evidence, 'subscription_active', 'Active') }}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            {{ handoff_status_badge(handoff.status) }}
+                            <div class="mt-2 text-xs text-slate-500 dark:text-slate-400">Ready age: {{ age_label(handoff.ready_age_seconds) }}</div>
+                            {% if handoff.attention_reason %}
+                            <div class="mt-2 max-w-56 rounded-md bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{{ handoff.attention_reason }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if handoff.status == 'ready' %}
+                            <div class="flex flex-col gap-2">
+                                {% if can(request, "customer_experience:handoff:accept") %}
+                                <form method="post" action="/admin/customer-experience/handoffs/{{ handoff.id }}/accept" class="flex flex-wrap items-center gap-2">
+                                    <input type="hidden" name="status" value="{{ status_filter }}">
+                                    <input type="text" name="reason" placeholder="Acceptance note" class="min-w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                    <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Accept</button>
+                                </form>
+                                {% endif %}
+                                {% if can(request, "customer_experience:handoff:attention") %}
+                                <form method="post" action="/admin/customer-experience/handoffs/{{ handoff.id }}/needs-attention" class="flex flex-wrap items-center gap-2">
+                                    <input type="hidden" name="status" value="{{ status_filter }}">
+                                    <input type="text" name="reason" required placeholder="Issue" class="min-w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                    <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">Needs attention</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                            {% elif handoff.status == 'needs_attention' and can(request, "customer_experience:handoff:attention") %}
+                            <form method="post" action="/admin/customer-experience/handoffs/{{ handoff.id }}/resolve-attention" class="flex flex-wrap items-center gap-2">
+                                <input type="hidden" name="status" value="{{ status_filter }}">
+                                <input type="text" name="reason" required placeholder="Resolution" class="min-w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-cyan-600 px-3 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Resolve</button>
+                            </form>
+                            {% else %}
+                            <span class="text-sm text-slate-500 dark:text-slate-400">{{ handoff.next_action | replace('_', ' ') | title }}</span>
+                            {% endif %}
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No handoffs found",
+                        message="Completed and verified installs will appear here when they are ready for Customer Experience.",
+                        icon=cx_icon,
+                        color="cyan",
+                        colspan=5
+                    ) }}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if has_prev or has_next %}
+        <div class="border-t border-slate-200 bg-slate-50/70 px-6 py-3 dark:border-slate-700 dark:bg-slate-950/40">
+            <div class="flex items-center justify-between">
+                <p class="text-sm text-slate-500 dark:text-slate-400">Showing {{ ((page - 1) * per_page) + 1 if total else 0 }} to {{ [page * per_page, total] | min }} of {{ total }}</p>
+                <nav class="flex items-center gap-1">
+                    {% if has_prev %}
+                    <a href="/admin/customer-experience/handoffs?status={{ status_filter }}&page={{ page - 1 }}&per_page={{ per_page }}" class="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Previous</a>
+                    {% endif %}
+                    {% if has_next %}
+                    <a href="/admin/customer-experience/handoffs?status={{ status_filter }}&page={{ page + 1 }}&per_page={{ per_page }}" class="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Next</a>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}
