@@ -133,10 +133,21 @@ jobs:
   deploy:
     name: Deploy exact dev image
     needs: verify
+    if: vars.STAGING_AUTO_DEPLOY_ENABLED == 'true'
     runs-on: [self-hosted, linux, x64, dotmac-sub-staging]
     environment: staging
     timeout-minutes: 90
     steps:
+      - name: Recheck automatic-deploy kill switch
+        env:
+          STAGING_AUTO_DEPLOY_ENABLED: ${{ vars.STAGING_AUTO_DEPLOY_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [ "$STAGING_AUTO_DEPLOY_ENABLED" != "true" ]; then
+            echo "Automatic staging deployment was disabled after candidate verification." >&2
+            exit 1
+          fi
+
       - name: Fast-forward the staging checkout to the verified dev commit
         env:
           CANDIDATE_SHA: ${{ needs.verify.outputs.candidate_sha }}

@@ -248,6 +248,40 @@ pre-migration backup. The offsite backup jobs under `scripts/backup/` are also
 unchanged. Existing staging backup files are retained until a separately
 approved retention action.
 
+## Staging-host resource admission
+
+`scripts/deploy_staging.sh` acquires the host-wide
+`/var/lock/dotmac_staging_heavy.lock` before it delegates to the deployment
+owner. The CRM/ERP staging deploy adapters, the nightly database-sync service,
+and any reviewed restore or migration wrapper must acquire this same lock.
+Repository-specific locks remain in place as a second layer; they do not
+serialize work across repositories.
+
+After acquiring the lock, `scripts/staging_host_admission.py` observes the host
+and fails closed before an image pull, migration, or container recreation. Its
+defaults require:
+
+- at least 4 GiB `MemAvailable` (`STAGING_MIN_AVAILABLE_MEMORY_GIB`);
+- one-minute load no greater than 1.5 per CPU
+  (`STAGING_MAX_LOAD_PER_CPU`);
+- no more than 50 percent swap used
+  (`STAGING_MAX_SWAP_USED_PERCENT`);
+- no more than two blocked processes
+  (`STAGING_MAX_BLOCKED_PROCESSES`);
+- `/proc/pressure/io` `some avg10` no greater than 20 percent
+  (`STAGING_MAX_IO_PRESSURE_AVG10_PERCENT`);
+- the exact staging database container healthy (`STAGING_DB_CONTAINER`, default
+  `dotmac_sub_db`); and
+- no observed `pg_dump`, `pg_restore`, `db_sync_to_staging`, or `dotmac_data`
+  work.
+
+Threshold changes are reviewed host-capacity changes, not an incident bypass.
+Do not raise a threshold merely to force a queued deployment through. Disable
+`STAGING_AUTO_DEPLOY_ENABLED`, recover the host, and follow
+`docs/runbooks/SEABONE_CAPACITY_RECOVERY.md` instead. The workflow rechecks the
+repository kill switch when its self-hosted deploy job starts so a disabled
+gate cannot silently proceed from an older verification job.
+
 ## Failure behavior
 
 - A missing runner, disabled repository switch, wrong host path, dirty tracked

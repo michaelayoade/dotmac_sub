@@ -20,6 +20,12 @@ def _install_adapter_fixture(
 
     adapter = scripts / "deploy_staging.sh"
     shutil.copy2(STAGING_ADAPTER, adapter)
+    (scripts / "staging_host_admission.py").write_text(
+        "from __future__ import annotations\n"
+        "import os\n"
+        "raise SystemExit(int(os.environ.get('STAGING_ADMISSION_TEST_RC', '0')))\n",
+        encoding="utf-8",
+    )
     (checkout / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
 
     output = tmp_path / "deploy-output.txt"
@@ -38,6 +44,7 @@ def _install_adapter_fixture(
             "REQUIRE_PROXY_HANDOFF": "1",
             "SKIP_BACKUP": "0",
             "STAGING_ADAPTER_TEST_OUTPUT": str(output),
+            "STAGING_HOST_LOCK_FILE": str(tmp_path / "staging-heavy.lock"),
         }
     )
     return adapter, output, process_env
@@ -85,4 +92,27 @@ def test_staging_adapter_refuses_non_staging_environment(tmp_path: Path) -> None
 
     assert result.returncode != 0
     assert "Staging deploy refused" in result.stderr
+    assert not output.exists()
+
+
+def test_staging_adapter_refuses_failed_resource_admission(tmp_path: Path) -> None:
+    adapter, output, process_env = _install_adapter_fixture(
+        tmp_path,
+        env_lines=(
+            "APP_ENV=staging",
+            "SERVER_NAME=dotmac-sub-staging",
+            "HEALTH_URL=http://10.120.121.20:8001/health",
+        ),
+    )
+    process_env["STAGING_ADMISSION_TEST_RC"] = "75"
+
+    result = subprocess.run(
+        ["bash", str(adapter), "sha-deadbee"],
+        check=False,
+        capture_output=True,
+        env=process_env,
+        text=True,
+    )
+
+    assert result.returncode == 75
     assert not output.exists()

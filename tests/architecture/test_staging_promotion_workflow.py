@@ -37,6 +37,8 @@ def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
     assert 'workflows: ["Build & Push to GHCR"]' in workflow
     assert "branches: [dev]" in workflow
     assert "vars.STAGING_AUTO_DEPLOY_ENABLED == 'true'" in workflow
+    assert workflow.count("vars.STAGING_AUTO_DEPLOY_ENABLED == 'true'") == 2
+    assert "Recheck automatic-deploy kill switch" in workflow
     assert "github.event.workflow_run.event == 'push'" in workflow
     assert (
         "github.event.workflow_run.head_repository.full_name == github.repository"
@@ -63,6 +65,8 @@ def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
     )
     assert "export SKIP_BACKUP=1" in staging_adapter
     assert "export REQUIRE_PROXY_HANDOFF=0" in staging_adapter
+    assert "/var/lock/dotmac_staging_heavy.lock" in staging_adapter
+    assert 'python3 "${ROOT_DIR}/scripts/staging_host_admission.py"' in staging_adapter
     assert 'exec bash "${ROOT_DIR}/scripts/deploy.sh" "$@"' in staging_adapter
 
 
@@ -86,10 +90,28 @@ def test_staging_promotion_runbook_records_activation_and_failure_contracts() ->
     assert "updates local `dev` only by fast-forward" in runbook
     assert "scripts/deploy_staging.sh" in runbook
     assert "Production backup behavior remains unchanged" in runbook
+    assert "/var/lock/dotmac_staging_heavy.lock" in runbook
+    assert "STAGING_MIN_AVAILABLE_MEMORY_GIB" in runbook
     assert "Do not edit `VERSION` in the source pull request" in runbook
     assert (
         "A failed staging deployment never authorizes promotion to `main`." in runbook
     )
+
+
+def test_seabone_recovery_runbook_pins_safe_cleanup_and_workload_placement() -> None:
+    runbook = _read("docs/runbooks/SEABONE_CAPACITY_RECOVERY.md")
+
+    assert "Never use `swapoff -a`" in runbook
+    assert "Never use `docker volume prune`" in runbook
+    assert "Compose `--remove-orphans`" in runbook
+    assert "/var/lock/dotmac_staging_heavy.lock" in runbook
+    assert "dotmac-observe throwaway-test host" in runbook
+    assert "They do not move to dotmac-observe" in runbook
+    assert "move the complete Sub staging stack" in runbook
+
+    guidance = _read("AGENTS.md")
+    assert "Do not run ad-hoc tests" in guidance
+    assert "explicitly named dotmac-observe" in guidance
 
 
 def test_runbook_records_the_merge_method_per_pull_request_kind() -> None:

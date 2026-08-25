@@ -108,6 +108,13 @@ authoritative documents in the same change that updates the contract.
 
 ## Validation
 
+Do not run ad-hoc tests, benchmark runs, dependency builds, or scratch
+containers on Seabone. Run them only on the explicitly named dotmac-observe
+throwaway-test host, one bounded container at a time, and remove the container,
+scratch tree, and pulled test image after the run. Production restores and ETL
+data must never be copied to dotmac-observe; they require a separately approved
+trusted migration host.
+
 Run the checks appropriate to the changed surface. Before publication, run the
 full repository-prescribed suite:
 
