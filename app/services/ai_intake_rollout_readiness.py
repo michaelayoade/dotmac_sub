@@ -901,7 +901,7 @@ def seeded_canary_definitions() -> tuple[CanaryScenarioDefinition, ...]:
 def run_seeded_canary_suite(
     *,
     required_only: bool = False,
-    engine: CanaryEngineMode = CanaryEngineMode.langgraph_v1,
+    engine: CanaryEngineMode = CanaryEngineMode.custom_v1,
     policy_version_number: int | None = None,
 ) -> tuple[CanaryRunResult, ...]:
     results: list[CanaryRunResult] = []
@@ -1150,7 +1150,7 @@ def _definition_from_matrix_seed(
         if scenario.high_priority
         else ("scenario-matrix",),
         channel=CanaryChannel.whatsapp,
-        engine_requirement=CanaryEngineMode.langgraph_v1,
+        engine_requirement=None,
         inbound_turns=turns,
         simulated_tool_results=tool_results,
         assertions=tuple(assertions),
@@ -1742,7 +1742,7 @@ def pre_activation_gate_report(
         if db is not None
         else activation_required_canaries_pass(
             policy_version_number=None,
-            engine=CanaryEngineMode.langgraph_v1,
+            engine=CanaryEngineMode.custom_v1,
         )
     )
     natural_passed = all(

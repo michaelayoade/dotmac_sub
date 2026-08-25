@@ -536,6 +536,7 @@ def test_generic_runner_executes_new_scenario_without_scenario_specific_python()
     scenario = CanaryScenarioDefinition(
         scenario_id="admin_created_greeting",
         name="Admin Created Greeting",
+        engine_requirement=CanaryEngineMode.custom_v1,
         inbound_turns=(CanaryInboundTurn(sequence=1, text="Hello"),),
         assertions=(
             CanaryAssertion(
@@ -633,6 +634,7 @@ def test_generic_rapid_burst_keeps_one_burst_group_and_bounded_outbound():
     scenario = CanaryScenarioDefinition(
         scenario_id="new_rapid_burst",
         name="New Rapid Burst",
+        engine_requirement=CanaryEngineMode.custom_v1,
         inbound_turns=(
             CanaryInboundTurn(
                 sequence=1, text="My internet is down.", burst_group="b1"
@@ -673,6 +675,7 @@ def test_tool_results_use_approved_typed_schema():
     scenario = CanaryScenarioDefinition(
         scenario_id="monitoring_no_data_generic",
         name="Monitoring No Data Generic",
+        engine_requirement=CanaryEngineMode.custom_v1,
         inbound_turns=(CanaryInboundTurn(sequence=1, text="My internet is down."),),
         simulated_tool_results=(
             CanaryToolResult(
