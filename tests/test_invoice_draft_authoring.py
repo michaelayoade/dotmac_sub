@@ -163,6 +163,33 @@ def test_create_draft_commits_complete_aggregate_and_replays(
     assert mismatched_replay.value.code.endswith(".idempotency_conflict")
 
 
+def test_create_draft_preserves_subscription_line_link(
+    db_session, subscriber, subscription
+) -> None:
+    command = replace(
+        _create_command(subscriber),
+        lines=(
+            replace(
+                _line(),
+                subscription_id=subscription.id,
+            ),
+        ),
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    created = invoice_draft_authoring.create_invoice_draft(
+        db_session,
+        command,
+        context=_context("invoice-draft-subscription-link"),
+    )
+
+    line = db_session.scalar(
+        select(InvoiceLine).where(InvoiceLine.invoice_id == created.invoice_id)
+    )
+    assert line is not None
+    assert line.subscription_id == subscription.id
+
+
 def test_proforma_conversion_retry_preserves_credit_derived_paid_status(
     db_session,
     subscriber,
