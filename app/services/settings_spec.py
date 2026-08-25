@@ -3329,6 +3329,77 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="",
         label="Favicon URL",
     ),
+    # Platform legal-entity identity. Owner: `customer.branding`
+    # (`app.services.brand_profiles`), which already owns legacy branding
+    # convergence: these keys are the settings-shaped inputs behind
+    # `BrandProfile.legal_name`, `.support_email`, `.support_phone` and
+    # `.legal_address`. They are registered beside the other convergence inputs
+    # (logo/colour/favicon) rather than in `billing`, which merely happened to
+    # be where the pre-registry company-info page wrote them.
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_name",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Legal Name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_email",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Support Email",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_phone",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Support Phone",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_address_street1",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Address Line 1",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_address_street2",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Address Line 2",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_address_city",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Address City",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_address_zip",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Address Postal Code",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="company_address_country",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Address Country",
+    ),
     SettingSpec(
         domain=SettingDomain.comms,
         key="brand_primary_color",

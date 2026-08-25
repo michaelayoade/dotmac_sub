@@ -9,7 +9,7 @@
 <div class="relative space-y-8">
     {% call page_header(
         title="Company Information",
-        subtitle="Manage the company/app name, address, and bank information used across the admin UI, invoices, and communications",
+        subtitle="Manage the legal name, address, and contact details used across the admin UI, invoices, and communications",
         icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>',
         color="slate",
         color2="gray"
@@ -27,20 +27,9 @@
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">This is the app name shown in the admin UI and customer-facing branding.</p>
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing System URL</label>
-                <input type="url" name="billing_url" value="{{ info.billing_url or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="https://billing.example.com">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Registration ID</label>
-                <input type="text" name="company_registration_id" value="{{ info.company_registration_id or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">VAT Number</label>
                 <input type="text" name="company_vat_number" value="{{ info.company_vat_number or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Partner Commission %</label>
-                <input type="number" step="0.01" name="partner_commission_pct" value="{{ info.partner_commission_pct or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="0.00">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Printed on the invoice tax label.</p>
             </div>
         </div>
         {% endcall %}
@@ -85,23 +74,11 @@
         </div>
         {% endcall %}
 
-        {# Bank Details #}
-        {% call card("Bank Details", color="slate") %}
-        <div class="grid gap-4 sm:grid-cols-2">
-            <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Bank Name</label>
-                <input type="text" name="company_bank_name" value="{{ info.company_bank_name or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Account Number</label>
-                <input type="text" name="company_bank_account" value="{{ info.company_bank_account or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Branch / Address</label>
-                <input type="text" name="company_bank_branch" value="{{ info.company_bank_branch or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-        </div>
-        {% endcall %}
+        {# Receiving bank accounts are owned by collection_accounts
+           (/admin/billing/collection-accounts), not by company metadata. The
+           retired company_bank_* fields printed an account that presentment
+           never offered — see
+           tests/architecture/test_collection_account_ownership.py. #}
 
         <div class="flex justify-end">
             <button type="submit" class="rounded-lg bg-slate-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-700 transition">Save Company Information</button>

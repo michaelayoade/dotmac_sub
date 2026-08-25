@@ -116,7 +116,7 @@ def test_legacy_branding_backfill_is_idempotent(db_session):
     db_session.add_all(
         [
             DomainSetting(
-                domain=SettingDomain.billing,
+                domain=SettingDomain.comms,
                 key="company_name",
                 value_type=SettingValueType.string,
                 value_text="Backfilled ISP",

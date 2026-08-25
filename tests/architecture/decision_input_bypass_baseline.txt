@@ -81,7 +81,6 @@ setting 5 app/services/web_admin_dashboard.py
 setting 3 app/services/web_catalog_subscriptions.py
 setting 3 app/services/web_customer_details.py
 setting 4 app/services/web_network_olt_profiles.py
-setting 7 app/services/web_system_company_info.py
 setting 7 app/services/web_system_config.py
 setting 30 app/services/web_system_export_tool.py
 setting 4 app/services/web_vpn_servers.py

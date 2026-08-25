@@ -2825,6 +2825,52 @@ theme tokens. They do not decide that a domain state is positive, warning,
 negative, informational, or neutral, and they do not assign a literal color to
 one of those roles locally.
 
+### Platform legal-entity identity (company information)
+
+The company-information admin page used to write ~15 `company_*` keys straight
+into `domain_settings` with raw ORM statements and no `SettingSpec`: a second,
+unregistered settings surface. Those keys were five different concerns saved
+together, so they were governed together.
+
+- Owner: `customer.branding` (`app.services.brand_profiles`), extended to own
+  "platform legal-entity identity, contact, and postal address". `company_name`,
+  `company_email`, `company_phone` and the five `company_address_*` parts are
+  registered `SettingSpec` entries in the **`comms`** domain — beside the other
+  legacy branding convergence inputs (`sidebar_logo_url`, `favicon_url`,
+  `brand_primary_color`) — and are projected onto `BrandProfile.legal_name`,
+  `.support_email`, `.support_phone` and `.legal_address`. They are not
+  registered in `billing`; that is only where the pre-registry page happened to
+  write them. Migration
+  `alembic/versions/462_company_identity_settings_comms_owner.py` relocates the
+  stored rows.
+- Adapter: `app.services.web_system_company_info` reads through
+  `settings_spec.resolve_value` and writes through the domain-settings service.
+  It constructs no `DomainSetting` rows; its entry in
+  `tests/architecture/decision_input_bypass_baseline.txt` was removed.
+- Receiving bank accounts are owned by `financial.collection_accounts`. The
+  `company_bank_name` / `company_bank_account` / `company_bank_branch` write
+  path is deleted; the read path was already retired by
+  `tests/architecture/test_collection_account_ownership.py`.
+- Per-partner commission is carried by `Organization.commission_rate`. The
+  global `partner_commission_pct` key had no reader and its write path is
+  deleted, as are the reader-less `company_registration_id` and `billing_url`.
+  Stored rows are left in place as migration evidence; only the code path is
+  removed, and `tests/architecture/test_company_identity_settings_ownership.py`
+  keeps the keys from returning.
+- **Open decision — `company_vat_number` has no owner.** It is the operating
+  entity's own tax-registration identity. Its single consumer is the invoice tax
+  label in `app.services.billing_invoice_pdf`. `customer.branding` owns branding
+  and `BrandProfile` carries no tax field; `financial.tax_configuration` owns
+  tax-*rate* records, not the operator's registration number. The key therefore
+  stays unregistered in the `billing` domain, written through the domain-settings
+  service like the rest, until an owner is named. Do not register it into a
+  domain by default.
+
+Rule: legal-entity identity resolves through the registered branding-owned
+settings and `resolve_brand`. A page does not open a second settings surface to
+save a value the registry could govern, and a mixed form does not make five
+concerns one owner.
+
 ## Secrets and Credentials
 
 1. Bootstrap secrets required before the application starts use environment or

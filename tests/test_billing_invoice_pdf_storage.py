@@ -245,13 +245,13 @@ def test_render_invoice_html_includes_branding_and_company_info(
                 value_type=SettingValueType.string,
             ),
             DomainSetting(
-                domain=SettingDomain.billing,
+                domain=SettingDomain.comms,
                 key="company_name",
                 value_text="Dotmac Green ISP",
                 value_type=SettingValueType.string,
             ),
             DomainSetting(
-                domain=SettingDomain.billing,
+                domain=SettingDomain.comms,
                 key="company_email",
                 value_text="billing@dotmac.ng",
                 value_type=SettingValueType.string,

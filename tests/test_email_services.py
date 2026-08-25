@@ -614,7 +614,7 @@ def test_send_user_invite_email_uses_company_name_and_branding_logo(
     db_session.add_all(
         [
             DomainSetting(
-                domain=SettingDomain.billing,
+                domain=SettingDomain.comms,
                 key="company_name",
                 value_text="Dotmac Selfcare",
                 value_type=SettingValueType.string,
@@ -705,7 +705,7 @@ def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
     db_session.add_all(
         [
             DomainSetting(
-                domain=SettingDomain.billing,
+                domain=SettingDomain.comms,
                 key="company_name",
                 value_text="Dotmac Selfcare",
                 value_type=SettingValueType.string,

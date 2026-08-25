@@ -2166,8 +2166,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "brand primary, secondary, and semantic UI color roles",
                     "runtime web theme token generation",
                     "legacy branding convergence",
+                    "platform legal-entity identity, contact, and postal address",
                 ),
                 depends_on=("customer.identity_scope", "control.domain_settings"),
+                notes=(
+                    "The company-info admin page is an adapter over this owner. "
+                    "Legal name, support email/phone and postal address are "
+                    "registered comms-domain SettingSpecs resolved through "
+                    "settings_spec, then projected onto BrandProfile.legal_name / "
+                    "support_email / support_phone / legal_address. The operating "
+                    "entity's tax-registration number (company_vat_number) is NOT "
+                    "owned here: BrandProfile carries no tax field, and assigning "
+                    "it needs an explicit ownership decision."
+                ),
             ),
         ),
         entrypoints=(
