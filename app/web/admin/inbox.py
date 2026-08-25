@@ -3460,7 +3460,7 @@ def team_inbox_ai_intake_canary_suite_save(
 
 @settings_router.post(
     "/ai-intake-canary/run",
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_ai_intake_canary_run(
     request: Request,

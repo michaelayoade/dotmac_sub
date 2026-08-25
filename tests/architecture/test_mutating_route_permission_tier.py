@@ -80,11 +80,13 @@ _READ_TIER_VERBS = frozenset(
 # ``test_every_permission_on_a_mutating_route_has_a_classified_verb``.
 _WRITE_TIER_VERBS = frozenset(
     {
+        "accept",
         "activate",
         "admin",
         "apply",
         "archive",
         "assign",
+        "attention",
         "billing_write",
         "cancel",
         "commission",

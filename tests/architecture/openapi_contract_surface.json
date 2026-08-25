@@ -14074,6 +14074,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/customer-experience/handoffs/{handoff_id}/resolve-attention": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:handoff_id!"
+   ],
+   "request": "356b6932160a",
+   "responses": {
+    "200": "c29cbf850a49",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/defaults/calculate-due-date": {
    "params": [
     "header:authorization",
@@ -19117,7 +19129,8 @@
   "CustomerDeviceCommandStatus": "e7911f4fdc39",
   "CustomerExperienceAcceptRequest": "0e8608e2743a",
   "CustomerExperienceAttentionRequest": "870e7a93b7e7",
-  "CustomerExperienceHandoffRead": "ad4250a7fc1d",
+  "CustomerExperienceHandoffRead": "53183f1817a1",
+  "CustomerExperienceResolveAttentionRequest": "86aef0362a70",
   "CustomerExperienceState": "10146f9b7d77",
   "CustomerFieldJobChatMessage": "cc5856b9cfdf",
   "CustomerFieldJobChatMessageCreate": "17b944829df4",

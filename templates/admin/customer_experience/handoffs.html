@@ -127,6 +127,7 @@
                             <div class="flex flex-col gap-2">
                                 {% if can(request, "customer_experience:handoff:accept") %}
                                 <form method="post" action="/admin/customer-experience/handoffs/{{ handoff.id }}/accept" class="flex flex-wrap items-center gap-2">
+                                    {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="status" value="{{ status_filter }}">
                                     <input type="text" name="reason" placeholder="Acceptance note" class="min-w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                                     <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Accept</button>
@@ -134,6 +135,7 @@
                                 {% endif %}
                                 {% if can(request, "customer_experience:handoff:attention") %}
                                 <form method="post" action="/admin/customer-experience/handoffs/{{ handoff.id }}/needs-attention" class="flex flex-wrap items-center gap-2">
+                                    {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="status" value="{{ status_filter }}">
                                     <input type="text" name="reason" required placeholder="Issue" class="min-w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                                     <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">Needs attention</button>
@@ -142,6 +144,7 @@
                             </div>
                             {% elif handoff.status == 'needs_attention' and can(request, "customer_experience:handoff:attention") %}
                             <form method="post" action="/admin/customer-experience/handoffs/{{ handoff.id }}/resolve-attention" class="flex flex-wrap items-center gap-2">
+                                {% include "components/forms/csrf_input.html" %}
                                 <input type="hidden" name="status" value="{{ status_filter }}">
                                 <input type="text" name="reason" required placeholder="Resolution" class="min-w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                                 <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-cyan-600 px-3 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Resolve</button>

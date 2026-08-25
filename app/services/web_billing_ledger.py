@@ -28,6 +28,7 @@ from app.models.subscriber import Reseller, Subscriber
 from app.schemas.status_presentation import StatusTone
 from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services.billing import ledger as billing_ledger_service
 from app.services.common import validate_enum
 from app.services.ui_contracts import Kpi, StateValue
 
@@ -548,19 +549,13 @@ def build_ledger_entry_detail(
 ) -> LedgerEntryDetailView | None:
     """Resolve one immutable ledger event and its direct source references."""
 
-    entry = (
-        db.query(LedgerEntry)
-        .options(joinedload(LedgerEntry.account))
-        .filter(LedgerEntry.id == query.entry_id)
-        .one_or_none()
+    ledger_detail = billing_ledger_service.get_ledger_entry_detail(
+        db,
+        entry_id=query.entry_id,
     )
-    if entry is None:
+    if ledger_detail is None:
         return None
-    reversed_by_entry_id = (
-        db.query(LedgerEntry.id)
-        .filter(LedgerEntry.reversal_of_entry_id == entry.id)
-        .scalar()
-    )
+    entry = ledger_detail.entry
     return LedgerEntryDetailView(
         id=entry.id,
         account_id=entry.account_id,
@@ -578,7 +573,7 @@ def build_ledger_entry_detail(
         invoice_id=entry.invoice_id,
         payment_id=entry.payment_id,
         reversal_of_entry_id=entry.reversal_of_entry_id,
-        reversed_by_entry_id=reversed_by_entry_id,
+        reversed_by_entry_id=ledger_detail.reversed_by_entry_id,
     )
 
 
