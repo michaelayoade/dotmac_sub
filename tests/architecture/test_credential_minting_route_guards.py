@@ -212,8 +212,8 @@ def test_without_the_route_level_guard_a_weakened_mount_lets_a_non_admin_through
     added). The request must now get PAST authorization. The eventual adapter
     outcome is deliberately not pinned: depending on the route it may be
     schema validation, unavailable Redis, or the deliberately skeletal fake
-    database. The contract under test is only that authorization no longer
-    returns 403.
+    database. The contract under test is only that neither authentication nor
+    authorization refuses the caller.
     """
     app = _weakened_mount_app()
     route = _find_route(auth_router, method, path)
@@ -231,7 +231,7 @@ def test_without_the_route_level_guard_a_weakened_mount_lets_a_non_admin_through
     client = TestClient(app, raise_server_exceptions=False)
     url = "/api/v1" + path.replace("{key_id}", "00000000-0000-0000-0000-00000000000b")
     response = client.request(method, url, json={})
-    assert response.status_code != 403, (
+    assert response.status_code not in {401, 403}, (
         "Removing the route-level admin guard did NOT change the outcome, so "
         "the forward-direction assertion is passing for some other reason and "
         "this canary does not actually test the guard."
