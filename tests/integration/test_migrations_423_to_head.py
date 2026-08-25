@@ -18,6 +18,7 @@ from sqlalchemy.engine import URL, Engine, make_url
 
 from alembic import command
 from app import config as app_config
+from scripts.ci.migrated_test_database import effective_heads
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION_423 = "423_prepaid_opening_funding_reconciliation"
@@ -386,7 +387,7 @@ def test_postgres_upgrades_revision_423_through_current_head(
 
     command.upgrade(config, "heads")
 
-    expected_heads = set(ScriptDirectory.from_config(config).get_heads())
+    expected_heads = set(effective_heads(ScriptDirectory.from_config(config)))
     assert _revision_rows(database_url) == expected_heads
     engine = create_engine(database_url)
     try:

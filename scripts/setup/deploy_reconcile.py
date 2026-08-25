@@ -30,6 +30,10 @@ from app.services.genieacs_client import GenieACSError, create_genieacs_client
 from app.services.scheduler_config import find_unregistered_scheduled_tasks
 from app.services.secrets import list_secret_field_names, list_secret_paths
 from app.services.settings_spec import resolve_value
+from scripts.ci.migrated_test_database import (
+    effective_heads,
+    install_migration_graph_environment,
+)
 
 REQUIRED_OPENBAO_PATHS = [
     "auth",
@@ -78,9 +82,10 @@ def check_release() -> CheckResult:
 
 
 def check_migrations() -> CheckResult:
+    install_migration_graph_environment()
     alembic_cfg = Config("alembic.ini")
     script = ScriptDirectory.from_config(alembic_cfg)
-    expected_heads = sorted(script.get_heads())
+    expected_heads = sorted(effective_heads(script))
 
     engine = get_engine()
     with engine.connect() as connection:

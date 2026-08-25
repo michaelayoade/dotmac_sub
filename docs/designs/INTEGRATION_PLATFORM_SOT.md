@@ -27,6 +27,14 @@ mapping. Flutterwave v4 does not report provider fee evidence on the current
 connector contract, so Sub refuses to infer zero or move money on that path;
 the mirror can report the gap without recording a consequence.
 
+The settlement mirror is deliberately usable while the Integrator installation
+or capability binding is configured but disabled. It resolves the pinned
+runtime context with the existing mirror-only disabled-state seam, compares
+against incumbent evidence, and writes no receipt or financial consequence.
+The live settlement receiver still requires both installation and binding to be
+enabled. Missing, quarantined, retired, unconfigured, or wrong-capability
+bindings fail closed on both paths.
+
 Machine-principal authentication is additive while the legacy API-key verifier
 remains available. Its HMAC key is therefore optional until that fallback is
 retired and lives at the dedicated OpenBao path
