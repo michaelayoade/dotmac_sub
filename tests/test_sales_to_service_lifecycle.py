@@ -171,6 +171,22 @@ def test_verified_implementation_to_provisioning_to_cx_acceptance(
     assert subscription.status == SubscriptionStatus.active
     assert handoff.status == CustomerExperienceHandoffStatus.ready.value
     assert handoff.readiness_evidence["eligible"] is True
+    queue = customer_experience_handoffs.list_handoff_queue(
+        db_session, status=CustomerExperienceHandoffStatus.ready.value
+    )
+    assert len(queue) == 1
+    assert queue[0].customer_display_name == (
+        subscriber.display_name or subscriber.full_name
+    )
+    assert queue[0].customer_email == subscriber.email
+    assert queue[0].sales_order_number == order.order_number
+    assert queue[0].project_name == project.name
+    assert queue[0].subscription_status == SubscriptionStatus.active.value
+    assert queue[0].service_order_status == ServiceOrderStatus.active.value
+    assert queue[0].next_action == "accept_or_needs_attention"
+    queue_counts = customer_experience_handoffs.count_handoff_queue(db_session)
+    assert queue_counts[CustomerExperienceHandoffStatus.ready.value] == 1
+    assert queue_counts["all"] == 1
 
     customer_experience_handoffs.accept_handoff(
         db_session,
@@ -184,6 +200,72 @@ def test_verified_implementation_to_provisioning_to_cx_acceptance(
     assert handoff.accepted_at is not None
     assert order.status == SalesOrderStatus.fulfilled.value
     assert db_session.query(CustomerExperienceHandoffEvent).count() == 2
+
+
+def test_cx_attention_can_be_resolved_back_to_ready(
+    db_session, subscriber, catalog_offer
+):
+    _order, _project, installation, _subscription, service_order, reviewer = _chain(
+        db_session, subscriber, catalog_offer
+    )
+    vendor_portal_operations.transition_staff_project(
+        db_session,
+        str(installation.id),
+        action="verify",
+        actor_id=str(reviewer.id),
+        reason="Implementation evidence accepted",
+    )
+    db_session.commit()
+    service_order_lifecycle.record_provisioning_result(
+        db_session,
+        service_order_id=service_order.id,
+        succeeded=True,
+        readiness_decision_id=uuid4(),
+        actor_id="pytest",
+    )
+    db_session.commit()
+    handoff = db_session.query(CustomerExperienceHandoff).one()
+
+    customer_experience_handoffs.mark_needs_attention(
+        db_session,
+        handoff_id=handoff.id,
+        actor_type="staff_user",
+        actor_id=str(reviewer.id),
+        reason="Customer welcome call pending",
+    )
+    assert handoff.status == CustomerExperienceHandoffStatus.needs_attention.value
+    assert (
+        customer_experience_handoffs.list_handoff_queue(db_session)[0].next_action
+        == "resolve_attention"
+    )
+    with pytest.raises(customer_experience_handoffs.CustomerExperienceHandoffError):
+        customer_experience_handoffs.accept_handoff(
+            db_session,
+            handoff_id=handoff.id,
+            actor_type="staff_user",
+            actor_id=str(reviewer.id),
+            reason="Premature accept",
+        )
+
+    customer_experience_handoffs.resolve_attention(
+        db_session,
+        handoff_id=handoff.id,
+        actor_type="staff_user",
+        actor_id=str(reviewer.id),
+        reason="Customer welcome call completed",
+    )
+    assert handoff.status == CustomerExperienceHandoffStatus.ready.value
+    assert handoff.attention_reason is None
+
+    customer_experience_handoffs.accept_handoff(
+        db_session,
+        handoff_id=handoff.id,
+        actor_type="staff_user",
+        actor_id=str(reviewer.id),
+        reason="Customer welcome and support ownership confirmed",
+    )
+    assert handoff.status == CustomerExperienceHandoffStatus.accepted.value
+    assert db_session.query(CustomerExperienceHandoffEvent).count() == 4
 
 
 def test_cx_lifecycle_evidence_is_append_only(db_session, subscriber, catalog_offer):

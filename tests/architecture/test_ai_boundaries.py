@@ -32,7 +32,15 @@ SERVICES = PROJECT_ROOT / "app" / "services"
 APP = PROJECT_ROOT / "app"
 
 # The AI family's own derived state — writing these is the point.
-_AI_OWNED_MODELS = {"AIInsight", "AiIntakeConfig"}
+_AI_OWNED_MODELS = {
+    "AIInsight",
+    "AiIntakeCanaryRun",
+    "AiIntakeCanaryScenario",
+    "AiIntakeCanaryScenarioRevision",
+    "AiIntakeCanarySuite",
+    "AiIntakeCanarySuiteScenario",
+    "AiIntakeConfig",
+}
 
 _WRITE_CALLS = {"add", "add_all", "delete", "merge"}
 _SESSION_TOKENS = {"db", "session", "db_session"}

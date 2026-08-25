@@ -39,6 +39,9 @@ from app.schemas.plan_family_catalogue import ResolveShareablePlanFamilyCatalogu
 from app.schemas.settings import DomainSettingUpdate
 from app.services import (
     ai_conversation_intake,
+    ai_intake_canary_library,
+    ai_intake_canary_runner,
+    ai_intake_rollout_readiness,
     conversation_lead_relationships,
     conversation_ticket_handoff,
     inbox_lead_actions,
@@ -2099,9 +2102,12 @@ def team_inbox_workflow_action(
     )
 
 
+# Persists a saved view (optionally shared with the whole team), so it takes the
+# same write-tier permission as its sibling ``POST /filters/{filter_id}/delete``
+# — a saved filter is stored state, not a query string.
 @router.post(
     "/filters/save",
-    dependencies=[Depends(require_permission("support:ticket:read"))],
+    dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_saved_filter_create(
     request: Request,
@@ -2942,8 +2948,14 @@ def team_inbox_ai_intake_policy_draft_update(
     rule_enabled: list[str] = Form(default=[]),
     fallback_team_id: str | None = Form(default=None),
     data_cleaning_support_team_id: str | None = Form(default=None),
-    display_name: str | None = Form(default="Dotmac Virtual Assistant"),
+    display_name: str | None = Form(default="Dotmac Support"),
     welcome_message: str | None = Form(default=None),
+    greeting_only_message: str | None = Form(default=None),
+    standard_handoff_message: str | None = Form(default=None),
+    media_first_handoff_message: str | None = Form(default=None),
+    direct_ai_question_message: str | None = Form(default=None),
+    direct_human_question_message: str | None = Form(default=None),
+    channel_overrides_json: str | None = Form(default=None),
     generic_clarification_question: str = Form(default=""),
     customer_type_clarification_question: str = Form(default=""),
     business_tone: str | None = Form(default=None),
@@ -3180,12 +3192,27 @@ def team_inbox_ai_intake_policy_draft_update(
             troubleshooting_rules, list
         ):
             raise ValueError("Troubleshooting rules must be a JSON list.")
+        conversation_templates = {
+            "welcome": welcome_message or "",
+            "greeting_only": greeting_only_message or "",
+            "standard_handoff": standard_handoff_message or "",
+            "media_first_handoff": media_first_handoff_message or "",
+            "direct_ai_question": direct_ai_question_message or "",
+            "direct_human_question": direct_human_question_message or "",
+        }
+        channel_overrides = (
+            json.loads(channel_overrides_json) if channel_overrides_json else {}
+        )
+        if channel_overrides and not isinstance(channel_overrides, dict):
+            raise ValueError("Channel overrides must be a JSON object.")
         conversation_policy = {
             "require_identity_before_tools": True,
             "handoff_after_classification": True,
             "max_turns": max(1, min(int(max_conversation_turns), 10)),
             "handoff": {
-                "customer_message": handoff_customer_message or "",
+                "customer_message": (
+                    handoff_customer_message or standard_handoff_message or ""
+                ),
                 "summary_template": handoff_summary_template or "",
                 "announce_destination": bool(announce_destination_team),
             },
@@ -3228,6 +3255,8 @@ def team_inbox_ai_intake_policy_draft_update(
                 permitted_identifiers=permitted_identifiers,
                 tool_config=tool_config,
                 conversation_policy=conversation_policy,
+                conversation_templates=conversation_templates,
+                channel_overrides=channel_overrides,
                 replace_existing_draft=replace_existing_draft,
             ),
         )
@@ -3282,6 +3311,264 @@ def team_inbox_ai_intake_policy_preview(
             message="AI intake preview generated without live side effects.",
             ai_intake_preview_result=preview,
         ),
+    )
+
+
+@settings_router.post(
+    "/ai-intake-canary/scenario",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_ai_intake_canary_scenario_save(
+    request: Request,
+    scenario_key: str = Form(...),
+    name: str = Form(...),
+    description: str | None = Form(default=None),
+    first_turn_text: str = Form(...),
+    expected_intent: str = Form(default="unknown"),
+    channel: str = Form(default="whatsapp"),
+    engine: str = Form(default="langgraph_v1"),
+    media_attached: bool = Form(default=False),
+    media_type: str | None = Form(default=None),
+    assertion_type: list[str] = Form(default=[]),
+    enabled: bool = Form(default=True),
+    required_for_activation: bool = Form(default=False),
+    priority: int = Form(default=50),
+    tags: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    actor_person_id = _actor_uuid_from_request(request)
+    if actor_person_id is None:
+        return _routes_redirect(status="error", message="Agent identity is required.")
+    try:
+        media_enum = (
+            ai_intake_canary_runner.CanaryMediaType(media_type) if media_type else None
+        )
+        assertions = [
+            ai_intake_canary_runner.CanaryAssertion(
+                assertion_type=ai_intake_canary_runner.CanaryAssertionType(assertion)
+            )
+            for assertion in assertion_type
+            if assertion
+        ]
+        if expected_intent:
+            assertions.append(
+                ai_intake_canary_runner.CanaryAssertion(
+                    assertion_type=(
+                        ai_intake_canary_runner.CanaryAssertionType.intent_equals
+                    ),
+                    expected=expected_intent,
+                )
+            )
+        assertions.append(
+            ai_intake_canary_runner.CanaryAssertion(
+                assertion_type=ai_intake_canary_runner.CanaryAssertionType.max_outbound_count,
+                max_count=3,
+            )
+        )
+        definition = ai_intake_canary_runner.CanaryScenarioDefinition(
+            scenario_id=scenario_key.strip(),
+            name=name.strip(),
+            description=description or "",
+            enabled=enabled,
+            required_for_activation=required_for_activation,
+            priority=max(0, min(int(priority), 100)),
+            tags=tuple(
+                item.strip() for item in str(tags or "").split(",") if item.strip()
+            ),
+            channel=ai_intake_canary_runner.CanaryChannel(channel),
+            engine_requirement=ai_intake_canary_runner.CanaryEngineMode(engine),
+            inbound_turns=(
+                ai_intake_canary_runner.CanaryInboundTurn(
+                    sequence=1,
+                    event_type=(
+                        ai_intake_canary_runner.CanaryEventType.customer_media
+                        if media_attached
+                        else ai_intake_canary_runner.CanaryEventType.customer_message
+                    ),
+                    text=first_turn_text,
+                    media_attached=media_attached,
+                    media_type=media_enum,
+                ),
+            ),
+            assertions=tuple(assertions),
+            updated_by=str(actor_person_id),
+        )
+    except (TypeError, ValueError) as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    _prepare_mutation(db)
+    try:
+        ai_intake_canary_library.save_scenario_revision(
+            db,
+            ai_intake_canary_library.SaveCanaryScenarioCommand(
+                context=CommandContext.system(
+                    actor=f"person:{actor_person_id}",
+                    scope="ai:intake-canary-scenario",
+                    reason="save AI intake canary scenario from admin UI",
+                ),
+                definition=definition,
+                actor_person_id=actor_person_id,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    return _routes_redirect(status="success", message="Canary scenario saved.")
+
+
+@settings_router.post(
+    "/ai-intake-canary/suite",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_ai_intake_canary_suite_save(
+    request: Request,
+    suite_key: str = Form(...),
+    name: str = Form(...),
+    description: str | None = Form(default=None),
+    enabled: bool = Form(default=True),
+    required_for_activation: bool = Form(default=False),
+    scenario_id: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+):
+    actor_person_id = _actor_uuid_from_request(request)
+    if actor_person_id is None:
+        return _routes_redirect(status="error", message="Agent identity is required.")
+    scenario_ids = ai_intake_canary_library.scenario_ids_for_keys(
+        db, tuple(value for value in scenario_id if value)
+    )
+    _prepare_mutation(db)
+    try:
+        ai_intake_canary_library.save_suite(
+            db,
+            ai_intake_canary_library.SaveCanarySuiteCommand(
+                context=CommandContext.system(
+                    actor=f"person:{actor_person_id}",
+                    scope="ai:intake-canary-suite",
+                    reason="save AI intake canary suite from admin UI",
+                ),
+                suite_key=suite_key,
+                name=name,
+                description=description,
+                enabled=enabled,
+                required_for_activation=required_for_activation,
+                scenario_ids=tuple(scenario_ids),
+                actor_person_id=actor_person_id,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    return _routes_redirect(status="success", message="Canary suite saved.")
+
+
+@settings_router.post(
+    "/ai-intake-canary/run",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_ai_intake_canary_run(
+    request: Request,
+    scenario_id: str | None = Form(default=None),
+    suite_id: str | None = Form(default=None),
+    required_only: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    actor_person_id = _actor_uuid_from_request(request)
+    if actor_person_id is None:
+        return _routes_redirect(status="error", message="Agent identity is required.")
+    context = CommandContext.system(
+        actor=f"person:{actor_person_id}",
+        scope="ai:intake-canary-run",
+        reason="run AI intake canary simulation from admin UI",
+    )
+    _prepare_mutation(db)
+    try:
+        parsed_suite_id = _uuid_form_value(suite_id)
+        if parsed_suite_id is not None:
+            suite_outcome = ai_intake_canary_library.run_suite(
+                db,
+                ai_intake_canary_library.RunCanarySuiteCommand(
+                    context=context,
+                    suite_id=parsed_suite_id,
+                    actor_person_id=actor_person_id,
+                ),
+            )
+            return _routes_redirect(
+                status="success" if suite_outcome.passed else "error",
+                message=(
+                    "Canary suite run completed: "
+                    f"{len(suite_outcome.run_ids)} scenarios."
+                ),
+            )
+        parsed_scenario_id = _uuid_form_value(scenario_id)
+        if parsed_scenario_id is None and scenario_id:
+            parsed_scenario_id = ai_intake_canary_library.scenario_id_for_key(
+                db, scenario_id
+            )
+            if parsed_scenario_id is None:
+                seed = next(
+                    (
+                        item
+                        for item in ai_intake_rollout_readiness.seeded_canary_definitions()
+                        if item.scenario_id == scenario_id
+                    ),
+                    None,
+                )
+                if seed is not None:
+                    finish_read_transaction(db)
+                    saved = ai_intake_canary_library.save_scenario_revision(
+                        db,
+                        ai_intake_canary_library.SaveCanaryScenarioCommand(
+                            context=context,
+                            definition=seed,
+                            actor_person_id=actor_person_id,
+                        ),
+                    )
+                    parsed_scenario_id = saved.scenario_id
+        if parsed_scenario_id is not None:
+            finish_read_transaction(db)
+            scenario_outcome = ai_intake_canary_library.run_persisted_scenario(
+                db,
+                ai_intake_canary_library.RunCanaryScenarioCommand(
+                    context=context,
+                    scenario_id=parsed_scenario_id,
+                    actor_person_id=actor_person_id,
+                ),
+            )
+            return _routes_redirect(
+                status="success" if scenario_outcome.passed else "error",
+                message="Canary scenario run completed.",
+            )
+        scenario_ids = ai_intake_canary_library.scenario_ids_for_run_scope(
+            db, required_only=required_only
+        )
+        if not scenario_ids:
+            for definition in ai_intake_rollout_readiness.seeded_canary_definitions():
+                ai_intake_canary_library.save_scenario_revision(
+                    db,
+                    ai_intake_canary_library.SaveCanaryScenarioCommand(
+                        context=context,
+                        definition=definition,
+                        actor_person_id=actor_person_id,
+                    ),
+                )
+            scenario_ids = ai_intake_canary_library.scenario_ids_for_run_scope(
+                db, required_only=required_only
+            )
+        finish_read_transaction(db)
+        outcomes = [
+            ai_intake_canary_library.run_persisted_scenario(
+                db,
+                ai_intake_canary_library.RunCanaryScenarioCommand(
+                    context=context,
+                    scenario_id=run_scenario_id,
+                    actor_person_id=actor_person_id,
+                ),
+            )
+            for run_scenario_id in scenario_ids
+        ]
+    except (DomainError, ValueError) as exc:
+        return _routes_redirect(status="error", message=str(exc))
+    passed = all(outcome.passed for outcome in outcomes)
+    return _routes_redirect(
+        status="success" if passed else "error",
+        message=f"Canary run completed: {len(outcomes)} scenarios.",
     )
 
 

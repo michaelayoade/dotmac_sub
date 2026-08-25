@@ -28,7 +28,13 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
     )
 
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
 from app.models.catalog import (
     AccessCredential,
     BillingMode,
@@ -236,6 +242,92 @@ def test_customer_detail_billing_overview_has_responsive_amount_contract() -> No
     assert billing_overview.count("min-w-0") >= 5
     assert billing_overview.count("text-[clamp(1.25rem,2.2vw,1.8rem)]") == 5
     assert billing_overview.count("break-words") == 5
+
+
+def test_customer_billing_ledger_tab_is_permission_gated_and_lazy() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+
+    assert "{'id': 'ledger', 'label': 'Ledger', 'count': none}" in template
+    assert "{% if can(request, 'billing:ledger:read') %}" in template
+    assert (
+        'hx-get="/admin/customers/person/{{ customer.id }}/billing/ledger"' in template
+    )
+    assert 'hx-trigger="revealed once"' in template
+    assert "/admin/billing/ledger?account=" not in template
+
+
+def test_customer_billing_ledger_route_requires_customer_and_ledger_read() -> None:
+    route = next(
+        item
+        for item in customer_routes.router.routes
+        if isinstance(item, APIRoute)
+        and item.path == "/customers/person/{customer_id}/billing/ledger"
+    )
+    dependency_cells = [
+        " ".join(
+            str(cell.cell_contents)
+            for cell in (getattr(dependency.call, "__closure__", None) or ())
+        )
+        for dependency in route.dependant.dependencies
+    ]
+
+    assert route.methods == {"GET"}
+    assert any("customer:read" in cells for cells in dependency_cells)
+    assert any("billing:ledger:read" in cells for cells in dependency_cells)
+
+
+def test_customer_billing_ledger_route_renders_only_the_selected_customer(
+    monkeypatch, db_session, subscriber
+):
+    subscriber.user_type = UserType.customer
+    other = Subscriber(
+        first_name="Other",
+        last_name="Ledger",
+        email="other-ledger-route@example.com",
+    )
+    db_session.add(other)
+    db_session.flush()
+    selected_entry = LedgerEntry(
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=Decimal("75.00"),
+        currency="NGN",
+        memo="Selected customer payment",
+    )
+    db_session.add_all(
+        [
+            selected_entry,
+            LedgerEntry(
+                account_id=other.id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.adjustment,
+                amount=Decimal("999.00"),
+                currency="NGN",
+                memo="Other customer adjustment",
+            ),
+        ]
+    )
+    db_session.commit()
+    import app.web.admin as admin_module
+
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+
+    response = customer_routes.customer_billing_ledger(
+        request=_bare_request(
+            f"/admin/customers/person/{subscriber.id}/billing/ledger"
+        ),
+        customer_id=subscriber.id,
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+
+    assert 'data-testid="customer-ledger-panel"' in rendered
+    assert "Selected customer payment" in rendered
+    assert "Other customer adjustment" not in rendered
+    assert f'href="/admin/billing/ledger/{selected_entry.id}"' in rendered
+    assert f"customer_ref={subscriber.id}" in rendered
 
 
 def test_customer_360_service_health_contains_only_active_services(

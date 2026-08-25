@@ -147,7 +147,7 @@
                         <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Troubleshooting and handoff</h3>
                     </div>
                     <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Customer handoff message
-                        <textarea name="handoff_customer_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('customer_message', '') }}</textarea>
+                        <textarea name="handoff_customer_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('customer_message') or ai_intake_conversation_templates.get('standard_handoff', '') }}</textarea>
                         <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used when the conversational engine decides to hand over.</p>
                     </label>
                     <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Internal summary template
@@ -322,12 +322,36 @@
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional team for the separate profile-completion workflow.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">AI display name
-                <input name="display_name" maxlength="120" value="{{ ai_intake_edit_version.display_name if ai_intake_edit_version else 'Dotmac Virtual Assistant' }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">The assistant name shown in customer-facing AI messages.</p>
+                <input name="display_name" maxlength="120" value="{{ ai_intake_edit_version.display_name if ai_intake_edit_version else 'Dotmac Support' }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Customer-facing support identity. It may be Dotmac Support, but must not impersonate a human employee.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Welcome message
-                <textarea name="welcome_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.welcome_message if ai_intake_edit_version else "Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team." }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent first when a new eligible conversation starts AI intake, before any clarification question.</p>
+                <textarea name="welcome_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.welcome_message if ai_intake_edit_version else ai_intake_conversation_templates.get('welcome', 'Welcome to Dotmac Support. How can we help today?') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used only when a welcome is appropriate; issue-first messages should be acknowledged directly.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Greeting-only message
+                <textarea name="greeting_only_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('greeting_only', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used for messages like Hi or Good morning.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Handoff message
+                <textarea name="standard_handoff_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('standard_handoff', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent by AI before Team Inbox routing, assignment and queue messaging take over.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Media-first handoff
+                <textarea name="media_first_handoff_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('media_first_handoff', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used when the first customer message has media but no usable text.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Direct AI question response
+                <textarea name="direct_ai_question_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('direct_ai_question', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Truthful response when a customer asks whether the responder is automated.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Direct human question response
+                <textarea name="direct_human_question_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('direct_human_question', '') }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Truthful response when a customer asks whether they are speaking with a human.</p>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6">Channel overrides JSON
+                <textarea name="channel_overrides_json" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_channel_overrides_json }}</textarea>
+                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional per-channel conversation template overrides for supported messaging channels.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Generic clarification question
                 <textarea name="generic_clarification_question" maxlength="300" required rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_clarification_questions[0] }}</textarea>
@@ -407,6 +431,124 @@
                 <button type="submit" class="min-h-11 rounded-lg bg-amber-500 px-5 text-sm font-semibold text-white hover:bg-amber-600">Save draft</button>
             </div>
         </form>
+        <section aria-labelledby="ai-intake-canary-library" class="border-t border-slate-100 px-5 py-4 dark:border-slate-700">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                    <h3 id="ai-intake-canary-library" class="text-sm font-semibold text-slate-900 dark:text-white">Canary / Scenario Library</h3>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Versioned scenarios built from typed turns, simulated read-only tool results and approved assertions. Runs use simulation mode and do not send messages or create queue entries.</p>
+                </div>
+                <span class="rounded-lg px-2.5 py-1 text-xs font-semibold {% if ai_intake_pre_activation_gate.ready %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% else %}bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200{% endif %}">
+                    Ready: {{ "YES" if ai_intake_pre_activation_gate.ready else "NO" }}
+                </span>
+            </div>
+            <div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]">
+                <div class="space-y-3">
+                    <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                        <table class="min-w-full divide-y divide-slate-200 text-left text-xs dark:divide-slate-700">
+                            <thead class="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                                <tr>
+                                    <th class="px-3 py-2 font-semibold">Scenario</th>
+                                    <th class="px-3 py-2 font-semibold">Revision</th>
+                                    <th class="px-3 py-2 font-semibold">Required</th>
+                                    <th class="px-3 py-2 font-semibold">Latest</th>
+                                    <th class="px-3 py-2 font-semibold">Run</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                                {% for scenario in ai_intake_canary_library %}
+                                <tr>
+                                    <td class="px-3 py-2">
+                                        <div class="font-semibold text-slate-800 dark:text-slate-100">{{ scenario.name }}</div>
+                                        <div class="font-mono text-[11px] text-slate-500 dark:text-slate-400">{{ scenario.scenario_id }}</div>
+                                    </td>
+                                    <td class="px-3 py-2 font-mono">v{{ scenario.revision }}</td>
+                                    <td class="px-3 py-2">{{ "YES" if scenario.required_for_activation else "NO" }}</td>
+                                    <td class="px-3 py-2">
+                                        <span class="rounded px-2 py-1 font-semibold {% if scenario.latest_passed %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% else %}bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200{% endif %}">{{ "PASS" if scenario.latest_passed else "PENDING" }}</span>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
+                                            {% include "components/forms/csrf_input.html" %}
+                                            <input type="hidden" name="scenario_id" value="{{ scenario.scenario_id }}">
+                                            <button class="min-h-9 rounded-lg border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200">Run</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                        <table class="min-w-full divide-y divide-slate-200 text-left text-xs dark:divide-slate-700">
+                            <thead class="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                                <tr><th class="px-3 py-2 font-semibold">Suite</th><th class="px-3 py-2 font-semibold">Required</th><th class="px-3 py-2 font-semibold">Scenarios</th><th class="px-3 py-2 font-semibold">Run</th></tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                                {% for suite in ai_intake_canary_suites %}
+                                <tr>
+                                    <td class="px-3 py-2"><div class="font-semibold text-slate-800 dark:text-slate-100">{{ suite.name }}</div><div class="font-mono text-[11px] text-slate-500 dark:text-slate-400">{{ suite.suite_key }}</div></td>
+                                    <td class="px-3 py-2">{{ "YES" if suite.required_for_activation else "NO" }}</td>
+                                    <td class="px-3 py-2">{{ suite.scenario_count }}</td>
+                                    <td class="px-3 py-2">
+                                        <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
+                                            {% include "components/forms/csrf_input.html" %}
+                                            <input type="hidden" name="suite_id" value="{{ suite.suite_id }}">
+                                            <button class="min-h-9 rounded-lg border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200">Run</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="space-y-3">
+                    <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <div class="flex flex-wrap gap-2">
+                            <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200">Run enabled</button>
+                            </form>
+                            <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="required_only" value="true">
+                                <button class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200">Run required</button>
+                            </form>
+                        </div>
+                    </div>
+                    <form method="post" action="/admin/crm/inbox/ai-intake-canary/scenario" class="rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
+                        {% include "components/forms/csrf_input.html" %}
+                        <div class="font-semibold text-slate-800 dark:text-slate-100">Create or edit scenario</div>
+                        <label class="mt-2 block font-semibold">Scenario ID<input name="scenario_key" required maxlength="120" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="mt-2 block font-semibold">Name<input name="name" required maxlength="160" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="mt-2 block font-semibold">First inbound message<textarea name="first_turn_text" required maxlength="4000" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-950"></textarea></label>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <label class="block font-semibold">Engine<select name="engine" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"><option value="langgraph_v1">langgraph_v1</option><option value="custom_v1">custom_v1</option></select></label>
+                            <label class="block font-semibold">Intent<select name="expected_intent" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"><option value="unknown">unknown</option><option value="technical_support">technical_support</option><option value="billing_issue">billing_issue</option><option value="payment_confirmation">payment_confirmation</option><option value="new_connection">new_connection</option></select></label>
+                        </div>
+                        <label class="mt-2 block font-semibold">Assertions<select name="assertion_type" multiple size="6" class="mt-1 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">{% for assertion_type in ai_intake_canary_assertion_types %}<option value="{{ assertion_type }}">{{ assertion_type }}</option>{% endfor %}</select></label>
+                        <label class="mt-2 block font-semibold">Tags<input name="tags" maxlength="240" placeholder="regression, media" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="enabled" value="true" checked class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Enabled</label>
+                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="required_for_activation" value="true" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Required</label>
+                        </div>
+                        <button class="mt-3 min-h-10 w-full rounded-lg bg-amber-500 px-3 text-xs font-semibold text-white hover:bg-amber-600">Save revision</button>
+                    </form>
+                    <form method="post" action="/admin/crm/inbox/ai-intake-canary/suite" class="rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
+                        {% include "components/forms/csrf_input.html" %}
+                        <div class="font-semibold text-slate-800 dark:text-slate-100">Create or edit suite</div>
+                        <label class="mt-2 block font-semibold">Suite ID<input name="suite_key" required maxlength="120" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="mt-2 block font-semibold">Name<input name="name" required maxlength="160" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="mt-2 block font-semibold">Scenarios<select name="scenario_id" multiple size="6" class="mt-1 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">{% for scenario in ai_intake_canary_library %}<option value="{{ scenario.scenario_id }}">{{ scenario.name }}</option>{% endfor %}</select></label>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="enabled" value="true" checked class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Enabled</label>
+                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="required_for_activation" value="true" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Required</label>
+                        </div>
+                        <button class="mt-3 min-h-10 w-full rounded-lg bg-amber-500 px-3 text-xs font-semibold text-white hover:bg-amber-600">Save suite</button>
+                    </form>
+                </div>
+            </div>
+        </section>
         {% if ai_intake_draft_version %}
         <div class="flex flex-wrap gap-2 border-t border-slate-100 p-5 dark:border-slate-700">
             <form method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_draft_version.id }}/validate">

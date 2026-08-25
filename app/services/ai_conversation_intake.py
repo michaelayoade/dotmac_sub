@@ -57,6 +57,7 @@ from app.services import (
     team_inbox_routing,
     team_inbox_status,
 )
+from app.services.ai_intake_text import human_impersonation_violations
 from app.services.integrations import (
     installations,
     meta_social_capability,
@@ -218,6 +219,8 @@ class AiPolicyVersionDraftCommand:
     permitted_identifiers: tuple[str, ...] = ()
     tool_config: Mapping[str, object] | None = None
     conversation_policy: Mapping[str, object] | None = None
+    conversation_templates: Mapping[str, object] | None = None
+    channel_overrides: Mapping[str, object] | None = None
     replace_existing_draft: bool = True
 
 
@@ -245,6 +248,8 @@ class AiDraftPolicyCommand:
     permitted_identifiers: tuple[str, ...] = ()
     tool_config: Mapping[str, object] | None = None
     conversation_policy: Mapping[str, object] | None = None
+    conversation_templates: Mapping[str, object] | None = None
+    channel_overrides: Mapping[str, object] | None = None
     replace_existing_draft: bool = False
 
 
@@ -576,6 +581,8 @@ def create_draft_policy(
                 permitted_identifiers=command.permitted_identifiers,
                 tool_config=command.tool_config,
                 conversation_policy=command.conversation_policy,
+                conversation_templates=command.conversation_templates,
+                channel_overrides=command.channel_overrides,
                 replace_existing_draft=command.replace_existing_draft,
             ),
         )
@@ -623,6 +630,39 @@ def _copy_version_payload(
     base: AiIntakePolicyVersion | None,
     command: AiPolicyVersionDraftCommand,
 ) -> dict[str, object | None]:
+    policy_text: dict[str, object] = {
+        "display_name": command.display_name,
+        "welcome_message": command.welcome_message,
+        "business_tone": command.business_tone,
+        "business_instructions": command.business_instructions,
+        "approved_isp_information": command.approved_isp_information,
+    }
+    if command.queue_templates is not None:
+        policy_text.update(
+            {
+                f"queue_templates.{key}": value
+                for key, value in command.queue_templates.items()
+            }
+        )
+    if command.conversation_policy is not None:
+        policy_text.update(
+            {
+                f"conversation_policy.{key}": value
+                for key, value in command.conversation_policy.items()
+            }
+        )
+    if command.conversation_templates is not None:
+        policy_text.update(
+            {
+                f"conversation_templates.{key}": value
+                for key, value in command.conversation_templates.items()
+            }
+        )
+    if violations := human_impersonation_violations(policy_text):
+        raise ValueError(
+            "AI intake policy text cannot impersonate a human employee: "
+            + ", ".join(violations)
+        )
     clarification_source: object = command.clarification_questions
     if clarification_source is None and base is not None:
         clarification_source = base.clarification_questions
@@ -642,6 +682,10 @@ def _copy_version_payload(
         metadata["tools"] = dict(command.tool_config)
     if command.conversation_policy is not None:
         metadata["conversation_policy"] = dict(command.conversation_policy)
+    if command.conversation_templates is not None:
+        metadata["conversation_templates"] = dict(command.conversation_templates)
+    if command.channel_overrides is not None:
+        metadata["channel_overrides"] = dict(command.channel_overrides)
     return {
         "display_name": command.display_name
         or (base.display_name if base is not None else DEFAULT_DISPLAY_NAME),
@@ -1184,6 +1228,8 @@ _ADMIN_POLICY_VERSION_HISTORY_LIMIT = 20
 def admin_policy_context(db: Session) -> dict[str, object]:
     """Build the admin AI intake policy read model for the settings template."""
 
+    from app.services import ai_intake_canary_library, ai_intake_rollout_readiness
+
     rows = (
         db.query(AiIntakePolicy)
         .order_by(AiIntakePolicy.updated_at.desc(), AiIntakePolicy.created_at.desc())
@@ -1264,6 +1310,8 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         else {}
     )
     conversation_policy = dict(version_metadata.get("conversation_policy") or {})
+    conversation_templates = dict(version_metadata.get("conversation_templates") or {})
+    channel_overrides = dict(version_metadata.get("channel_overrides") or {})
     conversation_engine_mode = _normalize_conversation_engine_mode(
         str(
             version_metadata.get("conversation_engine_mode")
@@ -1351,10 +1399,35 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         "ai_intake_engine_metadata": version_metadata,
         "ai_intake_conversation_engine_mode": conversation_engine_mode,
         "ai_intake_conversation_policy": conversation_policy,
+        "ai_intake_conversation_templates": conversation_templates,
+        "ai_intake_channel_overrides_json": json.dumps(
+            channel_overrides,
+            indent=2,
+            sort_keys=True,
+        ),
         "ai_intake_tool_config": tool_config,
         "ai_intake_permitted_identifiers": permitted_identifiers,
         "ai_intake_tool_catalogue": (
             ai_intake_conversation_engine.tool_catalogue_snapshot()
+        ),
+        "ai_intake_canary_matrix": (
+            ai_intake_rollout_readiness.data_driven_scenario_matrix()
+        ),
+        "ai_intake_canary_library": ai_intake_rollout_readiness.canary_library_rows(),
+        "ai_intake_canary_suites": ai_intake_canary_library.list_suites(db),
+        "ai_intake_canary_assertion_types": tuple(
+            sorted(
+                ai_intake_rollout_readiness.ai_intake_canary_runner.SUPPORTED_ASSERTION_TYPES
+            )
+        ),
+        "ai_intake_pre_activation_gate": (
+            ai_intake_rollout_readiness.pre_activation_gate_report(
+                db=db,
+                policy_version_id=selected_active.id if selected_active else None,
+            )
+        ),
+        "ai_intake_activation_plan": (
+            ai_intake_rollout_readiness.CONTROLLED_ACTIVATION_PLAN
         ),
     }
 
@@ -1468,6 +1541,11 @@ def _sync_active_policy_to_legacy_config(
                     intent_definitions=version.intent_definitions or [],
                     clarification_questions=version.clarification_questions or [],
                     queue_templates=queue_templates,
+                    conversation_templates=version_metadata.get(
+                        "conversation_templates"
+                    )
+                    or {},
+                    channel_overrides=version_metadata.get("channel_overrides") or {},
                     escalation_rules=escalation_rules,
                     data_cleanup_enabled=bool(
                         data_cleanup_policy.get("production_collection_enabled", False)
@@ -1509,6 +1587,8 @@ def _sync_active_policy_to_legacy_config(
             )
         ),
         "conversation_policy": version_metadata.get("conversation_policy") or {},
+        "conversation_templates": version_metadata.get("conversation_templates") or {},
+        "channel_overrides": version_metadata.get("channel_overrides") or {},
         "tools": version_metadata.get("tools") or {},
         "permitted_identifiers": version_metadata.get("permitted_identifiers") or [],
     }

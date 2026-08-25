@@ -17,6 +17,11 @@ from app.services.router_management.inventory import RouterInventory
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
+# The router-level guard is the READ baseline for this screen. Every mutating
+# route below states its own write-tier permission on top of it: a router-level
+# dependency cannot express "read to view, write to change", and inheriting
+# ``router:read`` onto a POST is exactly the hole that let a custom role holding
+# only ``router:read`` create and edit routers.
 router = APIRouter(
     prefix="/network/routers",
     tags=["web-admin-routers"],
@@ -75,7 +80,11 @@ def router_create_form(
     return templates.TemplateResponse("admin/network/routers/form.html", context)
 
 
-@router.post("/new", response_class=HTMLResponse)
+@router.post(
+    "/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:write"))],
+)
 def router_create(
     request: Request,
     db: Session = Depends(get_db),
@@ -250,7 +259,11 @@ def router_edit_form(
     return templates.TemplateResponse("admin/network/routers/form.html", context)
 
 
-@router.post("/{router_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/{router_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:write"))],
+)
 def router_edit(
     request: Request,
     router_id: uuid.UUID,
