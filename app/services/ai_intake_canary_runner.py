@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -28,6 +28,17 @@ from app.services import ai_intake_conversation_engine, ai_intake_graph
 from app.services.ai_intake_text import usable_customer_text
 
 JsonScalar = str | int | float | bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CanaryConversationStub:
+    id: UUID
+    channel_type: str
+    provider: str
+    external_thread_id: str
+    subject: str
+    status: str
+    metadata_: dict[str, JsonScalar]
 
 
 class CanaryEngineMode(StrEnum):
@@ -573,7 +584,7 @@ def _run_langgraph_canary(
     session_id = uuid4()
     policy_id = policy.policy_id or uuid4()
     policy_version_id = policy.policy_version_id or uuid4()
-    conversation = InboxConversation(
+    conversation = _CanaryConversationStub(
         id=conversation_id,
         channel_type=definition.channel.value,
         provider=definition.provider or "canary",
@@ -646,7 +657,7 @@ def _run_langgraph_canary(
         classification = _classification_for_text(usable_text, policy)
         last_decision = ai_intake_graph.run_ai_intake_graph(
             db,  # type: ignore[arg-type]
-            conversation=conversation,
+            conversation=cast(InboxConversation, conversation),
             session=session,
             version=version,
             latest_body=usable_text,
@@ -662,7 +673,7 @@ def _run_langgraph_canary(
         last_decision.state
         if last_decision is not None
         else ai_intake_conversation_engine.ConversationalState.load(
-            conversation=conversation,
+            conversation=cast(InboxConversation, conversation),
             session=session,
         )
     )
@@ -697,7 +708,7 @@ def _run_langgraph_canary(
         last_decision.handoff_summary if last_decision is not None else None
     )
     if media_handoff and private_note_preview is None:
-        private_note_preview = _private_note(dict(state.collected_facts))
+        private_note_preview = _private_note(_json_scalar_dict(state.collected_facts))
     completion_mode = _completion_mode(
         handoff=handoff,
         fallback_observed=False,
@@ -949,7 +960,7 @@ def draft_scenario_from_production_pattern(
     observation: ProductionPatternObservation,
 ) -> CanaryScenarioDefinition:
     media_attached = observation.media_type is not None
-    assertions = (
+    assertions: tuple[CanaryAssertion, ...] = (
         CanaryAssertion(
             assertion_type=CanaryAssertionType.response_does_not_contain_internal_terms
         ),

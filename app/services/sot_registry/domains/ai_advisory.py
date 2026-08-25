@@ -241,8 +241,6 @@ DOMAIN = DomainSOT(
                 "AI intake approved tool catalogue policy",
                 "AI intake customer lookup tool resolver",
                 "AI intake subscriber monitoring tool resolver",
-                "AI intake canary scenario library lifecycle",
-                "AI intake canary run evidence",
                 "AI generation attempt evidence",
                 "customer-message intake eligibility policy",
                 "bounded customer-message intent classification",
@@ -349,25 +347,6 @@ DOMAIN = DomainSOT(
                             "support-relevant subscriber identity",
                             "approved monitoring projection",
                         ),
-                    ),
-                    ConcernContract(
-                        name="AI intake canary scenario library lifecycle",
-                        role=OwnerRole.COMMAND_WRITER,
-                        input_names=(
-                            "reviewed AI intake canary scenario definition",
-                            "active AI intake policy version",
-                        ),
-                        canonical_writer="ai.intake",
-                    ),
-                    ConcernContract(
-                        name="AI intake canary run evidence",
-                        role=OwnerRole.AUTHORITATIVE_RECORD,
-                        input_names=(
-                            "reviewed AI intake canary scenario definition",
-                            "active AI intake policy version",
-                            "simulated canary execution evidence",
-                        ),
-                        canonical_writer="ai.intake",
                     ),
                     ConcernContract(
                         name="AI generation attempt evidence",
@@ -486,25 +465,6 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
                         source="Strict JSON candidate returned through ai.gateway.",
                     ),
-                    AuthorityInput(
-                        name="reviewed AI intake canary scenario definition",
-                        owner="auth.permission_gate",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source=(
-                            "Admin-reviewed typed canary scenario or suite definition; "
-                            "no executable code, SQL, imports or templates are accepted."
-                        ),
-                    ),
-                    AuthorityInput(
-                        name="simulated canary execution evidence",
-                        owner="ai.intake",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source=(
-                            "Isolated scenario run evidence including scenario revision, "
-                            "policy version, requested and actual engine, turns, tool "
-                            "results and typed assertion results."
-                        ),
-                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
@@ -565,6 +525,144 @@ DOMAIN = DomainSOT(
                     "tests/test_ai_intake.py",
                     "tests/test_ai_intake_conversation_engine.py",
                     "tests/test_team_inbox_ai_intake_flow.py",
+                    "tests/architecture/test_ai_boundaries.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="ai.intake_canaries",
+            module="app.services.ai_intake_canary_library",
+            owns=(
+                "AI intake canary scenario library lifecycle",
+                "AI intake canary run evidence",
+            ),
+            depends_on=(
+                "ai.intake",
+                "auth.permission_gate",
+                "communications.team_inbox_threads",
+            ),
+            notes=(
+                "Persists admin-reviewed, typed AI Intake canary definitions, "
+                "immutable revisions, suites, and simulation-only run evidence. "
+                "The canary library can execute the real selected AI Intake "
+                "engine in simulation mode, but it cannot send messages, route "
+                "customers, create assignments, write queue rows, mutate "
+                "subscribers, or call write tools."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="AI intake canary scenario library lifecycle",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "reviewed AI intake canary scenario definition",
+                            "active AI intake policy version",
+                        ),
+                        canonical_writer="ai.intake_canaries",
+                    ),
+                    ConcernContract(
+                        name="AI intake canary run evidence",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "reviewed AI intake canary scenario definition",
+                            "active AI intake policy version",
+                            "simulated canary execution evidence",
+                        ),
+                        canonical_writer="ai.intake_canaries",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="reviewed AI intake canary scenario definition",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Admin-reviewed typed canary scenario or suite definition; "
+                            "no executable code, SQL, imports or templates are accepted."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="active AI intake policy version",
+                        owner="ai.intake",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Selected immutable AI Intake policy version under test.",
+                    ),
+                    AuthorityInput(
+                        name="simulated canary execution evidence",
+                        owner="ai.intake_canaries",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Isolated scenario run evidence including scenario revision, "
+                            "policy version, requested and actual engine, turns, tool "
+                            "results and typed assertion results."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Scenario, suite, and run-evidence mutations enter "
+                        "execute_owner_command once from the admin adapter or CI "
+                        "runner. Nested helpers flush only."
+                    ),
+                    locking=(
+                        "Scenario and suite edits lock the current row before "
+                        "creating a new immutable revision or replacing membership."
+                    ),
+                    idempotency=(
+                        "Scenario definitions are content-hashed; historical run "
+                        "evidence references the exact scenario revision and policy "
+                        "version used."
+                    ),
+                    retries="Retry by submitting the same reviewed scenario command again.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes("ai.intake_canaries"),
+                        "ai.intake_canary.invalid_definition",
+                        "ai.intake_canary.unsafe_simulation",
+                    ),
+                    mapping_owner="AI Intake admin canary adapters",
+                    fail_closed_on=(
+                        "unknown event kind",
+                        "unknown assertion type",
+                        "unsupported simulated tool schema",
+                        "missing policy version",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("ai.intake_canary_run.recorded.v1",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 records scenario revision, policy version, engine, "
+                        "PASS/FAIL status and bounded evidence."
+                    ),
+                    replay="Re-run the scenario against the desired policy version.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="ai.intake_canaries",
+                    verification=(
+                        "Generic runner, scenario CRUD/revision, suite management, "
+                        "activation gate, security, and LangGraph simulation tests."
+                    ),
+                    cutover_gate=(
+                        "Rollout readiness reads persisted generic canary runs for "
+                        "required scenarios and suites."
+                    ),
+                    fallback_retirement=(
+                        "Legacy A-X scenario constants remain compatibility adapters "
+                        "until parity is demonstrated."
+                    ),
+                ),
+                steward="customer experience platform",
+                design_refs=(
+                    "docs/designs/AI_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_ai_intake_production_canary_scenarios.py",
                     "tests/architecture/test_ai_boundaries.py",
                 ),
             ),

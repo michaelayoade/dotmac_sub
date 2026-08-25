@@ -57,6 +57,7 @@ from app.services import (
     team_inbox_routing,
     team_inbox_status,
 )
+from app.services.ai_intake_text import human_impersonation_violations
 from app.services.integrations import (
     installations,
     meta_social_capability,
@@ -623,6 +624,32 @@ def _copy_version_payload(
     base: AiIntakePolicyVersion | None,
     command: AiPolicyVersionDraftCommand,
 ) -> dict[str, object | None]:
+    policy_text: dict[str, object] = {
+        "display_name": command.display_name,
+        "welcome_message": command.welcome_message,
+        "business_tone": command.business_tone,
+        "business_instructions": command.business_instructions,
+        "approved_isp_information": command.approved_isp_information,
+    }
+    if command.queue_templates is not None:
+        policy_text.update(
+            {
+                f"queue_templates.{key}": value
+                for key, value in command.queue_templates.items()
+            }
+        )
+    if command.conversation_policy is not None:
+        policy_text.update(
+            {
+                f"conversation_policy.{key}": value
+                for key, value in command.conversation_policy.items()
+            }
+        )
+    if violations := human_impersonation_violations(policy_text):
+        raise ValueError(
+            "AI intake policy text cannot impersonate a human employee: "
+            + ", ".join(violations)
+        )
     clarification_source: object = command.clarification_questions
     if clarification_source is None and base is not None:
         clarification_source = base.clarification_questions

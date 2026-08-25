@@ -32,9 +32,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import finish_read_transaction, get_db
-from app.models.ai_intake import (
-    AiIntakeCanaryScenario,
-)
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
 from app.models.team_inbox import InboxChannelType
@@ -3345,7 +3342,7 @@ def team_inbox_ai_intake_canary_scenario_save(
         definition = ai_intake_canary_runner.CanaryScenarioDefinition(
             scenario_id=scenario_key.strip(),
             name=name.strip(),
-            description=description,
+            description=description or "",
             enabled=enabled,
             required_for_activation=required_for_activation,
             priority=max(0, min(int(priority), 100)),
@@ -3408,18 +3405,9 @@ def team_inbox_ai_intake_canary_suite_save(
     actor_person_id = _actor_uuid_from_request(request)
     if actor_person_id is None:
         return _routes_redirect(status="error", message="Agent identity is required.")
-    scenario_ids: list[UUID] = []
-    for value in scenario_id:
-        scenario_uuid = _uuid_form_value(value)
-        if scenario_uuid is None and value:
-            existing = (
-                db.query(AiIntakeCanaryScenario)
-                .filter(AiIntakeCanaryScenario.scenario_key == value)
-                .one_or_none()
-            )
-            scenario_uuid = existing.id if existing is not None else None
-        if scenario_uuid is not None:
-            scenario_ids.append(scenario_uuid)
+    scenario_ids = ai_intake_canary_library.scenario_ids_for_keys(
+        db, tuple(value for value in scenario_id if value)
+    )
     _prepare_mutation(db)
     try:
         ai_intake_canary_library.save_suite(
@@ -3467,7 +3455,7 @@ def team_inbox_ai_intake_canary_run(
     try:
         parsed_suite_id = _uuid_form_value(suite_id)
         if parsed_suite_id is not None:
-            outcome = ai_intake_canary_library.run_suite(
+            suite_outcome = ai_intake_canary_library.run_suite(
                 db,
                 ai_intake_canary_library.RunCanarySuiteCommand(
                     context=context,
@@ -3476,17 +3464,18 @@ def team_inbox_ai_intake_canary_run(
                 ),
             )
             return _routes_redirect(
-                status="success" if outcome.passed else "error",
-                message=f"Canary suite run completed: {len(outcome.run_ids)} scenarios.",
+                status="success" if suite_outcome.passed else "error",
+                message=(
+                    "Canary suite run completed: "
+                    f"{len(suite_outcome.run_ids)} scenarios."
+                ),
             )
         parsed_scenario_id = _uuid_form_value(scenario_id)
         if parsed_scenario_id is None and scenario_id:
-            scenario = (
-                db.query(AiIntakeCanaryScenario)
-                .filter(AiIntakeCanaryScenario.scenario_key == scenario_id)
-                .one_or_none()
+            parsed_scenario_id = ai_intake_canary_library.scenario_id_for_key(
+                db, scenario_id
             )
-            if scenario is None:
+            if parsed_scenario_id is None:
                 seed = next(
                     (
                         item
@@ -3506,11 +3495,9 @@ def team_inbox_ai_intake_canary_run(
                         ),
                     )
                     parsed_scenario_id = saved.scenario_id
-            else:
-                parsed_scenario_id = scenario.id
         if parsed_scenario_id is not None:
             finish_read_transaction(db)
-            outcome = ai_intake_canary_library.run_persisted_scenario(
+            scenario_outcome = ai_intake_canary_library.run_persisted_scenario(
                 db,
                 ai_intake_canary_library.RunCanaryScenarioCommand(
                     context=context,
@@ -3519,21 +3506,13 @@ def team_inbox_ai_intake_canary_run(
                 ),
             )
             return _routes_redirect(
-                status="success" if outcome.passed else "error",
+                status="success" if scenario_outcome.passed else "error",
                 message="Canary scenario run completed.",
             )
-        query = db.query(AiIntakeCanaryScenario).filter(
-            AiIntakeCanaryScenario.enabled.is_(True)
+        scenario_ids = ai_intake_canary_library.scenario_ids_for_run_scope(
+            db, required_only=required_only
         )
-        if required_only:
-            query = query.filter(
-                AiIntakeCanaryScenario.required_for_activation.is_(True)
-            )
-        scenarios = query.order_by(
-            AiIntakeCanaryScenario.priority.asc(),
-            AiIntakeCanaryScenario.name.asc(),
-        ).all()
-        if not scenarios:
+        if not scenario_ids:
             for definition in ai_intake_rollout_readiness.seeded_canary_definitions():
                 ai_intake_canary_library.save_scenario_revision(
                     db,
@@ -3543,11 +3522,9 @@ def team_inbox_ai_intake_canary_run(
                         actor_person_id=actor_person_id,
                     ),
                 )
-            scenarios = query.order_by(
-                AiIntakeCanaryScenario.priority.asc(),
-                AiIntakeCanaryScenario.name.asc(),
-            ).all()
-        scenario_ids = tuple(scenario.id for scenario in scenarios)
+            scenario_ids = ai_intake_canary_library.scenario_ids_for_run_scope(
+                db, required_only=required_only
+            )
         finish_read_transaction(db)
         outcomes = [
             ai_intake_canary_library.run_persisted_scenario(

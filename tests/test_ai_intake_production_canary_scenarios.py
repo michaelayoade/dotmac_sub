@@ -333,8 +333,12 @@ def test_policy_version_payload_stores_composable_conversation_settings():
             display_name="Dotmac Support",
             welcome_message="Welcome to Dotmac Support.",
             business_tone="Natural and concise.",
-            conversation_templates={
-                "greeting_only": "Welcome to Dotmac Support. How can we help?",
+            queue_templates={
+                "initial": "I am passing this to {team_name}.",
+                "position_update": "Quick update: you are now number {position}.",
+                "heartbeat": "You are still number {position}.",
+            },
+            conversation_policy={
                 "standard_handoff": "I am passing this to our support team.",
                 "media_first_handoff": "I will pass this attachment to support.",
                 "direct_ai_question": "I am Dotmac's automated support assistant.",
@@ -342,29 +346,16 @@ def test_policy_version_payload_stores_composable_conversation_settings():
                     "I am Dotmac's automated support assistant, not a human agent."
                 ),
             },
-            channel_overrides={
-                "whatsapp": {
-                    "conversation_templates": {
-                        "greeting_only": "Welcome to Dotmac Support on WhatsApp."
-                    }
-                }
-            },
         ),
     )
 
     metadata = payload["metadata_"]
 
     assert isinstance(metadata, dict)
-    assert metadata["customer_facing_identity"] == "Dotmac Support"
+    assert payload["queue_templates"]["initial"] == "I am passing this to {team_name}."
     assert (
-        metadata["conversation_templates"]["greeting_only"]
-        == "Welcome to Dotmac Support. How can we help?"
-    )
-    assert (
-        metadata["channel_overrides"]["whatsapp"]["conversation_templates"][
-            "greeting_only"
-        ]
-        == "Welcome to Dotmac Support on WhatsApp."
+        metadata["conversation_policy"]["direct_ai_question"]
+        == "I am Dotmac's automated support assistant."
     )
 
 
@@ -522,7 +513,7 @@ def test_natural_conversation_fails_langgraph_queue_position_generation():
 
     assert score.passed is False
     assert score.ownership_transition is False
-    assert score.duplicate_queue_messaging is False
+    assert score.issues == ("ownership_transition",)
 
 
 def test_natural_conversation_fails_ai_response_after_human_ownership():

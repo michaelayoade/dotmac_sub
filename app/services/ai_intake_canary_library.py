@@ -19,6 +19,7 @@ from app.models.ai_intake import (
     AiIntakePolicyVersion,
 )
 from app.services.ai_intake_canary_runner import (
+    CanaryEngineMode,
     CanaryPolicySelection,
     CanaryRunResult,
     CanaryScenarioDefinition,
@@ -30,7 +31,7 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 
-OWNER = "ai.intake"
+OWNER = "ai.intake_canaries"
 _SCENARIO_LIBRARY_COMMAND = OwnerCommandDefinition(
     owner=OWNER,
     concern="AI intake canary scenario library lifecycle",
@@ -209,6 +210,44 @@ def list_suites(db: Session) -> tuple[CanarySuiteRow, ...]:
         )
         for suite in suites
     )
+
+
+def scenario_id_for_key(db: Session, scenario_key: str) -> UUID | None:
+    scenario = (
+        db.query(AiIntakeCanaryScenario.id)
+        .filter(AiIntakeCanaryScenario.scenario_key == scenario_key)
+        .one_or_none()
+    )
+    return scenario[0] if scenario is not None else None
+
+
+def scenario_ids_for_keys(
+    db: Session, scenario_keys: tuple[str, ...]
+) -> tuple[UUID, ...]:
+    resolved: list[UUID] = []
+    for value in scenario_keys:
+        try:
+            resolved.append(UUID(value))
+            continue
+        except ValueError:
+            pass
+        scenario_id = scenario_id_for_key(db, value)
+        if scenario_id is not None:
+            resolved.append(scenario_id)
+    return tuple(resolved)
+
+
+def scenario_ids_for_run_scope(db: Session, *, required_only: bool) -> tuple[UUID, ...]:
+    query = db.query(AiIntakeCanaryScenario.id).filter(
+        AiIntakeCanaryScenario.enabled.is_(True)
+    )
+    if required_only:
+        query = query.filter(AiIntakeCanaryScenario.required_for_activation.is_(True))
+    rows = query.order_by(
+        AiIntakeCanaryScenario.priority.asc(),
+        AiIntakeCanaryScenario.name.asc(),
+    ).all()
+    return tuple(row[0] for row in rows)
 
 
 def _save_scenario_revision_locked(
@@ -435,13 +474,16 @@ def _policy_selection_from_version(
     templates = metadata.get("conversation_templates")
     template_map = templates if isinstance(templates, dict) else {}
     engine = metadata.get("conversation_engine_mode") or metadata.get("engine_mode")
+    requested_engine = (
+        CanaryEngineMode(engine)
+        if engine in {mode.value for mode in CanaryEngineMode}
+        else CanaryEngineMode.langgraph_v1
+    )
     return CanaryPolicySelection(
         policy_id=version.policy_id,
         policy_version_id=version.id,
         policy_version_number=version.version_number,
-        requested_engine=engine
-        if engine in {"custom_v1", "langgraph_v1"}
-        else "langgraph_v1",
+        requested_engine=requested_engine,
         support_identity=version.display_name,
         welcome_message=version.welcome_message,
         standard_handoff_message=str(
