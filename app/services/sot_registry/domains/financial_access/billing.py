@@ -11,6 +11,7 @@ from app.services.sot_manifest import (
     EventContract,
     MigrationContract,
     OwnerRole,
+    ProjectionContract,
     ServiceContract,
     SOTService,
     TransactionContract,
@@ -1423,6 +1424,304 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_billing_rating.py",
                 "tests/architecture/test_billing_target_architecture.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="billing.receivable_projection",
+        module="app.services.billing.receivable_projection",
+        owns=(
+            "billing receivable projection",
+            "receivable-shadow-01 cohort sealing and membership digest",
+            "receivable projection version watermark",
+            "receivable projection drift detection and idempotent repair",
+            "receivable projection run evidence",
+        ),
+        depends_on=(
+            "financial.invoices",
+            "financial.payments",
+            "billing.contracts",
+            "billing.obligations",
+            "financial.subscription_billing_treatments",
+            "access.subscription_lifecycle",
+            "events.dispatcher",
+        ),
+        notes=(
+            "Sole canonical writer of billing_receivable_projections and "
+            "receivable_projection_runs, and of nothing else. It observes the "
+            "receivable facts the incumbent owners already decided: "
+            "financial.invoices keeps _recalculate_invoice_totals as the only "
+            "writer of invoice status, balance_due and paid_at; "
+            "financial.payments keeps allocation and settlement; "
+            "financial.payment_provider_events keeps the settlement mirror; "
+            "collections.lifecycle keeps the only CollectionsCase construction "
+            "site, and this owner never calls it. Authority does not move. "
+            "The cohort spans BOTH collection modes, because Sub's postpaid "
+            "DunningWorkflow and its separate prepaid balance sweep diverge "
+            "operationally and a postpaid-only cohort would make a "
+            "Subscription-to-Collections parity claim rest on half the system. "
+            "observed_outstanding_amount is an OBSERVATION of the incumbent's "
+            "own number, recorded so parity can compare it; it is not a third "
+            "derivation for consumers to switch to. projection_version is a "
+            "sequence-allocated watermark distinct from "
+            "BillingContractVersion.source_version, which stays owned by "
+            "billing.contracts and is carried here read-only as provenance. "
+            "Every writing command defaults to dry run, and a dry run never "
+            "enters the owner-command boundary at all."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="billing receivable projection",
+                    role=OwnerRole.PROJECTION_WRITER,
+                    input_names=(
+                        "incumbent invoice receivable state",
+                        "incumbent settlement and allocation facts",
+                        "effective billing contract terms",
+                        "subscription service scope",
+                        "authoritative non-standard billing treatment",
+                    ),
+                    canonical_writer="billing.receivable_projection",
+                ),
+                ConcernContract(
+                    name="receivable-shadow-01 cohort sealing and membership digest",
+                    role=OwnerRole.PROJECTION_WRITER,
+                    input_names=("incumbent invoice receivable state",),
+                    canonical_writer="billing.receivable_projection",
+                ),
+                ConcernContract(
+                    name="receivable projection version watermark",
+                    role=OwnerRole.PROJECTION_WRITER,
+                    input_names=("incumbent invoice receivable state",),
+                    canonical_writer="billing.receivable_projection",
+                ),
+                ConcernContract(
+                    name=(
+                        "receivable projection drift detection and idempotent repair"
+                    ),
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "incumbent invoice receivable state",
+                        "incumbent settlement and allocation facts",
+                    ),
+                    canonical_writer="billing.receivable_projection",
+                ),
+                ConcernContract(
+                    name="receivable projection run evidence",
+                    role=OwnerRole.PROJECTION_WRITER,
+                    input_names=(
+                        "incumbent invoice receivable state",
+                        "shadow obligation counterparty",
+                    ),
+                    canonical_writer="billing.receivable_projection",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="incumbent invoice receivable state",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "invoices and invoice_lines: status, currency, total, "
+                        "balance_due, issue and due instants, due-date basis "
+                        "provenance, and the subscription link carried on lines"
+                    ),
+                ),
+                AuthorityInput(
+                    name="incumbent settlement and allocation facts",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "payment_allocations, payments, credit_note_applications "
+                        "and prepaid opening funding consumption, read through "
+                        "resolve_invoice_settlement_amounts"
+                    ),
+                ),
+                AuthorityInput(
+                    name="effective billing contract terms",
+                    owner="billing.contracts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "the one effective billing_contract_versions row at the "
+                        "invoice issue instant: cadence, proration policy, "
+                        "payment terms, and its source_version"
+                    ),
+                ),
+                AuthorityInput(
+                    name="shadow obligation counterparty",
+                    owner="billing.obligations",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "the billing_obligations row covering the position's "
+                        "service period, where one exists; its absence is a "
+                        "recorded not_expressible outcome, never an assumption"
+                    ),
+                ),
+                AuthorityInput(
+                    name="subscription service scope",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "subscriptions: offer, offer version, service address, "
+                        "bundle, billing mode, billing cycle, contract term, "
+                        "status and the effective interval"
+                    ),
+                ),
+                AuthorityInput(
+                    name="authoritative non-standard billing treatment",
+                    owner="financial.subscription_billing_treatments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "subscription_billing_arrangements: the effective "
+                        "complimentary or sponsored approval, read only"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "An apply pass enters the verified owner-command boundary on "
+                    "a transaction-free session; every projected row and the run "
+                    "evidence commit atomically before return. A dry run never "
+                    "enters the boundary and writes nothing at all."
+                ),
+                locking=(
+                    "A PostgreSQL transaction advisory lock serialises whole "
+                    "passes; uq_billing_receivable_projection_key arbitrates each "
+                    "position; projection_version is allocated from "
+                    "billing_receivable_projection_version_seq so it is monotonic "
+                    "across "
+                    "concurrent workers rather than across one process."
+                ),
+                idempotency=(
+                    "Convergent by natural key. A stale observation is refused "
+                    "three times over: the plan compares the stored watermark, "
+                    "the upsert carries "
+                    "WHERE excluded.source_observed_at > source_observed_at, and "
+                    "a BEFORE UPDATE trigger refuses any update that does not "
+                    "strictly advance projection_version or that moves "
+                    "source_observed_at backwards. Equal watermark with a "
+                    "different fingerprint fails closed and is counted."
+                ),
+                retries=(
+                    "Safe to re-request on any schedule; a later pass repairs "
+                    "stale state. Run evidence is keyed by idempotency_key so a "
+                    "retried operator invocation cannot double-record."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "billing.receivable_projection.missing_idempotency_key",
+                    "billing.receivable_projection.incomplete_run_identity",
+                    *owner_command_boundary_error_codes(
+                        "billing.receivable_projection"
+                    ),
+                ),
+                mapping_owner="scripts.billing.receivable_projection",
+                fail_closed_on=(
+                    "naive or unsealed cohort window",
+                    "missing idempotency key",
+                    "incomplete code or schema version",
+                    "equal source watermark with a different fingerprint",
+                    "active caller transaction",
+                ),
+            ),
+            events=EventContract(
+                event_types=("receivable_projection.reconciled",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Additive payload evolution within schema version 1; a "
+                    "breaking change takes a new version and, for the observed "
+                    "field set, a new billing projection class and table."
+                ),
+                replay=(
+                    "Consumers key side effects by event id and treat the "
+                    "reported counts and fingerprints as immutable evidence."
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="billing_receivable_projections",
+                    input_names=(
+                        "incumbent invoice receivable state",
+                        "incumbent settlement and allocation facts",
+                        "effective billing contract terms",
+                        "subscription service scope",
+                        "authoritative non-standard billing treatment",
+                    ),
+                    writer="billing.receivable_projection",
+                    freshness=(
+                        "source_observed_at carries the newest contributing "
+                        "source instant; projected_at carries when the pass "
+                        "looked. Staleness is judged on the former, because a "
+                        "projection that compares its own clock is measuring "
+                        "when it ran, not when the fact changed."
+                    ),
+                    stale_behavior=(
+                        "A stale observation is a converging no-op counted in "
+                        "stale_skipped_count, never an overwrite. Readers treat "
+                        "the projection as evidence only; no decision path reads "
+                        "it, and observed_outstanding_amount is explicitly not a "
+                        "third derivation of outstanding."
+                    ),
+                    drift_signal=(
+                        "missing_count, stale_skipped_count, "
+                        "ambiguous_watermark_count and orphaned_count on the run "
+                        "row, plus a membership_digest that moves under an "
+                        "unchanged cohort_definition_seal, which localises the "
+                        "drift to the SOURCE rather than the projection."
+                    ),
+                    rebuild_operation=(
+                        "reconcile_receivable_projection with run_kind=backfill "
+                        "over the same sealed window reproduces every "
+                        "input_row_fingerprint byte for byte; "
+                        "run_kind=drift_repair converges a partially drifted "
+                        "projection. Both default to dry run."
+                    ),
+                    repair_owner="billing.receivable_projection",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.SHADOWING,
+                new_owner="billing.receivable_projection",
+                old_owner="financial.invoices",
+                verification=(
+                    "Seven-dimension semantic parity — cadence, proration, "
+                    "obligations, settlements, receivable amount, due-date "
+                    "provenance and service scope — evaluated read-only over the "
+                    "sealed cohort and recorded on the run row with its "
+                    "not_expressible counts and pinned blockers."
+                ),
+                cutover_gate=(
+                    "No cutover is proposed by this slice and none is implied by "
+                    "it. Cadence parity is BLOCKED for complimentary and "
+                    "sponsored subscriptions because Sub's authoritative "
+                    "subscription_billing_arrangements record has no expression "
+                    "in the pinned Subscriptions contract; those positions are "
+                    "counted not_expressible with the pin coordinates attached, "
+                    "never matched. A gate would additionally require the ADR "
+                    "0007 obligation coverage the cohort currently reports as "
+                    "absent."
+                ),
+                fallback_retirement=(
+                    "Nothing is retired. Every incumbent writer named above "
+                    "remains the sole writer of its own state, and the "
+                    "projection is a rebuildable cache that can be dropped "
+                    "without financial consequence."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/adr/0007-end-to-end-billing-target-architecture.md",
+                "docs/designs/RECEIVABLE_PROJECTION_SHADOW.md",
+                "docs/runbooks/SUB_THIN_SHADOW.md",
+            ),
+            test_refs=(
+                "tests/test_receivable_projection.py",
+                "tests/test_receivable_parity_report.py",
+                "tests/integration/test_receivable_projection_monotonic.py",
+                "tests/architecture/test_receivable_projection_boundary.py",
             ),
         ),
     ),
