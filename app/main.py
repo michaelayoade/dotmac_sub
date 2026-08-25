@@ -136,7 +136,13 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.sales_orders", "router", "api", "user"),
     # Native projects vertical.
     ("app.api.projects", "router", "api", "user"),
-    ("app.api.dispatch", "router", "api", "perm:operations:dispatch:read"),
+    # Read FLOOR for the whole router; every mutating route declares its own
+    # operations:dispatch:write / :assign guard (app/api/dispatch.py). This is
+    # deliberately "readperm:" and NOT "perm:operations:dispatch": the perm:
+    # mode appends :read/:write to the DOMAIN, so "perm:operations:dispatch:read"
+    # asked for the unseeded operations:dispatch:read:read / :read:write and
+    # 403'd the entire surface for every non-admin principal.
+    ("app.api.dispatch", "router", "api", "readperm:operations:dispatch:read"),
     ("app.api.field.config", "router", "api", "none"),
     ("app.api.field", "router", "api", "user"),
     ("app.api.vendor_portal", "router", "api", "user"),
@@ -219,7 +225,11 @@ def _router_dependencies(mode: str):
 
         domain = mode[len("perm:") :]
         return [Depends(require_method_permission(f"{domain}:read", f"{domain}:write"))]
-    # "readperm:<key>" guards a read-only router with a single permission.
+    # "readperm:<key>" applies ONE permission key, verbatim, to every method of
+    # the router — a floor. Read-only routers use it as their whole guard; a
+    # router whose mutations declare their own stronger per-route permission
+    # uses it for the floor (see app.api.dispatch). Unlike "perm:" it appends
+    # nothing, so the key is exactly the seeded key.
     if mode.startswith("readperm:"):
         from app.services.auth_dependencies import require_permission
 
