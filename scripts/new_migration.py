@@ -28,7 +28,6 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -67,17 +66,23 @@ def downgrade() -> None:
 
 
 def _script_directory() -> ScriptDirectory:
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    return ScriptDirectory.from_config(config)
+    # This helper authors only Sub's host lineage.  ``alembic.ini`` also
+    # composes independently headed module lineages, and some of those module
+    # revisions depend on a Sub-owned prerequisite.  Neither a foreign module
+    # head nor the effective composed graph is a valid ``down_revision`` for a
+    # new host migration, so inspect the host version directory in isolation.
+    return ScriptDirectory(
+        dir=str(REPO_ROOT / "alembic"),
+        version_locations=[str(VERSIONS)],
+    )
 
 
 def _resolve_head(script: ScriptDirectory) -> str:
     heads = script.get_heads()
     if len(heads) != 1:
         raise SystemExit(
-            "Refusing to allocate: the chain is not single-headed.\n"
-            f"  heads: {sorted(heads)}\n"
+            "Refusing to allocate: the host lineage is not single-headed.\n"
+            f"  host heads: {sorted(heads)}\n"
             "Repair the fork first — a new migration on a forked chain cannot "
             "be applied."
         )

@@ -295,6 +295,9 @@ def test_migration_248_is_single_alembic_head():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    config.set_main_option(
+        "version_locations", str(REPO_ROOT / "alembic" / "versions")
+    )
     script = ScriptDirectory.from_config(config)
     # 248 is a single link in the chain; the current head advances as later PRs
     # stack on top (Phase 5 asset inventory is the current head).

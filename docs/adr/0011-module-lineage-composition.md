@@ -135,10 +135,13 @@ lineage, and this ADR grants no permission to.
    `app/migration_bindings.py`, the same decision the reference assembly makes
    in the same filename, binding `tenant_scope_catalog.v1` and
    `module_database_roles.v1` to Sub revisions. Binding is not belief:
-   `require_prerequisites` re-proves each effect against the live catalog before
-   the requiring migration runs, and the order canary requires the named
-   revision to be present in `alembic_version`. A wrong entry fails at
-   `alembic upgrade`, before any DDL.
+   `resolve_depends_on` turns each binding into Alembic's real physical edge at
+   script load, and the static composition gate checks that the provider
+   revision is composed and declares the effect. Then
+   `require_prerequisites` independently proves the effect's live catalog
+   observables before the requiring migration emits DDL. `alembic_version`
+   records current heads, not applied history, so a provider ancestor is not
+   required to remain there as a row.
 
 2. **Two additive Sub migrations close the prerequisite gap.** Measured, not
    assumed — Sub satisfies neither spec in full today:
@@ -272,8 +275,9 @@ taking the second-config option.
 - **Migration:** `alembic upgrade heads` from the currently deployed revision
   against a production-shaped database, with one module composed, leaves Sub's
   chain single-headed and the module head applied.
-- **Reconciliation:** `require_prerequisites` proves both bound effects against
-  the live catalog; a deliberately wrong binding fails at upgrade before DDL.
+- **Reconciliation:** the static composition gate and resolved Alembic edge
+  reject an invalid binding or ordering graph; `require_prerequisites`
+  separately refuses a structurally wrong live effect before module DDL.
 - **Operational:** the deploy script's existing `upgrade heads` path is
   exercised with a composed module; lock timeout is observed on module DDL.
 - **Isolation:** cross-tenant RLS canaries for the composed module's tables run
@@ -306,3 +310,196 @@ Nothing here touches applied Sub migrations or production data.
   require re-ruling the collision dispositions.
 - Supersedes or is superseded by: none. Extends ADR-0009 (operator-tenant
   bridge) and depends on ADR-0008's `upgrade heads` finding.
+
+## Amendment — 2026-08-25: a product revision may supply a runtime prerequisite
+
+The original decision named the two effects required by the first network
+modules and explicitly left idempotency ownership out of scope. It did not rule
+the narrower question now reached by commercial modules: whether Sub may host
+kernel-shaped prerequisite storage without adopting the kernel migration
+lineage or transferring Sub's existing runtime authority.
+
+It may. Migration `556_idempotency_ledger_prereq` supplies
+`idempotency_ledger.v1` from Sub's own lineage and
+`app/migration_bindings.py` names that Sub revision as the provider. Both
+planes form one indivisible effect. The tenant table is tenant-scoped and
+FORCE-RLS protected; the platform table has no tenant column or RLS, is
+reachable by the two platform roles, and is fully revoked from `app_user`.
+The provider migration's final statement asks the exact pinned kernel verifier
+to accept the live catalog before Alembic records the revision.
+
+This does not amend the runtime ownership decision. Existing
+`idempotency_keys`, `task_executions`, `IdempotencyKey`, `TaskExecution` and
+`idempotent_task` paths remain authoritative, no existing row moves, and
+`dotmac_kernel.idempotency` remains forbidden under `app/`. The legacy
+reference set is frozen by a two-directional ratchet so coexistence cannot grow
+silently; shrinking it requires the same reviewed slice to lower the baseline.
+The new table names are storage consumed by future composed-module runtime
+paths, not a second Sub idempotency service.
+
+The import boundary changes only for migration entry points. An Alembic
+revision may import the exact name
+`dotmac_kernel.migrations.verify.require_prerequisites`; application code and
+every other verifier name remain refused. This makes “binding is not belief”
+true for a product-owned provider while preserving the kernel runtime boundary.
+
+The cutover gate for any consuming commercial module remains separate: pin its
+exact-tagged compatible kernel/module artifacts in the lock, compose the selected
+plane, prove fresh and predecessor upgrades plus RLS isolation, then run a
+shadow/parity phase before moving a business writer. This amendment by itself
+moves no subscription, billing, collection, payment, settlement, route, job,
+webhook or reconciliation authority.
+
+## Amendment — 2026-08-25: Sub supplies module-event relay storage product-first
+
+Migration `557_outbox_relay_prereq` supplies `outbox_relay.v1` after the
+idempotency provider. Its implementation is ported from ERP commit
+`dc10b24af22b1452b9954d4c33ff87a5916a4afe`, the qualifying production-used
+source, rather than rebuilt beside it. Sub changes only the typed product seam:
+its existing `event_store`, owner-output, notification, network-operation and
+field-ERP outboxes remain separate authoritative mechanisms.
+
+The two dispatcher roles are cluster identities, so their creation is an
+explicitly elevated bootstrap step owned by
+`scripts/bootstrap_outbox_dispatcher_roles.py`, not hidden inside ordinary
+Alembic execution. The migration first verifies that both identities are LOGIN,
+NOBYPASSRLS and NOSUPERUSER, then creates the two relay planes and their four
+hardened SECURITY DEFINER functions. PostgreSQL evidence covers the exact
+primary/foreign keys, defaults, claim indexes, positive and negative grants,
+schema usage, own-plane-only EXECUTE, real `app_user` tenant isolation and the
+pinned kernel verifier's negative observables.
+
+Storage is not delivery. This amendment binds a repairable prerequisite now
+consumed by shadow-composed commercial modules but installs no worker, route,
+webhook or runtime module import. Existing Sub delivery paths do not enqueue
+into or drain the new tables, so no event or money authority moves here.
+
+## Amendment — 2026-08-25: Subscriptions tenant storage is shadow-composed
+
+Sub now exact-pins tagged `dotmac-subscriptions==0.1.0a3` artifacts and its
+required `dotmac-kernel==0.1.0a94`, declares the installed Subscriptions migration
+resource in `alembic.ini`, and selects only `ModulePlane.TENANT` in
+`app/migration_bindings.py`. `alembic/env.py` installs that selection before
+the module's migration executes. The declaration is independent from the
+four prerequisite bindings: the bindings record effects this database really
+has, while the selection records storage this product intends to install.
+
+The package resource belongs in `alembic.ini`, not in a dynamic mutation in
+`env.py`. Alembic creates its `ScriptDirectory` before executing `env.py`, so a
+late `config.set_main_option("version_locations", ...)` can report a successful
+upgrade while silently omitting an installed module lineage. The architecture
+gate now checks pins and package resources in both directions.
+
+This is an additive empty-schema/shadow phase. It introduces no application
+import, route, job, webhook, runtime reader, runtime writer, backfill or
+dual-write, and it leaves the deployment profile's commercial provider set to
+`none`. Sub's local subscription, billing, collection and payment owners remain
+authoritative. The tenant-plane selection cannot be read as an authority claim:
+Vendor CP remains the first Subscriptions authority cutover on the platform
+plane, and Sub remains second behind complete parity and a separately sealed
+authority switch. Released a3 supplies the billing-treatment contract needed
+by the next parity phase, but this additive schema pin does not satisfy the
+backfill, comparison or sealed authority gates.
+
+Disposable-PostgreSQL evidence covers a fresh `upgrade heads`, an upgrade from
+Sub revision 556, exact selected/unselected table catalogues, ENABLE + FORCE
+RLS on all selected tables, effective two-tenant visibility as `app_user`,
+provider-ledger preservation and repeat-upgrade stability. Production is not
+touched and this amendment authorizes no deployment.
+
+## Amendment — 2026-08-25: Payments tenant storage joins the shadow composition
+
+`dotmac-payments==0.1.0a1` is exact-pinned and its installed
+`pm_0001_payment_intents` root composes beside Sub, Service Orders and
+Subscriptions. Payments is atomic tenant-only, so its manifest already fixes
+the full persistence plane and no `ModulePlaneSelection` is permitted.
+
+Composing its lineage and empty schema does not select a runtime commercial
+provider or transfer payment authority. Sub's legacy payment-intent,
+confirmation, proof and provider-consequence writers remain authoritative
+until a distinct data-bearing cutover seals parity and retires them. The real
+PostgreSQL canary verifies the exact table catalogue and ENABLE + FORCE RLS,
+then seeds an operator row before exercising unset, wrong and canonical tenant
+contexts as `app_user`; this prevents a wrong-tenant read assertion from
+passing vacuously against an empty table. Repeat `upgrade heads` is a no-op.
+
+## Amendment — 2026-08-25: Billing and Collections tenant storage joins shadow
+
+Sub exact-pins `dotmac-billing==0.1.0a1` and
+`dotmac-collections==0.1.0a1`, declares both installed migration resources in
+`alembic.ini`, and selects `ModulePlane.TENANT` for both dual-plane modules in
+`app/migration_bindings.py`. The resulting independent heads are
+`bi_0001_billing` and `cl_0001_collections`. Only their tenant catalogues are
+installed; their platform tables remain absent. Fresh and
+`557_outbox_relay_prereq` predecessor rehearsals prove the exact catalogues,
+ENABLE + FORCE RLS, effective two-tenant isolation, provider-row preservation
+and repeat-upgrade stability.
+
+This is still an empty-schema/shadow decision, not runtime adoption.
+`commercial_provider="none"` remains the selected profile value, application
+code imports neither distribution, and no reader, writer, route, job, webhook,
+dispatcher, backfill or dual-write is introduced. Sub's existing billing,
+payment, settlement, allocation and Collections decision/consequence paths
+retain authority.
+
+Composition also preserves the cross-product cutover order. Billing and
+Subscriptions are Vendor-first: their Vendor CP platform-plane authority
+switches must complete before the matching Sub tenant-plane switches.
+Collections is Sub-first: Sub must prove and seal the first tenant-plane
+authority switch before Vendor CP may move its platform plane.
+
+Each authority move remains separately gated by a typed complete backfill,
+total-classified shadow parity, a named sealed watermark with an explicit
+rollback premise, and retirement of the local writers, jobs, fallbacks and
+repair paths under sensitivity-proven ratchets. Billing's cutover is one
+coupled invoice/settlement/allocation boundary. Collections additionally
+requires exact parity of the authoritative Billing observation before a policy
+cohort moves. Subscriptions retains its distinct a3 billing-treatment and
+recurrence gates. None of those gates is satisfied merely by this amendment.
+
+## Amendment — 2026-08-25: a pure Collections observation precedes authority
+
+Sub may now import only the Collections a1 public
+`ReceivableObservationV1` value object in one named read-only adapter. The
+adapter compares the incumbent postpaid invoice-candidate predicate with the
+value object's pure blocker inside a repeatable-read, read-only snapshot and
+emits aggregate, PII-free evidence. It is registered as
+`collections.module_shadow_parity`, a resolver in `SHADOWING`, rather than as
+an authoritative record, policy or writer.
+
+The command's default non-zero mismatch result is an operational check, not a
+cutover gate. Its aggregate output deliberately carries no cohort identity,
+source revision, evaluation instant or evidence digest, so it cannot seal the
+representative cohort required by this ADR. It also preserves the incumbent's
+second raw Python-truthiness reconciliation-hold check, including the legacy
+string `"false"` quirk, and reports rather than normalizes that mismatch.
+
+The observer preserves the exact incumbent/module blocker pair, not only their
+binary decisions. It can evaluate those same immutable snapshot inputs again at
+an explicit later instant and aggregates every parity transition. This exposes
+the temporal case hidden by the old `MATCHED_BLOCKED` bucket: a future-due
+invoice without due provenance is blocked as `receivable_not_due` /
+`due_date_unverified` initially, but the incumbent becomes actionable at the
+due instant while the module remains fail-closed. Naive instants and an
+observation before evaluation are refused; an equal instant is deterministic.
+Serialized output carries neither absolute instant, identifier nor amount—only
+the observation horizon in seconds—so this evidence remains operational and
+unsealed.
+
+The admission does not include `CollectionCaseService`, a Collections
+submodule, Billing or Subscriptions runtime APIs, module writes, DDL, backfill,
+routes, jobs, outbox delivery, idempotency or consequences. The deployment
+profile remains `commercial_provider="none"`; Sub's incumbent invoice,
+dunning and financial-access owners remain in force. Collections remains the
+Sub-first cutover, but Billing and Subscriptions retain their Vendor-first
+ordering and are not adopted indirectly by this observer.
+
+Collections a1 requires a positive `source_version` on the observation. This
+report uses the constant `1` only as an inert contract marker. It is not a
+stateful reader version and cannot cross into `CollectionCaseService`; Sub
+lacks one durable monotonic revision spanning every fact that can change a
+receivable. The authority gate therefore remains zero total-classification
+mismatches at the evaluation instant and across an approved temporal horizon on
+sealed representative data, exact Billing-input parity, a real monotonic source
+version, policy/case/consequence parity and explicit retirement of incumbent
+writers and jobs.

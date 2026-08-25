@@ -12,6 +12,7 @@ MIGRATION = ROOT / "alembic/versions/420_billing_run_launch_evidence.py"
 def test_billing_run_evidence_is_the_single_migration_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
     script = ScriptDirectory.from_config(config)
 
     # Single linear head: Quote acceptance conversion (462) sits on outage
