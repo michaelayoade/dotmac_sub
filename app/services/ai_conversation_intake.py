@@ -1184,6 +1184,8 @@ _ADMIN_POLICY_VERSION_HISTORY_LIMIT = 20
 def admin_policy_context(db: Session) -> dict[str, object]:
     """Build the admin AI intake policy read model for the settings template."""
 
+    from app.services import ai_intake_canary_library, ai_intake_rollout_readiness
+
     rows = (
         db.query(AiIntakePolicy)
         .order_by(AiIntakePolicy.updated_at.desc(), AiIntakePolicy.created_at.desc())
@@ -1355,6 +1357,25 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         "ai_intake_permitted_identifiers": permitted_identifiers,
         "ai_intake_tool_catalogue": (
             ai_intake_conversation_engine.tool_catalogue_snapshot()
+        ),
+        "ai_intake_canary_matrix": (
+            ai_intake_rollout_readiness.data_driven_scenario_matrix()
+        ),
+        "ai_intake_canary_library": ai_intake_rollout_readiness.canary_library_rows(),
+        "ai_intake_canary_suites": ai_intake_canary_library.list_suites(db),
+        "ai_intake_canary_assertion_types": tuple(
+            sorted(
+                ai_intake_rollout_readiness.ai_intake_canary_runner.SUPPORTED_ASSERTION_TYPES
+            )
+        ),
+        "ai_intake_pre_activation_gate": (
+            ai_intake_rollout_readiness.pre_activation_gate_report(
+                db=db,
+                policy_version_id=selected_active.id if selected_active else None,
+            )
+        ),
+        "ai_intake_activation_plan": (
+            ai_intake_rollout_readiness.CONTROLLED_ACTIVATION_PLAN
         ),
     }
 

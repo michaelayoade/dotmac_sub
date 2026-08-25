@@ -241,6 +241,8 @@ DOMAIN = DomainSOT(
                 "AI intake approved tool catalogue policy",
                 "AI intake customer lookup tool resolver",
                 "AI intake subscriber monitoring tool resolver",
+                "AI intake canary scenario library lifecycle",
+                "AI intake canary run evidence",
                 "AI generation attempt evidence",
                 "customer-message intake eligibility policy",
                 "bounded customer-message intent classification",
@@ -347,6 +349,25 @@ DOMAIN = DomainSOT(
                             "support-relevant subscriber identity",
                             "approved monitoring projection",
                         ),
+                    ),
+                    ConcernContract(
+                        name="AI intake canary scenario library lifecycle",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "reviewed AI intake canary scenario definition",
+                            "active AI intake policy version",
+                        ),
+                        canonical_writer="ai.intake",
+                    ),
+                    ConcernContract(
+                        name="AI intake canary run evidence",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "reviewed AI intake canary scenario definition",
+                            "active AI intake policy version",
+                            "simulated canary execution evidence",
+                        ),
+                        canonical_writer="ai.intake",
                     ),
                     ConcernContract(
                         name="AI generation attempt evidence",
@@ -464,6 +485,25 @@ DOMAIN = DomainSOT(
                         owner="external:llm_provider",
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
                         source="Strict JSON candidate returned through ai.gateway.",
+                    ),
+                    AuthorityInput(
+                        name="reviewed AI intake canary scenario definition",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Admin-reviewed typed canary scenario or suite definition; "
+                            "no executable code, SQL, imports or templates are accepted."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="simulated canary execution evidence",
+                        owner="ai.intake",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Isolated scenario run evidence including scenario revision, "
+                            "policy version, requested and actual engine, turns, tool "
+                            "results and typed assertion results."
+                        ),
                     ),
                 ),
                 transaction=TransactionContract(

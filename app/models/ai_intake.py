@@ -291,3 +291,179 @@ class AiIntakeGenerationAttempt(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
+
+
+class AiIntakeCanaryScenario(Base):
+    __tablename__ = "ai_intake_canary_scenarios"
+    __table_args__ = (
+        UniqueConstraint("scenario_key", name="uq_ai_intake_canary_scenario_key"),
+        Index("ix_ai_intake_canary_scenarios_enabled", "enabled", "priority"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    scenario_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    required_for_activation: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    tags: Mapped[list | None] = mapped_column(MutableList.as_mutable(JSON()))
+    current_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class AiIntakeCanaryScenarioRevision(Base):
+    __tablename__ = "ai_intake_canary_scenario_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "scenario_id",
+            "revision_number",
+            name="uq_ai_intake_canary_scenario_revision_number",
+        ),
+        Index(
+            "ix_ai_intake_canary_scenario_revisions_scenario",
+            "scenario_id",
+            "revision_number",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    scenario_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_intake_canary_scenarios.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSON()), nullable=False
+    )
+    definition_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class AiIntakeCanarySuite(Base):
+    __tablename__ = "ai_intake_canary_suites"
+    __table_args__ = (
+        UniqueConstraint("suite_key", name="uq_ai_intake_canary_suite_key"),
+        Index("ix_ai_intake_canary_suites_enabled", "enabled"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    suite_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    required_for_activation: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
+class AiIntakeCanarySuiteScenario(Base):
+    __tablename__ = "ai_intake_canary_suite_scenarios"
+    __table_args__ = (
+        UniqueConstraint(
+            "suite_id",
+            "scenario_id",
+            name="uq_ai_intake_canary_suite_scenario",
+        ),
+        Index("ix_ai_intake_canary_suite_scenarios_suite", "suite_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    suite_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_intake_canary_suites.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scenario_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_intake_canary_scenarios.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class AiIntakeCanaryRun(Base):
+    __tablename__ = "ai_intake_canary_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('passed', 'failed')",
+            name="ck_ai_intake_canary_runs_status",
+        ),
+        Index("ix_ai_intake_canary_runs_scenario_latest", "scenario_id", "created_at"),
+        Index(
+            "ix_ai_intake_canary_runs_policy_engine",
+            "policy_version_id",
+            "requested_engine",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    scenario_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_intake_canary_scenarios.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scenario_revision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_intake_canary_scenario_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    suite_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_intake_canary_suites.id", ondelete="SET NULL"),
+    )
+    policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ai_intake_policies.id", ondelete="SET NULL")
+    )
+    policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_intake_policy_versions.id", ondelete="SET NULL"),
+    )
+    requested_engine: Mapped[str] = mapped_column(String(40), nullable=False)
+    actual_engine: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    evidence: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSON()), nullable=False
+    )
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )

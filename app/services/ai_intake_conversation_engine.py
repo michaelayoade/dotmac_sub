@@ -560,6 +560,11 @@ def execute_tool(
     if not _tool_enabled(policy, key):
         return {"status": "unauthorized", "reason": "tool_disabled_by_policy"}
     if tool_mode == "simulation":
+        configured_results = policy.get("simulated_tool_results")
+        if isinstance(configured_results, dict):
+            configured = configured_results.get(key)
+            if isinstance(configured, dict):
+                return dict(configured)
         return _simulated_tool_result(key, inputs)
     if key == "customer_lookup":
         return _customer_lookup(db, inputs, conversation=conversation)
