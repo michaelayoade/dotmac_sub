@@ -129,3 +129,39 @@ To roll back only the application while keeping the database for inspection:
 ```sh
 docker rm -f dotmac_sub_thin_shadow_app
 ```
+
+## The other cohort: `receivable-shadow-01`
+
+Two different things in this repository are called a cohort, and conflating them
+would misread both.
+
+**This document's cohort is a module-adoption cohort** — twenty-five packages
+and how far each has actually travelled. Every entry is `source_only` with
+`authority_mode = none`, and `ModuleEntry` refuses each step that runs ahead of
+its evidence.
+
+**`receivable-shadow-01` is a data cohort** — which *rows* across
+Subscription → Billing → Collections are projected into
+`billing_receivable_projections` and compared by the seven-dimension parity
+report. It
+is declared in `app/services/billing/receivable_cohort.py` and designed in
+`docs/designs/RECEIVABLE_PROJECTION_SHADOW.md`.
+
+Neither implies the other:
+
+* the module cohort answers "could `dotmac-billing` one day own this?";
+* the data cohort answers "which facts would be compared if it ever could".
+
+Recording a data cohort **does not** advance a module one step along
+`ADOPTION_PROGRESSION`, and nothing in the projection package writes to the
+manifest in `app/shadow/`. The link runs one way and is deliberate: the data
+cohort *reads* this manifest's pins, so a parity blocker naming
+`dotmac-subscriptions 0.1.0a2` cannot drift away from the manifest that records
+that pin. `test_the_standing_blocker_carries_real_pin_coordinates` fails the
+build if the two ever disagree.
+
+The data cohort also runs against **live Sub**, not inside the shadow stack:
+it observes incumbent invoices and writes a rebuildable projection beside them.
+It moves no authority, creates no collections case, and every writing command
+defaults to dry run. That is a different kind of safety from this environment's
+egress denial, and neither substitutes for the other.
