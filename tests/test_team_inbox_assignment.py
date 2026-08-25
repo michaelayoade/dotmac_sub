@@ -179,6 +179,36 @@ def test_assign_conversation_to_me_does_not_require_team_membership(db_session):
     assert assignment.is_active is True
 
 
+def test_assign_conversation_to_me_replays_existing_active_assignment(db_session):
+    team = _team(db_session, "Support")
+    user, _person = add_bound_staff_user(db_session)
+    conversation = _conversation(db_session)
+    conversation.primary_service_team_id = team.id
+    db_session.commit()
+
+    first = team_inbox_commands.assign_conversation_to_me(
+        db_session,
+        conversation_id=conversation.id,
+        actor_person_id=user.id,
+    )
+    second = team_inbox_commands.assign_conversation_to_me(
+        db_session,
+        conversation_id=conversation.id,
+        actor_person_id=user.id,
+    )
+    db_session.commit()
+
+    assert first.message == "Assigned conversation to you."
+    assert second.message == "Assigned conversation to you."
+    assignments = db_session.query(InboxConversationAssignment).all()
+    events = db_session.query(InboxRoutingEvent).all()
+    assert len(assignments) == 1
+    assert assignments[0].person_id == user.id
+    assert assignments[0].service_team_id == team.id
+    assert assignments[0].is_active is True
+    assert len(events) == 1
+
+
 def test_direct_agent_assignment_still_requires_team_membership(db_session):
     team = _team(db_session, "Support")
     user, _person = add_bound_staff_user(db_session)

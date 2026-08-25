@@ -21,6 +21,17 @@ a second invoice-document authority.
 ## Delivery contract
 
 Only the email channel for `invoice.sent` receives an invoice-PDF descriptor.
+On the admin invoice detail page, **Issue & send invoice** performs the guarded
+draft-to-issued transition and stages `invoice.sent` in that same invoice-owner
+transaction. **Send invoice** on an already-issued document stages the same
+event without another lifecycle transition. Proformas and terminal void or
+written-off documents remain unsendable.
+
+The stock email greets the customer, explains that the attached invoice is for
+review regarding their service, and includes the invoice number, amount, and
+due date. The exact historical stock template is migrated to this copy while
+operator-customized templates remain untouched.
+
 At delivery time the worker:
 
 1. parses the invoice UUID;
@@ -34,6 +45,21 @@ At delivery time the worker:
 
 The generated document is therefore the same branded/template-backed PDF used
 by admin and customer portal downloads.
+
+## PDF payment action
+
+Current invoice renders present one **Pay with Paystack** action and do not
+print bank-transfer account details. The action links to the public,
+invoice-scoped checkout hand-off at `/pay/invoices/{invoice_id}`. Opening the
+link rechecks that the invoice remains payable, creates a fresh Paystack
+checkout intent for its current balance, and redirects directly to Paystack;
+the customer does not need to sign in to the portal. The PDF stores only the
+stable Dotmac hand-off URL, never an expiring provider authorization URL. The
+normal signed webhook/reconciliation path remains the settlement authority.
+
+Changing the invoice template freshness marker invalidates cached exports so
+new downloads and invoice email attachments do not retain the retired bank
+details.
 
 ## Failure and retry
 

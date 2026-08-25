@@ -572,6 +572,18 @@ def _active_assignment(
     )
 
 
+def _lock_active_conversation(
+    db: Session, conversation: InboxConversation
+) -> InboxConversation | None:
+    return (
+        db.query(InboxConversation)
+        .filter(InboxConversation.id == conversation.id)
+        .filter(InboxConversation.is_active.is_(True))
+        .with_for_update()
+        .one_or_none()
+    )
+
+
 def _lock_team(db: Session, team_id: UUID) -> ServiceTeam | None:
     return (
         db.query(ServiceTeam)
@@ -776,6 +788,28 @@ def assign_conversation_to_agent(
                 reason="person_id must reference an active staff user",
             )
 
+    locked_conversation = _lock_active_conversation(db, conversation)
+    if locked_conversation is None:
+        return InboxAssignmentResult(
+            kind="conversation_not_found",
+            service_team_id=str(team_uuid),
+            reason="Conversation not found",
+        )
+    conversation = locked_conversation
+
+    previous_assignment = _active_assignment(db, conversation)
+    if (
+        previous_assignment is not None
+        and previous_assignment.service_team_id == team_uuid
+        and previous_assignment.person_id == person_uuid
+    ):
+        return InboxAssignmentResult(
+            kind="assigned",
+            service_team_id=str(team_uuid),
+            assigned_person_id=str(person_uuid),
+            reason="already_assigned",
+        )
+
     if decision_mode is InboxRoutingDecisionMode.manual and require_team_membership:
         available_person_ids = {
             candidate.person_id
@@ -795,7 +829,6 @@ def assign_conversation_to_agent(
                 ),
             )
 
-    previous_assignment = _active_assignment(db, conversation)
     set_conversation_owner_team(
         db,
         conversation=conversation,
@@ -910,6 +943,15 @@ def queue_conversation_for_team(
             service_team_id=str(team_uuid),
             reason="service_team_id must reference an active team",
         )
+
+    locked_conversation = _lock_active_conversation(db, conversation)
+    if locked_conversation is None:
+        return InboxAssignmentResult(
+            kind="conversation_not_found",
+            service_team_id=str(team_uuid),
+            reason="Conversation not found",
+        )
+    conversation = locked_conversation
 
     previous_assignment = _active_assignment(db, conversation)
     set_conversation_owner_team(

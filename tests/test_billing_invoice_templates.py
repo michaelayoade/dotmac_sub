@@ -36,6 +36,18 @@ def test_invoice_detail_shows_authoritative_paid_date_only_when_available():
     )
 
 
+def test_invoice_detail_offers_permission_scoped_pdf_email_action():
+    template = Path("templates/admin/billing/invoice_detail.html").read_text()
+
+    assert "['draft', 'issued', 'overdue', 'partially_paid']" in template
+    assert "can(request, 'billing:invoice:update')" in template
+    assert "Issue & send invoice" in template
+    assert "Send invoice" in template
+    assert "/send-and-return" in template
+    assert 'name="issue_draft" value="1"' in template
+    assert "email the PDF to the customer" in template
+
+
 def test_prepaid_draft_reconciliation_uses_owner_preview_and_shared_confirmation():
     detail = Path("templates/admin/billing/invoice_detail.html").read_text()
     confirmation = Path(

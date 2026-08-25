@@ -438,6 +438,18 @@ def test_update_offer_with_audit_stages_profile_sync_task_for_existing_bundle(
     )
     db_session.add_all([olt, offer])
     db_session.flush()
+    # A sellable offer must carry a real recurring price; this fixture is about
+    # OLT profile sync, so give it one rather than model an offer that cannot
+    # legitimately exist.
+    db_session.add(
+        OfferPrice(
+            offer_id=offer.id,
+            price_type=PriceType.recurring,
+            amount=Decimal("100000.00"),
+            currency="NGN",
+            is_active=True,
+        )
+    )
     db_session.add(
         OltProfileBundle(
             olt_id=olt.id,

@@ -166,6 +166,7 @@ class DraftLineCommand:
     quantity: Decimal
     unit_price: Decimal
     tax_rate_id: UUID | None = None
+    subscription_id: UUID | None = None
     line_id: UUID | None = None
 
 
@@ -298,6 +299,9 @@ def _create_fingerprint(command: CreateInvoiceDraftCommand) -> str:
                 "quantity": str(line.quantity),
                 "unit_price": str(line.unit_price),
                 "tax_rate_id": str(line.tax_rate_id) if line.tax_rate_id else None,
+                "subscription_id": (
+                    str(line.subscription_id) if line.subscription_id else None
+                ),
             }
             for line in command.lines
         ],
@@ -368,6 +372,8 @@ def _validate_header(
 
 def _validated_lines(
     db: Session,
+    *,
+    account_id: UUID,
     lines: tuple[DraftLineCommand, ...],
 ) -> tuple[tuple[DraftLineCommand, Decimal, TaxApplication], ...]:
     if not lines:
@@ -403,6 +409,21 @@ def _validated_lines(
                 "Invoice tax rate was not found.",
                 tax_rate_id=str(line.tax_rate_id),
             )
+        if line.subscription_id is not None:
+            subscription = db.get(Subscription, line.subscription_id)
+            if subscription is None:
+                raise _error(
+                    "subscription_not_found",
+                    "Invoice line subscription was not found.",
+                    subscription_id=str(line.subscription_id),
+                )
+            if subscription.subscriber_id != account_id:
+                raise _error(
+                    "subscription_account_mismatch",
+                    "Invoice line subscription does not belong to this account.",
+                    subscription_id=str(line.subscription_id),
+                    account_id=str(account_id),
+                )
         validated.append(
             (
                 DraftLineCommand(
@@ -410,6 +431,7 @@ def _validated_lines(
                     quantity=line.quantity,
                     unit_price=line.unit_price,
                     tax_rate_id=line.tax_rate_id,
+                    subscription_id=line.subscription_id,
                     line_id=line.line_id,
                 ),
                 amount,
@@ -425,7 +447,7 @@ def _stage_lines(
     invoice: Invoice,
     lines: tuple[DraftLineCommand, ...],
 ) -> None:
-    validated = _validated_lines(db, lines)
+    validated = _validated_lines(db, account_id=invoice.account_id, lines=lines)
     vat_policy = get_customer_vat_exemption_policy(
         db,
         account_id=invoice.account_id,
@@ -441,6 +463,7 @@ def _stage_lines(
                 amount=amount,
                 tax_rate_id=None if vat_policy.vat_exempt else command.tax_rate_id,
                 tax_application=tax_application,
+                subscription_id=command.subscription_id,
                 is_active=True,
             ),
         )
