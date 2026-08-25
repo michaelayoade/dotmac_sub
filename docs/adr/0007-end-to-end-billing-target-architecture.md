@@ -1138,3 +1138,24 @@ evidence are append-only and are not removed by rollback.
   duplicated billing-mode/cadence authority, multi-source customer-position
   computation, separate enforcement sweeps, and generic cross-owner
   reconciliation expectations.
+
+## Amendment — 2026-08-18: external operational-receivables adoption target
+
+ADR-0011 accepts preparation for Sub to adopt Starter's `dotmac-billing` tenant
+plane as the eventual single operational-receivables owner. This refines the
+placement of the target designed here; it does not claim a production cutover.
+
+Until the separately authorized coupled watermark switch, the Sub-local owners
+and executable SOT registry in this ADR remain authoritative. The isolated
+candidate harness is deliberately unmounted and owns only classification,
+shadow, reconciliation, readiness, and retirement evidence. At the eventual
+switch, invoice, confirmed-settlement, allocation, and operational-position
+authority move together to `dotmac-billing`; the registry and displaced-writer
+ratchets change atomically in that cutover slice.
+
+The external boundary preserves the rest of this ADR's owner map:
+Subscriptions owns commercial recurrence and rated-occurrence production,
+Collections owns delinquency policy, products own service/access consequences,
+the Integrator owns payment-provider transport, and ERP exclusively owns GL and
+statutory accounting. Durable Timers gates effective recurring scheduling but
+is not a runtime dependency of the Billing financial engine.

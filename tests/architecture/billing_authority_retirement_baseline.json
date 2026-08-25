@@ -1,0 +1,29 @@
+{
+  "categories": {
+    "allocation_authority": {
+      "count": 63,
+      "sites_sha256": "ef0079dcc97a9fff133766889a0bc6d3d068e083fc78ba0e89d500e9da4d789b"
+    },
+    "direct_balance_assignment": {
+      "count": 16,
+      "sites_sha256": "0044eadabffe5cce6fb002137221ecc5d1b14fb5073025a04bbb705e7a6500c8"
+    },
+    "invoice_credit_authority": {
+      "count": 307,
+      "sites_sha256": "d8f600c28505c791316239de4da91523307b14da12a663f440b4e97077ea010a"
+    },
+    "payment_settlement_authority": {
+      "count": 223,
+      "sites_sha256": "47dc815b86bf62aa6878417086d781816e538bd4529795e3f9d6f8a48d074ede"
+    },
+    "provider_or_job_money_mutation": {
+      "count": 1,
+      "sites_sha256": "a4f0174fea07697c26901b06f66e49341175ffac8fcd77d415ae0c2e65406694"
+    },
+    "tax_fx_decision": {
+      "count": 45,
+      "sites_sha256": "f578167737ed72c8bbd409d4bd364d4fb5d17af7d63c46e4ee4a3502ea13bf8f"
+    }
+  },
+  "version": 1
+}

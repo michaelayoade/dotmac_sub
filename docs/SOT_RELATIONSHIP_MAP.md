@@ -74,6 +74,23 @@ A setting with no `SettingSpec` is not a setting. `_get_domain_setting` and
 `_normalize_spec_setting` both reject an unspec'd key, so on the owned path an
 undeclared key is unreachable for read and write alike.
 
+## External Billing adoption preparation — 2026-08-18
+
+ADR-0011 prepares the tenant-plane adoption of Starter's `dotmac-billing` as the
+eventual single operational-receivables owner. The preparation is isolated from
+the production application and owns only typed classification, shadow,
+reconciliation, watermark-readiness, and retirement evidence.
+
+The executable registry below intentionally continues to name the current
+Sub-local invoice, payment, allocation, customer-subledger, and position owners.
+Changing those declarations during shadow preparation would falsely claim a
+cutover and create two authorities. A separately authorized production change
+must switch those coupled declarations to the external Billing owner in the
+same slice that disables and ratchets the legacy writers. ERP remains GL and
+statutory-accounting owner; Integrator remains payment-provider transport owner;
+Subscriptions/Timers own recurring occurrences; Collections and product access
+owners retain policy and consequence authority.
+
 ## UI Projection Boundary
 
 The approved cross-Dotmac presentation contract is
