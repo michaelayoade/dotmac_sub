@@ -226,8 +226,8 @@ def parse_create_line_items(
                 raw_line_id = (
                     item.get("id") or item.get("lineId") or item.get("line_id")
                 )
-                raw_subscription_id = (
-                    item.get("subscriptionId") or item.get("subscription_id")
+                raw_subscription_id = item.get("subscriptionId") or item.get(
+                    "subscription_id"
                 )
                 line_items.append(
                     {
