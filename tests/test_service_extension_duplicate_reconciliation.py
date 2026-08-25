@@ -363,5 +363,5 @@ def test_deploy_runs_candidate_preflight_before_migrations() -> None:
     )
     assert preflight in source
     assert source.index(preflight) < source.index(
-        'log "Applying migrations (alembic upgrade heads)"'
+        'log "Applying migrations (python -m app.migrations upgrade heads)"'
     )

@@ -120,7 +120,7 @@ test-e2e: assert-full-test-host ## Run end-to-end browser tests
 # ─── Database ─────────────────────────────────────────────
 
 migrate: ## Apply all pending migrations
-	poetry run alembic upgrade head
+	poetry run python -m app.migrations upgrade heads
 
 new-migration: ## Allocate a migration from the current head (usage: make new-migration slug=add_users_table)
 	poetry run python scripts/new_migration.py "$(slug)"
@@ -129,10 +129,10 @@ migrate-new: ## Autogenerate a migration (hex id; prefer new-migration for the N
 	poetry run alembic revision --autogenerate -m "$(msg)"
 
 migrate-down: ## Rollback last migration
-	poetry run alembic downgrade -1
+	poetry run python -m app.migrations downgrade -1
 
 migrate-history: ## Show migration history
-	poetry run alembic history --verbose
+	poetry run python -m app.migrations history
 
 # ─── Development ──────────────────────────────────────────
 
@@ -163,7 +163,7 @@ docker-shell: ## Open shell in app container
 	docker exec -it dotmac_sub_app bash
 
 docker-migrate: ## Run migrations inside Docker
-	docker exec dotmac_sub_app alembic upgrade heads
+	docker exec dotmac_sub_app python -m app.migrations upgrade heads
 
 # ─── Host-build fallback guard ─────────────────────────────────────────────
 #
@@ -236,7 +236,7 @@ prod-smtp-inbound-probe: ## Prove SMTP intake creates a marked team-inbox messag
 
 prod-migrate: ## Apply migrations, retry lock timeouts, then verify schema contracts
 	@n=0; until [ $$n -ge 4 ]; do \
-	  out=$$($(PROD_COMPOSE) run --rm --no-deps app alembic upgrade heads 2>&1); rc=$$?; \
+	  out=$$($(PROD_COMPOSE) run --rm --no-deps app python -m app.migrations upgrade heads 2>&1); rc=$$?; \
 	  echo "$$out"; \
 	  [ $$rc -eq 0 ] && break; \
 	  if echo "$$out" | grep -qiE "lock timeout|canceling statement due to lock"; then \

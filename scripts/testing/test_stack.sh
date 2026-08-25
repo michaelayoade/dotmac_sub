@@ -79,8 +79,8 @@ cmd_create() {
 }
 
 cmd_migrate() {
-  echo ">> alembic upgrade head against $TEST_DB"
-  run_in_image 'alembic upgrade head 2>&1 | tail -6; echo "--- current ---"; alembic current 2>&1 | tail -1'
+  echo ">> composed migration upgrade heads against $TEST_DB"
+  run_in_image 'python -m app.migrations upgrade heads 2>&1 | tail -8; echo "--- current ---"; python -m app.migrations current 2>&1 | tail -4'
 }
 
 cmd_seed() {

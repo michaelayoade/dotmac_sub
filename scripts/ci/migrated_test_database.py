@@ -16,18 +16,15 @@ import re
 import sys
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
 
-from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 from alembic import command
+from app.migrations import make_alembic_config
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-ALEMBIC_CONFIG_PATH = REPOSITORY_ROOT / "alembic.ini"
 _DISPOSABLE_DATABASE_TOKEN = re.compile(
     r"(?:^|_)(?:test|pytest|ci|e2e|migration)(?:_|$)", re.IGNORECASE
 )
@@ -116,8 +113,7 @@ def parse_test_database_target(raw_url: str | None) -> DatabaseTarget:
 def repository_heads() -> frozenset[str]:
     """Return the exact checked-in Alembic heads."""
 
-    config = Config(str(ALEMBIC_CONFIG_PATH))
-    config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
+    config = make_alembic_config()
     return frozenset(ScriptDirectory.from_config(config).get_heads())
 
 
@@ -163,9 +159,10 @@ def migrate_test_database(target: DatabaseTarget) -> MigratedSchemaState:
     previous_database_url = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = target.url.render_as_string(hide_password=False)
     try:
-        config = Config(str(ALEMBIC_CONFIG_PATH))
-        config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
-        command.upgrade(config, "head")
+        config = make_alembic_config(
+            target.url.render_as_string(hide_password=False)
+        )
+        command.upgrade(config, "heads")
     finally:
         if previous_database_url is None:
             os.environ.pop("DATABASE_URL", None)

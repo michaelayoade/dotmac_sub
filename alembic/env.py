@@ -5,6 +5,8 @@ from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool
 from alembic import context
 from app.config import settings
 from app.db import Base, resolve_migration_lock_timeout
+from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
+from app.migrations import MODULE_PLANE_SELECTIONS
 from app.models import (  # noqa: F401
     analytics,
     audit,
@@ -46,10 +48,18 @@ from app.models import (  # noqa: F401
     usage,
     wireguard,
 )
+from dotmac_kernel.planes import install_module_plane_selections
+from dotmac_kernel.prerequisites import install_prerequisite_bindings
 
 config = context.config
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", settings.database_url)
+
+install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
+install_module_plane_selections(
+    config.attributes.get("module_plane_selections", MODULE_PLANE_SELECTIONS)
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

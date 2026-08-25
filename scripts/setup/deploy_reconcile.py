@@ -17,12 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 logging.basicConfig(level=logging.CRITICAL)
 
-from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import select
 
 from app.db import SessionLocal, get_engine
+from app.migrations import make_alembic_config
 from app.models.domain_settings import SettingDomain
 from app.models.integration_platform import IntegrationInstallation
 from app.models.tr069 import Tr069AcsServer
@@ -78,7 +78,7 @@ def check_release() -> CheckResult:
 
 
 def check_migrations() -> CheckResult:
-    alembic_cfg = Config("alembic.ini")
+    alembic_cfg = make_alembic_config()
     script = ScriptDirectory.from_config(alembic_cfg)
     expected_heads = sorted(script.get_heads())
 

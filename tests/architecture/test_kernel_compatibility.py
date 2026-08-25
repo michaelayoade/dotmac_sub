@@ -56,9 +56,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a50"
-KERNEL_WHEEL_SHA256 = "3030954c84c8ed4caae877412df4c1f3db0b2e4dd94895f1bd9a3a954fa77371"
-KERNEL_SDIST_SHA256 = "87c0df99a33f4d4b79f3e22842166524b3dec9f077af7ad5757e6fb3600274f7"
+KERNEL_PIN = "0.1.0a73"
+KERNEL_WHEEL_SHA256 = "LOCK_PENDING"
+KERNEL_SDIST_SHA256 = "LOCK_PENDING"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"
@@ -234,7 +234,7 @@ def test_pyproject_pins_kernel_exactly_from_the_named_index() -> None:
 
 
 def test_lock_carries_the_reviewed_kernel_release_bytes() -> None:
-    """The current pin resolves to the exact registry-verified a50 artifacts."""
+    """The current pin resolves to the exact registry-verified a73 artifacts."""
     import tomllib
 
     with (PROJECT_ROOT / "poetry.lock").open("rb") as lock_file:

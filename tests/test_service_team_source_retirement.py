@@ -34,7 +34,7 @@ def test_source_retirement_gate_is_narrow_and_has_native_pointers():
 def test_deploy_uses_source_retirement_check_not_crm_adoption():
     source = Path("scripts/deploy.sh").read_text(encoding="utf-8")
     gate = "python -m scripts.migration.retire_legacy_service_team_sources --check"
-    migration = 'log "Applying migrations (alembic upgrade heads)"'
+    migration = 'log "Applying migrations (python -m app.migrations upgrade heads)"'
 
     assert gate in source
     assert source.index(gate) < source.index(migration)

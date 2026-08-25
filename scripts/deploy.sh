@@ -113,7 +113,7 @@ DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
 # Nothing used to stop two deploys running at once. On 2026-07-12 two did: each
 # started a full pg_dump of the production database, load hit 52 on 16 cores,
 # the app was starved out and the site served 502s for ~10 minutes. Had both
-# reached `alembic upgrade heads` they would have raced the migration chain
+# reached the composed migration runner they would have raced the migration chain
 # against the same database.
 LOCK_FILE="${DEPLOY_LOCK_FILE:-/var/lock/dotmac_sub_deploy.lock}"
 command -v flock >/dev/null || {
@@ -322,7 +322,8 @@ run_migrations() {
   local output
   local rc
   while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
-    if output="$("${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads 2>&1)"; then
+    if output="$("${COMPOSE[@]}" run --rm --no-deps app \
+      python -m app.migrations upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
     else
@@ -767,7 +768,7 @@ set_env_value GIT_SHA "${FULL_SHA}"
 
 # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
 # merged heads), so use `heads` (plural), never `head`.
-log "Applying migrations (alembic upgrade heads)"
+log "Applying migrations (python -m app.migrations upgrade heads)"
 run_migrations
 
 log "Verifying database schema contracts"

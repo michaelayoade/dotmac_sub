@@ -1,6 +1,6 @@
 """Fail a deployment when required database structures are not usable.
 
-Run after ``alembic upgrade heads`` and before replacing live services.  The
+Run after the composed ``app.migrations upgrade heads`` and before replacing live services.  The
 check is read-only and deliberately examines PostgreSQL catalog validity, not
 only object names.
 """

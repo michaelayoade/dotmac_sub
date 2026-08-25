@@ -102,7 +102,7 @@ if [[ "$1 $2" == "image inspect" ]]; then
     printf '%s\\n' "{revision}"
   fi
 fi
-if [[ "$*" == *"alembic upgrade heads"* ]]; then
+if [[ "$*" == *"python -m app.migrations upgrade heads"* ]]; then
   attempts="$(cat "$MIGRATION_ATTEMPTS")"
   if ((attempts < {migration_lock_failures})); then
     printf '%s\\n' "$((attempts + 1))" > "$MIGRATION_ATTEMPTS"
@@ -308,7 +308,7 @@ def test_deploy_rejects_non_green_github_revision_before_database_work(
     )
     assert not any(
         "scripts.migration.reconcile_service_extension_duplicates" in command
-        or "alembic upgrade heads" in command
+        or "python -m app.migrations upgrade heads" in command
         for command in commands[gate + 1 :]
     )
 
@@ -362,7 +362,7 @@ def test_deploy_rejects_release_compose_tree_mismatch_before_database_work(
     )
     assert not any(
         "scripts.migration.reconcile_service_extension_duplicates" in command
-        or "alembic upgrade heads" in command
+        or "python -m app.migrations upgrade heads" in command
         for command in docker_log.read_text().splitlines()
     )
 
@@ -387,7 +387,7 @@ def test_deploy_verifies_schema_then_warms_candidate_before_recreate(
     migration = next(
         index
         for index, command in enumerate(commands)
-        if "alembic upgrade heads" in command
+        if "python -m app.migrations upgrade heads" in command
     )
     verification = next(
         index
@@ -475,7 +475,7 @@ def test_deploy_retries_a_bounded_migration_lock_timeout(tmp_path: Path) -> None
     attempts = [
         command
         for command in docker_log.read_text().splitlines()
-        if "alembic upgrade heads" in command
+        if "python -m app.migrations upgrade heads" in command
     ]
     assert len(attempts) == 3
 

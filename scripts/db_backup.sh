@@ -2,7 +2,7 @@
 # Pre-migration DB backup for dotmac_sub (a fast local dump for rollback).
 #
 # Separate from the offsite rclone backups in scripts/backup/* — this is the
-# quick, on-box snapshot deploy.sh takes right before `alembic upgrade heads`,
+# quick, on-box snapshot deploy.sh takes right before the composed migration run,
 # so a bad migration can be restored without waiting on remote storage.
 #
 # Dumps via DATABASE_URL from .env, run inside the DB container (which ships

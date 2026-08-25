@@ -77,7 +77,7 @@ def test_deploy_requires_exact_branch_github_evidence_before_database_work() -> 
         "Backing up database before migrations"
     )
     assert deploy.index('scripts/verify_github_release.py"') < deploy.index(
-        'log "Applying migrations (alembic upgrade heads)"'
+        'log "Applying migrations (python -m app.migrations upgrade heads)"'
     )
     assert "production does not accept SKIP_BACKUP=1" in deploy
     assert "typed production authorization is required" in deploy
@@ -110,7 +110,7 @@ def test_deploy_checks_openbao_boot_secrets_before_migrations() -> None:
     deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
 
     preflight = "python -m scripts.setup.verify_openbao_boot_secrets"
-    migration = 'log "Applying migrations (alembic upgrade heads)"'
+    migration = 'log "Applying migrations (python -m app.migrations upgrade heads)"'
     assert preflight in deploy
     assert deploy.index(preflight) < deploy.index(migration)
 
