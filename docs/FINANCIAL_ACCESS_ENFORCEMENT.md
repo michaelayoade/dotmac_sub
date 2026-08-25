@@ -222,11 +222,23 @@ The same owner has a separate dry-run-first command for the historical case
 where generic conversion already made an onboarding document final and an
 exact allocation later made it `paid`, while its line and period remained
 unlinked. Repair requires one active paid non-proforma invoice, one positive
-unlinked line, one named matching unanchored prepaid subscription, one active
+unlinked line, one named matching prepaid subscription with either no billing
+anchor or a stale anchor at or before the paid settlement period, one active
 full-value allocation from a successful unreturned settlement, no credit-note
-funding, no existing entitlement, and exact equality with the shared taxed
-renewal charge. The Payment may also fund other invoices; only this invoice's
-allocation must equal its total.
+funding, no overlapping entitlement or competing document, and exact equality
+with the shared taxed renewal charge. The Payment may also fund other invoices;
+only this invoice's allocation must equal its total.
+
+Payment finalization invokes the same exact repair participant before prepaid
+entitlement and financial-access restoration run. If exactly one matching
+prepaid service is proved, the participant writes the missing invoice identity,
+creates the entitlement, projects the anchor, and requests prepaid-lock
+restoration in the same transaction. If the evidence is ambiguous, it leaves
+financial state unchanged and opens a billing review alert. The CLI can dry-run
+the historical paid-invoice cohort with `--repair-paid-invoice --account-id`
+or `--repair-paid-invoice --limit`; apply remains one reviewed document at a
+time with explicit invoice, subscription, fingerprint, actor, reason, and
+idempotency key.
 
 Confirmation locks and rechecks the complete evidence chain. A flush-only
 invoice participant writes the missing subscription and WAT settlement-period
