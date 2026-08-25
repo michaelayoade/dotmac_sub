@@ -59,9 +59,9 @@ def _price(db_session, offer, amount, *, active=True, kind=PriceType.recurring):
 
 
 def _assert(db_session, offer, *, sellable=True, incoming=None):
+    db_session.refresh(offer)
     assert_sellable_offer_has_a_billable_price(
-        db_session,
-        offer_id=str(offer.id),
+        offer,
         available_for_services=sellable,
         incoming_price_amount=incoming,
     )
@@ -142,6 +142,4 @@ def test_two_active_recurring_prices_are_refused_as_ambiguous(db_session):
 
 def test_an_offer_that_does_not_exist_yet_is_not_judged(db_session):
     """Prices hang off the offer; the update path re-checks once it exists."""
-    assert_sellable_offer_has_a_billable_price(
-        db_session, offer_id=None, available_for_services=True
-    )
+    assert_sellable_offer_has_a_billable_price(None, available_for_services=True)

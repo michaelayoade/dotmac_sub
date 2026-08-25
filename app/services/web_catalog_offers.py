@@ -1255,9 +1255,8 @@ class SellableOfferWithoutBillablePrice(DomainError):
 
 
 def assert_sellable_offer_has_a_billable_price(
-    db: Session,
+    offer: CatalogOffer | None,
     *,
-    offer_id: str | None,
     available_for_services: bool,
     incoming_price_amount: object = None,
 ) -> None:
@@ -1292,11 +1291,11 @@ def assert_sellable_offer_has_a_billable_price(
     """
     if not available_for_services:
         return
-    if not offer_id:
+    if offer is None:
         # Nothing to price yet; the update path re-checks once it exists.
         return
 
-    if incoming_price_amount not in (None, ""):
+    if isinstance(incoming_price_amount, Decimal | int | float | str):
         try:
             if to_decimal(incoming_price_amount) > Decimal("0.00"):
                 return
@@ -1305,15 +1304,14 @@ def assert_sellable_offer_has_a_billable_price(
             # fall through and judge the stored state instead of guessing.
             pass
 
-    stored = (
-        db.query(OfferPrice)
-        .filter(
-            OfferPrice.offer_id == coerce_uuid(offer_id),
-            OfferPrice.is_active.is_(True),
-            OfferPrice.price_type == PriceType.recurring,
-        )
-        .all()
-    )
+    # Read through the loaded relationship rather than issuing a query: this
+    # module is an adapter, and the architecture ratchet is right that a new
+    # direct read here would be one more decision living outside its owner.
+    stored = [
+        price
+        for price in offer.prices or []
+        if price.is_active and price.price_type == PriceType.recurring
+    ]
     if len(stored) == 1 and to_decimal(stored[0].amount) > Decimal("0.00"):
         return
 
@@ -1327,7 +1325,7 @@ def assert_sellable_offer_has_a_billable_price(
             "foregone revenue stays visible, rather than as a zero-priced plan."
         ),
         details={
-            "offer_id": str(offer_id),
+            "offer_id": str(offer.id),
             "active_recurring_prices": len(stored),
         },
     )
@@ -1473,8 +1471,7 @@ def update_offer_with_audit(
     # Same transition, same reason prices cannot be checked on create: a
     # sellable offer must have something to charge.
     assert_sellable_offer_has_a_billable_price(
-        db,
-        offer_id=offer_id,
+        existing_offer if isinstance(existing_offer, CatalogOffer) else None,
         available_for_services=bool(
             offer_data.get(
                 "available_for_services",
