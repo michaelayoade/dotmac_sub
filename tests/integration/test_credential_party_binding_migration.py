@@ -130,7 +130,7 @@ def _identity_trigger_exists(url: URL) -> bool:
 
 
 def test_fresh_head_has_complete_projection_contract(engine, migrated_database) -> None:
-    _upgrade("head")
+    _upgrade("heads")
 
     columns, constraints, bindings = _candidate_contract(migrated_database)
 

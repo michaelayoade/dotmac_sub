@@ -424,6 +424,9 @@
         } else if (filters.get("open_only") === "true") {
           chips.push({ key: "open_only", label: "Active", keys: ["open_only"] });
         }
+        if (filters.get("view") === "all") {
+          chips.push({ key: "view", label: "All", keys: ["view"] });
+        }
         if (filters.get("status")) {
           chips.push({
             key: "status",
@@ -633,7 +636,10 @@
             history.replaceState({}, "", this.lastSuccessfulListUrl);
           }
           const detailSequence = event.detail?.xhr?.__inboxDetailSequence;
-          if (detailSequence === this.activeDetailRequest?.sequence) {
+          if (
+            detailSequence != null &&
+            detailSequence === this.activeDetailRequest?.sequence
+          ) {
             const wasBlocking = this.activeDetailRequest.blocking;
             this.activeDetailRequest = null;
             if (wasBlocking && detailSequence === this.detailRequestSequence) {
@@ -644,7 +650,10 @@
             }
           }
           const contactSequence = event.detail?.xhr?.__inboxContactSequence;
-          if (contactSequence === this.activeContactRequest?.sequence) {
+          if (
+            contactSequence != null &&
+            contactSequence === this.activeContactRequest?.sequence
+          ) {
             this.activeContactRequest = null;
             if (requestFailed) {
               this.showToast("Could not load contact details. Try again.");
@@ -800,6 +809,7 @@
           const url = new URL(window.location.href);
           url.searchParams.delete("open_only");
           url.searchParams.delete("has_ticket");
+          url.searchParams.delete("view");
           if (status) url.searchParams.set("status", status);
           else url.searchParams.delete("status");
           history.replaceState({}, "", url);
@@ -981,6 +991,7 @@
         const url = new URL(window.location.href);
         const assignmentKeys = [
           "status",
+          "view",
           "assigned_person_id",
           "service_team_ids",
           "unassigned",
@@ -1097,6 +1108,8 @@
       applyStatusFilter(value) {
         if (value === "expired") {
           this.navigateFilter({ reply_window_status: "expired" });
+        } else if (value === "all") {
+          this.navigateFilter({ view: "all" });
         } else if (value) {
           this.navigateFilter({ status: value });
         } else {
@@ -1162,6 +1175,7 @@
         const filters = new URLSearchParams(window.location.search);
         const keys = [
           "status",
+          "view",
           "search",
           "channel_type",
           "service_team_id",
@@ -1202,6 +1216,7 @@
         const data = new FormData();
         data.set("name", name);
         const mapping = {
+          view: "view",
           status: "status_value",
           search: "search",
           channel_type: "channel_type",
@@ -2001,6 +2016,7 @@
             element.__inboxReplyWindowTimer = null;
           }
           element.__inboxMentionCleanup?.();
+          element.__inboxComposerCleanup?.();
         });
       },
 
@@ -2132,6 +2148,9 @@
       replyLifecycleCleanup: null,
       idempotencyKey: "",
       replyTo: null,
+      copyRecipientsOpen: false,
+      ccRecipients: "",
+      bccRecipients: "",
       scheduled: false,
       scheduledAt: "",
       typingTimer: null,
@@ -2164,7 +2183,10 @@
           this.resizeTextarea();
           this.bindReplyLifecycle();
         });
-        this.$cleanup(() => this.replyLifecycleCleanup?.());
+        this.$root.__inboxComposerCleanup = () => {
+          this.replyLifecycleCleanup?.();
+          this.$root.__inboxComposerCleanup = null;
+        };
       },
 
       bindReplyLifecycle() {
@@ -2436,6 +2458,8 @@
           this.draft.trim() ||
             this.files.length ||
             this.replyTo ||
+            this.ccRecipients.trim() ||
+            this.bccRecipients.trim() ||
             this.scheduled ||
             this.polishSuggestion ||
             this.aiDraftResult,
@@ -2504,6 +2528,9 @@
         this.draft = "";
         this.files = [];
         this.replyTo = null;
+        this.copyRecipientsOpen = false;
+        this.ccRecipients = "";
+        this.bccRecipients = "";
         this.scheduled = false;
         this.scheduledAt = "";
         this.macroId = "";

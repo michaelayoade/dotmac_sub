@@ -1667,13 +1667,20 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_observations",
             module="app.services.team_inbox_observations",
-            owns=("normalized inbound provider observation ledger",),
+            owns=(
+                "normalized inbound provider observation ledger",
+                "provider observation identity collision quarantine",
+            ),
             depends_on=("integration.inbox",),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_observations",
                 concerns=(
                     (
                         "normalized inbound provider observation ledger",
+                        OwnerRole.OBSERVATION_COLLECTOR,
+                    ),
+                    (
+                        "provider observation identity collision quarantine",
                         OwnerRole.OBSERVATION_COLLECTOR,
                     ),
                 ),
@@ -1698,6 +1705,8 @@ DOMAIN = DomainSOT(
                 transaction_mode=TransactionMode.OWNER_MANAGED,
                 domain_error_codes=(
                     "communications.team_inbox_observations.invalid_location",
+                    "communications.team_inbox_observations.invalid_observation",
+                    "communications.team_inbox_observations.provider_event_identity_collision",
                 ),
                 event_types=("team_inbox.provider_observation_recorded.v1",),
             ),
@@ -2962,8 +2971,11 @@ DOMAIN = DomainSOT(
             depends_on=(
                 "communications.conversation_lead_relationships",
                 "communications.inbox_lead_actions",
-                "communications.team_inbox_projection",
+                "communications.team_inbox_threads",
+                "communications.team_inbox_participants",
+                "communications.team_inbox_contact_resolution",
                 "party.registry",
+                "customer.identity_scope",
                 "sales.lead_lifecycle",
                 "support.ticket_lifecycle",
                 "operations.project_lifecycle",
@@ -2973,7 +2985,8 @@ DOMAIN = DomainSOT(
                 service_name="communications.team_inbox_contact_context",
                 concerns=(
                     (
-                        "permission-scoped authoritative Inbox customer context projection",
+                        "permission-scoped authoritative Inbox customer context "
+                        "projection",
                         OwnerRole.RESOLVER,
                     ),
                 ),
@@ -2982,18 +2995,90 @@ DOMAIN = DomainSOT(
                         name="exact customer relationships",
                         owner="communications.conversation_lead_relationships",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Exact conversation-to-Party, Subscriber, and Lead relationships only.",
+                        source=(
+                            "Exact conversation-to-Party, Subscriber, and Lead "
+                            "relationships only."
+                        ),
                     ),
                     AuthorityInput(
-                        name="customer operational records",
+                        name="conversation history facts",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Active and resolved conversation identity, channel, "
+                            "endpoint, continuation, status, and chronology facts."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="conversation participant evidence",
+                        owner="communications.team_inbox_participants",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Exact normalized inbound endpoint, provider account "
+                            "scope, and reviewed Party contact-point binding."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="reviewed Inbox contact resolution",
+                        owner="communications.team_inbox_contact_resolution",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Active endpoint-to-Subscriber, Reseller, or canonical "
+                            "Party contact-point resolution."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical Party identity",
+                        owner="party.registry",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Reviewed Party and active canonical contact-point facts."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="customer identity scope",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Subscriber and Reseller identity, including reviewed "
+                            "Party bindings."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="Lead records",
+                        owner="sales.lead_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Permission-scoped Lead lifecycle records.",
+                    ),
+                    AuthorityInput(
+                        name="Ticket records",
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Permission-scoped Ticket, Project, Task, Lead, Party, and conversation owner queries.",
+                        source="Permission-scoped active Ticket lifecycle records.",
+                    ),
+                    AuthorityInput(
+                        name="Project and Task records",
+                        owner="operations.project_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Permission-scoped Project and Project Task lifecycle "
+                            "records."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="operator authorization",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Section-specific profile, Lead, Ticket, Project, and "
+                            "Task read permissions."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.READ_ONLY,
                 projections=(
-                    "truthful per-section Inbox customer context with availability and freshness",
+                    "truthful per-section Inbox customer context with availability "
+                    "and freshness",
                 ),
                 design_refs=(
                     "docs/designs/INBOX_CUSTOMER_CONTEXT_AND_LEAD_ACTIONS.md",
@@ -3079,6 +3164,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "Inbox list detail metrics response cohort unread and action projection",
                 "Inbox outbound message sender identity projection",
+                "Inbox email recipient envelope projection",
                 "Inbox media browser presentation projection",
                 "Inbox structured location browser presentation projection",
             ),
@@ -3104,6 +3190,10 @@ DOMAIN = DomainSOT(
                         OwnerRole.RESOLVER,
                     ),
                     (
+                        "Inbox email recipient envelope projection",
+                        OwnerRole.RESOLVER,
+                    ),
+                    (
                         "Inbox media browser presentation projection",
                         OwnerRole.RESOLVER,
                     ),
@@ -3117,7 +3207,10 @@ DOMAIN = DomainSOT(
                         name="conversation records",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Current conversation/message chronology and lifecycle.",
+                        source=(
+                            "Current conversation/message chronology, lifecycle, and "
+                            "recorded From, To, CC, and internal BCC delivery evidence."
+                        ),
                     ),
                     AuthorityInput(
                         name="contact projection",
@@ -3191,6 +3284,7 @@ DOMAIN = DomainSOT(
                     "Inbox queue detail metrics response cohorts actions and unread cohorts",
                     "Exact-message and filter-aware single-row Inbox UI fragments",
                     "Outbound message sender display name initials and provenance source",
+                    "Permission-scoped email From To CC and BCC recipient presentation",
                     "MIME-allowlisted inline image or download-only attachment presentation",
                     "Google Maps link presentation for a validated structured location attachment",
                 ),

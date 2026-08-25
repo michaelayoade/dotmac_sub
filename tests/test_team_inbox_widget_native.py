@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 
@@ -168,7 +169,13 @@ def test_auto_resolve_skips_conversations_needing_response(db_session):
         subject="Needs response",
         last_message_at=now - timedelta(hours=80),
     )
-    db_session.add_all([stale_agent_reply, stale_customer_reply])
+    stale_system_reply = InboxConversation(
+        channel_type=InboxChannelType.whatsapp.value,
+        status=InboxConversationStatus.open.value,
+        subject="Queue notice",
+        last_message_at=now - timedelta(hours=80),
+    )
+    db_session.add_all([stale_agent_reply, stale_customer_reply, stale_system_reply])
     db_session.flush()
     db_session.add_all(
         [
@@ -177,12 +184,23 @@ def test_auto_resolve_skips_conversations_needing_response(db_session):
                 channel_type=InboxChannelType.email.value,
                 direction=InboxMessageDirection.outbound.value,
                 body="We fixed this.",
+                metadata_={"sent_by_person_id": str(uuid4())},
             ),
             InboxMessage(
                 conversation_id=stale_customer_reply.id,
                 channel_type=InboxChannelType.email.value,
                 direction=InboxMessageDirection.inbound.value,
                 body="Still down.",
+            ),
+            InboxMessage(
+                conversation_id=stale_system_reply.id,
+                channel_type=InboxChannelType.whatsapp.value,
+                direction=InboxMessageDirection.outbound.value,
+                body="You are still in the queue.",
+                metadata_={
+                    "sender_type": "ai",
+                    "automation_kind": "queue_notification",
+                },
             ),
         ]
     )
@@ -197,6 +215,7 @@ def test_auto_resolve_skips_conversations_needing_response(db_session):
     assert count == 1
     assert stale_agent_reply.status == InboxConversationStatus.resolved.value
     assert stale_customer_reply.status == InboxConversationStatus.open.value
+    assert stale_system_reply.status == InboxConversationStatus.open.value
 
 
 def test_chat_disabled_returns_503(db_session):

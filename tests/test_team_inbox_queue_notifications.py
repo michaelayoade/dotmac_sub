@@ -5,6 +5,8 @@ from app.models.service_team import ServiceTeam
 from app.models.team_inbox import (
     InboxConversation,
     InboxConversationQueueEntry,
+    InboxMessage,
+    InboxMessageDirection,
     InboxQueueEntryStatus,
     InboxQueueNotification,
 )
@@ -91,16 +93,16 @@ def test_queue_notification_sweep_uses_next_due_and_sends_heartbeat_once(
     )
     assert early.sent == 0
 
-    five_minutes = team_inbox_queue_notifications.sweep_queue_notifications(
+    ten_minutes = team_inbox_queue_notifications.sweep_queue_notifications(
         db_session,
         team_inbox_queue_notifications.QueueNotificationSweepCommand(
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=5),
+            now=now + timedelta(minutes=10),
         ),
     )
-    assert five_minutes.sent == 0
+    assert ten_minutes.sent == 0
     assert db_session.query(InboxQueueNotification).count() == 1
     db_session.commit()
 
@@ -110,7 +112,7 @@ def test_queue_notification_sweep_uses_next_due_and_sends_heartbeat_once(
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=16),
+            now=now + timedelta(minutes=31),
         ),
     )
     assert heartbeat.sent + heartbeat.failed == 1
@@ -128,10 +130,74 @@ def test_queue_notification_sweep_uses_next_due_and_sends_heartbeat_once(
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=16),
+            now=now + timedelta(minutes=31),
         ),
     )
     assert duplicate.sent == 0
+
+
+def test_queue_notification_sweep_cancels_due_notice_after_human_reply(
+    db_session, monkeypatch
+):
+    sends: list[str] = []
+
+    def _record_send(_db, *, conversation, body_text, **_kwargs):
+        sends.append(str(body_text))
+        return InboxReplyResult(
+            kind="queued",
+            conversation_id=str(conversation.id),
+            message_id=str(uuid4()),
+        )
+
+    monkeypatch.setattr(
+        team_inbox_queue_notifications.team_inbox_outbound,
+        "send_ai_intake_message",
+        _record_send,
+    )
+    team = _team(db_session)
+    conversation = _conversation(db_session)
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
+    queue_conversation_for_team(
+        db_session,
+        conversation=conversation,
+        service_team_id=team.id,
+        now=now,
+    )
+    notice = db_session.query(InboxQueueNotification).one()
+    assert notice.status == "sent"
+    assert len(sends) == 1
+
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type=conversation.channel_type,
+            direction=InboxMessageDirection.outbound.value,
+            body="An agent is checking this now.",
+            sent_at=now + timedelta(minutes=1),
+            metadata_={"sent_by_person_id": str(uuid4())},
+        )
+    )
+    db_session.commit()
+
+    result = team_inbox_queue_notifications.sweep_queue_notifications(
+        db_session,
+        team_inbox_queue_notifications.QueueNotificationSweepCommand(
+            context=CommandContext.system(
+                actor="test", scope="team-inbox:routing-command", reason="test"
+            ),
+            now=now + timedelta(minutes=31),
+        ),
+    )
+
+    assert result.skipped == 1
+    assert len(sends) == 1
+    assert db_session.get(InboxQueueNotification, notice.id).status == "cancelled"
+    assert (
+        db_session.query(InboxQueueNotification)
+        .filter(InboxQueueNotification.notification_kind == "heartbeat")
+        .count()
+        == 0
+    )
 
 
 def test_queue_notification_sends_changed_position_update_once(db_session, monkeypatch):
@@ -172,7 +238,7 @@ def test_queue_notification_sends_changed_position_update_once(db_session, monke
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=6),
+            now=now + timedelta(minutes=11),
         ),
     )
     assert changed.sent + changed.failed == 1
@@ -191,7 +257,7 @@ def test_queue_notification_sends_changed_position_update_once(db_session, monke
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=6),
+            now=now + timedelta(minutes=11),
         ),
     )
     assert duplicate.sent == 0
@@ -307,7 +373,7 @@ def test_terminal_queue_state_cancels_due_notification(db_session):
             context=CommandContext.system(
                 actor="test", scope="team-inbox:routing-command", reason="test"
             ),
-            now=now + timedelta(minutes=5),
+            now=now + timedelta(minutes=10),
         ),
     )
 

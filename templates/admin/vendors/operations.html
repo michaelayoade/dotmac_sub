@@ -9,19 +9,41 @@
     <p class="mt-1 text-sm text-slate-500">Open a record to review its full route, line items, attachment, and history before deciding.</p>
   </div>
   {% if message %}<div class="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ message }}</div>{% endif %}
+  <div class="overflow-x-auto border-b border-slate-200 dark:border-slate-700">
+    <nav class="flex min-w-max gap-6" aria-label="Vendor operations queue filters">
+      {% for tab in vendor_operations_tabs %}
+      {% set is_active_tab = tab.key == active_vendor_operations_view %}
+      <a href="{{ tab.href }}" class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition {% if is_active_tab %}border-teal-500 text-teal-700 dark:text-teal-300{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}" {% if is_active_tab %}aria-current="page"{% endif %}>
+        {{ tab.label }}
+        <span class="rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums {% if is_active_tab %}bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-200{% else %}bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300{% endif %}">{{ tab.count }}</span>
+      </a>
+      {% endfor %}
+    </nav>
+  </div>
+
   <form method="get" action="/admin/vendors/operations" class="rounded-md border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+    <input type="hidden" name="view" value="{{ active_vendor_operations_view }}">
     <label for="vendor-operations-search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search vendor queue</label>
     <div class="mt-4 flex flex-col gap-3 sm:flex-row">
       <input id="vendor-operations-search" type="search" name="q" value="{{ queue_search }}" maxlength="120" placeholder="Project name, code, number, or vendor" class="min-h-10 flex-1 rounded-md border border-slate-400 bg-white pl-3 text-sm shadow-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+      {% if active_vendor_operations_view == 'quotes' %}
+      <label for="vendor-quote-status-filter" class="sr-only">Quote status</label>
+      <select id="vendor-quote-status-filter" name="quote_status" class="min-h-10 rounded-md border border-slate-400 bg-white px-3 text-sm shadow-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+        <option value="">All statuses</option>
+        {% for option in quote_status_options %}
+        <option value="{{ option.value }}" {% if quote_status == option.value %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
       <button type="submit" class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Search</button>
-      {% if queue_search %}<a href="/admin/vendors/operations" class="rounded-md border border-slate-300 px-4 py-2 text-center text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Clear</a>{% endif %}
+      {% if queue_search or quote_status %}<a href="/admin/vendors/operations?view={{ active_vendor_operations_view }}" class="rounded-md border border-slate-300 px-4 py-2 text-center text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Clear</a>{% endif %}
     </div>
-    {% if queue_search %}<p class="mt-2 text-xs text-slate-500">Showing vendor assignment and quote matches for "{{ queue_search }}".</p>{% endif %}
+    {% if queue_search or quote_status %}<p class="mt-2 text-xs text-slate-500">Showing {{ active_vendor_operations_label }} matching the active filter.</p>{% endif %}
   </form>
 
-  {% if show_field_reviews or show_advance_reviews %}
-  <div class="grid items-start gap-6 lg:grid-cols-2">
-  {% if show_field_reviews %}
+  {% if active_vendor_operations_view in ['procurement', 'advances'] %}
+  <div class="space-y-6">
+  {% if active_vendor_operations_view == 'procurement' and show_field_reviews %}
   <section class="overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Draft projects awaiting vendor procurement</h2><p class="mt-1 text-sm text-slate-500">Assign one vendor directly or open a time-bounded bidding round. Tasks and work orders remain internal delivery scope.</p></header>
     {% for project in draft_projects %}
@@ -44,7 +66,7 @@
   </section>
   {% endif %}
 
-  {% if show_advance_reviews %}
+  {% if active_vendor_operations_view == 'advances' and show_advance_reviews %}
   <section class="overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Vendor advances awaiting review</h2><p class="mt-1 text-sm text-slate-500">Approval authorizes the advance. Payment happens outside Sub and must be recorded here once made.</p></header>
     {% for advance in advances %}
@@ -78,7 +100,7 @@
   {% endif %}
 
   {% if show_field_reviews %}
-  {% if show_route_reviews %}
+  {% if active_vendor_operations_view == 'routes' and show_route_reviews %}
   <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Proposed routes awaiting review</h2></header>
     {% for revision in route_revisions %}
@@ -93,6 +115,7 @@
   </section>
   {% endif %}
 
+  {% if active_vendor_operations_view == 'as-built' %}
   <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">As-built evidence awaiting review</h2></header>
     {% for as_built in as_builts %}
@@ -105,17 +128,24 @@
     </article>
     {% else %}<p class="p-8 text-center text-sm text-slate-500">No as-built evidence waiting.</p>{% endfor %}
   </section>
+  {% endif %}
 
+  {% if active_vendor_operations_view == 'quotes' %}
   <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-    <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Quotes awaiting review</h2></header>
+    <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Vendor quotes</h2></header>
     {% for quote in quotes %}
     <article class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 p-5 last:border-0 dark:border-slate-800">
-      <div><strong>{{ quote.vendor.name }}</strong><p class="mt-1 text-sm text-slate-500">{{ quote.project.project.name if quote.project and quote.project.project else quote.project_id }} · {{ quote.line_items|length }} line item{{ '' if quote.line_items|length == 1 else 's' }} · {{ quote.currency }} {{ "{:,.2f}".format(quote.total) }}</p></div>
-      <a href="/admin/vendors/operations/quotes/{{ quote.id }}" class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Review quote</a>
+      <div>
+        <div class="flex flex-wrap items-center gap-2"><strong>{{ quote.vendor.name }}</strong><span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ quote.status|replace('_', ' ')|title }}</span></div>
+        <p class="mt-1 text-sm text-slate-500">{{ quote.project.project.name if quote.project and quote.project.project else quote.project_id }} · {{ quote.line_items|length }} line item{{ '' if quote.line_items|length == 1 else 's' }} · {{ quote.currency }} {{ "{:,.2f}".format(quote.total) }}</p>
+      </div>
+      <a href="/admin/vendors/operations/quotes/{{ quote.id }}" class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Open quote</a>
     </article>
-    {% else %}<p class="p-8 text-center text-sm text-slate-500">No quotes waiting.</p>{% endfor %}
+    {% else %}<p class="p-8 text-center text-sm text-slate-500">No quotes match the active filter.</p>{% endfor %}
   </section>
+  {% endif %}
 
+  {% if active_vendor_operations_view == 'materials' %}
   <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Material releases awaiting review</h2><p class="mt-1 text-sm text-slate-500">Approve Dotmac's release decision here; provider issue remains separately observed.</p></header>
     {% for release in material_releases %}
@@ -145,6 +175,47 @@
     {% else %}<p class="p-8 text-center text-sm text-slate-500">No material releases waiting.</p>{% endfor %}
   </section>
 
+  <section class="rounded-md border border-amber-300 bg-white dark:border-amber-700 dark:bg-slate-900">
+    <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+      <h2 class="font-bold">Approved materials awaiting issue
+        {% if material_releases_awaiting_issue %}<span class="ml-2 rounded-full bg-amber-600 px-2 py-0.5 text-xs font-semibold text-white">{{ material_releases_awaiting_issue | length }}</span>{% endif %}
+      </h2>
+      <p class="mt-1 text-sm text-slate-500">Record where approved materials were issued and the quantity issued to the vendor.</p>
+    </header>
+    {% for release in material_releases_awaiting_issue %}
+    <article class="grid gap-4 border-b border-slate-100 p-5 last:border-0 dark:border-slate-800 lg:grid-cols-[minmax(0,1fr)_minmax(320px,460px)]">
+      <div>
+        <div class="flex flex-wrap items-center gap-2"><strong>{{ release.project.name }}</strong>{{ status_presentation_badge(release.status, size="sm") }}</div>
+        <p class="mt-1 text-sm text-slate-500">{{ release.vendor.name }} &middot; {{ release.items|length }} line item{{ '' if release.items|length == 1 else 's' }} &middot; approved {{ release.reviewed_at | app_datetime('%d %b %Y %H:%M', 'time unavailable') }}</p>
+        <ul class="mt-3 space-y-1 text-sm">{% for item in release.items %}<li>{{ item.description }} &mdash; {{ item.quantity }} {{ item.unit or 'unit(s)' }}</li>{% endfor %}</ul>
+      </div>
+      {% if action_permitted(request, release.issue_action) %}
+      <form method="post" action="{{ release.issue_action.preview_url }}" class="space-y-3">
+        {% include "components/forms/csrf_input.html" %}
+        <label class="block text-xs text-slate-500">Issue source
+          <select name="issue_source" required class="mt-1 w-full rounded-md border-slate-300 text-sm">
+            <option value="dotmac_store">Dotmac store</option>
+            <option value="erp">ERP/provider</option>
+          </select>
+        </label>
+        <label class="block text-xs text-slate-500">Issue reference (optional)<input name="issue_reference" maxlength="120" placeholder="Store issue note or ERP reference" class="mt-1 w-full rounded-md border-slate-300 text-sm"></label>
+        <div class="space-y-2">
+          {% for item in release.items %}
+          <label class="grid grid-cols-[minmax(0,1fr)_96px] items-center gap-3 text-xs text-slate-500">
+            <span class="truncate">{{ item.description }}</span>
+            <input type="number" name="issued_quantity_{{ item.id }}" min="0" max="{{ item.quantity }}" step="1" value="{{ item.quantity }}" required class="w-full rounded-md border-slate-300 text-sm">
+          </label>
+          {% endfor %}
+        </div>
+        <button class="w-full rounded-md bg-amber-600 px-3 py-2 text-sm font-semibold text-white">{{ release.issue_action.label }}</button>
+      </form>
+      {% endif %}
+    </article>
+    {% else %}<p class="p-8 text-center text-sm text-slate-500">Every approved material release has an issue record.</p>{% endfor %}
+  </section>
+  {% endif %}
+
+  {% if active_vendor_operations_view == 'verification' %}
   <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Completed projects awaiting verification</h2></header>
     {% for project in projects %}
@@ -176,9 +247,10 @@
     {% else %}<p class="p-8 text-center text-sm text-slate-500">No completed projects waiting.</p>{% endfor %}
   </section>
   {% endif %}
+  {% endif %}
 
   {% if show_financial_reviews %}
-  {% if show_advance_reviews %}
+  {% if active_vendor_operations_view == 'advances' and show_advance_reviews %}
   <section class="rounded-md border border-amber-300 bg-white dark:border-amber-700 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <h2 class="font-bold">Advances awaiting disbursement record
@@ -203,6 +275,7 @@
     {% else %}<p class="p-8 text-center text-sm text-slate-500">Every approved advance has a disbursement record.</p>{% endfor %}
   </section>
   {% endif %}
+  {% if active_vendor_operations_view == 'invoices' %}
   <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
     <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Purchase invoices awaiting review</h2></header>
     {% for invoice in invoices %}
@@ -212,6 +285,7 @@
     </article>
     {% else %}<p class="p-8 text-center text-sm text-slate-500">No purchase invoices waiting.</p>{% endfor %}
   </section>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

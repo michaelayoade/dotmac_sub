@@ -12,7 +12,7 @@
             <span class="text-slate-900 dark:text-white">Bulk Change</span>
         </nav>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Bulk Tariff Change</h1>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Mass-migrate subscribers from one plan to another.</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review and schedule plan changes at each subscription's next billing boundary.</p>
     </div>
 
     {# ============================
@@ -156,12 +156,13 @@
                             <p class="font-medium text-blue-800 dark:text-blue-200">
                                 {{ preview.total_count }}
                                 {% if preview.include_suspended %}active or suspended{% else %}active{% endif %}
-                                subscription{{ 's' if preview.total_count != 1 else '' }} will be changed
+                                subscription{{ 's' if preview.total_count != 1 else '' }} reviewed;
+                                {{ preview.eligible_count }} eligible to schedule
                             </p>
                             <p class="mt-1 text-blue-700 dark:text-blue-300">
                                 From <span class="font-semibold">{{ preview.source_offer.name }}</span>
                                 to <span class="font-semibold">{{ preview.target_offer.name }}</span> —
-                                applied immediately on confirm.
+                                scheduled for each eligible subscription's next billing boundary on confirm.
                             </p>
                             {% if preview.source_price or preview.target_price %}
                             <p class="mt-1 text-blue-700 dark:text-blue-300">
@@ -187,6 +188,7 @@
                                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Plan</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">New Plan</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Lifecycle review</th>
                                                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
@@ -206,6 +208,18 @@
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-violet-600 dark:text-violet-400">
                                     {{ preview.target_offer.name }}
+                                </td>
+                                {% set lifecycle = preview.lifecycle_by_id.get(sub.id|string) %}
+                                <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                                    {% if lifecycle and lifecycle.eligible %}
+                                    <span class="font-medium text-emerald-700 dark:text-emerald-300">Eligible</span>
+                                    <span class="block text-xs text-slate-500 dark:text-slate-400">Effective {{ lifecycle.effective_at | local_datetime if lifecycle.effective_at else 'at the next billing boundary' }}</span>
+                                    {% elif lifecycle %}
+                                    <span class="font-medium text-rose-700 dark:text-rose-300">Not eligible</span>
+                                    <span class="block text-xs text-slate-500 dark:text-slate-400">{{ lifecycle.eligibility_reasons | join(', ') }}</span>
+                                    {% else %}
+                                    <span class="font-medium text-rose-700 dark:text-rose-300">Preview unavailable</span>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% endfor %}
@@ -227,14 +241,16 @@
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="source_offer_id" value="{{ form_source_offer_id }}">
                     <input type="hidden" name="target_offer_id" value="{{ form_target_offer_id }}">
+                    <input type="hidden" name="preview_fingerprint" value="{{ preview.preview_fingerprint }}">
+                    <input type="hidden" name="idempotency_key" value="{{ preview_operation_key }}">
                     {% if form_include_suspended|default(false) %}<input type="hidden" name="include_suspended" value="true">{% endif %}
                     <button type="submit"
-                            onclick="return confirm('Are you sure you want to change {{ preview.total_count }} {% if preview.include_suspended %}active or suspended {% endif %}subscription{{ 's' if preview.total_count != 1 else '' }}? This action cannot be undone.')"
+                            onclick="return confirm('Schedule {{ preview.eligible_count }} reviewed plan change{{ 's' if preview.eligible_count != 1 else '' }} for the next billing boundary?')"
                             class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                         </svg>
-                        Process {{ preview.total_count }} Change{{ 's' if preview.total_count != 1 else '' }}
+                        Schedule {{ preview.eligible_count }} Change{{ 's' if preview.eligible_count != 1 else '' }}
                     </button>
                 </form>
                 {% endif %}
@@ -303,7 +319,7 @@
                             </div>
                             <div>
                                 <p class="text-2xl font-bold text-emerald-800 dark:text-emerald-200 tabular-nums">{{ result.changed }}</p>
-                                <p class="text-sm text-emerald-600 dark:text-emerald-400">Changed</p>
+                                <p class="text-sm text-emerald-600 dark:text-emerald-400">Scheduled</p>
                             </div>
                         </div>
                     </div>
@@ -347,7 +363,7 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
                         </svg>
                         <p class="text-sm font-medium text-emerald-800 dark:text-emerald-200">
-                            All {{ result.changed }} subscription{{ 's' if result.changed != 1 else '' }} successfully changed.
+                            All {{ result.changed }} eligible subscription{{ 's' if result.changed != 1 else '' }} successfully scheduled for the next billing boundary.
                         </p>
                     </div>
                 </div>
@@ -358,7 +374,7 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                         </svg>
                         <p class="text-sm font-medium text-amber-800 dark:text-amber-200">
-                            Partially completed: {{ result.changed }} changed, {{ result.errors }} failed.
+                            Partially completed: {{ result.changed }} scheduled, {{ result.errors }} failed.
                             {% if result.failed_ids %}
                             <span class="block mt-1 text-xs">Failed subscription IDs:
                                 {% for fid in result.failed_ids %}

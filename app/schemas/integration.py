@@ -293,3 +293,14 @@ class IntegrationInboxRead(BaseModel):
     processed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class IntegratorPaymentProviderMappingUpsert(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    installation_id: UUID
+
+
+class IntegratorPaymentProviderMappingRead(BaseModel):
+    provider_id: UUID
+    installation_id: UUID

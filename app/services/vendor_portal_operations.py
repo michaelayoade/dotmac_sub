@@ -193,6 +193,45 @@ class VendorRouteAuthoringProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class VendorRouteAuthoringFilterOption:
+    value: str
+    label: str
+    selected_by_default: bool
+
+
+@dataclass(frozen=True, slots=True)
+class VendorRouteAuthoringRadiusOption:
+    value_meters: int
+    label: str
+    selected_by_default: bool
+
+
+VENDOR_ROUTE_AUTHORING_LAYER_FILTERS: tuple[VendorRouteAuthoringFilterOption, ...] = (
+    VendorRouteAuthoringFilterOption("proposed", "Proposed routes", True),
+    VendorRouteAuthoringFilterOption("as_built", "As-built routes", True),
+    VendorRouteAuthoringFilterOption(
+        "closure_proposal",
+        "Closure proposals",
+        True,
+    ),
+)
+VENDOR_ROUTE_AUTHORING_STATUS_FILTERS: tuple[VendorRouteAuthoringFilterOption, ...] = (
+    VendorRouteAuthoringFilterOption("draft", "Draft", True),
+    VendorRouteAuthoringFilterOption("submitted", "Submitted", True),
+    VendorRouteAuthoringFilterOption("accepted", "Accepted", True),
+    VendorRouteAuthoringFilterOption("rejected", "Rejected", True),
+    VendorRouteAuthoringFilterOption("pending", "Pending", True),
+    VendorRouteAuthoringFilterOption("applied", "Applied", True),
+)
+VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS: tuple[VendorRouteAuthoringRadiusOption, ...] = (
+    VendorRouteAuthoringRadiusOption(500, "500 m", False),
+    VendorRouteAuthoringRadiusOption(1000, "1 km", True),
+    VendorRouteAuthoringRadiusOption(5000, "5 km", False),
+    VendorRouteAuthoringRadiusOption(10000, "10 km", False),
+)
+
+
+@dataclass(frozen=True, slots=True)
 class StageVendorQuoteSubmission:
     context: CommandContext
     quote_id: str
@@ -282,7 +321,9 @@ def _as_utc(value: datetime | None) -> datetime | None:
     values. Compare everything in UTC rather than raising on a mixed pair."""
     if value is None:
         return None
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return (
+        value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    )
 
 
 def _quote_creation_eligibility(
@@ -993,17 +1034,16 @@ class VendorPortalOperations:
                 project.assignment_type = VendorAssignmentType.direct.value
                 project.status = InstallationProjectStatus.assigned.value
             elif command.mode == VendorAssignmentType.bidding.value:
-                if (
-                    command.bidding_close_at is None
-                    or command.bidding_close_at <= _now()
-                ):
+                now = _now()
+                bidding_close_at = _as_utc(command.bidding_close_at)
+                if bidding_close_at is None or bidding_close_at <= now:
                     raise _error(
                         "bidding_window_required", "Choose a future bid closing time."
                     )
                 project.assigned_vendor_id = None
                 project.assignment_type = VendorAssignmentType.bidding.value
-                project.bidding_open_at = _now()
-                project.bidding_close_at = command.bidding_close_at
+                project.bidding_open_at = now
+                project.bidding_close_at = bidding_close_at
                 project.status = InstallationProjectStatus.open_for_bidding.value
             else:
                 raise _error(
@@ -1215,6 +1255,49 @@ class VendorPortalOperations:
                 }
             )
         return projected
+
+    @staticmethod
+    def list_quotes_for_admin(
+        db: Session,
+        *,
+        search: str | None = None,
+        statuses: tuple[ProjectQuoteStatus, ...] | None = None,
+        limit: int = 200,
+    ) -> list[ProjectQuote]:
+        query = db.query(ProjectQuote).options(
+            selectinload(ProjectQuote.line_items),
+            joinedload(ProjectQuote.vendor),
+            joinedload(ProjectQuote.project).joinedload(InstallationProject.project),
+        )
+        pattern = _queue_search_pattern(search)
+        if pattern:
+            query = (
+                query.join(
+                    InstallationProject,
+                    ProjectQuote.project_id == InstallationProject.id,
+                )
+                .join(Project, InstallationProject.project_id == Project.id)
+                .join(Vendor, ProjectQuote.vendor_id == Vendor.id)
+                .filter(
+                    or_(
+                        Project.name.ilike(pattern),
+                        Project.code.ilike(pattern),
+                        Project.number.ilike(pattern),
+                        Vendor.name.ilike(pattern),
+                        Vendor.code.ilike(pattern),
+                    )
+                )
+            )
+        if statuses:
+            query = query.filter(
+                ProjectQuote.status.in_(tuple(status.value for status in statuses))
+            )
+        return (
+            query.filter(ProjectQuote.is_active.is_(True))
+            .order_by(ProjectQuote.created_at.desc(), ProjectQuote.id.desc())
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
 
     @staticmethod
     def list_reviewable_quotes(
@@ -1443,14 +1526,15 @@ class VendorPortalOperations:
                 "Provide a route or line items.",
             )
         if payload.geojson:
+            coordinates = payload.geojson.get("coordinates")
             if payload.geojson.get("type") != "LineString" or not isinstance(
-                payload.geojson.get("coordinates"), list
+                coordinates, list
             ):
                 raise _error(
                     "invalid_as_built_route",
                     "As-built route must be a GeoJSON LineString.",
                 )
-            if len(payload.geojson["coordinates"]) < 2:
+            if len(coordinates) < 2:
                 raise _error(
                     "invalid_as_built_route",
                     "As-built route requires at least two coordinates.",

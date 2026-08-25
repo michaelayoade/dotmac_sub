@@ -294,9 +294,7 @@ def test_zero_price_offer_is_not_available_for_customer_plan_change(
     assert subscription.offer_id == current_offer.id
 
 
-def test_change_plan_page_classifies_cross_family_from_network_intent(
-    db_session, subscriber
-):
+def test_change_plan_page_excludes_cross_family_offer(db_session, subscriber):
     from app.services import customer_portal_flow_changes as flow
 
     current_offer = _make_offer(
@@ -335,12 +333,8 @@ def test_change_plan_page_classifies_cross_family_from_network_intent(
     assert {str(offer.id) for offer in page["available_offers"]} == {
         str(current_offer.id),
         str(instant_offer.id),
-        str(cross_family_offer.id),
     }
-    assert (
-        page["available_offer_delivery_modes"][str(cross_family_offer.id)]
-        == "commercial_only"
-    )
+    assert str(cross_family_offer.id) not in page["available_offer_delivery_modes"]
 
 
 @pytest.mark.parametrize(
@@ -367,7 +361,7 @@ def test_confirm_service_change_queues_delivery_without_ticket_or_plan_swap(
         db_session,
         name=f"Target {expected_mode}",
         amount=Decimal("150.00"),
-        plan_family="dedicated",
+        plan_family="unlimited",
         access_type=target_access,
         speed_download_mbps=target_speed,
     )
@@ -2003,6 +1997,150 @@ def test_reseller_restricted_offer_hidden_from_other_resellers_customer(
     assert str(current.id) in ids
 
 
+def test_change_plan_page_ignores_reseller_scope_but_enforces_family_and_gates(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import customer_portal_flow_changes as flow
+
+    reseller_a = _reseller(db_session, "Plan owner")
+    reseller_b = _reseller(db_session, "Customer reseller")
+    subscriber.reseller_id = reseller_b.id
+    db_session.commit()
+
+    current = _make_offer(
+        db_session,
+        name="Unlimited Current",
+        amount=Decimal("100"),
+        plan_family="unlimited",
+    )
+    restricted_same_family = _make_offer(
+        db_session,
+        name="Unlimited Other Reseller",
+        amount=Decimal("150"),
+        plan_family="unlimited",
+    )
+    cross_family = _make_offer(
+        db_session,
+        name="Dedicated Compatible",
+        amount=Decimal("200"),
+        plan_family="dedicated",
+    )
+    hidden = _make_offer(
+        db_session,
+        name="Unlimited Hidden",
+        amount=Decimal("175"),
+        plan_family="unlimited",
+        show_on_customer_portal=False,
+    )
+    zero_price = _make_offer(
+        db_session,
+        name="Unlimited Zero",
+        amount=Decimal("0"),
+        plan_family="unlimited",
+    )
+    _restrict_to(db_session, restricted_same_family, reseller_a)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+
+    page = flow.get_change_plan_page(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+
+    assert page is not None
+    visible_ids = {offer.id for offer in page["available_offers"]}
+    assert restricted_same_family.id in visible_ids
+    assert cross_family.id not in visible_ids
+    assert hidden.id not in visible_ids
+    assert zero_price.id not in visible_ids
+
+    current.allowed_change_plan_ids = str(restricted_same_family.id)
+    db_session.commit()
+    narrowed_page = flow.get_change_plan_page(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+    assert narrowed_page is not None
+    assert {offer.id for offer in narrowed_page["available_offers"]} == {
+        restricted_same_family.id
+    }
+
+    import app.services.subscription_billing_treatments as treatments
+
+    monkeypatch.setattr(
+        treatments,
+        "subscription_has_open_billing_treatment",
+        lambda db, subscription_id: True,
+    )
+    blocked_page = flow.get_change_plan_page(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+    assert blocked_page is not None
+    assert blocked_page["available_offers"] == []
+
+
+def test_change_plan_quote_and_submit_share_same_family_eligibility(
+    db_session, subscriber, monkeypatch
+):
+    from app.services import customer_portal_flow_changes as flow
+    from app.services import subscription_changes as change_service
+
+    current = _make_offer(
+        db_session,
+        name="Unlimited Quote Current",
+        amount=Decimal("100"),
+        plan_family="unlimited",
+    )
+    cross_family = _make_offer(
+        db_session,
+        name="Dedicated Quote Target",
+        amount=Decimal("200"),
+        plan_family="dedicated",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    customer = {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)}
+    created: list[dict] = []
+    monkeypatch.setattr(
+        change_service.subscription_change_requests,
+        "create",
+        lambda **kwargs: created.append(kwargs),
+    )
+
+    assert (
+        flow.get_plan_change_quote(
+            db_session,
+            customer,
+            str(subscription.id),
+            str(cross_family.id),
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="not available for self-service change"):
+        flow.submit_change_plan(
+            db_session,
+            customer,
+            str(subscription.id),
+            str(cross_family.id),
+            "2099-01-01",
+        )
+    assert created == []
+
+
 def test_reseller_restricted_offer_visible_to_member(db_session, subscriber):
     reseller_a = _reseller(db_session, "Partner A2")
     subscriber.reseller_id = reseller_a.id
@@ -2189,7 +2327,7 @@ def test_archived_status_offer_hidden_even_when_is_active_drifted(
     assert {str(offer.id) for offer in offers} == {str(current_offer.id)}
 
 
-def test_submit_change_plan_accepts_cross_family_when_catalog_compatible(
+def test_submit_change_plan_rejects_cross_family_when_catalog_compatible(
     db_session, subscriber, monkeypatch
 ):
     from app.services import customer_portal_flow_changes as flow
@@ -2222,16 +2360,16 @@ def test_submit_change_plan_accepts_cross_family_when_catalog_compatible(
     )
     customer = {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)}
 
-    result = flow.submit_change_plan(
-        db_session,
-        customer,
-        str(subscription.id),
-        str(cross_family_offer.id),
-        "2099-01-01",
-    )
+    with pytest.raises(ValueError, match="not available for self-service change"):
+        flow.submit_change_plan(
+            db_session,
+            customer,
+            str(subscription.id),
+            str(cross_family_offer.id),
+            "2099-01-01",
+        )
 
-    assert result == {"success": True}
-    assert created[0]["new_offer_id"] == str(cross_family_offer.id)
+    assert created == []
 
 
 def test_submit_change_plan_accepts_compatible_offer(

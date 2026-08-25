@@ -8,7 +8,10 @@ repair age does not create a third public device state.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
+
+from fastapi.templating import Jinja2Templates
 
 from app.services.ui_contracts import Action, Kpi, StateValue
 from app.services.web_network_core_devices_inventory import (
@@ -177,7 +180,7 @@ def test_row_actions_allowed_ping_carries_no_reason() -> None:
     assert actions["reboot"].requires_confirmation is True
     assert actions["reboot"].preview_url.endswith("/reboot/preview")
     assert actions["archive"].allowed
-    assert actions["archive"].label == "Archive Device"
+    assert actions["archive"].label == "Decommission Device"
     assert actions["archive"].preview_url.endswith("/archive/preview")
 
 
@@ -217,6 +220,34 @@ def test_index_template_renders_kpi_contract_fields() -> None:
     assert "device_kpis.total" in text
     # No longer reads the raw stats dict for the tiles.
     assert "stats.working" not in text
+    assert 'hx-target": "#devices-table-body"' not in text
+    assert 'hx-target": "#devices-content"' in text
+    assert 'include "admin/network/devices/_table_content.html"' in text
+
+
+def test_device_table_partial_refreshes_rows_and_pagination_together() -> None:
+    templates = Jinja2Templates(directory="templates")
+    html = templates.env.get_template(
+        "admin/network/devices/_table_content.html"
+    ).render(
+        request=SimpleNamespace(query_params={}),
+        devices=[],
+        pagination=True,
+        offset=25,
+        limit=25,
+        total=100,
+        htmx_url="/admin/network/devices/filter",
+        htmx_target="devices-content",
+        htmx_include="#devices-filter-form",
+    )
+
+    assert 'id="devices-table-body"' in html
+    assert 'hx-get="/admin/network/devices/filter?offset=50&limit=25"' in html
+    assert 'hx-target="#devices-content"' in html
+    normalized_html = " ".join(html.split())
+    assert 'bg-primary-600 text-sm font-medium text-white"> 2 </button>' in (
+        normalized_html
+    )
 
 
 def test_table_rows_template_gates_actions_on_eligibility() -> None:

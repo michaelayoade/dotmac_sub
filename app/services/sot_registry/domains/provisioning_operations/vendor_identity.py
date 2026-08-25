@@ -24,6 +24,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "vendor portal login provisioning and revocation",
             "vendor organisation role assignment",
+            "vendor portal profile repair and CRM contact import",
         ),
         depends_on=("auth.permission_gate",),
         notes=(
@@ -49,6 +50,12 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=("vendor portal login command",),
                     canonical_writer="auth.vendor_user_provisioning",
                 ),
+                ConcernContract(
+                    name="vendor portal profile repair and CRM contact import",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=("vendor portal login command",),
+                    canonical_writer="auth.vendor_user_provisioning",
+                ),
             ),
             authoritative_inputs=(
                 AuthorityInput(
@@ -67,11 +74,14 @@ SERVICES: tuple[SOTService, ...] = (
                     "Principal, credential, and membership commit together "
                     "or not at all."
                 ),
-                locking="Email uniqueness is rechecked before the write.",
+                locking=(
+                    "The native vendor row is locked; email uniqueness and "
+                    "unlinked portal-profile conflicts are rechecked before writes."
+                ),
                 idempotency=(
-                    "Email uniqueness on system_users makes a repeated "
-                    "provisioning attempt a refusal, never a duplicate "
-                    "principal."
+                    "Native vendor-to-portal profile linkage is unique, and "
+                    "system-user email uniqueness makes a repeated provisioning "
+                    "attempt a refusal, never a duplicate principal."
                 ),
                 retries=(
                     "No automatic retry: a collision is an identity "
@@ -84,9 +94,15 @@ SERVICES: tuple[SOTService, ...] = (
                     "auth.vendor_user_provisioning.vendor_inactive",
                     "auth.vendor_user_provisioning.email_in_use",
                     "auth.vendor_user_provisioning.email_required",
+                    "auth.vendor_user_provisioning.crm_identity_required",
                     "auth.vendor_user_provisioning.name_required",
                     "auth.vendor_user_provisioning.unknown_role",
+                    "auth.vendor_user_provisioning.portal_profile_conflict",
                     "auth.vendor_user_provisioning.membership_not_found",
+                    "auth.vendor_user_provisioning.membership_inactive",
+                    "auth.vendor_user_provisioning.principal_not_vendor",
+                    "auth.vendor_user_provisioning.credential_not_found",
+                    "auth.vendor_user_provisioning.credential_projection_conflict",
                     "auth.vendor_user_provisioning.active_caller_transaction",
                     "auth.vendor_user_provisioning.command_contract_violation",
                     "auth.vendor_user_provisioning.invalid_command_context",

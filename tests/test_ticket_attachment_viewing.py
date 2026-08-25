@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import io
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from starlette.responses import StreamingResponse
+from starlette.responses import HTMLResponse, StreamingResponse
 
 from app.models.stored_file import StoredFile
 from app.models.support import Ticket, TicketComment
-from app.services import crm_portal, web_support_tickets
+from app.schemas.support import AttachmentMeta
+from app.services import crm_portal, support, web_support_tickets
+from app.services.db_session_adapter import db_session_adapter
 from app.services.file_storage import file_uploads
 from app.services.object_storage import StreamResult
+from app.services.owner_commands import CommandContext
 from app.web.admin import support_tickets
 
 
@@ -76,6 +81,219 @@ def test_ticket_attachment_rejects_unrelated_file_types(db_session) -> None:
         )
         is None
     )
+
+
+def test_comment_upload_contract_persists_viewable_stored_file_id(
+    db_session, monkeypatch
+) -> None:
+    ticket = Ticket(title="Comment attachment")
+    db_session.add(ticket)
+    db_session.commit()
+    record = _stored_ticket_file(
+        db_session,
+        ticket,
+        entity_type="support_ticket_comment_attachment",
+    )
+    payload = web_support_tickets.build_ticket_comment_payload(
+        body="See attached image",
+        is_internal=True,
+        actor_id=None,
+        uploaded=(
+            AttachmentMeta(
+                file_name=record.original_filename,
+                content_type=record.content_type or "image/jpeg",
+                file_size=record.file_size,
+                storage_key=record.storage_key_or_relative_path,
+                stored_file_id=record.id,
+            ),
+        ),
+    )
+    db_session_adapter.release_read_transaction(db_session)
+    comment = support.tickets.create_comment(
+        db_session,
+        str(ticket.id),
+        payload,
+        actor_id=None,
+        request=None,
+    )
+    monkeypatch.setattr(
+        file_uploads,
+        "stream_file",
+        lambda _record: StreamResult(iter([b"data"]), "image/jpeg", 4),
+    )
+
+    assert comment.attachments == [
+        {
+            "file_name": record.original_filename,
+            "content_type": "image/jpeg",
+            "file_size": record.file_size,
+            "storage_key": record.storage_key_or_relative_path,
+            "stored_file_id": str(record.id),
+        }
+    ]
+    response = support_tickets.ticket_attachment_download(
+        ticket.id, record.id, db_session
+    )
+    assert response.headers["content-disposition"].startswith("inline;")
+
+
+def test_oversized_comment_attachment_raises_typed_validation_error(
+    db_session,
+) -> None:
+    ticket = Ticket(title="Oversized comment attachment")
+    db_session.add(ticket)
+    db_session.commit()
+    attachment = SimpleNamespace(
+        filename="diagnostic.pdf",
+        content_type="application/pdf",
+        file=io.BytesIO(b"x" * (web_support_tickets.MAX_ATTACHMENT_BYTES + 1)),
+    )
+
+    with pytest.raises(web_support_tickets.TicketAttachmentValidationError) as exc_info:
+        web_support_tickets.upload_ticket_attachments(
+            db_session,
+            ticket_id=ticket.id,
+            attachments=[attachment],
+            entity_type=web_support_tickets.TicketAttachmentEntityType.comment,
+            actor_id=None,
+        )
+
+    assert (
+        exc_info.value.kind
+        is web_support_tickets.TicketAttachmentValidationKind.too_large
+    )
+    assert exc_info.value.code == "support.ticket_attachment.too_large"
+    assert "max file size is 5 MB" in exc_info.value.message
+
+
+def test_admin_comment_upload_renders_413_with_validation_message(
+    db_session, monkeypatch
+) -> None:
+    ticket = Ticket(title="Admin attachment validation")
+    db_session.add(ticket)
+    db_session.commit()
+    error = web_support_tickets.TicketAttachmentValidationError(
+        kind=web_support_tickets.TicketAttachmentValidationKind.too_large,
+        filename="diagnostic.pdf",
+        message="diagnostic.pdf: max file size is 5 MB",
+    )
+
+    def reject(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        support_tickets.support_web_service,
+        "add_ticket_comment_from_form",
+        reject,
+    )
+    monkeypatch.setattr(support_tickets, "_actor_id", lambda _request: None)
+    monkeypatch.setattr(support_tickets, "_ctx", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(support_tickets, "can", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        support_tickets.support_web_service,
+        "build_ticket_detail_context",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        support_tickets.templates,
+        "TemplateResponse",
+        lambda _name, context, status_code=200: HTMLResponse(
+            context["action_error"], status_code=status_code
+        ),
+    )
+
+    response = support_tickets.ticket_add_comment(
+        request=SimpleNamespace(),
+        ticket_id=ticket.id,
+        body="See diagnostics",
+        reply_to_customer=False,
+        mentions=None,
+        attachments=[],
+        db=db_session,
+    )
+
+    assert response.status_code == 413
+    assert b"max file size is 5 MB" in response.body
+
+
+def test_comment_attachment_reference_repair_is_bounded_and_idempotent(
+    db_session,
+) -> None:
+    ticket = Ticket(title="Legacy comment attachment")
+    db_session.add(ticket)
+    db_session.commit()
+    ticket_id = ticket.id
+    comment = TicketComment(
+        ticket=ticket,
+        body="Legacy upload",
+        attachments=[
+            {
+                "file_name": "evidence.jpg",
+                "content_type": "image/jpeg",
+                "file_size": 4,
+                "storage_key": f"attachments/{ticket.id}/evidence.jpg",
+            }
+        ],
+    )
+    db_session.add(comment)
+    db_session.commit()
+    record = _stored_ticket_file(
+        db_session,
+        ticket,
+        entity_type="support_ticket_comment_attachment",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+
+    preview = support.repair_ticket_comment_attachment_references(
+        db_session,
+        support.TicketCommentAttachmentRepairCommand(
+            context=CommandContext.system(
+                actor="test-operator",
+                scope="support.ticket:comment_attachment_reference_repair",
+                reason="preview test repair",
+            ),
+            ticket_ids=(ticket_id,),
+        ),
+    )
+    db_session.refresh(comment)
+    assert preview.repairable == 1
+    assert preview.repaired == 0
+    assert "stored_file_id" not in comment.attachments[0]
+    db_session_adapter.release_read_transaction(db_session)
+
+    repaired = support.repair_ticket_comment_attachment_references(
+        db_session,
+        support.TicketCommentAttachmentRepairCommand(
+            context=CommandContext.system(
+                actor="test-operator",
+                scope="support.ticket:comment_attachment_reference_repair",
+                reason="apply test repair",
+                idempotency_key="ticket-comment-attachment-repair-test",
+            ),
+            ticket_ids=(ticket_id,),
+            apply=True,
+        ),
+    )
+    db_session.refresh(comment)
+    assert repaired.repaired == 1
+    assert comment.attachments[0]["stored_file_id"] == str(record.id)
+    db_session_adapter.release_read_transaction(db_session)
+
+    replay = support.repair_ticket_comment_attachment_references(
+        db_session,
+        support.TicketCommentAttachmentRepairCommand(
+            context=CommandContext.system(
+                actor="test-operator",
+                scope="support.ticket:comment_attachment_reference_repair",
+                reason="replay test repair",
+                idempotency_key="ticket-comment-attachment-repair-test-replay",
+            ),
+            ticket_ids=(ticket_id,),
+            apply=True,
+        ),
+    )
+    assert replay.repaired == 0
+    assert replay.already_complete == 1
 
 
 def test_customer_attachment_access_excludes_internal_comments(db_session) -> None:

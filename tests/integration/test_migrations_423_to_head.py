@@ -384,7 +384,7 @@ def test_postgres_upgrades_revision_423_through_current_head(
     assert _revision_rows(database_url) == {REVISION_437}
     legacy_rows = _stage_legacy_service_teams_at_437(database_url)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
 
     expected_heads = set(ScriptDirectory.from_config(config).get_heads())
     assert _revision_rows(database_url) == expected_heads
@@ -453,5 +453,5 @@ def test_postgres_upgrades_revision_423_through_current_head(
     finally:
         engine.dispose()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")
     assert _revision_rows(database_url) == expected_heads

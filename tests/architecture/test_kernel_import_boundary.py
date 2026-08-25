@@ -40,6 +40,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = PROJECT_ROOT / "app"
+ALEMBIC_DIR = PROJECT_ROOT / "alembic"
 LEDGER = PROJECT_ROOT / "docs" / "PLATFORM_ADOPTION_LEDGER.md"
 
 #: The consume-pure/adapt kernel modules from the ledger — the only
@@ -52,6 +53,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.features",
         "dotmac_kernel.models",
         "dotmac_kernel.money",
+        "dotmac_kernel.prerequisites",
         "dotmac_kernel.profiles",
         "dotmac_kernel.providers",
         "dotmac_kernel.providers.provisioning",
@@ -86,9 +88,25 @@ DENIED_NAMES = frozenset(
 #: ``SettingDomain`` value type from ``settings_models``; importing
 #: ``DomainSetting`` or ``DomainSettingHistory`` directly would create a second
 #: model/writer surface over two same-named Sub tables.
+#: ``dotmac_kernel.prerequisites`` is admitted for the composition VOCABULARY —
+#: the effect names a binding is keyed by, the binding type itself, and the
+#: installer ``alembic/env.py`` calls. ``require_prerequisites``, the function
+#: that PROVES an effect against the live catalog, is deliberately absent: it
+#: stays where it is, called by the module's own migration inside its own
+#: lineage. Sub reads the vocabulary; it does not run the check. The ledger
+#: claimed that narrowing in prose while nothing enforced it, so the name was
+#: importable here — this entry is what makes the sentence true.
 RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
     "dotmac_kernel.models": frozenset({"Tenant", "TenantDomain"}),
     "dotmac_kernel.settings_models": frozenset({"SettingDomain"}),
+    "dotmac_kernel.prerequisites": frozenset(
+        {
+            "MODULE_DATABASE_ROLES_V1",
+            "PrerequisiteBinding",
+            "TENANT_SCOPE_CATALOG_V1",
+            "install_prerequisite_bindings",
+        }
+    ),
 }
 
 
@@ -174,6 +192,28 @@ def test_app_imports_only_allowlisted_kernel_modules() -> None:
     )
 
 
+def test_alembic_imports_only_allowlisted_kernel_modules() -> None:
+    """`alembic/` is in scope too, because composition put a kernel call there.
+
+    Composing a module lineage means `env.py` calls
+    `install_prerequisite_bindings`. That is a real kernel import outside `app/`,
+    and until this test existed the whole directory was unmonitored rather than
+    exempt — the migration entry point could have imported anything at all and
+    the `app/`-scoped scan would have stayed green.
+    """
+
+    scanned = list(ALEMBIC_DIR.rglob("*.py"))
+    # Sensitivity: assert the scan actually reaches the one file that matters,
+    # so a future layout change cannot quietly empty this test's input.
+    assert ALEMBIC_DIR / "env.py" in scanned, "alembic/env.py is not being scanned"
+    violations = _kernel_import_violations(ALEMBIC_DIR)
+    assert not violations, (
+        "Forbidden dotmac_kernel import(s) in alembic/ — the allowlist is "
+        "docs/PLATFORM_ADOPTION_LEDGER.md 'Kernel import allowlist', amended "
+        "only with a ledger change:\n" + "\n".join(violations)
+    )
+
+
 def test_guard_fails_on_forbidden_kernel_imports(tmp_path: Path) -> None:
     """Negative control: the checker must actually flag internal imports.
 
@@ -192,11 +232,15 @@ def test_guard_fails_on_forbidden_kernel_imports(tmp_path: Path) -> None:
         "from dotmac_kernel.providers import provisioning\n"
         "from dotmac_kernel.models import Tenant, TenantDomain\n"
         "from dotmac_kernel.settings_models import DomainSetting\n"
-        "from dotmac_kernel.settings_models import SettingDomain\n",
+        "from dotmac_kernel.settings_models import SettingDomain\n"
+        # Appended AFTER the eleven above on purpose: the admitted-import
+        # assertions below pin lines 9 and 11, so new cases must not shift them.
+        "from dotmac_kernel.prerequisites import require_prerequisites\n"
+        "from dotmac_kernel.prerequisites import PrerequisiteBinding\n",
         encoding="utf-8",
     )
     violations = _kernel_import_violations(tmp_path)
-    assert len(violations) == 7, violations
+    assert len(violations) == 8, violations
     flagged = "\n".join(violations)
     for needle in (
         "dotmac_kernel.db",
@@ -209,6 +253,9 @@ def test_guard_fails_on_forbidden_kernel_imports(tmp_path: Path) -> None:
         "UserCredential",
         "reaches every name",
         "DomainSetting",
+        # Sub reads the composition vocabulary; it does not run the check. This
+        # is the name the ledger forbids in prose, now forbidden in fact.
+        "require_prerequisites",
     ):
         assert needle in flagged, f"checker missed {needle!r}: {violations}"
     assert "dotmac_kernel.money" not in flagged, violations
@@ -222,6 +269,13 @@ def test_guard_fails_on_forbidden_kernel_imports(tmp_path: Path) -> None:
     assert not [v for v in violations if v.startswith(admitted_line)], violations
     admitted_settings_line = "offender.py:11:"
     assert not [v for v in violations if v.startswith(admitted_settings_line)], (
+        violations
+    )
+    # The binding TYPE is admitted while `require_prerequisites` on the line
+    # above it is not, which is the whole point of the narrowing: same module,
+    # different names, opposite verdicts.
+    admitted_binding_line = "offender.py:13:"
+    assert not [v for v in violations if v.startswith(admitted_binding_line)], (
         violations
     )
 

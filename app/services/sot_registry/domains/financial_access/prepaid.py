@@ -2213,7 +2213,8 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "The invoice-first classifier distinguishes exact settlement-"
             "backed payments, reviewed opening funding, insufficient or "
-            "unbacked funding, direct-renewal overlap, and ambiguity. "
+            "unbacked funding, exact adjustment- or ledger-backed renewal "
+            "overlap, and ambiguity. "
             "Reviewed confirmation consumes payment settlements first and "
             "then records only the exact remainder as typed opening-funding "
             "consumption; opening funding is never represented as a Payment. "
@@ -2228,8 +2229,10 @@ SERVICES: tuple[SOTService, ...] = (
             "The admin invoice adapter presents the same exact classifier "
             "output and submits an actor-bound, signed, fingerprinted review "
             "to this owner; it does not maintain a second settlement path. "
-            "Every existing draft blocks the parallel invoice-less renewal "
-            "path, and generic Restore cannot bypass an unresolved prepaid "
+            "Every unresolved draft blocks the parallel invoice-less renewal "
+            "path. One strictly proven duplicate is voided through the invoice "
+            "participant before current funding continues to invoice-less "
+            "renewal; generic Restore cannot bypass an unresolved prepaid "
             "financial lock. A separate dry-run-first adoption concern can "
             "restore the documentary identity of one pristine onboarding "
             "proforma only when an operator names the matching active, "
@@ -2483,8 +2486,11 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="financial.prepaid_service_renewals",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "unreversed prepaid-service-renewal adjustment and "
-                        "linked active ledger debit"
+                        "either one unreversed prepaid-service-renewal adjustment "
+                        "and linked active ledger debit, or one legacy active "
+                        "customer-position service debit structurally linked to "
+                        "one matching entitlement with exact account, subscription, "
+                        "period overlap, currency, and funded amount"
                     ),
                 ),
                 AuthorityInput(
@@ -2547,7 +2553,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "it intentionally emits no funding-change event because its "
                     "economic delta is zero. The "
                     "funding-change caller uses the same flush-only classifier "
-                    "inside its existing transaction."
+                    "inside its existing transaction; after that participant "
+                    "voids one proven duplicate, the caller may continue the "
+                    "current funding to invoice-less renewal in that transaction."
                 ),
                 locking=(
                     "Lock account first, then invoice or selected subscription "
@@ -2615,7 +2623,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "reconstructed in the approved opening, whose allocation "
                     "or two-lane posting changed, or whose confirmed balance "
                     "does not match the reviewed expectation",
-                    "partial or ambiguous entitlement overlap",
+                    "partial, multiple, reversed, amount-mismatched, or otherwise "
+                    "ambiguous entitlement and ledger overlap",
                     "stale preview, changed payment capacity, participant "
                     "remainder mismatch, or already consumed opening funding",
                 ),
@@ -2713,7 +2722,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "fee-inclusive mixed funding, partial funding, exact "
                     "nonzero shortfall, pre-boundary residue absorption, post-boundary "
                     "unbacked or reversed payment evidence, "
-                    "direct-renewal overlap, multiple drafts, stale preview, "
+                    "adjustment- and ledger-backed direct-renewal overlap, "
+                    "multiple evidence pairs, multiple drafts, stale preview, "
                     "replay, concurrency, lapsed re-anchoring, opening-funding "
                     "double-spend, Restore guard, and architecture tests."
                 ),
@@ -3010,6 +3020,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.customer_subledger",
             "financial.invoices",
             "financial.payments",
+            "financial.billing_tax_resolution",
             "financial.prepaid_funding_reconstruction",
             "financial.subscription_billing_grants",
             "financial.subscription_billing_treatments",
@@ -3047,8 +3058,12 @@ SERVICES: tuple[SOTService, ...] = (
             "project_paid_invoice_billing_anchors helper is gone. The reviewed "
             "repair also admits a NULL active-prepaid anchor only when an "
             "active entitlement proves its exact paid-through target; the "
-            "legacy cadence/forgiveness backfill is retired and evidence-free "
-            "rows remain review stock. A lapsed "
+            "legacy cadence/forgiveness backfill is retired. An anchor ahead "
+            "of exact entitlement evidence remains outside bulk discovery: "
+            "retraction requires an explicit subscription-scoped preview, and "
+            "applied service-extension evidence quarantines it so another "
+            "owner's grant cannot be clawed back. Other evidence-free rows "
+            "remain review stock. A lapsed "
             "settlement period first resolves the payment instant into the "
             "Africa/Lagos calendar, starts at local midnight, advances by the "
             "typed cadence, and persists the resulting boundaries as UTC "
@@ -3065,6 +3080,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "prepaid subscription and renewal terms",
+                        "effective compatibility tax treatment",
                         "settled payment evidence",
                         "verified customer funding position",
                         "funded service entitlement evidence",
@@ -3076,6 +3092,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "prepaid subscription and renewal terms",
+                        "effective compatibility tax treatment",
                         "verified customer funding position",
                         "funded service entitlement evidence",
                     ),
@@ -3144,6 +3161,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "prepaid subscription and renewal terms",
                         "funded service entitlement evidence",
+                        "applied service-extension coverage evidence",
                     ),
                     canonical_writer="financial.prepaid_service_renewals",
                 ),
@@ -3204,6 +3222,16 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="effective compatibility tax treatment",
+                    owner="financial.billing_tax_resolution",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "typed customer-exemption-first VAT resolution with exact "
+                        "TaxRate identity, application, provenance, and customer "
+                        "policy version"
+                    ),
+                ),
+                AuthorityInput(
                     name="verified customer funding position",
                     owner="financial.prepaid_funding_reconstruction",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -3219,6 +3247,15 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "active ServiceEntitlement linked to the exact renewal "
                         "debit and service period"
+                    ),
+                ),
+                AuthorityInput(
+                    name="applied service-extension coverage evidence",
+                    owner="financial.service_extensions",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "applied ServiceExtension and its exact immutable "
+                        "ServiceExtensionEntry grant interval"
                     ),
                 ),
             ),
@@ -3576,7 +3613,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "locked prepaid subscription state",
                         "active prepaid enforcement lock",
-                        "contracted prepaid renewal price",
+                        "contracted prepaid renewal price and tax policy",
                         "unresolved service-invoice evidence",
                     ),
                 ),
@@ -3595,10 +3632,10 @@ SERVICES: tuple[SOTService, ...] = (
                     source="active EnforcementLock with prepaid reason for the exact subscription",
                 ),
                 AuthorityInput(
-                    name="contracted prepaid renewal price",
+                    name="contracted prepaid renewal price and tax policy",
                     owner="financial.prepaid_service_renewals",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="prepaid monthly charge resolver using subscription contract and tax policy",
+                    source="prepaid monthly charge resolver using subscription contract and customer tax policy",
                 ),
                 AuthorityInput(
                     name="unresolved service-invoice evidence",

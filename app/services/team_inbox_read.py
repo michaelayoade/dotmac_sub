@@ -105,6 +105,13 @@ class InboxTimelineAttachment:
 
 
 @dataclass(frozen=True)
+class InboxTimelineReplyReference:
+    message_id: str | None
+    author: str | None
+    excerpt: str | None
+
+
+@dataclass(frozen=True)
 class InboxTimelineMessage:
     id: str
     channel_type: str
@@ -114,12 +121,14 @@ class InboxTimelineMessage:
     from_address: str | None
     to_addresses: list[str]
     cc_addresses: list[str]
+    bcc_addresses: list[str]
     sent_at: datetime | None
     received_at: datetime | None
     created_at: datetime
     metadata: dict[str, object] | None
     attachments: list[InboxTimelineAttachment]
     sender: InboxTimelineSenderIdentity | None
+    reply_to: InboxTimelineReplyReference | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,8 @@ class InboxConversationTimeline:
     contact_initials: str
     contact_name_source: str
     external_thread_id: str | None
+    continued_from_conversation_id: str | None
+    continued_from_url: str | None
     first_message_at: datetime | None
     last_message_at: datetime | None
     created_at: datetime
@@ -1767,6 +1778,16 @@ def get_conversation_timeline(
         contact_initials=contact_identity.initials,
         contact_name_source=contact_identity.source.value,
         external_thread_id=conversation.external_thread_id,
+        continued_from_conversation_id=(
+            str(conversation.continued_from_conversation_id)
+            if conversation.continued_from_conversation_id is not None
+            else None
+        ),
+        continued_from_url=(
+            f"/admin/inbox?c={conversation.continued_from_conversation_id}"
+            if conversation.continued_from_conversation_id is not None
+            else None
+        ),
         first_message_at=conversation.first_message_at,
         last_message_at=conversation.last_message_at,
         created_at=conversation.created_at,
@@ -1841,6 +1862,18 @@ def _timeline_message_projection(
     assets: Sequence[InboxMediaAsset],
     outbound_sender_identities: Mapping[UUID, InboxTimelineSenderIdentity],
 ) -> InboxTimelineMessage:
+    metadata = message.metadata_ if isinstance(message.metadata_, Mapping) else {}
+    raw_reply = metadata.get("reply_to")
+    reply_to = (
+        InboxTimelineReplyReference(
+            message_id=_optional_text(raw_reply.get("message_id")),
+            author=_optional_text(raw_reply.get("author")),
+            excerpt=_optional_text(raw_reply.get("excerpt")),
+        )
+        if isinstance(raw_reply, Mapping)
+        else None
+    )
+    raw_bcc_addresses = metadata.get("bcc")
     return InboxTimelineMessage(
         id=str(message.id),
         channel_type=message.channel_type,
@@ -1850,15 +1883,21 @@ def _timeline_message_projection(
         from_address=message.from_address,
         to_addresses=[str(value) for value in (message.to_addresses or [])],
         cc_addresses=[str(value) for value in (message.cc_addresses or [])],
+        bcc_addresses=(
+            [str(value) for value in raw_bcc_addresses if isinstance(value, str)]
+            if isinstance(raw_bcc_addresses, list)
+            else []
+        ),
         sent_at=message.sent_at,
         received_at=message.received_at,
         created_at=message.created_at,
-        metadata=message.metadata_,
+        metadata={str(key): value for key, value in metadata.items()},
         attachments=(
             [_asset_attachment(asset) for asset in assets]
             or _message_attachments(message)
         ),
         sender=_timeline_sender_identity(message, outbound_sender_identities),
+        reply_to=reply_to,
     )
 
 

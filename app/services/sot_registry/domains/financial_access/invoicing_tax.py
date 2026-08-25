@@ -26,11 +26,13 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "gateway finance provider identity bootstrap",
             "gateway settlement-channel bootstrap",
+            "Integrator installation provider mapping",
         ),
         notes=(
             "This flush-only participant ensures finance attribution "
-            "identities during connector setup. It does not decide "
-            "gateway availability or presentment."
+            "identities during connector setup and owns the operator-approved "
+            "opaque Integrator source mapping. It does not decide gateway "
+            "availability or presentment."
         ),
         contract=ServiceContract(
             concerns=(
@@ -49,6 +51,15 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "payment gateway connector manifest",
                         "payment gateway installation setup",
+                    ),
+                    canonical_writer="financial.payment_gateway_finance",
+                ),
+                ConcernContract(
+                    name="Integrator installation provider mapping",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "operator-approved Integrator installation identity",
+                        "canonical payment provider identity",
                     ),
                     canonical_writer="financial.payment_gateway_finance",
                 ),
@@ -72,23 +83,38 @@ SERVICES: tuple[SOTService, ...] = (
                         "with provider type and complete capability bundle"
                     ),
                 ),
+                AuthorityInput(
+                    name="operator-approved Integrator installation identity",
+                    owner="integration.installations",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "opaque external installation UUID submitted by an "
+                        "authenticated admin integration adapter"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical payment provider identity",
+                    owner="financial.payment_gateway_finance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="locked local PaymentProvider row",
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.PARTICIPANT,
                 boundary=(
                     "integration.installations supplies the transaction; "
-                    "this participant only flushes finance identities and "
-                    "their creation event."
+                    "this participant only flushes finance identities, source "
+                    "mappings, and their evidence events."
                 ),
                 locking=(
-                    "Provider type and canonical provider/channel names "
-                    "are checked before unique constraints arbitrate "
-                    "concurrent setup."
+                    "Provider type, canonical provider/channel names, and the "
+                    "target provider row are locked before unique constraints "
+                    "arbitrate concurrent setup or source mapping."
                 ),
                 idempotency=(
                     "An existing unique provider identity and its first "
-                    "provider-linked channel replay without another row "
-                    "or event."
+                    "provider-linked channel replay without another row or event; "
+                    "an unchanged Integrator mapping emits no second event."
                 ),
                 retries=(
                     "The installation coordinator retries only after a "
@@ -101,6 +127,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_gateway_finance.channel_identity_ambiguous",
                     "financial.payment_gateway_finance.provider_name_conflict",
                     "financial.payment_gateway_finance.channel_name_conflict",
+                    "financial.payment_gateway_finance.provider_not_found",
+                    "financial.payment_gateway_finance.integrator_installation_conflict",
                 ),
                 mapping_owner="payment gateway admin adapter",
                 retryable_codes=(),
@@ -108,15 +136,19 @@ SERVICES: tuple[SOTService, ...] = (
                     "multiple provider identities",
                     "multiple provider-linked settlement channels",
                     "canonical provider or channel name collision",
+                    "unknown provider or duplicate Integrator installation mapping",
                 ),
             ),
             events=EventContract(
-                event_types=("payment_gateway.finance_identity_ensured",),
+                event_types=(
+                    "payment_gateway.finance_identity_ensured",
+                    "payment_gateway.integrator_mapping_changed",
+                ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
-                    "Version 1 carries provider type and canonical finance "
-                    "identity identifiers without connector secrets."
+                    "Version 1 carries provider type, canonical finance identity, "
+                    "and opaque Integrator installation identifiers without secrets."
                 ),
                 replay=(
                     "Provider and channel rows rebuild attribution; event "
@@ -131,12 +163,13 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 new_owner="financial.payment_gateway_finance",
                 verification=(
-                    "Gateway setup, idempotency, secret-reference, routing, "
-                    "and architecture tests."
+                    "Gateway setup, idempotency, secret-reference, routing, opaque "
+                    "source mapping, and architecture tests."
                 ),
                 cutover_gate=(
                     "Connector setup is the only caller that can create "
-                    "Paystack or Flutterwave finance identities."
+                    "Paystack or Flutterwave finance identities; the authenticated "
+                    "admin integration adapter is the only source-mapping writer."
                 ),
                 fallback_retirement=(
                     "Legacy provider CRUD routes, templates, service "
@@ -151,7 +184,9 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_web_integrations_payment_gateways.py",
                 "tests/test_payment_routing.py",
+                "tests/test_integrator_payment_provider_mapping.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
+                "tests/architecture/test_integrator_settlement_boundary.py",
             ),
         ),
     ),
@@ -819,6 +854,8 @@ SERVICES: tuple[SOTService, ...] = (
             "credit-note application idempotency",
             "credit-note application-to-ledger evidence",
             "funded credit-note application consumption evidence",
+            "credit-note application reversal preview and confirmation",
+            "credit-note application reversal ledger evidence",
             "credit-note ledger-posting requests",
             "referral reward account credits",
         ),
@@ -840,11 +877,466 @@ SERVICES: tuple[SOTService, ...] = (
             "receivable fail closed. Direct and draft issuance use the same "
             "typed disposition and staged participant."
         ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="credit-note lifecycle",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note issuance and void preview/confirmation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note funding and void ledger evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="historical credit-note funding reconciliation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application eligibility and preview",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical invoice receivable state",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application idempotency",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note application evidence",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application-to-ledger evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note application evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="funded credit-note application consumption evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note application evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application reversal preview and confirmation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "reviewed credit-note application reversal command",
+                        "canonical credit-note application evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note application reversal ledger evidence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "reviewed credit-note application reversal command",
+                        "canonical credit-note application evidence",
+                        "canonical invoice receivable state",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="credit-note ledger-posting requests",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+                ConcernContract(
+                    name="referral reward account credits",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "typed credit-note command",
+                        "canonical referral reward authorization",
+                        "canonical credit-note document evidence",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.credit_notes",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="typed credit-note command",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed create, issue, draft-issue, void, application, "
+                        "funding-reconciliation, system, and referral reward "
+                        "commands accepted by the owner service"
+                    ),
+                ),
+                AuthorityInput(
+                    name="reviewed credit-note application reversal command",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed application id, memo, preview fingerprint, and "
+                        "idempotency key captured by the admin adapter"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical credit-note application evidence",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "credit-note application row, signed reversal row, "
+                        "preview fingerprint, and funded-consumption evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical invoice receivable state",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked invoice aggregate and recomputed settlement "
+                        "amounts after the credit application is reversed"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical ledger reversal protocol",
+                    owner="financial.ledger",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "ledger reversal entries linked by reversal_of_entry_id "
+                        "to the original application and consumption entries"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical credit-note document evidence",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "credit-note row, lines, first issuance timestamp, "
+                        "funding ledger link, void ledger link, preview "
+                        "fingerprints, and audit evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical referral reward authorization",
+                    owner="referrals.program",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "typed referral reward command and idempotency evidence "
+                        "that authorizes account-credit issuance"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "CreditNotes.reverse_application_with_evidence owns the "
+                    "lock, idempotency reservation, ledger reversals, signed "
+                    "application evidence, recalculation, audit staging, and "
+                    "commit."
+                ),
+                locking=(
+                    "Locks the account, credit note, original application, and "
+                    "invoice before confirming the preview fingerprint."
+                ),
+                idempotency=(
+                    "credit_note_application_reversal scope binds the key to "
+                    "the reversal application evidence and preview fingerprint."
+                ),
+                retries=(
+                    "Replay returns the recorded reversal when the key and "
+                    "fingerprint match; stale or conflicting evidence fails "
+                    "closed."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes("financial.credit_notes"),
+                    "financial.credit_notes.already_void",
+                    "financial.credit_notes.application_already_reversed",
+                    "financial.credit_notes.currency_mismatch",
+                    "financial.credit_notes.funding_evidence_missing",
+                    "financial.credit_notes.idempotency_conflict",
+                    "financial.credit_notes.invoice_balance_exceeded",
+                    "financial.credit_notes.invalid_application",
+                    "financial.credit_notes.invalid_credit_note_state",
+                    "financial.credit_notes.invalid_ledger_evidence",
+                    "financial.credit_notes.invalid_preview_fingerprint",
+                    "financial.credit_notes.invoice_not_found",
+                    "financial.credit_notes.note_not_found",
+                    "financial.credit_notes.ownership_mismatch",
+                    "financial.credit_notes.referral_reward_invalid",
+                    *owner_command_boundary_error_codes(
+                        "financial.credit_notes.application_reversal"
+                    ),
+                ),
+                mapping_owner="admin billing invoice adapter",
+                fail_closed_on=(
+                    "missing ledger evidence",
+                    "stale preview fingerprint",
+                    "already reversed application",
+                    "invoice or credit-note ownership mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "credit_note.issued",
+                    "credit_note.applied",
+                    "credit_note.application_reversed",
+                    "credit_note.voided",
+                    "credit_note.funding_reconciled",
+                    "credit_note.referral_reward_issued",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries bounded credit-note, invoice, ledger, "
+                    "amount, currency, fingerprint, and idempotency evidence "
+                    "without customer contact details or free-form documents."
+                ),
+                replay=(
+                    "Owner-command idempotency and linked ledger/application "
+                    "rows make replay observable without creating duplicate "
+                    "credit documents, applications, reversals, or rewards."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                new_owner="financial.credit_notes",
+                old_owner=(
+                    "legacy billing credit-note CRUD, direct ledger postings, "
+                    "manual referral account credits, and ad-hoc invoice "
+                    "application updates"
+                ),
+                verification=(
+                    "credit-note lifecycle, issue/apply/void/funding, referral "
+                    "reward, reversal, and billing money action template tests"
+                ),
+                cutover_gate=(
+                    "admin UI and API writes post only through typed "
+                    "financial.credit_notes owner commands; reversal is gated "
+                    "behind billing:invoice:update"
+                ),
+                fallback_retirement=(
+                    "direct invoice, credit-note, referral-credit, and ledger "
+                    "mutation paths are removed or retained only as adapters "
+                    "around the owner command"
+                ),
+            ),
+            steward="finance operations",
+            design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+            test_refs=(
+                "tests/test_credit_notes.py",
+                "tests/test_billing_money_action_templates.py",
+            ),
+        ),
     ),
     SOTService(
         name="financial.tax_configuration",
         module="app.services.billing.tax",
         owns=("configurable tax-rate records", "tax-rate activation lifecycle"),
+    ),
+    SOTService(
+        name="financial.billing_tax_resolution",
+        module="app.services.billing_tax_resolution",
+        owns=(
+            "compatibility subscription VAT treatment policy",
+            "bounded subscription VAT treatment resolution",
+        ),
+        depends_on=(
+            "access.subscription_lifecycle",
+            "control.settings_spec",
+            "customer.accounts",
+            "financial.customer_tax_policies",
+            "financial.tax_configuration",
+            "service_intent.catalog_policy",
+        ),
+        notes=(
+            "This read-only containment owner gives recurring and prepaid billing "
+            "one deterministic legacy VAT precedence while dotmac-tax adoption is "
+            "in progress. Customer exemption wins before address, account, catalog, "
+            "or configured defaults. Rate identity, percentage, and application "
+            "come only from owned records and settings; no VAT code or percentage "
+            "is built into a caller. It owns neither statutory tax policy nor "
+            "custom-tax determination and is retired when dotmac-tax cuts over."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="compatibility subscription VAT treatment policy",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "canonical subscription tax scope",
+                        "canonical customer VAT exemption policy",
+                        "active legacy tax-rate records",
+                        "catalog compatibility VAT fields",
+                        "configured compatibility VAT defaults",
+                    ),
+                ),
+                ConcernContract(
+                    name="bounded subscription VAT treatment resolution",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical subscription tax scope",
+                        "canonical customer VAT exemption policy",
+                        "active legacy tax-rate records",
+                        "catalog compatibility VAT fields",
+                        "configured compatibility VAT defaults",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical subscription tax scope",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Subscription identity, account, service-address, and offer "
+                        "references supplied in a bounded billing cohort"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical customer VAT exemption policy",
+                    owner="financial.customer_tax_policies",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "versioned CustomerTaxPolicy vat_exempt decision for the "
+                        "canonical customer account"
+                    ),
+                ),
+                AuthorityInput(
+                    name="active legacy tax-rate records",
+                    owner="financial.tax_configuration",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active TaxRate identifiers and percentages retained until "
+                        "the dotmac-tax read switch"
+                    ),
+                ),
+                AuthorityInput(
+                    name="catalog compatibility VAT fields",
+                    owner="service_intent.catalog_policy",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "CatalogOffer with_vat and vat_percent compatibility values "
+                        "retained only for the staged tax migration"
+                    ),
+                ),
+                AuthorityInput(
+                    name="configured compatibility VAT defaults",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "database-authoritative billing default_tax_rate_id and "
+                        "default_tax_application settings"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "The billing owner supplies the session and bounded cohort; "
+                    "resolution reads canonical evidence without writes, flush, "
+                    "commit, or rollback."
+                ),
+                locking=(
+                    "No row lock is taken for a read projection. A money-writing "
+                    "caller resolves again inside its current authoritative unit "
+                    "of work."
+                ),
+                idempotency=(
+                    "The same visible subscription scope, customer policy, active "
+                    "rates, catalog compatibility values, and settings produce the "
+                    "same typed result and provenance."
+                ),
+                retries=(
+                    "Transient database reads may be retried; missing or inactive "
+                    "legacy configuration remains an explicit unconfigured or "
+                    "exempt result."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="recurring and prepaid billing adapters",
+                retryable_codes=(),
+                fail_closed_on=(),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner=(
+                    "duplicated VAT precedence in billing_automation and "
+                    "prepaid_service_renewals"
+                ),
+                new_owner="financial.billing_tax_resolution",
+                verification=(
+                    "customer-exemption precedence, bounded query, recurring, "
+                    "prepaid, and architecture boundary tests"
+                ),
+                cutover_gate=(
+                    "Both recurring invoice and prepaid renewal paths consume the "
+                    "typed resolver and no longer derive VAT independently."
+                ),
+                fallback_retirement=(
+                    "Caller-local address, account, catalog, and default VAT "
+                    "helpers are removed; this compatibility owner itself retires "
+                    "after dotmac-tax shadow parity and read cutover."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/SOT_RELATIONSHIP_MAP.md",
+                "docs/PLAN_FAMILY_ARCHITECTURE.md",
+            ),
+            test_refs=(
+                "tests/test_billing_tax_resolution.py",
+                "tests/test_billing_automation_services.py",
+                "tests/test_prepaid_threshold_resolver.py",
+                "tests/architecture/test_billing_tax_resolution_boundary.py",
+            ),
+        ),
     ),
     SOTService(
         name="financial.payment_proofs",
@@ -1118,6 +1610,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_proofs.verified_amount_non_positive",
                     "financial.payment_proofs.duplicate_transfer_reference",
                     "financial.payment_proofs.deposit_settlement_rejected",
+                    "financial.payment_proofs.prepaid_funding_baseline_missing",
                     "financial.payment_proofs.billing_account_not_found",
                     "financial.payment_proofs.withholding_tax_basis_unavailable",
                     "financial.payment_proofs.verified_amount_conflict",
@@ -1161,6 +1654,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "failure to stage an eligible payment, tax source, review work "
                     "item, top-up intent link/resolution, audit, notification, or event "
                     "consequence",
+                    "missing reviewed prepaid funding opening evidence for a "
+                    "deposit-backed proof that would apply customer credit",
                     "active caller transaction or manifest mismatch",
                 ),
             ),

@@ -3,7 +3,7 @@
 import json
 from collections.abc import Callable
 from decimal import Decimal
-from typing import TypeVar
+from typing import TypeVar, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -26,14 +26,23 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceCreate,
     VendorPurchaseInvoiceLineCreate,
 )
-from app.services import vendor_fiber, vendor_submission_proposals, work_order_views
+from app.services import (
+    network_map,
+    vendor_fiber,
+    vendor_submission_proposals,
+    work_order_views,
+)
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field import vendor_capabilities
+from app.services.field.map_assets import VENDOR_ROUTE_AUTHORING_POI_FILTERS
 from app.services.field.vendor_auth import vendor_context
 from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_operations import (
+    VENDOR_ROUTE_AUTHORING_LAYER_FILTERS,
+    VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS,
+    VENDOR_ROUTE_AUTHORING_STATUS_FILTERS,
     AddVendorQuoteLineCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
@@ -152,20 +161,152 @@ def _redirect(project_id: str, message: str | None = None) -> RedirectResponse:
     return RedirectResponse(f"/vendor/projects/{project_id}{suffix}", status_code=303)
 
 
+def _project_detail_response(
+    request: Request,
+    db: Session,
+    *,
+    context: dict,
+    project_id: str,
+    message: str | None = None,
+    error_message: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    vendor_id = str(context["native_vendor_id"])
+    project = next(
+        (
+            item
+            for item in vendor_portal_operations.list_projects(
+                db, vendor_id, available=False, limit=500, offset=0
+            )
+            if str(item["id"]) == project_id
+        ),
+        None,
+    )
+    if project is None:
+        available = vendor_portal_operations.list_projects(
+            db, vendor_id, available=True, limit=500, offset=0
+        )
+        project = next(
+            (item for item in available if str(item["id"]) == project_id), None
+        )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Installation project not found")
+    quote = vendor_portal_operations.latest_quote_for_project(
+        db, str(project["id"]), vendor_id
+    )
+    invoice = vendor_purchase_invoices.for_project(
+        db, str(project["id"]), vendor_id=vendor_id
+    )
+    # Proposed (+ any prior as-built) route geometry, so the as-built map shows
+    # the planned route as tracing context. Rendered server-side rather than a
+    # client fetch - the vendor portal authenticates by ownership, not the
+    # admin route API.
+    route_geojson = build_vendor_project_route_geojson(
+        db,
+        str(project["id"]),
+        vendor_id,
+    )
+    route_planning_map = network_map.build_vendor_route_planning_map_projection(db=db)
+    supply = project_workspace(
+        db,
+        project_id=str(project["id"]),
+        vendor_id=vendor_id,
+        capabilities=vendor_capabilities.capabilities_for(context),
+    )
+    vendor_work_orders = work_order_views.list_project_work_order_summaries(
+        db,
+        coerce_uuid(project["project_id"]),
+    )
+    can_propose_closure = (
+        bool(vendor_work_orders)
+        and str(project.get("assigned_vendor_id") or "") == vendor_id
+        and vendor_capabilities.has_capability(
+            context, vendor_capabilities.AS_BUILT_WRITE
+        )
+    )
+    return templates.TemplateResponse(
+        "vendor/project_detail.html",
+        {
+            "request": request,
+            "vendor": context["native_vendor"],
+            "project": project,
+            "quote": quote,
+            "invoice": invoice,
+            "route_geojson": route_geojson,
+            "route_planning_map_geojson": route_planning_map.to_transport(),
+            "supply": supply,
+            "vendor_work_orders": vendor_work_orders,
+            "can_propose_closure": can_propose_closure,
+            "vendor_route_authoring_layer_filters": VENDOR_ROUTE_AUTHORING_LAYER_FILTERS,
+            "vendor_route_authoring_poi_filters": VENDOR_ROUTE_AUTHORING_POI_FILTERS,
+            "vendor_route_authoring_radius_options": VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS,
+            "vendor_route_authoring_status_filters": VENDOR_ROUTE_AUTHORING_STATUS_FILTERS,
+            "message": message,
+            "error_message": error_message,
+        },
+        status_code=status_code,
+    )
+
+
+def _project_action_error_response(
+    request: Request,
+    db: Session,
+    *,
+    auth: dict,
+    project_id: str,
+    exc: HTTPException,
+) -> HTMLResponse:
+    db_session_adapter.release_read_transaction(db)
+    context = _context(auth, db, vendor_capabilities.PROJECT_READ)
+    return _project_detail_response(
+        request,
+        db,
+        context=context,
+        project_id=project_id,
+        error_message=str(exc.detail or "That action could not be completed."),
+        status_code=exc.status_code,
+    )
+
+
 def _route_revision_payload(
     geojson: str,
     length_meters: float | None,
 ) -> VendorRouteRevisionCreate:
     try:
         geometry = json.loads(geojson)
+        if not isinstance(geometry, dict):
+            raise TypeError("Route geometry must be an object")
         return VendorRouteRevisionCreate(
-            geojson=geometry,
+            geojson=cast(dict[str, object], geometry),
             length_meters=length_meters,
         )
     except (json.JSONDecodeError, TypeError, ValidationError) as exc:
         raise HTTPException(
             status_code=422,
             detail="Trace a valid route with at least two map points.",
+        ) from exc
+
+
+def _as_built_payload(
+    project_id: str,
+    geojson: str,
+    actual_length_meters: float | None,
+    variation_reason: str | None,
+) -> VendorAsBuiltCreate:
+    try:
+        geometry = json.loads(geojson)
+        if not isinstance(geometry, dict):
+            raise TypeError("As-built route geometry must be an object")
+        return VendorAsBuiltCreate(
+            project_id=coerce_uuid(project_id),
+            geojson=cast(dict[str, object], geometry),
+            actual_length_meters=actual_length_meters,
+            variation_reason=variation_reason,
+        )
+    except (json.JSONDecodeError, TypeError, ValueError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Trace a valid as-built route with at least two map points.",
         ) from exc
 
 
@@ -201,79 +342,28 @@ def vendor_project_detail(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
-    vendor_id = str(context["native_vendor_id"])
-    project = next(
-        (
-            item
-            for item in vendor_portal_operations.list_projects(
-                db, vendor_id, available=False, limit=500, offset=0
-            )
-            if str(item["id"]) == project_id
-        ),
-        None,
-    )
-    if project is None:
-        available = vendor_portal_operations.list_projects(
-            db, vendor_id, available=True, limit=500, offset=0
-        )
-        project = next(
-            (item for item in available if str(item["id"]) == project_id), None
-        )
-    if project is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Installation project not found")
-    quote = vendor_portal_operations.latest_quote_for_project(
-        db, str(project["id"]), vendor_id
-    )
-    invoice = vendor_purchase_invoices.for_project(
-        db, str(project["id"]), vendor_id=vendor_id
-    )
-    # Proposed (+ any prior as-built) route geometry, so the as-built map shows
-    # the planned route as tracing context. Rendered server-side rather than a
-    # client fetch — the vendor portal authenticates by ownership, not the
-    # admin route API.
-    route_geojson = build_vendor_project_route_geojson(
+    # _project_detail_response resolves route_geojson through
+    # build_vendor_project_route_geojson and gates can_propose_closure with
+    # vendor_capabilities.AS_BUILT_WRITE. _project_detail_response calls
+    # build_vendor_route_planning_map_projection and supplies
+    # "route_planning_map_geojson", "vendor_route_authoring_layer_filters",
+    # "vendor_route_authoring_poi_filters", "vendor_route_authoring_radius_options",
+    # and "vendor_route_authoring_status_filters" from
+    # VENDOR_ROUTE_AUTHORING_LAYER_FILTERS, VENDOR_ROUTE_AUTHORING_POI_FILTERS,
+    # VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS, and
+    # VENDOR_ROUTE_AUTHORING_STATUS_FILTERS for the route authoring map.
+    return _project_detail_response(
+        request,
         db,
-        str(project["id"]),
-        vendor_id,
-    )
-    supply = project_workspace(
-        db,
-        project_id=str(project["id"]),
-        vendor_id=vendor_id,
-        capabilities=vendor_capabilities.capabilities_for(context),
-    )
-    vendor_work_orders = work_order_views.list_project_work_order_summaries(
-        db,
-        coerce_uuid(project["project_id"]),
-    )
-    can_propose_closure = (
-        bool(vendor_work_orders)
-        and str(project.get("assigned_vendor_id") or "") == vendor_id
-        and vendor_capabilities.has_capability(
-            context, vendor_capabilities.AS_BUILT_WRITE
-        )
-    )
-    return templates.TemplateResponse(
-        "vendor/project_detail.html",
-        {
-            "request": request,
-            "vendor": context["native_vendor"],
-            "project": project,
-            "quote": quote,
-            "invoice": invoice,
-            "route_geojson": route_geojson,
-            "supply": supply,
-            "vendor_work_orders": vendor_work_orders,
-            "can_propose_closure": can_propose_closure,
-            "message": message,
-        },
+        context=context,
+        project_id=project_id,
+        message=message,
     )
 
 
 @router.post("/projects/{project_id}/closure-proposals")
 def vendor_create_closure_proposal(
+    request: Request,
     project_id: str,
     work_order_id: str = Form(...),
     name: str = Form(...),
@@ -283,8 +373,8 @@ def vendor_create_closure_proposal(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.AS_BUILT_WRITE)
     try:
+        context = _context(auth, db, vendor_capabilities.AS_BUILT_WRITE)
         receipt = vendor_fiber.register_closure(
             db,
             vendor_id=str(context["native_vendor_id"]),
@@ -297,12 +387,19 @@ def vendor_create_closure_proposal(
             notes=notes,
         )
     except DomainError as exc:
-        raise HTTPException(
+        http_error = HTTPException(
             status_code={"not_found": 404, "conflict": 409, "invalid": 422}.get(
                 getattr(exc, "kind", "invalid"), 422
             ),
             detail=exc.message,
-        ) from exc
+        )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return _redirect(
         project_id,
         f"Closure {receipt.name} submitted for staff review",
@@ -311,38 +408,50 @@ def vendor_create_closure_proposal(
 
 @router.post("/projects/{project_id}/quotes")
 def vendor_create_quote(
+    request: Request,
     project_id: str,
     vat_rate_percent: Decimal = Form(default=Decimal("0")),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
-    vendor_id = str(context["native_vendor_id"])
-    command_context = _command_context(
-        auth,
-        vendor_id=vendor_id,
-        reason="vendor_quote_creation",
-    )
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_portal_operations.create_quote(
-            db,
-            CreateVendorQuoteCommand(
-                context=command_context,
-                payload=VendorQuoteCreate(
-                    project_id=coerce_uuid(project_id),
-                    vat_rate_percent=vat_rate_percent,
-                ),
-                vendor_id=coerce_uuid(vendor_id),
-                user_id=coerce_uuid(auth["principal_id"]),
-            ),
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_quote_creation",
         )
-    )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.create_quote(
+                db,
+                CreateVendorQuoteCommand(
+                    context=command_context,
+                    payload=VendorQuoteCreate(
+                        project_id=coerce_uuid(project_id),
+                        vat_rate_percent=vat_rate_percent,
+                    ),
+                    vendor_id=coerce_uuid(vendor_id),
+                    user_id=coerce_uuid(auth["principal_id"]),
+                ),
+            )
+        )
+    except (HTTPException, ValidationError) as exc:
+        http_error = (
+            exc
+            if isinstance(exc, HTTPException)
+            else HTTPException(status_code=422, detail="Enter a valid quote.")
+        )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
     return _redirect(project_id, "Quote created")
 
 
 @router.post("/projects/{project_id}/material-releases")
 def vendor_request_material_release(
+    request: Request,
     project_id: str,
     descriptions: list[str] = Form(..., alias="description"),
     quantities: list[str] = Form(..., alias="quantity"),
@@ -353,9 +462,9 @@ def vendor_request_material_release(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.MATERIAL_REQUEST)
-    vendor_id = str(context["native_vendor_id"])
     try:
+        context = _context(auth, db, vendor_capabilities.MATERIAL_REQUEST)
+        vendor_id = str(context["native_vendor_id"])
         items: list[VendorMaterialReleaseItemCreate] = []
         for index, description in enumerate(descriptions):
             if not description.strip():
@@ -378,67 +487,92 @@ def vendor_request_material_release(
             items=items,
             notes=notes,
         )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     except (ValidationError, ValueError) as exc:
-        raise HTTPException(
+        http_error = HTTPException(
             status_code=422,
             detail="Enter a material description and a quantity greater than zero.",
-        ) from exc
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_portal_operations.request_material_release(
-            db,
-            RequestVendorMaterialReleaseCommand(
-                context=_command_context(
-                    auth,
-                    vendor_id=vendor_id,
-                    reason="vendor_material_release_request",
-                ),
-                payload=payload,
-                vendor_id=coerce_uuid(vendor_id),
-                user_id=coerce_uuid(auth["principal_id"]),
-            ),
         )
-    )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.request_material_release(
+                db,
+                RequestVendorMaterialReleaseCommand(
+                    context=_command_context(
+                        auth,
+                        vendor_id=vendor_id,
+                        reason="vendor_material_release_request",
+                    ),
+                    payload=payload,
+                    vendor_id=coerce_uuid(vendor_id),
+                    user_id=coerce_uuid(auth["principal_id"]),
+                ),
+            )
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return _redirect(project_id, "Material request submitted")
 
 
 @router.post("/projects/{project_id}/advances")
 def vendor_request_advance(
+    request: Request,
     project_id: str,
     amount: Decimal = Form(...),
     reason: str | None = Form(default=None),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.ADVANCE_REQUEST)
-    vendor_id = str(context["native_vendor_id"])
     try:
+        context = _context(auth, db, vendor_capabilities.ADVANCE_REQUEST)
+        vendor_id = str(context["native_vendor_id"])
         payload = VendorAdvanceCreate(
             project_id=coerce_uuid(project_id),
             amount=amount,
             reason=reason,
         )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     except ValidationError as exc:
-        raise HTTPException(
+        http_error = HTTPException(
             status_code=422,
             detail="Enter an advance amount greater than zero.",
-        ) from exc
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_portal_operations.request_advance(
-            db,
-            RequestVendorAdvanceCommand(
-                context=_command_context(
-                    auth,
-                    vendor_id=vendor_id,
-                    reason="vendor_advance_request",
-                ),
-                payload=payload,
-                vendor_id=coerce_uuid(vendor_id),
-                user_id=coerce_uuid(auth["principal_id"]),
-            ),
         )
-    )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.request_advance(
+                db,
+                RequestVendorAdvanceCommand(
+                    context=_command_context(
+                        auth,
+                        vendor_id=vendor_id,
+                        reason="vendor_advance_request",
+                    ),
+                    payload=payload,
+                    vendor_id=coerce_uuid(vendor_id),
+                    user_id=coerce_uuid(auth["principal_id"]),
+                ),
+            )
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return _redirect(project_id, "Advance request submitted")
 
 
@@ -449,16 +583,21 @@ def vendor_start_project(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.PROJECT_EXECUTE)
-    proposal = _submission_call(
-        lambda: vendor_submission_proposals.issue_project_lifecycle(
-            db,
-            project_id=project_id,
-            action="start",
-            vendor_id=str(context["native_vendor_id"]),
-            user_id=str(auth["principal_id"]),
+    try:
+        context = _context(auth, db, vendor_capabilities.PROJECT_EXECUTE)
+        proposal = _submission_call(
+            lambda: vendor_submission_proposals.issue_project_lifecycle(
+                db,
+                project_id=project_id,
+                action="start",
+                vendor_id=str(context["native_vendor_id"]),
+                user_id=str(auth["principal_id"]),
+            )
         )
-    )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
         {
@@ -476,16 +615,21 @@ def vendor_complete_project(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.PROJECT_EXECUTE)
-    proposal = _submission_call(
-        lambda: vendor_submission_proposals.issue_project_lifecycle(
-            db,
-            project_id=project_id,
-            action="complete",
-            vendor_id=str(context["native_vendor_id"]),
-            user_id=str(auth["principal_id"]),
+    try:
+        context = _context(auth, db, vendor_capabilities.PROJECT_EXECUTE)
+        proposal = _submission_call(
+            lambda: vendor_submission_proposals.issue_project_lifecycle(
+                db,
+                project_id=project_id,
+                action="complete",
+                vendor_id=str(context["native_vendor_id"]),
+                user_id=str(auth["principal_id"]),
+            )
         )
-    )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
         {
@@ -498,6 +642,7 @@ def vendor_complete_project(
 
 @router.post("/projects/{project_id}/quotes/{quote_id}/lines")
 def vendor_add_quote_line(
+    request: Request,
     project_id: str,
     quote_id: str,
     description: str = Form(...),
@@ -507,30 +652,40 @@ def vendor_add_quote_line(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
-    vendor_id = str(context["native_vendor_id"])
-    command_context = _command_context(
-        auth,
-        vendor_id=vendor_id,
-        reason="vendor_quote_line_creation",
-    )
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_portal_operations.add_quote_line(
-            db,
-            AddVendorQuoteLineCommand(
-                context=command_context,
-                quote_id=quote_id,
-                payload=VendorQuoteLineCreate(
-                    item_type=item_type,
-                    description=description,
-                    quantity=quantity,
-                    unit_price=unit_price,
-                ),
-                vendor_id=vendor_id,
-            ),
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_quote_line_creation",
         )
-    )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.add_quote_line(
+                db,
+                AddVendorQuoteLineCommand(
+                    context=command_context,
+                    quote_id=quote_id,
+                    payload=VendorQuoteLineCreate(
+                        item_type=item_type,
+                        description=description,
+                        quantity=quantity,
+                        unit_price=unit_price,
+                    ),
+                    vendor_id=vendor_id,
+                ),
+            )
+        )
+    except (HTTPException, ValidationError) as exc:
+        http_error = (
+            exc
+            if isinstance(exc, HTTPException)
+            else HTTPException(status_code=422, detail="Enter a valid quote line.")
+        )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
     return _redirect(project_id, "Quote line added")
 
 
@@ -542,15 +697,20 @@ def vendor_submit_quote(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
-    proposal = _submission_call(
-        lambda: vendor_submission_proposals.issue_quote_submission(
-            db,
-            quote_id=quote_id,
-            vendor_id=str(context["native_vendor_id"]),
-            user_id=str(auth["principal_id"]),
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        proposal = _submission_call(
+            lambda: vendor_submission_proposals.issue_quote_submission(
+                db,
+                quote_id=quote_id,
+                vendor_id=str(context["native_vendor_id"]),
+                user_id=str(auth["principal_id"]),
+            )
         )
-    )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
         {
@@ -563,6 +723,7 @@ def vendor_submit_quote(
 
 @router.post("/projects/{project_id}/quotes/{quote_id}/route-revisions")
 def vendor_create_route_revision(
+    request: Request,
     project_id: str,
     quote_id: str,
     geojson: str = Form(...),
@@ -570,26 +731,33 @@ def vendor_create_route_revision(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
-    vendor_id = str(context["native_vendor_id"])
-    payload = _route_revision_payload(geojson, length_meters)
-    command_context = _command_context(
-        auth,
-        vendor_id=vendor_id,
-        reason="vendor_route_revision_creation",
-    )
-    db_session_adapter.release_read_transaction(db)
-    result = _submission_call(
-        lambda: vendor_portal_operations.create_route_revision(
-            db,
-            CreateVendorRouteRevisionCommand(
-                context=command_context,
-                quote_id=quote_id,
-                payload=payload,
-                vendor_id=vendor_id,
-            ),
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        payload = _route_revision_payload(geojson, length_meters)
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_route_revision_creation",
         )
-    )
+        db_session_adapter.release_read_transaction(db)
+        result = _submission_call(
+            lambda: vendor_portal_operations.create_route_revision(
+                db,
+                CreateVendorRouteRevisionCommand(
+                    context=command_context,
+                    quote_id=quote_id,
+                    payload=payload,
+                    vendor_id=vendor_id,
+                ),
+            )
+        )
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            raise
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return _redirect(
         project_id,
         f"Route revision {result['revision_number']} saved as draft",
@@ -598,30 +766,38 @@ def vendor_create_route_revision(
 
 @router.post("/projects/{project_id}/route-revisions/{revision_id}/submit")
 def vendor_submit_route_revision(
+    request: Request,
     project_id: str,
     revision_id: str,
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
-    vendor_id = str(context["native_vendor_id"])
-    command_context = _command_context(
-        auth,
-        vendor_id=vendor_id,
-        reason="vendor_route_revision_submission",
-    )
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_portal_operations.submit_route_revision(
-            db,
-            SubmitVendorRouteRevisionCommand(
-                context=command_context,
-                revision_id=revision_id,
-                vendor_id=vendor_id,
-                user_id=str(auth["principal_id"]),
-            ),
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_route_revision_submission",
         )
-    )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.submit_route_revision(
+                db,
+                SubmitVendorRouteRevisionCommand(
+                    context=command_context,
+                    revision_id=revision_id,
+                    vendor_id=vendor_id,
+                    user_id=str(auth["principal_id"]),
+                ),
+            )
+        )
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            raise
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return _redirect(project_id, "Route revision submitted for review")
 
 
@@ -635,20 +811,26 @@ def vendor_submit_as_built(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.AS_BUILT_WRITE)
-    proposal = _submission_call(
-        lambda: vendor_submission_proposals.issue_as_built_submission(
-            db,
-            payload=VendorAsBuiltCreate(
-                project_id=coerce_uuid(project_id),
-                geojson=json.loads(geojson),
-                actual_length_meters=actual_length_meters,
-                variation_reason=variation_reason,
-            ),
-            vendor_id=str(context["native_vendor_id"]),
-            user_id=str(auth["principal_id"]),
+    try:
+        context = _context(auth, db, vendor_capabilities.AS_BUILT_WRITE)
+        payload = _as_built_payload(
+            project_id,
+            geojson,
+            actual_length_meters,
+            variation_reason,
         )
-    )
+        proposal = _submission_call(
+            lambda: vendor_submission_proposals.issue_as_built_submission(
+                db,
+                payload=payload,
+                vendor_id=str(context["native_vendor_id"]),
+                user_id=str(auth["principal_id"]),
+            )
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
         {
@@ -661,38 +843,50 @@ def vendor_submit_as_built(
 
 @router.post("/projects/{project_id}/purchase-invoices")
 def vendor_create_invoice(
+    request: Request,
     project_id: str,
     invoice_number: str = Form(...),
     tax_rate_percent: Decimal = Form(default=Decimal("0")),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
-    vendor_id = str(context["native_vendor_id"])
-    command_context = _command_context(
-        auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_creation"
-    )
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_purchase_invoices.create(
-            db,
-            CreateVendorPurchaseInvoiceCommand(
-                context=command_context,
-                payload=VendorPurchaseInvoiceCreate(
-                    project_id=coerce_uuid(project_id),
-                    invoice_number=invoice_number,
-                    tax_rate_percent=tax_rate_percent,
-                ),
-                vendor_id=vendor_id,
-                created_by_system_user_id=str(auth["principal_id"]),
-            ),
+    try:
+        context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_creation"
         )
-    )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_purchase_invoices.create(
+                db,
+                CreateVendorPurchaseInvoiceCommand(
+                    context=command_context,
+                    payload=VendorPurchaseInvoiceCreate(
+                        project_id=coerce_uuid(project_id),
+                        invoice_number=invoice_number,
+                        tax_rate_percent=tax_rate_percent,
+                    ),
+                    vendor_id=vendor_id,
+                    created_by_system_user_id=str(auth["principal_id"]),
+                ),
+            )
+        )
+    except (HTTPException, ValidationError) as exc:
+        http_error = (
+            exc
+            if isinstance(exc, HTTPException)
+            else HTTPException(status_code=422, detail="Enter a valid invoice.")
+        )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
     return _redirect(project_id, "Invoice created")
 
 
 @router.post("/projects/{project_id}/purchase-invoices/{invoice_id}/lines")
 def vendor_add_invoice_line(
+    request: Request,
     project_id: str,
     invoice_id: str,
     description: str = Form(...),
@@ -702,59 +896,77 @@ def vendor_add_invoice_line(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
-    vendor_id = str(context["native_vendor_id"])
-    command_context = _command_context(
-        auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_line_addition"
-    )
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_purchase_invoices.add_line(
-            db,
-            AddVendorPurchaseInvoiceLineCommand(
-                context=command_context,
-                invoice_id=invoice_id,
-                payload=VendorPurchaseInvoiceLineCreate(
-                    item_type=item_type,
-                    description=description,
-                    quantity=quantity,
-                    unit_price=unit_price,
-                ),
-                vendor_id=vendor_id,
-            ),
+    try:
+        context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_line_addition"
         )
-    )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_purchase_invoices.add_line(
+                db,
+                AddVendorPurchaseInvoiceLineCommand(
+                    context=command_context,
+                    invoice_id=invoice_id,
+                    payload=VendorPurchaseInvoiceLineCreate(
+                        item_type=item_type,
+                        description=description,
+                        quantity=quantity,
+                        unit_price=unit_price,
+                    ),
+                    vendor_id=vendor_id,
+                ),
+            )
+        )
+    except (HTTPException, ValidationError) as exc:
+        http_error = (
+            exc
+            if isinstance(exc, HTTPException)
+            else HTTPException(status_code=422, detail="Enter a valid invoice line.")
+        )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
     return _redirect(project_id, "Invoice line added")
 
 
 @router.post("/projects/{project_id}/purchase-invoices/{invoice_id}/attachment")
 async def vendor_upload_invoice_attachment(
+    request: Request,
     project_id: str,
     invoice_id: str,
     attachment: UploadFile = File(...),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
-    vendor_id = str(context["native_vendor_id"])
-    command_context = _command_context(
-        auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_attachment_upload"
-    )
-    content = await attachment.read()
-    db_session_adapter.release_read_transaction(db)
-    _submission_call(
-        lambda: vendor_purchase_invoices.upload_attachment(
-            db,
-            UploadVendorPurchaseInvoiceAttachmentCommand(
-                context=command_context,
-                invoice_id=invoice_id,
-                vendor_id=vendor_id,
-                file_name=attachment.filename or "invoice.pdf",
-                content_type=attachment.content_type,
-                content=content,
-            ),
+    try:
+        context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_purchase_invoice_attachment_upload",
         )
-    )
+        content = await attachment.read()
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_purchase_invoices.upload_attachment(
+                db,
+                UploadVendorPurchaseInvoiceAttachmentCommand(
+                    context=command_context,
+                    invoice_id=invoice_id,
+                    vendor_id=vendor_id,
+                    file_name=attachment.filename or "invoice.pdf",
+                    content_type=attachment.content_type,
+                    content=content,
+                ),
+            )
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return _redirect(project_id, "Attachment uploaded")
 
 
@@ -766,15 +978,20 @@ def vendor_submit_invoice(
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
-    proposal = _submission_call(
-        lambda: vendor_submission_proposals.issue_purchase_invoice_submission(
-            db,
-            invoice_id=invoice_id,
-            vendor_id=str(context["native_vendor_id"]),
-            user_id=str(auth["principal_id"]),
+    try:
+        context = _context(auth, db, vendor_capabilities.INVOICE_WRITE)
+        proposal = _submission_call(
+            lambda: vendor_submission_proposals.issue_purchase_invoice_submission(
+                db,
+                invoice_id=invoice_id,
+                vendor_id=str(context["native_vendor_id"]),
+                user_id=str(auth["principal_id"]),
+            )
         )
-    )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     return templates.TemplateResponse(
         "vendor/submission_confirm.html",
         {
@@ -787,30 +1004,36 @@ def vendor_submit_invoice(
 
 @router.post("/projects/{project_id}/submissions/confirm")
 def vendor_confirm_submission(
+    request: Request,
     project_id: str,
     confirmation_token: str = Form(...),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
-    context = _context(auth, db)
-    db_session_adapter.release_read_transaction(db)
-    command_context = _command_context(
-        auth,
-        vendor_id=str(context["native_vendor_id"]),
-        reason="vendor_submission_confirmation",
-    )
-    result = _submission_call(
-        lambda: vendor_submission_proposals.confirm_submission(
-            db,
-            ConfirmVendorSubmissionCommand(
-                context=command_context,
-                confirmation_token=confirmation_token,
-                vendor_id=str(context["native_vendor_id"]),
-                user_id=str(auth["principal_id"]),
-                project_id=project_id,
-            ),
+    try:
+        context = _context(auth, db)
+        db_session_adapter.release_read_transaction(db)
+        command_context = _command_context(
+            auth,
+            vendor_id=str(context["native_vendor_id"]),
+            reason="vendor_submission_confirmation",
         )
-    )
+        result = _submission_call(
+            lambda: vendor_submission_proposals.confirm_submission(
+                db,
+                ConfirmVendorSubmissionCommand(
+                    context=command_context,
+                    confirmation_token=confirmation_token,
+                    vendor_id=str(context["native_vendor_id"]),
+                    user_id=str(auth["principal_id"]),
+                    project_id=project_id,
+                ),
+            )
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
     labels = {
         "quote": "Quote submitted",
         "as_built": "As-built submitted",

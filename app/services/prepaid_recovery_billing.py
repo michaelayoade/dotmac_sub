@@ -47,7 +47,7 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services.prepaid_service_renewals import resolve_prepaid_monthly_charge
+from app.services.prepaid_service_renewals import resolve_prepaid_monthly_charge_detail
 
 _OWNER = "financial.prepaid_recovery_billing"
 _CREATE_DEFINITION = OwnerCommandDefinition(
@@ -110,10 +110,13 @@ class PrepaidRecoveryDraftPreview:
     account_id: UUID
     starts_at: datetime
     ends_at: datetime
+    unit_price: Decimal
     subtotal: Decimal
     tax_total: Decimal
     total: Decimal
     currency: str
+    tax_rate_id: UUID | None
+    tax_application: TaxApplication
     fingerprint: str
 
 
@@ -339,19 +342,20 @@ def _build_prepaid_recovery_draft_preview(
     effective_at: datetime | None,
 ) -> PrepaidRecoveryDraftPreview:
     starts_at = _utc(effective_at or datetime.now(UTC))
-    charge = resolve_prepaid_monthly_charge(db, subscription, starts_at)
+    charge = resolve_prepaid_monthly_charge_detail(db, subscription, starts_at)
     if charge is None:
         _error(
             "unsupported_cycle",
             "This prepaid service has no supported recurring monthly charge.",
         )
-    total, currency, cycle = charge
     from app.services.billing_automation import _period_end
 
-    ends_at = _period_end(starts_at, cycle)
-    subtotal = round_money(Decimal(str(subscription.unit_price or "0")))
-    tax_total = round_money(total - subtotal)
-    if subtotal <= Decimal("0.00") or tax_total < Decimal("0.00"):
+    ends_at = _period_end(starts_at, charge.billing_cycle)
+    if (
+        charge.subtotal <= Decimal("0.00")
+        or charge.total <= Decimal("0.00")
+        or charge.tax_total < Decimal("0.00")
+    ):
         _error(
             "invalid_charge",
             "The service recurring charge could not be resolved safely.",
@@ -361,25 +365,32 @@ def _build_prepaid_recovery_draft_preview(
         account_id=subscription.subscriber_id,
         starts_at=starts_at,
         ends_at=ends_at,
-        subtotal=subtotal,
-        tax_total=tax_total,
-        total=round_money(total),
-        currency=currency,
+        unit_price=charge.unit_price,
+        subtotal=charge.subtotal,
+        tax_total=charge.tax_total,
+        total=charge.total,
+        currency=charge.currency,
+        tax_rate_id=charge.tax_rate_id,
+        tax_application=charge.tax_application,
         fingerprint=_fingerprint(
             subscription.id,
             subscription.updated_at,
             starts_at.isoformat(),
             ends_at.isoformat(),
-            subtotal,
-            tax_total,
-            total,
-            currency,
+            charge.unit_price,
+            charge.subtotal,
+            charge.tax_total,
+            charge.total,
+            charge.currency,
+            charge.tax_rate_id or "",
+            charge.tax_application.value,
         ),
     )
 
 
 def _replayed_prepaid_recovery_draft_preview(
     *,
+    db: Session,
     invoice: Invoice,
     subscription: Subscription,
     fingerprint: str,
@@ -392,15 +403,38 @@ def _replayed_prepaid_recovery_draft_preview(
             invoice_id=str(invoice.id),
             next_action=PrepaidRecoveryNextAction.review_existing_invoice.value,
         )
+    line = db.scalar(
+        select(InvoiceLine)
+        .where(
+            InvoiceLine.invoice_id == invoice.id,
+            InvoiceLine.subscription_id == subscription.id,
+            InvoiceLine.is_active.is_(True),
+            InvoiceLine.amount > Decimal("0.00"),
+        )
+        .order_by(InvoiceLine.created_at.asc(), InvoiceLine.id.asc())
+    )
     return PrepaidRecoveryDraftPreview(
         subscription_id=subscription.id,
         account_id=invoice.account_id,
         starts_at=_utc(invoice.billing_period_start),
         ends_at=_utc(invoice.billing_period_end),
+        unit_price=(
+            round_money(Decimal(str(line.unit_price)))
+            if line is not None
+            else round_money(Decimal(str(invoice.subtotal)))
+        ),
         subtotal=round_money(Decimal(str(invoice.subtotal))),
         tax_total=round_money(Decimal(str(invoice.tax_total))),
         total=round_money(Decimal(str(invoice.total))),
         currency=(invoice.currency or "NGN").upper(),
+        tax_rate_id=line.tax_rate_id if line is not None else None,
+        tax_application=(
+            line.tax_application
+            if line is not None
+            else TaxApplication.exempt
+            if round_money(Decimal(str(invoice.tax_total))) == Decimal("0.00")
+            else TaxApplication.exclusive
+        ),
         fingerprint=fingerprint,
     )
 
@@ -440,6 +474,7 @@ def create_prepaid_recovery_draft(
                 matching_recovery.id,
                 matching_recovery.invoice_number,
                 _replayed_prepaid_recovery_draft_preview(
+                    db=db,
                     invoice=matching_recovery,
                     subscription=subscription,
                     fingerprint=confirmation.fingerprint,
@@ -481,9 +516,10 @@ def create_prepaid_recovery_draft(
                     f"{billing_cycle_noun(subscription.billing_cycle)} recovery cycle"
                 ),
                 quantity=Decimal("1.000"),
-                unit_price=current.subtotal,
-                amount=current.subtotal,
-                tax_application=TaxApplication.exclusive,
+                unit_price=current.unit_price,
+                amount=current.unit_price,
+                tax_rate_id=current.tax_rate_id,
+                tax_application=current.tax_application,
                 metadata_={
                     "kind": "prepaid_recovery_cycle",
                     "billing_period_start": current.starts_at.isoformat(),

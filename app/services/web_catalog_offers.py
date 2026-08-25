@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 from pydantic import ValidationError
 from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from starlette.datastructures import FormData
 
 from app.models.catalog import (
@@ -134,7 +134,10 @@ def get_offer_availability(
     return {
         "reseller_availability": (
             db.query(OfferResellerAvailability)
+            .options(joinedload(OfferResellerAvailability.reseller))
             .filter(OfferResellerAvailability.offer_id == offer_id)
+            .filter(OfferResellerAvailability.is_active.is_(True))
+            .order_by(OfferResellerAvailability.created_at.asc())
             .all()
         ),
         "location_availability": (
@@ -654,6 +657,7 @@ def offer_edit_form_data(
     if not price and prices:
         price = prices[0]
     offer_data = {
+        "id": offer.id,
         "name": offer.name,
         "code": offer.code or "",
         "service_type": offer.service_type,
@@ -691,6 +695,7 @@ def offer_edit_form_data(
         "service_description": offer.service_description or "",
         "burst_profile": offer.burst_profile or "",
         "prepaid_period": offer.prepaid_period or "",
+        "plan_family": offer.plan_family or "",
         "allowed_change_plan_ids": offer.allowed_change_plan_ids or "",
         "status": offer.status,
         "description": offer.description or "",
@@ -791,6 +796,7 @@ def offer_edit_form_context(
         offer_data,
         offer_addon_links=offer_addon_links,
     )
+    context.update(get_offer_availability(db, offer_id))
     context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
     return context
 

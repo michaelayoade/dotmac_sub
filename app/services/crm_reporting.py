@@ -88,6 +88,7 @@ class CrmReportQuery:
     page: int = 1
     per_page: int | None = 50
     person_id: UUID | None = None
+    search: str | None = None
 
     @property
     def start_at(self) -> datetime | None:
@@ -812,7 +813,10 @@ def _crm_performance(db: Session, query: CrmReportQuery) -> CrmReportPage:
 def _agent_performance(
     db: Session, query: CrmReportQuery, *, personal: bool = False
 ) -> CrmReportPage:
-    report = team_inbox_metrics.agent_performance_report(db)
+    report = team_inbox_metrics.agent_performance_report(
+        db,
+        search=query.search,
+    )
     if personal:
         report = [
             item
@@ -825,6 +829,7 @@ def _agent_performance(
             item.service_team_name,
             str(item.metrics.active_assignment_count),
             str(item.metrics.handled_conversation_count),
+            str(item.metrics.resolved_conversation_count),
             _text(item.metrics.average_first_response_seconds),
             _text(item.metrics.average_queue_wait_seconds),
         )
@@ -843,12 +848,17 @@ def _agent_performance(
                 "Handled",
                 str(sum(item.metrics.handled_conversation_count for item in report)),
             ),
+            CrmReportMetric(
+                "Resolved",
+                str(sum(item.metrics.resolved_conversation_count for item in report)),
+            ),
         ),
         (
             "Agent",
             "Team",
             "Active assignments",
             "Handled",
+            "Resolved",
             "Avg first response (s)",
             "Avg queue wait (s)",
         ),

@@ -1,8 +1,13 @@
-"""Bulk tariff plan change service."""
+"""Reviewed bulk tariff scheduling over the subscription lifecycle owner."""
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
+from dataclasses import asdict
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -10,8 +15,23 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.services.common import coerce_uuid
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandKind,
+    SubscriptionCommandOutcomeStatus,
+    SubscriptionEffectiveTiming,
+)
+from app.services.subscription_lifecycle_batch import (
+    MAX_BATCH_SIZE,
+    SubscriptionBatchOutcomeItem,
+    SubscriptionBatchPreviewItem,
+    execute_subscription_batch,
+    preview_subscription_batch,
+)
 
 logger = logging.getLogger(__name__)
+
+_COMMAND_SOURCE = "admin:bulk_tariff_change"
+_COMMAND_REASON = "Reviewed bulk tariff change from the admin catalog"
 
 
 def _recurring_price(db: Session, offer_id: str):
@@ -31,6 +51,58 @@ def _recurring_price(db: Session, offer_id: str):
         (item for item in prices if item.price_type.value == "recurring"), None
     )
     return recurring or (prices[0] if prices else None)
+
+
+def _chunks(values: list[str]) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        tuple(values[offset : offset + MAX_BATCH_SIZE])
+        for offset in range(0, len(values), MAX_BATCH_SIZE)
+    )
+
+
+def _lifecycle_preview_items(
+    db: Session,
+    subscriptions: list[Subscription],
+    *,
+    target_offer_id: str,
+) -> tuple[SubscriptionBatchPreviewItem, ...]:
+    items: list[SubscriptionBatchPreviewItem] = []
+    subscription_ids = [str(subscription.id) for subscription in subscriptions]
+    for batch in _chunks(subscription_ids):
+        preview = preview_subscription_batch(
+            db,
+            batch,
+            kind=SubscriptionCommandKind.change_plan,
+            source=_COMMAND_SOURCE,
+            target_offer_id=target_offer_id,
+            effective_timing=SubscriptionEffectiveTiming.next_cycle,
+            reason=_COMMAND_REASON,
+        )
+        items.extend(preview.items)
+    return tuple(items)
+
+
+def _preview_fingerprint(
+    *,
+    source_offer_id: str,
+    target_offer_id: str,
+    include_suspended: bool,
+    lifecycle_items: tuple[SubscriptionBatchPreviewItem, ...],
+) -> str:
+    payload = {
+        "source_offer_id": str(coerce_uuid(source_offer_id)),
+        "target_offer_id": str(coerce_uuid(target_offer_id)),
+        "include_suspended": include_suspended,
+        "effective_timing": SubscriptionEffectiveTiming.next_cycle.value,
+        "items": [asdict(item) for item in lifecycle_items],
+    }
+    encoded = json.dumps(
+        payload,
+        default=str,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class BulkTariffChange:
@@ -66,11 +138,11 @@ class BulkTariffChange:
         target_offer_id: str,
         include_suspended: bool = False,
     ) -> dict:
-        """Preview what will happen if we change all subscribers from source to target plan.
+        """Preview a source-offer cohort against one target offer.
 
-        The change is applied immediately on execute — there is deliberately no
-        start-date or balance option (previous form fields collected both and
-        ignored them, implying behavior that never existed).
+        The canonical lifecycle owner previews every subscription. Confirmation
+        schedules eligible changes for each subscription's next billing boundary;
+        it never performs an unreviewed immediate price or access mutation.
 
         When ``include_suspended`` is true, suspended subscriptions on the source
         plan are included alongside active ones; otherwise only active ones match.
@@ -88,13 +160,22 @@ class BulkTariffChange:
         if not target:
             raise HTTPException(status_code=404, detail="Target offer not found")
 
-        stmt = select(Subscription).where(
-            Subscription.offer_id == coerce_uuid(source_offer_id),
-            Subscription.status.in_(
-                BulkTariffChange._eligible_statuses(include_suspended)
-            ),
+        stmt = (
+            select(Subscription)
+            .where(
+                Subscription.offer_id == coerce_uuid(source_offer_id),
+                Subscription.status.in_(
+                    BulkTariffChange._eligible_statuses(include_suspended)
+                ),
+            )
+            .order_by(Subscription.id)
         )
         subscriptions = list(db.scalars(stmt).all())
+        lifecycle_items = _lifecycle_preview_items(
+            db,
+            subscriptions,
+            target_offer_id=target_offer_id,
+        )
 
         source_price = _recurring_price(db, source_offer_id)
         target_price = _recurring_price(db, target_offer_id)
@@ -111,6 +192,16 @@ class BulkTariffChange:
             "target_price": target_price,
             "price_delta": price_delta,
             "include_suspended": include_suspended,
+            "lifecycle_items": lifecycle_items,
+            "lifecycle_by_id": {item.subscription_id: item for item in lifecycle_items},
+            "eligible_count": sum(item.eligible for item in lifecycle_items),
+            "ineligible_count": sum(not item.eligible for item in lifecycle_items),
+            "preview_fingerprint": _preview_fingerprint(
+                source_offer_id=source_offer_id,
+                target_offer_id=target_offer_id,
+                include_suspended=include_suspended,
+                lifecycle_items=lifecycle_items,
+            ),
         }
 
     @staticmethod
@@ -120,93 +211,129 @@ class BulkTariffChange:
         source_offer_id: str,
         target_offer_id: str,
         include_suspended: bool = False,
+        preview_fingerprint: str,
+        idempotency_key: str,
+        actor_id: str | None,
     ) -> dict:
-        """Execute the bulk tariff change (immediately).
+        """Schedule one preview-bound next-cycle command per subscription.
 
-        When ``include_suspended`` is true, suspended subscriptions are changed
-        alongside active ones; otherwise only active ones are touched.
-
-        Returns dict with: changed, skipped, errors counts plus failed_ids so a
-        partial failure is triageable from the UI, not just "check the logs".
+        Every item passes through the subscription lifecycle validation, billing
+        treatment, scheduling, idempotency, audit, and eventual access projection
+        boundary. A changed cohort or lifecycle head invalidates confirmation.
         """
         source_uuid = coerce_uuid(source_offer_id)
         target_uuid = coerce_uuid(target_offer_id)
 
+        source = db.get(CatalogOffer, source_uuid)
+        if not source:
+            raise HTTPException(status_code=404, detail="Source offer not found")
         target = db.get(CatalogOffer, target_uuid)
         if not target:
             raise HTTPException(status_code=404, detail="Target offer not found")
+        if source_uuid == target_uuid:
+            raise HTTPException(
+                status_code=400,
+                detail="Source and target offers must be different",
+            )
+        operation_key = idempotency_key.strip()
+        if not operation_key:
+            raise HTTPException(
+                status_code=400,
+                detail="A preview operation key is required",
+            )
+        execution_actor = str(actor_id or "").strip()
+        if not execution_actor:
+            raise HTTPException(
+                status_code=401,
+                detail="An authenticated actor is required for bulk tariff changes",
+            )
 
-        stmt = select(Subscription).where(
-            Subscription.offer_id == source_uuid,
-            Subscription.status.in_(
-                BulkTariffChange._eligible_statuses(include_suspended)
-            ),
+        current = BulkTariffChange.preview(
+            db,
+            source_offer_id=str(source_uuid),
+            target_offer_id=str(target_uuid),
+            include_suspended=include_suspended,
         )
-        subscriptions = list(db.scalars(stmt).all())
+        expected_fingerprint = str(preview_fingerprint or "").strip()
+        current_fingerprint = str(current["preview_fingerprint"])
+        if not expected_fingerprint or not hmac.compare_digest(
+            current_fingerprint,
+            expected_fingerprint,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The subscription cohort or lifecycle facts changed after "
+                    "preview. Preview the bulk tariff change again."
+                ),
+            )
 
-        changed = 0
-        skipped = 0
-        errors = 0
-        changed_ids: list[str] = []
-        failed_ids: list[str] = []
+        lifecycle_items = cast(
+            tuple[SubscriptionBatchPreviewItem, ...],
+            current["lifecycle_items"],
+        )
+        reviewed_heads = {
+            item.subscription_id: item.expected_head
+            for item in lifecycle_items
+            if item.expected_head is not None
+        }
+        outcome_items: list[SubscriptionBatchOutcomeItem] = []
+        subscription_ids = [str(item.subscription_id) for item in lifecycle_items]
+        for batch_number, batch in enumerate(_chunks(subscription_ids), start=1):
+            outcome = execute_subscription_batch(
+                db,
+                batch,
+                kind=SubscriptionCommandKind.change_plan,
+                source=_COMMAND_SOURCE,
+                actor_id=execution_actor,
+                target_offer_id=str(target_uuid),
+                effective_timing=SubscriptionEffectiveTiming.next_cycle,
+                reason=_COMMAND_REASON,
+                reviewed_heads=reviewed_heads,
+                idempotency_key=f"{operation_key}:batch:{batch_number}",
+            )
+            outcome_items.extend(outcome.items)
 
-        for sub in subscriptions:
-            savepoint = db.begin_nested()
-            try:
-                previous_offer_id = sub.offer_id
-                sub.offer_id = target_uuid
-                from app.services.catalog.subscriptions import (
-                    apply_offer_radius_profile,
-                )
-
-                apply_offer_radius_profile(
-                    db,
-                    sub,
-                    previous_offer_id=previous_offer_id,
-                )
-                savepoint.commit()
-                changed += 1
-                changed_ids.append(str(sub.id))
-            except Exception as e:
-                savepoint.rollback()
-                logger.error("Error changing subscription %s: %s", sub.id, e)
-                errors += 1
-                failed_ids.append(str(sub.id))
-
-        if changed > 0:
-            db.commit()
-            from app.services.enforcement import update_subscription_sessions
-            from app.services.radius import reconcile_subscription_connectivity
-
-            for subscription_id in changed_ids:
-                try:
-                    reconcile_subscription_connectivity(
-                        db, subscription_id
-                    ).require_projected()
-                    update_subscription_sessions(
-                        db, subscription_id, reason="profile_change"
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to refresh RADIUS state for subscription %s after bulk tariff change: %s",
-                        subscription_id,
-                        exc,
-                    )
+        changed_statuses = {
+            SubscriptionCommandOutcomeStatus.applied,
+            SubscriptionCommandOutcomeStatus.scheduled,
+        }
+        failed_ids = [
+            item.subscription_id
+            for item in outcome_items
+            if item.status == SubscriptionCommandOutcomeStatus.failed
+        ]
+        changed_ids = [
+            item.subscription_id
+            for item in outcome_items
+            if item.status in changed_statuses
+        ]
+        skipped_ids = [
+            item.subscription_id
+            for item in outcome_items
+            if item.status not in changed_statuses
+            and item.status != SubscriptionCommandOutcomeStatus.failed
+        ]
 
         logger.info(
-            "Bulk tariff change: %d changed, %d skipped, %d errors (source=%s, target=%s)",
-            changed,
-            skipped,
-            errors,
+            "Bulk tariff change: %d scheduled, %d skipped, %d errors "
+            "(source=%s, target=%s)",
+            len(changed_ids),
+            len(skipped_ids),
+            len(failed_ids),
             source_offer_id,
             target_offer_id,
         )
 
         return {
-            "changed": changed,
-            "skipped": skipped,
-            "errors": errors,
+            "changed": len(changed_ids),
+            "skipped": len(skipped_ids),
+            "errors": len(failed_ids),
+            "changed_ids": changed_ids,
+            "skipped_ids": skipped_ids,
             "failed_ids": failed_ids,
+            "outcomes": outcome_items,
+            "effective_timing": SubscriptionEffectiveTiming.next_cycle.value,
         }
 
     @staticmethod

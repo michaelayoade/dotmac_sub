@@ -15,6 +15,7 @@ from app.services.sot_manifest import (
     SOTService,
     TransactionContract,
     TransactionMode,
+    owner_command_boundary_error_codes,
 )
 from app.services.sot_registry.model import DomainSOT
 
@@ -122,6 +123,139 @@ DOMAIN = DomainSOT(
             module="app.services.catalog.validation",
             owns=("catalog mutation validation", "offer/profile consistency"),
             depends_on=("service_intent.catalog_policy",),
+        ),
+        SOTService(
+            name="service_intent.offer_reseller_availability",
+            module="app.services.offer_reseller_availability",
+            owns=("reseller-specific catalog offer availability",),
+            depends_on=(
+                "service_intent.catalog_policy",
+                "party.registry",
+                "auth.permission_gate",
+                "events.dispatcher",
+                "observability.audit_log",
+            ),
+            notes=(
+                "Owns explicit reseller-to-offer assignments used by reseller and "
+                "new-service catalog visibility. Customer self-service changes use "
+                "same-family and explicit allowed-target policy instead of reseller "
+                "sales assignment. Inactive assignment rows remain historical and "
+                "are reactivated rather than duplicated."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="reseller-specific catalog offer availability",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authenticated reseller catalog-access command",
+                            "canonical reseller identity",
+                            "active catalog offer identity",
+                        ),
+                        canonical_writer=("service_intent.offer_reseller_availability"),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authenticated reseller catalog-access command",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed desired active offer identifiers, reseller:write "
+                            "principal, reason, correlation, and idempotency evidence."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical reseller identity",
+                        owner="party.registry",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact locked Reseller commercial-channel record.",
+                    ),
+                    AuthorityInput(
+                        name="active catalog offer identity",
+                        owner="service_intent.catalog_policy",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Exact active CatalogOffer identity and lifecycle status."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "One desired reseller assignment set is locked, reconciled, "
+                        "audited, and committed atomically."
+                    ),
+                    locking=(
+                        "Lock the reseller, desired offers in identifier order, and "
+                        "all existing reseller assignment rows before reconciliation."
+                    ),
+                    idempotency=(
+                        "The desired assignment set is a complete-state command; an "
+                        "exact replay returns an unchanged outcome."
+                    ),
+                    retries=(
+                        "Invalid or inactive targets fail closed; uniqueness conflicts "
+                        "retry only from a fresh desired-state read."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "service_intent.offer_reseller_availability"
+                        ),
+                        "service_intent.offer_reseller_availability.invalid_command",
+                        "service_intent.offer_reseller_availability.reseller_not_found",
+                        "service_intent.offer_reseller_availability.offer_not_available",
+                        "service_intent.offer_reseller_availability.assignment_conflict",
+                    ),
+                    mapping_owner="app.web.admin.resellers",
+                    fail_closed_on=(
+                        "missing reseller",
+                        "inactive or archived target offer",
+                        "duplicate or oversized desired assignment set",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("catalog.offer_reseller_availability_changed",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "The event carries the reseller and exact added, reactivated, "
+                        "and deactivated offer identifiers."
+                    ),
+                    replay=(
+                        "Consumers re-read active assignments; replay never creates a "
+                        "second assignment row."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="service_intent.offer_reseller_availability",
+                    verification=(
+                        "Focused command, route permission, UI render, and catalog "
+                        "visibility regression tests."
+                    ),
+                    cutover_gate=(
+                        "Admin assignment writes enter only this owner command."
+                    ),
+                    fallback_retirement=(
+                        "No route writes or deletes offer_reseller_availability rows "
+                        "directly."
+                    ),
+                ),
+                steward="commercial operations",
+                design_refs=(
+                    "docs/PLAN_FAMILY_ARCHITECTURE.md",
+                    "docs/designs/CUSTOMER_SELF_SERVICE_LIFECYCLE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_offer_reseller_availability.py",
+                    "tests/test_customer_plan_change_prepaid.py",
+                    "tests/test_admin_route_permissions.py",
+                ),
+            ),
         ),
         SOTService(
             name="service_intent.catalog_billing_governance",

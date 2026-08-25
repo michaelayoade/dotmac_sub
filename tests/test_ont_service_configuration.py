@@ -200,6 +200,7 @@ def test_configuration_admission_commits_intent_operation_and_dispatch_atomicall
     assert intent is not None and intent.s_vlan == 321
     assert operation.operation_type is NetworkOperationType.ont_service_config
     assert dispatch is not None
+    assert dispatch.queue is None
     assert head.phase is OntServiceConfigurationPhase.queued
 
 
@@ -550,6 +551,47 @@ def test_lan_operator_prefix_does_not_require_catalog_entitlement(
     assert outcome.phase is OntServiceConfigurationPhase.queued
 
 
+def test_lan_dhcp_admission_does_not_require_ppp_authoritative_credential(
+    db_session, monkeypatch, olt_device, subscription, subscriber
+):
+    ont_id, _assignment_id = _admission_scope(
+        db_session,
+        monkeypatch,
+        olt_device=olt_device,
+        subscription=subscription,
+        subscriber=subscriber,
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_service_configuration.resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "config_pack": {"id": "test-pack"},
+            "values": {"wan_mode": "pppoe", "wan_vlan": 321},
+        },
+    )
+
+    outcome = configure_ont_service(
+        db_session,
+        _configure_command(
+            ont_id,
+            idempotency_key="lan-dhcp-no-ppp-credential",
+            section=OntConfigurationSection.lan,
+            change=LanConfigurationChange(
+                gateway_ip="198.51.100.1",
+                block_prefix=IpBlockPrefix.p29,
+                dhcp_enabled=True,
+                dhcp_start="198.51.100.2",
+                dhcp_end="198.51.100.6",
+            ),
+        ),
+    )
+
+    desired_lan = db_session.get(OntUnit, ont_id).desired_config["lan"]
+    assert desired_lan["dhcp_enabled"] is True
+    assert desired_lan["dhcp_start"] == "198.51.100.2"
+    assert desired_lan["dhcp_end"] == "198.51.100.6"
+    assert outcome.phase is OntServiceConfigurationPhase.queued
+
+
 def _lifecycle(
     db_session,
     ont: OntUnit,
@@ -770,6 +812,230 @@ def test_lan_worker_forces_write_and_reports_exact_readback_unavailable(
     assert revision.verified_at is None
     assert head.failure_code == "exact_lan_readback_unavailable"
     assert operation.status is NetworkOperationStatus.succeeded
+
+
+def test_lan_worker_verifies_when_exact_lan_readback_is_exposed(
+    db_session, monkeypatch
+):
+    ont = OntUnit(serial_number=f"LANOK-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="lan-exact-readback",
+        section=OntConfigurationSection.lan,
+        desired_change_evidence={
+            "lan.ip": "198.51.100.1",
+            "lan.subnet": "255.255.255.248",
+            "lan.block_prefix": "/29",
+            "lan.dhcp_enabled": True,
+            "lan.dhcp_start": "198.51.100.2",
+            "lan.dhcp_end": "198.51.100.6",
+        },
+    )
+    db_session.commit()
+
+    def reconciled(*_args, **_kwargs):
+        return SimpleNamespace(
+            success=True,
+            sync_status="synced",
+            drift_after=(),
+            failure=None,
+            observed_after=SimpleNamespace(
+                acs=SimpleNamespace(
+                    acs_observed_lan_gateway_ip="198.51.100.1",
+                    acs_observed_dhcp_subnet_mask="255.255.255.248",
+                    acs_observed_dhcp_enabled=True,
+                    acs_observed_dhcp_pool_min="198.51.100.2",
+                    acs_observed_dhcp_pool_max="198.51.100.6",
+                )
+            ),
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+    command_id = uuid.uuid4()
+    ont_id = ont.id
+    operation_id = operation.id
+    head_id = head.id
+    revision_number = revision.revision
+    db_session_adapter.release_read_transaction(db_session)
+
+    outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test exact LAN readback",
+                command_id=command_id,
+                correlation_id=operation_id,
+                idempotency_key="lan-exact-readback",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+        ),
+    )
+
+    assert outcome.phase is OntServiceConfigurationPhase.verified
+    assert revision.verified_at is not None
+    assert head.failure_code is None
+    assert operation.status is NetworkOperationStatus.succeeded
+
+
+def test_lan_worker_ignores_unrelated_ppp_residual_drift_after_delivery(
+    db_session, monkeypatch
+):
+    ont = OntUnit(serial_number=f"LANPPP-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="lan-ppp-residual",
+        section=OntConfigurationSection.lan,
+        desired_change_evidence={
+            "lan.ip": "198.51.100.1",
+            "lan.subnet": "255.255.255.248",
+            "lan.block_prefix": "/29",
+            "lan.dhcp_enabled": True,
+            "lan.dhcp_start": "198.51.100.2",
+            "lan.dhcp_end": "198.51.100.6",
+        },
+    )
+    db_session.commit()
+
+    def reconciled(*_args, **_kwargs):
+        return SimpleNamespace(
+            success=True,
+            sync_status="out_of_sync",
+            drift_after=(
+                SimpleNamespace(field="ppp_delivery[AcsSetPppoe]", surface="acs"),
+            ),
+            failure=None,
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+    command_id = uuid.uuid4()
+    ont_id = ont.id
+    operation_id = operation.id
+    head_id = head.id
+    revision_number = revision.revision
+    db_session_adapter.release_read_transaction(db_session)
+
+    outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test forced LAN delivery",
+                command_id=command_id,
+                correlation_id=operation_id,
+                idempotency_key="lan-delivery-with-ppp-residual",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+        ),
+    )
+
+    assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
+    assert head.failure_code == "exact_lan_readback_unavailable"
+    assert operation.status is NetworkOperationStatus.succeeded
+
+
+def test_lan_worker_treats_acs_connection_request_failure_as_pending_drain(
+    db_session, monkeypatch
+):
+    ont = OntUnit(serial_number=f"LANCR-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="lan-cr-pending",
+        section=OntConfigurationSection.lan,
+        desired_change_evidence={
+            "lan.ip": "198.51.100.1",
+            "lan.subnet": "255.255.255.248",
+            "lan.block_prefix": "/29",
+            "lan.dhcp_enabled": True,
+            "lan.dhcp_start": "198.51.100.2",
+            "lan.dhcp_end": "198.51.100.6",
+        },
+    )
+    operation.input_payload = {
+        "ont_id": str(ont.id),
+        "configuration_head_id": str(head.id),
+        "configuration_revision": revision.revision,
+    }
+    db_session.commit()
+
+    def reconciled(*_args, **_kwargs):
+        return SimpleNamespace(
+            success=False,
+            sync_status="out_of_sync",
+            drift_after=("lan.dhcp_enabled",),
+            failure=SimpleNamespace(
+                reason="acs_cr_failed",
+                message=(
+                    "setParameterValues queued but Connection Request failed: "
+                    "Connection request error: Unexpected status code 401."
+                ),
+                evidence=None,
+            ),
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+    command_id = uuid.uuid4()
+    ont_id = ont.id
+    operation_id = operation.id
+    head_id = head.id
+    revision_number = revision.revision
+    db_session_adapter.release_read_transaction(db_session)
+
+    outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test LAN CR pending",
+                command_id=command_id,
+                correlation_id=operation_id,
+                idempotency_key="lan-cr-pending",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+        ),
+    )
+
+    assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+    assert "accepted by ACS" in outcome.message
+    assert head.waiting_reason == "awaiting_acs_task_drain"
+    assert head.failure_code is None
+    assert operation.status is NetworkOperationStatus.waiting
 
 
 def test_inventory_retirement_clears_only_current_projection_and_keeps_history(

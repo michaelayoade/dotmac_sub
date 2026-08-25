@@ -164,6 +164,13 @@ entitlement. `Subscription.next_billing_at` is also a projection: a future
 anchor without exact evidence is `unresolved_projection`, blocks adverse
 action, and enters reconciliation.
 
+The prepaid-renewal owner's billing-anchor repair discovers absent or lagging
+anchors from exact active entitlement evidence. An evidence-free anchor lead
+is never repaired in bulk: an operator must select the exact subscription in a
+fingerprint-bound preview and explicitly allow retraction, and an applied
+service extension quarantines the candidate. Confirmation aligns the anchor to
+the entitlement end and records durable audit evidence without posting money.
+
 For a lapsed prepaid settlement, the replacement period starts on the
 payment's `Africa/Lagos` calendar date. The owner resolves WAT local midnight
 and advances the typed calendar cadence before converting the half-open period
@@ -198,6 +205,18 @@ typed opening-funding consumption (never as a Payment), creates the entitlement,
 then projects `next_billing_at` from the entitlement end. Automatic discovery
 creates a durable operator exception; it does not silently leave a generic
 `draft_invoice_pending` outcome.
+
+The classifier also recognizes one exact duplicate-coverage pair. The native
+form remains the strict prepaid-service-renewal `AccountAdjustment` with its
+linked debit and entitlement. The legacy form requires one active entitlement
+with no invoice, line, or billing-grant source, linked to one active unreversed
+customer-position service debit whose account, subscription context where
+present, currency, and line-or-gross funded amount are exact. One pair permits
+the invoice owner to void the pristine duplicate with zero economic delta;
+multiple, reversed, mixed, financially active, or inferred pairs remain manual
+review. A funding-change transaction that voids a proven old duplicate may then
+continue its current payment to invoice-less renewal, without treating the old
+draft as the funded renewal.
 
 The same owner has a separate dry-run-first command for the historical case
 where generic conversion already made an onboarding document final and an

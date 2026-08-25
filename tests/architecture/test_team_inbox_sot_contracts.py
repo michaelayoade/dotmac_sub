@@ -43,6 +43,28 @@ def test_team_inbox_owner_family_has_complete_typed_contracts() -> None:
         assert service.contract.test_refs
 
 
+def test_observation_owner_contracts_collision_quarantine() -> None:
+    service = service_relationship("communications.team_inbox_observations")
+
+    assert "provider observation identity collision quarantine" in service.owns
+    assert service.contract is not None
+    assert (
+        "communications.team_inbox_observations.provider_event_identity_collision"
+        in service.contract.errors.domain_codes
+    )
+
+    model = (ROOT / "app/models/team_inbox.py").read_text(encoding="utf-8")
+    owner = (ROOT / "app/services/team_inbox_observations.py").read_text(
+        encoding="utf-8"
+    )
+    smtp = (ROOT / "app/services/team_inbox_smtp_inbound.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class InboxProviderObservationCollision" in model
+    assert "SEMANTIC_FINGERPRINT_VERSION = 2" in owner
+    assert "ObservationCollisionPolicy.quarantine" in smtp
+
+
 def test_legacy_catch_all_is_retired() -> None:
     baseline = (
         ROOT / "tests/architecture/sot_manifest_legacy_baseline.txt"
@@ -69,6 +91,9 @@ def test_admin_route_delegates_query_contract_and_transactions() -> None:
 def test_projection_owns_response_cohorts_from_authoritative_inputs() -> None:
     service = service_relationship("communications.team_inbox_projection")
     assert service.contract is not None
+    assert "Inbox email recipient envelope projection" in {
+        concern.name for concern in service.contract.concerns
+    }
     input_owners = {
         item.name: item.owner for item in service.contract.authoritative_inputs
     }
@@ -92,6 +117,7 @@ def test_projection_owns_response_cohorts_from_authoritative_inputs() -> None:
     assert "needs_attention" not in model
     assert "class InboxResponseCohort" in projection
     assert "def response_cohort" in projection
+    assert "bcc_addresses" in projection
 
 
 def test_operator_unread_projection_is_set_based_and_indexed() -> None:

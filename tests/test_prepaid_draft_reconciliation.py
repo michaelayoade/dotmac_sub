@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -12,6 +12,7 @@ from app.models.billing import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
+    LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
@@ -21,6 +22,7 @@ from app.models.billing import (
     PaymentSettlementOrigin,
     PaymentStatus,
     ServiceEntitlement,
+    ServiceEntitlementStatus,
     TaxRate,
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
@@ -162,6 +164,45 @@ def _payment(
     )
     db.commit()
     return payment
+
+
+def _ledger_backed_entitlement(
+    db,
+    account,
+    subscription,
+    *,
+    amount: Decimal,
+    starts_at: datetime = START,
+    ends_at: datetime = END,
+) -> tuple[ServiceEntitlement, LedgerEntry]:
+    ledger_entry = LedgerEntry(
+        account_id=account.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.invoice,
+        category=LedgerCategory.internet_service,
+        amount=amount,
+        currency="NGN",
+        memo="Prepaid service renewal",
+        is_active=True,
+        affects_customer_position=True,
+        effective_date=starts_at,
+        created_at=starts_at,
+    )
+    db.add(ledger_entry)
+    db.flush()
+    entitlement = ServiceEntitlement(
+        account_id=account.id,
+        subscription_id=subscription.id,
+        source_ledger_entry_id=ledger_entry.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        amount_funded=amount,
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+    )
+    db.add(entitlement)
+    db.commit()
+    return entitlement, ledger_entry
 
 
 def _onboarding_proforma(db, account, subscription) -> Invoice:
@@ -1540,4 +1581,206 @@ def test_exact_direct_renewal_overlap_voids_duplicate_without_second_charge(
     assert invoice.status is InvoiceStatus.void
     assert db_session.query(AccountAdjustment).count() == 1
     assert db_session.query(ServiceEntitlement).count() == 1
+    assert db_session.query(PaymentAllocation).count() == 0
+
+
+def test_exact_ledger_backed_entitlement_marks_draft_as_duplicate(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    entitlement, ledger_entry = _ledger_backed_entitlement(
+        db_session,
+        subscriber,
+        subscription,
+        amount=Decimal("100.00"),
+        starts_at=START + timedelta(days=2),
+        ends_at=END + timedelta(days=2),
+    )
+
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidDraftDisposition.already_renewed
+    assert preview.recommended_action is PrepaidDraftAction.void_duplicate
+    assert preview.entitlement_ids == (entitlement.id,)
+    assert preview.renewal_ledger_entry_ids == (ledger_entry.id,)
+    assert "ledger debit evidence already fund" in preview.reason
+
+
+def test_multiple_ledger_backed_overlaps_remain_manual_review(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    _ledger_backed_entitlement(
+        db_session,
+        subscriber,
+        subscription,
+        amount=Decimal("100.00"),
+        starts_at=START,
+        ends_at=END,
+    )
+    _ledger_backed_entitlement(
+        db_session,
+        subscriber,
+        subscription,
+        amount=Decimal("100.00"),
+        starts_at=START + timedelta(days=1),
+        ends_at=END + timedelta(days=1),
+    )
+
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidDraftDisposition.manual_review
+    assert preview.recommended_action is PrepaidDraftAction.none
+    assert len(preview.entitlement_ids) == 2
+    assert len(preview.renewal_ledger_entry_ids) == 2
+    assert preview.reason == "multiple renewal evidence pairs overlap the draft"
+
+
+def test_reversed_ledger_backed_overlap_remains_manual_review(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    entitlement, ledger_entry = _ledger_backed_entitlement(
+        db_session,
+        subscriber,
+        subscription,
+        amount=Decimal("100.00"),
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.invoice,
+            category=LedgerCategory.internet_service,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            memo="Reversed prepaid service renewal",
+            reversal_of_entry_id=ledger_entry.id,
+            is_active=True,
+            affects_customer_position=True,
+        )
+    )
+    db_session.commit()
+
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidDraftDisposition.manual_review
+    assert preview.recommended_action is PrepaidDraftAction.none
+    assert preview.entitlement_ids == (entitlement.id,)
+    assert preview.reason == "overlapping coverage is not exact direct-renewal evidence"
+
+
+def test_ledger_backed_duplicate_with_draft_financial_activity_remains_manual(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    entitlement, _ledger_entry = _ledger_backed_entitlement(
+        db_session,
+        subscriber,
+        subscription,
+        amount=Decimal("100.00"),
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            invoice_id=invoice.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            category=LedgerCategory.internet_service,
+            amount=Decimal("1.00"),
+            currency="NGN",
+            memo="Existing invoice activity",
+            is_active=True,
+            affects_customer_position=False,
+        )
+    )
+    db_session.commit()
+
+    preview = preview_prepaid_draft_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidDraftDisposition.manual_review
+    assert preview.recommended_action is PrepaidDraftAction.none
+    assert preview.entitlement_ids == (entitlement.id,)
+    assert preview.blocks_invoice_issue is True
+    assert preview.reason == "draft already has financial activity"
+
+
+def test_funding_change_voids_duplicate_then_funds_current_renewal(
+    db_session,
+    subscriber,
+    subscription,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("100.00"))
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("100.00"),
+        position_at=START - timedelta(days=1),
+    )
+    _ledger_backed_entitlement(
+        db_session,
+        subscriber,
+        subscription,
+        amount=Decimal("100.00"),
+    )
+    subscription.next_billing_at = END
+    payment_time = END + timedelta(days=1, hours=10)
+    _payment(
+        db_session,
+        subscriber,
+        amount=Decimal("100.00"),
+        paid_at=payment_time,
+    )
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=payment_time,
+        funding_currency="NGN",
+        evidence_ref="pytest:duplicate-draft-current-renewal",
+    )
+    db_session.commit()
+
+    db_session.refresh(invoice)
+    assert result.disposition is FundingChangeRenewalDisposition.funded
+    assert result.draft_invoices_voided == 1
+    assert result.draft_invoices_settled == 0
+    assert result.funded == 1
+    assert invoice.status is InvoiceStatus.void
+    assert db_session.query(ServiceEntitlement).count() == 2
+    assert db_session.query(AccountAdjustment).count() == 1
     assert db_session.query(PaymentAllocation).count() == 0

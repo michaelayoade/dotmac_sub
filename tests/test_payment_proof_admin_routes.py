@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from app.api.payment_proof_errors import payment_proof_http_status
 from app.db import get_db
 from app.models.system_user import SystemUser
 from app.services import payment_proofs as svc
@@ -113,6 +114,14 @@ class TestAdminWebRouteRegistration:
 
 
 class TestAdminWebVerifyRejectHandlers:
+    def test_missing_prepaid_baseline_error_maps_to_conflict(self) -> None:
+        exc = svc.PaymentProofReviewError(
+            code="financial.payment_proofs.prepaid_funding_baseline_missing",
+            message="Opening position is required",
+        )
+
+        assert payment_proof_http_status(exc) == 409
+
     def test_verify_redirects_to_detail_on_success(self) -> None:
         from app.web.admin.billing_payment_proofs import payment_proofs_verify
 
@@ -358,6 +367,20 @@ def _customer_principal(sub) -> dict:
         "principal_id": str(sub.id),
         "subscriber_id": str(sub.id),
     }
+
+
+def test_customer_payment_proof_upload_is_disabled(db_session) -> None:
+    owner = _subscriber(db_session, "proof.disabled@example.com")
+    client = _client(db_session, _customer_principal(owner))
+
+    response = client.post(
+        "/api/v1/payment-proofs/me",
+        data={"amount": "5000", "reference": "TRF-DISABLED"},
+        files={"file": ("receipt.png", b"receipt", "image/png")},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Bank transfer is available to resellers only"
 
 
 class TestProofFileEndpointAuth:

@@ -34,6 +34,7 @@ from app.services import (
     conversation_ticket_handoff,
     service_team_lifecycle,
     subscriber_summary,
+    team_inbox_assignment,
     team_inbox_contact_links,
     team_inbox_filters,
     team_inbox_media,
@@ -161,6 +162,7 @@ INBOX_LIST_DEFINITION = ListDefinition(
     key="team_inbox",
     fields=(
         ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("view", "View", filterable=True),
         ListFieldDefinition("channel_type", "Channel", filterable=True),
         ListFieldDefinition("service_team_id", "Team", filterable=True),
         # Declared so the multi-team "My team" scope survives a canonical
@@ -197,6 +199,7 @@ INBOX_LIST_DEFINITION = ListDefinition(
 @dataclass(frozen=True, slots=True)
 class InboxQueueRequest:
     search: str | None = None
+    view: str | None = None
     status: str | None = None
     channel_type: str | None = None
     service_team_id: str | UUID | None = None
@@ -369,6 +372,7 @@ class InboxAgentOption:
     initials: str
     presence_status: str
     email: str = ""
+    team_ids: tuple[UUID, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,6 +436,7 @@ class InboxQueueProjection:
     count: int
     list_query: ListQuery
     page_meta: PageMeta
+    view: str
     status: str
     channel_type: str
     service_team_id: str
@@ -605,6 +610,20 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
         else []
     )
     presence_by_person = {row.person_id: row for row in presence_rows}
+    person_party_ids = [row.person_party_id for row in rows]
+    membership_rows = (
+        db.query(ServiceTeamMember)
+        .filter(ServiceTeamMember.person_id.in_(person_party_ids))
+        .filter(ServiceTeamMember.is_active.is_(True))
+        .all()
+        if person_party_ids
+        else []
+    )
+    team_ids_by_person_party: dict[UUID, set[UUID]] = {}
+    for membership in membership_rows:
+        team_ids_by_person_party.setdefault(membership.person_id, set()).add(
+            membership.team_id
+        )
     return tuple(
         InboxAgentOption(
             id=row.id,
@@ -615,15 +634,18 @@ def list_agent_options(db: Session) -> tuple[InboxAgentOption, ...]:
             ),
             initials=_initials(row.first_name, row.last_name, row.display_name),
             presence_status=(
-                (
-                    presence.manual_override_status
-                    or presence.status
-                    or InboxAgentPresenceStatus.offline.value
-                )
+                team_inbox_assignment.effective_presence_status(presence)
                 if (presence := presence_by_person.get(row.id)) is not None
                 else InboxAgentPresenceStatus.offline.value
             ),
             email=row.email,
+            team_ids=tuple(
+                sorted(
+                    team_ids_by_person_party.get(row.person_party_id, set()), key=str
+                )
+            )
+            if row.person_party_id is not None
+            else (),
         )
         for row in rows
     )
@@ -683,6 +705,7 @@ def list_mentionable_users(
             initials=_initials(row.first_name, row.last_name, row.display_name),
             presence_status=InboxAgentPresenceStatus.offline.value,
             email=row.email,
+            team_ids=tuple(active_team_ids),
         )
         for row in rows
     )
@@ -1595,6 +1618,7 @@ def _activity_param(value: datetime | None) -> str | None:
 
 def _filter_params(
     *,
+    view: str | None,
     status: str | None,
     channel_type: str | None,
     service_team_id: str | None,
@@ -1625,6 +1649,7 @@ def _filter_params(
     """
 
     return {
+        "view": view,
         "status": status,
         "channel_type": channel_type,
         "service_team_id": service_team_id,
@@ -2110,6 +2135,8 @@ def get_queue_row_projection(
         if request.status in {item.value for item in InboxConversationStatus}
         else None
     )
+    view = "all" if str(request.view or "").strip().lower() == "all" else None
+    effective_open_only = request.open_only or (status is None and view != "all")
     channel = (
         request.channel_type
         if request.channel_type in {item.value for item in InboxChannelType}
@@ -2150,6 +2177,7 @@ def get_queue_row_projection(
     )
     filters = _filter_params(
         status=status,
+        view=view,
         channel_type=channel,
         service_team_id=str(team_id) if team_id else None,
         service_team_ids=team_id_scope,
@@ -2194,7 +2222,7 @@ def get_queue_row_projection(
         priority_at_most=priority,
         muted=request.muted,
         snoozed=request.snoozed,
-        open_only=request.open_only or status is None,
+        open_only=effective_open_only,
         unassigned=request.unassigned,
         operator_person_id=request.actor_person_id,
         unread_only=request.unread,
@@ -2229,6 +2257,7 @@ def build_queue_projection(
     """Own filter normalization, sort, pagination, cohorts, and UI state."""
 
     search = request.search
+    raw_view = request.view
     raw_status = request.status
     raw_channel = request.channel_type
     raw_team_id = request.service_team_id
@@ -2265,11 +2294,11 @@ def build_queue_projection(
         if raw_status in {item.value for item in InboxConversationStatus}
         else None
     )
-    # The unqualified Inbox queue is active work. Resolved conversations are
-    # historical and remain available only through the explicit Done filter.
-    # Keep this presentation rule here rather than changing the generic read
-    # model's default, which is also used by history-oriented callers.
-    effective_open_only = open_only or status is None
+    view = "all" if str(raw_view or "").strip().lower() == "all" else None
+    # Plain Inbox loads are operational work queues, so they default to the
+    # active non-resolved cohort. The explicit All view keeps resolved history
+    # available without letting it re-enter the day-to-day queue.
+    effective_open_only = open_only or (status is None and view != "all")
     channel = (
         raw_channel
         if raw_channel in {item.value for item in InboxChannelType}
@@ -2313,6 +2342,7 @@ def build_queue_projection(
     )
     normalized_filters = _filter_params(
         status=status,
+        view=view,
         channel_type=channel,
         service_team_id=str(team_id) if team_id else None,
         service_team_ids=team_id_scope,
@@ -2386,6 +2416,7 @@ def build_queue_projection(
         search=search,
         filters=_filter_params(
             status=raw_status,
+            view=raw_view,
             channel_type=raw_channel,
             service_team_id=raw_team_text,
             service_team_ids=team_id_scope,
@@ -2473,6 +2504,7 @@ def build_queue_projection(
         count=result.count,
         list_query=list_query,
         page_meta=page_meta,
+        view=view or "",
         status=status or "",
         channel_type=channel or "",
         service_team_id=str(team_id) if team_id else "",

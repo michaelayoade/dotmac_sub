@@ -82,7 +82,7 @@ jobs:
             -e DATABASE_URL=postgresql+psycopg://postgres@e2e-db:5432/dotmac_sub_e2e \
             -e SECRET_KEY=e2e-test-secret-key-not-for-production \
             -e REDIS_URL=redis://e2e-redis:6379/0"
-          docker run --rm $COMMON dotmac-sub:e2e alembic upgrade head
+          docker run --rm $COMMON dotmac-sub:e2e alembic upgrade heads
           docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_rbac
           docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_admin \
             --email e2e.admin@example.com --first-name E2E --last-name Admin \

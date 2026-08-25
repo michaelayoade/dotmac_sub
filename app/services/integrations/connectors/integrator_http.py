@@ -34,6 +34,7 @@ from app.services.integrations.runtime import (
 
 INTEGRATOR_CONNECTOR_KEY = "dotmac.integrator.http"
 INTEGRATOR_RECEIVE_CAPABILITY = "messaging.receive.v1"
+INTEGRATOR_SETTLEMENT_CAPABILITY = "payments.settlement.observation.v1"
 
 
 class IntegratorHttpRunner:

@@ -145,6 +145,8 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
         payload=team_inbox_outbound.InboxReplyPayload(
             body_html="<p>We are checking.</p>",
             body_text="We are checking.",
+            cc_addresses=("copy@example.com",),
+            bcc_addresses=("audit@example.com",),
             sent_by_person_id=uuid4(),
         ),
         now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
@@ -161,9 +163,13 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
     assert notification.recipient == "customer@example.com"
     assert notification.subject == "Re: Router offline"
     assert notification.metadata_["activity"] == "support_ticket"
+    assert notification.metadata_["cc"] == ["copy@example.com"]
+    assert notification.metadata_["bcc"] == ["audit@example.com"]
     assert message.direction == InboxMessageDirection.outbound.value
     assert message.from_address == "support@dotmac.io"
     assert message.to_addresses == ["customer@example.com"]
+    assert message.cc_addresses == ["copy@example.com"]
+    assert message.metadata_["bcc"] == ["audit@example.com"]
     assert message.metadata_["sender_key"] == "support"
     assert message.notification_id == notification.id
     assert message.metadata_["delivery_status"] == "queued"
@@ -259,6 +265,63 @@ def test_email_notification_delivers_inbox_attachment(db_session, monkeypatch):
     assert len(calls[0]["attachments"]) == 1
     assert calls[0]["attachments"][0].filename == "router.pdf"
     assert calls[0]["attachments"][0].content == b"pdf-bytes"
+
+
+def test_email_notification_resolves_inbox_png_without_generic_attachment_path(
+    db_session, monkeypatch
+):
+    _smtp_sender(db_session, "support", from_email="support@dotmac.io")
+    _activity_sender(db_session, "support_ticket", "support")
+    team = _team(db_session, "Support", ServiceTeamType.support.value)
+    conversation = _conversation(db_session, team)
+    attachment_id = uuid4()
+    calls: list[dict] = []
+
+    def unexpected_generic_resolver(*_args, **_kwargs):
+        raise AssertionError("Team Inbox attachments must not use the generic resolver")
+
+    monkeypatch.setattr(
+        notification_tasks.communication_attachments,
+        "resolve_email_attachments",
+        unexpected_generic_resolver,
+    )
+    monkeypatch.setattr(
+        notification_tasks.team_inbox_media,
+        "resolve_delivery_attachments",
+        lambda *_args, **_kwargs: (
+            team_inbox_media.InboxDeliveryAttachment(
+                asset_id=attachment_id,
+                filename="network-map.png",
+                content_type="image/png",
+                content=b"png-bytes",
+                asset_type="image",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        notification_tasks.email_service,
+        "send_email",
+        lambda *args, **kwargs: calls.append(kwargs) or True,
+    )
+    db_session.commit()
+
+    team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>Image attached.</p>",
+            body_text="Image attached.",
+            metadata={
+                "inbox_attachment_ids": [str(attachment_id)],
+                "attachments": [{"mime_type": "image/png"}],
+            },
+        ),
+    )
+    notification_tasks._deliver_notification_queue_stats(db_session)
+
+    assert len(calls) == 1
+    assert calls[0]["attachments"][0].content_type == "image/png"
+    assert calls[0]["attachments"][0].content == b"png-bytes"
 
 
 def test_send_inbox_reply_sends_whatsapp_template(db_session, monkeypatch):

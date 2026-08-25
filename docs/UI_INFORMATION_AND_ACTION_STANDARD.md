@@ -383,10 +383,32 @@ implementation.
   a fresh drawer query; read failure never replays the mutation.
 - The drawer keeps customer identity visible while Details and Conversations
   tabs provide progressive disclosure. The Conversations badge is the
-  authoritative full count of previous conversations for the exact Subscriber;
-  its bounded newest-first list shows channel, status, and last activity and
-  routes each row to the exact prior Inbox conversation. Assignment does not
-  narrow this customer history.
+  authoritative full count of matching previous active and resolved
+  conversations. History spans different endpoints only through an exact
+  Subscriber, reviewed Party contact-point, or reviewed Reseller relationship;
+  otherwise it is restricted to the exact normalized inbound endpoint and, for
+  provider-scoped social identifiers, the same provider account scope.
+  Ambiguous identity evidence renders `Not calculated`.
+  The bounded newest-first list shows endpoint, channel, status, and last
+  activity and routes each row to the exact prior Inbox conversation.
+  Assignment does not narrow this customer history.
+
+## Inbox Email Recipient And Copy Contract
+
+- Authority: `communications.team_inbox_commands` validates reply copy-recipient
+  input, `communications.team_inbox_outbound_intents` owns the durable delivery
+  attempt, and `communications.team_inbox_projection` owns the staff recipient
+  presentation. The route and templates are adapters.
+- The reply composer exposes optional CC and BCC only for email conversations.
+  Invalid, ambiguous, or over-limit recipient input blocks the send; non-email
+  channels reject copy recipients.
+- Each email message in the permission-scoped staff thread renders all
+  recorded From, To, CC, and BCC addresses. Unknown lists remain absent rather
+  than being inferred from conversation identity.
+- BCC is internal delivery evidence. It is included in the SMTP envelope but
+  never in MIME headers or customer-facing projections.
+- Mobile layouts wrap long addresses without hiding recipients or displacing
+  the message body and primary Send action.
 
 ## ONT Configure Page Contract
 

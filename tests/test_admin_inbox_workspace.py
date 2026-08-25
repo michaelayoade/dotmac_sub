@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from jinja2 import Environment, FileSystemLoader
 
+from app.models.notification import Notification
 from app.models.party import Party, PartyType
-from app.models.sales import Lead, LeadOriginCapture
+from app.models.sales import Lead, LeadOriginCapture, LeadStatus
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import (
@@ -227,6 +228,9 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'name="priority_at_most"' in sidebar
     assert "data-reply-composer" in conversation
     assert "idempotency_key" in conversation
+    assert "Add CC/BCC" in conversation
+    assert 'name="cc"' in conversation
+    assert 'name="bcc"' in conversation
     assert "import message_bubble with context" in conversation
     triage = Path("templates/components/ui/triage.html").read_text()
     assert "att.mime_type.startswith('video/')" in triage
@@ -240,6 +244,8 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "outbound_sender.display_name" in triage
     assert "outbound_sender.initials" in triage
     assert 'aria-label="Sent by {{ outbound_sender_name }}"' in triage
+    assert 'aria-label="Email recipients"' in triage
+    assert "message.bcc_addresses" in triage
     assert ">AG</div>" not in triage
     assert "att.location.map_url" in triage
     assert "att.location.latitude" in triage
@@ -303,6 +309,7 @@ def test_projection_supplies_live_agent_and_assignment_options(db_session):
     )
     assert projection.service_team_options[0].name == "Support"
     assert projection.service_team_options[0].id == team.id
+    assert projection.agent_options[0].team_ids == (team.id,)
     assert (
         team_inbox_projection.list_actor_service_team_options(db_session, user.id)
         == projection.service_team_options
@@ -390,6 +397,7 @@ def test_assignment_agent_options_show_team_and_presence_status(db_session):
         InboxAgentPresence(
             person_id=user.id,
             status=InboxAgentPresenceStatus.online.value,
+            last_seen_at=datetime.now(UTC),
         )
     )
     db_session.commit()
@@ -405,7 +413,10 @@ def test_assignment_agent_options_show_team_and_presence_status(db_session):
         InboxAgentPresenceStatus.online.value
     )
     assert 'name="service_team_id"' in conversation_template
+    assert conversation_template.count('name="service_team_id" required') == 1
     assert "service_team_options" in conversation_template
+    assert "selectedTeam" in conversation_template
+    assert "data-team-ids" in conversation_template
     assert "agent.presence_status" in conversation_template
 
 
@@ -495,6 +506,73 @@ def test_message_fragment_projects_only_the_confirmed_message(db_session, monkey
     assert projection is not None
     assert projection.message_id == message.id
     assert projection.message.body == "The router replacement is scheduled."
+
+
+@pytest.mark.parametrize("legacy_reply", [[], ["legacy-message-id"]])
+def test_message_projection_ignores_non_mapping_legacy_reply_metadata(
+    db_session, legacy_reply
+):
+    conversation = InboxConversation(
+        channel_type="email",
+        contact_address="customer@example.test",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction="outbound",
+        body="Legacy reply metadata",
+        sent_at=datetime.now(UTC),
+        metadata_={"reply_to": legacy_reply},
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    projection = team_inbox_projection.get_message_fragment_projection(
+        db_session,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
+
+    assert projection is not None
+    assert projection.message.reply_to is None
+
+
+def test_message_projection_exposes_typed_reply_reference(db_session):
+    conversation = InboxConversation(
+        channel_type="email",
+        contact_address="customer@example.test",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction="outbound",
+        body="Quoted reply",
+        sent_at=datetime.now(UTC),
+        metadata_={
+            "reply_to": {
+                "message_id": str(uuid.uuid4()),
+                "author": "Customer",
+                "excerpt": "Original message",
+            }
+        },
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    projection = team_inbox_projection.get_message_fragment_projection(
+        db_session,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
+
+    assert projection is not None
+    assert projection.message.reply_to is not None
+    assert projection.message.reply_to.author == "Customer"
+    assert projection.message.reply_to.excerpt == "Original message"
 
 
 def test_targeted_queue_row_honours_the_active_response_filter(db_session):
@@ -599,6 +677,64 @@ def test_queue_and_detail_use_email_from_name_when_contact_is_unlinked(db_sessio
     assert timeline is not None
     assert timeline.contact_name == row.contact_name
     assert timeline.contact_initials == row.contact_initials
+
+
+def test_whatsapp_reply_to_explicit_contact_ignores_canceled_subscriber_match(
+    db_session, monkeypatch
+):
+    opened_at = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    subscriber = Subscriber(
+        first_name="Canceled",
+        last_name="Match",
+        email="canceled-match@example.test",
+        phone="08183750805",
+        status=SubscriberStatus.canceled,
+        is_active=False,
+    )
+    conversation = InboxConversation(
+        channel_type="whatsapp",
+        contact_address="+2348183750805",
+        status=InboxConversationStatus.open.value,
+    )
+    db_session.add_all([subscriber, conversation])
+    db_session.flush()
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="whatsapp",
+            direction="inbound",
+            body="Hello",
+            from_address="+2348183750805",
+            received_at=opened_at,
+            metadata_={"reply_window_qualifying": True},
+        )
+    )
+    db_session.flush()
+    monkeypatch.setattr(
+        team_inbox_outbound.team_inbox_realtime,
+        "publish_conversation_event",
+        lambda *args, **kwargs: None,
+    )
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking this.</p>",
+            body_text="We are checking this.",
+            sent_by_person_id=uuid.uuid4(),
+            metadata={"source_route": "test_reply"},
+        ),
+        record_failure=True,
+        now=opened_at + timedelta(minutes=1),
+    )
+
+    assert result.kind == "queued"
+    notification = db_session.get(Notification, result.notification_id)
+    assert notification is not None
+    assert notification.subscriber_id is None
+    assert notification.audience_type == "operational"
+    assert notification.audience_id == conversation.id
 
 
 def test_sidebar_projection_preserves_selection_without_loading_detail(
@@ -1083,3 +1219,38 @@ def test_merge_contact_to_customer_captures_and_attaches_lead(db_session):
     assert (
         conversation.metadata_["lead_capture"]["merge"]["target_type"] == "subscriber"
     )
+
+
+def test_merge_contact_rejects_existing_open_lead_without_unique_violation(db_session):
+    conversation_id = _conversation(db_session)
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Existing Lead",
+        email="ada-existing-lead@example.test",
+        status=SubscriberStatus.active,
+        is_active=True,
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    existing_lead = Lead(
+        subscriber_id=subscriber.id,
+        status=LeadStatus.new.value,
+        is_active=True,
+    )
+    db_session.add(existing_lead)
+    db_session.commit()
+
+    with pytest.raises(team_inbox_commands.InboxContactMergeConflict) as exc_info:
+        team_inbox_commands.merge_contact(
+            db_session,
+            conversation_id=conversation_id,
+            target_type="subscriber",
+            target_query="ada-existing-lead@example.test",
+            actor_person_id=uuid.uuid4(),
+        )
+
+    assert exc_info.value.code.endswith(".contact_merge_conflict")
+    assert exc_info.value.details["conflicting_lead_id"] == str(existing_lead.id)
+    assert db_session.query(Lead).count() == 1
+    conversation = db_session.get(InboxConversation, conversation_id)
+    assert conversation.subscriber_id is None

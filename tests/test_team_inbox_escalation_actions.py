@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -37,7 +38,13 @@ def _member(
     db_session.add(
         ServiceTeamMember(team_id=team.id, person_id=person.id, is_active=True)
     )
-    db_session.add(InboxAgentPresence(person_id=user.id, status=status))
+    db_session.add(
+        InboxAgentPresence(
+            person_id=user.id,
+            status=status,
+            last_seen_at=datetime.now(UTC) if status == "online" else None,
+        )
+    )
     db_session.flush()
     return user.id
 
@@ -91,7 +98,7 @@ def test_escalate_inbox_conversation_auto_assigns_available_agent(db_session):
 
 def test_escalate_inbox_conversation_can_target_active_team_member(db_session):
     team = _team(db_session, "Field Service")
-    agent = _member(db_session, team, status=InboxAgentPresenceStatus.away.value)
+    agent = _member(db_session, team, status=InboxAgentPresenceStatus.online.value)
     conversation = _conversation(db_session)
     db_session.commit()
 

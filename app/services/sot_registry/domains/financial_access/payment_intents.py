@@ -31,7 +31,7 @@ SERVICES: tuple[SOTService, ...] = (
             "gateway invoice and reseller checkout intent record creation",
             "saved-card top-up intent failure projection",
             "top-up intent completed-payment projection",
-            "gateway top-up intent expiry decision",
+            "gateway observation lifecycle and blocker projection",
         ),
         depends_on=(
             "control.feature_registry",
@@ -46,8 +46,9 @@ SERVICES: tuple[SOTService, ...] = (
             "The participant derives direct-transfer availability from canonical "
             "active collection-account destinations and customer "
             "instructions. It is the canonical invoice-intent, proof-link, "
-            "reviewed-proof resolution, completed-payment, and gateway-expiry "
-            "projection writer. Cash remains authoritative in the payment owner; "
+            "reviewed-proof resolution, completed-payment, gateway-observation, "
+            "effective-expiry, and blocker/retry projection writer. Cash remains "
+            "authoritative in the payment owner; "
             "callers compose or idempotently repair the intent projection without "
             "parallel field writers."
         ),
@@ -129,12 +130,12 @@ SERVICES: tuple[SOTService, ...] = (
                     canonical_writer="financial.topup_intents",
                 ),
                 ConcernContract(
-                    name="gateway top-up intent expiry decision",
+                    name="gateway observation lifecycle and blocker projection",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical top-up intent projection target",
-                        "canonical top-up reconciliation expiry policy",
-                        "typed gateway expiry observation",
+                        "typed gateway verification observation",
+                        "top-up intent transition protocol",
                     ),
                     canonical_writer="financial.topup_intents",
                 ),
@@ -216,21 +217,14 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
-                    name="canonical top-up reconciliation expiry policy",
-                    owner="control.settings_spec",
-                    kind=AuthorityKind.CONTROL_INPUT,
-                    source=(
-                        "bounded database-authoritative expiry grace setting plus "
-                        "the intent's canonical expiry timestamp"
-                    ),
-                ),
-                AuthorityInput(
-                    name="typed gateway expiry observation",
+                    name="typed gateway verification observation",
                     owner="external:payment_provider",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "provider not-found or definitive unsuccessful verification "
-                        "evidence normalized with its observation time"
+                        "allowlisted provider transaction status normalized as "
+                        "awaiting confirmation, processing, succeeded, failed, "
+                        "abandoned, unavailable, or unknown with a safe reason "
+                        "code and observation time"
                     ),
                 ),
                 AuthorityInput(
@@ -271,7 +265,9 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical provider identity, status vocabulary, pending-to-"
                         "submitted eligibility, exact proof-link uniqueness, "
                         "submitted-to-completed/canceled reviewed-proof resolution, "
-                        "late-payment recovery, and event vocabulary"
+                        "terminal versus non-terminal gateway semantics, effective "
+                        "expiry, blocker/retry policy, late-success recovery from "
+                        "failed, abandoned, canceled, or expired, and event vocabulary"
                     ),
                 ),
             ),
@@ -302,7 +298,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "verified/rejected proof-resolution replay performs no second "
                     "transition or event, while changed outcome, proof, or payment "
                     "evidence conflicts. Replaying the same succeeded Payment or "
-                    "expired state performs no second field transition or event."
+                    "expired state performs no second field transition or event. "
+                    "Repeated normalized gateway observations update only safe "
+                    "latest-check evidence and cannot repeat a terminal transition."
                 ),
                 retries=(
                     "Only the caller retries after rollback. If cash was already "
@@ -344,6 +342,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.topup_intents.gateway_currency_invalid",
                     "financial.topup_intents.gateway_expiry_invalid",
                     "financial.topup_intents.gateway_reference_conflict",
+                    "financial.topup_intents.observation_time_invalid",
+                    "financial.topup_intents.observation_success_forbidden",
+                    "financial.topup_intents.observation_transaction_forbidden",
                 ),
                 mapping_owner=(
                     "payment, webhook, portal, reseller, and reconciliation adapters"
@@ -362,6 +363,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "wrong-provider payment evidence",
                     "a conflicting completed-payment or external transaction link",
                     "invalid expiry evidence or non-pending expiry transition",
+                    "successful or transaction-bearing evidence submitted through "
+                    "the non-money gateway-observation command",
                 ),
             ),
             events=EventContract(
@@ -373,6 +376,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "topup_intent.completed",
                     "topup_intent.expired",
                     "topup_intent.gateway_created",
+                    "topup_intent.gateway_observed",
                     "topup_intent.failed",
                 ),
                 schema_version=1,
@@ -390,6 +394,32 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             projections=(
+                ProjectionContract(
+                    name="gateway intent lifecycle and blocker projection",
+                    input_names=(
+                        "canonical top-up intent projection target",
+                        "typed gateway verification observation",
+                        "top-up intent transition protocol",
+                    ),
+                    writer="financial.topup_intents",
+                    freshness=(
+                        "Resolved at an explicit observation time; normalized "
+                        "provider evidence is persisted synchronously by the owner."
+                    ),
+                    stale_behavior=(
+                        "A legacy pending gateway row projects as Expired once its "
+                        "canonical expiry elapses and cannot block retry."
+                    ),
+                    drift_signal=(
+                        "Stored pending state outlives expiry or disagrees with a "
+                        "terminal normalized provider observation."
+                    ),
+                    rebuild_operation=(
+                        "Run bounded payment reconciliation and the expiry backfill; "
+                        "late success still settles by provider transaction identity."
+                    ),
+                    repair_owner="financial.payment_reconciliation",
+                ),
                 ProjectionContract(
                     name="direct-transfer reviewed-proof intent resolution",
                     input_names=(
@@ -435,10 +465,11 @@ SERVICES: tuple[SOTService, ...] = (
                     "caller, event, and architecture tests."
                 ),
                 cutover_gate=(
-                    "Every reviewed-proof/completion/expiry caller supplies typed "
-                    "evidence; only this participant writes canceled/completed/"
-                    "expired intent status, completion identity, provider evidence, "
-                    "amount/time, proof-resolution metadata, and lifecycle events."
+                    "Every reviewed-proof/completion/expiry/observation caller "
+                    "supplies typed evidence; only this participant writes canceled/completed/"
+                    "expired/failed/abandoned intent status, completion identity, "
+                    "safe provider evidence, amount/time, proof-resolution metadata, "
+                    "and lifecycle events."
                 ),
                 fallback_retirement=(
                     "Portal-owned direct-transfer construction/replacement/proof "
@@ -458,6 +489,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_payment_webhook_settlement.py",
                 "tests/test_topup_intent_status.py",
                 "tests/architecture/test_topup_intent_ownership.py",
+                "tests/architecture/test_payment_intent_lifecycle_ownership.py",
             ),
         ),
     ),
@@ -472,7 +504,9 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "This coordinator exposes account-scoped intent history and admits "
             "customer or staff abandonment only while a direct-transfer intent is "
-            "pending and has no submitted payment evidence."
+            "pending and has no submitted payment evidence. Customer and admin "
+            "history consume the lifecycle owner's same safe normalized projection; "
+            "raw gateway payloads and private metadata are never projected."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1422,9 +1456,10 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "A deposit preview may include current eligible invoices and "
             "the exact oldest-debt application before any checkout starts. "
-            "The same policy owner supplies the customer-facing active-request "
-            "phase, observation/expiry facts, and closed next-action hint so "
-            "portal adapters do not reinterpret pending intent state. "
+            "The service consumes the top-up lifecycle owner's blocker/retry "
+            "projection and supplies the customer-facing active-request phase and "
+            "closed next-action hint so portal adapters do not reinterpret intent "
+            "state. "
             "The deposit first records the whole confirmed receipt as "
             "unallocated account credit, grants no service duration, and "
             "then asks the canonical applicator to settle eligible debt. "
@@ -1444,6 +1479,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical payable invoice set",
                         "canonical payment-backed account credit",
                         "canonical deposit eligibility policy",
+                        "canonical typed deposit intent",
                     ),
                 ),
                 ConcernContract(

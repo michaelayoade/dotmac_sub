@@ -9,6 +9,7 @@ import logging
 import re
 import secrets
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
@@ -63,6 +64,17 @@ from app.services.status_presentation import payment_status_presentation
 logger = logging.getLogger(__name__)
 _IDEMPOTENCY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,120}$")
 _PAYMENT_CSV_YIELD_PER = 500
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentCorrectionAction:
+    """UI action contract for correcting an accepted payment through reversal."""
+
+    allowed: bool
+    reason: str | None
+    permission: str
+    preview_url: str
+    label: str = "Correct accepted payment"
 
 
 IMPORT_HANDLERS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -205,6 +217,7 @@ def build_payment_detail_data(
     db: Session,
     *,
     payment_id: str,
+    can_update_payment: bool = False,
 ) -> dict[str, object] | None:
     """Load payment and derived data for the detail page.
 
@@ -250,6 +263,20 @@ def build_payment_detail_data(
         if payment.billing_account_id is not None
         else billing_service.reversals.capability(db, payment_id)
     )
+    correction_action_allowed = bool(can_update_payment and reversal_capability.allowed)
+    correction_action = PaymentCorrectionAction(
+        allowed=correction_action_allowed,
+        reason=(
+            None
+            if correction_action_allowed
+            else (
+                reversal_capability.reason
+                or "Requires billing payment update permission"
+            )
+        ),
+        permission="billing:payment:update",
+        preview_url=f"/admin/billing/payments/{payment.id}/reversal/preview",
+    )
     return {
         "payment": payment,
         "payment_status_presentation": payment_status_presentation(payment.status),
@@ -261,6 +288,7 @@ def build_payment_detail_data(
         "edit_capability": billing_service.payments.edit_capability(db, payment_id),
         "refund_capability": refund_capability,
         "reversal_capability": reversal_capability,
+        "payment_correction_action": correction_action,
         "allocation_invoices": allocation_invoices,
         "allocation_available": allocation_available,
         "active_page": "payments",

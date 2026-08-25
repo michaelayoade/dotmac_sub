@@ -173,7 +173,7 @@ def test_predecessor_upgrade_preserves_and_quarantines_legacy_rows(
         connection.execute("SET session_replication_role = origin")
         connection.commit()
 
-    _upgrade("head")
+    _upgrade("heads")
 
     with psycopg.connect(_render(predecessor_database)) as connection:
         invoice = connection.execute(

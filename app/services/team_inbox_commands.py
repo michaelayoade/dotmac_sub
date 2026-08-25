@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from html import escape
@@ -33,7 +33,7 @@ from app.models.party import (
     PartyRoleType,
     PartyType,
 )
-from app.models.sales import Lead, LeadCaptureMethod, LeadSourcePlatform
+from app.models.sales import Lead, LeadCaptureMethod, LeadSourcePlatform, LeadStatus
 from app.models.service_team import ServiceTeamMember
 from app.models.subscriber import Reseller, Subscriber
 from app.models.system_user import SystemUser
@@ -137,6 +137,19 @@ class InboxCommandRejected(InboxCommandError):
         self.conversation_id = str(conversation_id) if conversation_id else None
 
 
+class InboxContactMergeConflict(InboxCommandError):
+    def __init__(self, *, conversation_id: UUID, conflicting_lead_id: UUID) -> None:
+        super().__init__(
+            "This customer already has an open lead in the same pipeline. "
+            "Review and consolidate that lead before merging this conversation.",
+            suffix="contact_merge_conflict",
+            details={
+                "conversation_id": str(conversation_id),
+                "conflicting_lead_id": str(conflicting_lead_id),
+            },
+        )
+
+
 @dataclass(frozen=True)
 class ReplyOutcome:
     conversation_id: str
@@ -174,6 +187,14 @@ class WhatsAppTemplateComponent:
 
 
 @dataclass(frozen=True, slots=True)
+class EmailCopyRecipients:
+    """Untrusted email copy-recipient input carried to the command owner."""
+
+    cc: tuple[str, ...] = ()
+    bcc: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ReplyCommand:
     conversation_id: UUID
     body_text: str
@@ -184,6 +205,9 @@ class ReplyCommand:
     send_after: datetime | None = None
     idempotency_key: str | None = None
     reply_to_message_id: UUID | None = None
+    email_copy_recipients: EmailCopyRecipients = field(
+        default_factory=EmailCopyRecipients
+    )
     whatsapp_template_name: str | None = None
     whatsapp_template_language: str | None = None
     whatsapp_template_components: tuple[WhatsAppTemplateComponent, ...] = ()
@@ -518,6 +542,8 @@ def _reply_replay(
     idempotency_key: str,
     body_text: str,
     reply_to_message_id: UUID | None,
+    cc_addresses: tuple[str, ...],
+    bcc_addresses: tuple[str, ...],
 ) -> ReplyOutcome | None:
     if not idempotency_key:
         return None
@@ -541,10 +567,19 @@ def _reply_replay(
         else ""
     )
     requested_reply_id = str(reply_to_message_id) if reply_to_message_id else ""
+    previous_cc = tuple(str(value) for value in (previous.cc_addresses or ()))
+    raw_previous_bcc = (previous.metadata_ or {}).get("bcc")
+    previous_bcc = (
+        tuple(str(value) for value in raw_previous_bcc if isinstance(value, str))
+        if isinstance(raw_previous_bcc, list)
+        else ()
+    )
     if (
         previous_body
         and previous_body != body_text
         or previous_reply_id != requested_reply_id
+        or previous_cc != cc_addresses
+        or previous_bcc != bcc_addresses
     ):
         raise InboxCommandRejected(
             "This send key was already used for a different reply.",
@@ -568,6 +603,14 @@ def reply(
     def action() -> ReplyOutcome:
         conversation = _active_conversation(db, command.conversation_id)
         clean_body = command.body_text.strip()
+        copy_recipients = command.email_copy_recipients
+        clean_cc: tuple[str, ...] = ()
+        clean_bcc: tuple[str, ...] = ()
+        if conversation.channel_type == InboxChannelType.email.value:
+            clean_cc = _normalize_email_recipients(copy_recipients.cc, label="CC")
+            clean_bcc = _normalize_email_recipients(copy_recipients.bcc, label="BCC")
+        elif copy_recipients.cc or copy_recipients.bcc:
+            raise InboxCommandError("CC and BCC are available only for email.")
         scheduled_for = command.send_after
         if scheduled_for is not None:
             if scheduled_for.tzinfo is None:
@@ -584,6 +627,8 @@ def reply(
             idempotency_key=clean_idempotency_key,
             body_text=clean_body,
             reply_to_message_id=reply_to_uuid,
+            cc_addresses=clean_cc,
+            bcc_addresses=clean_bcc,
         )
         if replay is not None:
             return replay
@@ -652,6 +697,8 @@ def reply(
             idempotency_key=clean_idempotency_key,
             body_text=clean_body,
             reply_to_message_id=reply_to_uuid,
+            cc_addresses=clean_cc,
+            bcc_addresses=clean_bcc,
         )
         if replay is not None:
             return replay
@@ -741,6 +788,8 @@ def reply(
                     body_html=body_html,
                     body_text=clean_body,
                     subject=template.subject if template is not None else None,
+                    cc_addresses=clean_cc,
+                    bcc_addresses=clean_bcc,
                     sent_by_person_id=command.actor_person_id,
                     metadata=reply_metadata,
                 ),
@@ -764,6 +813,8 @@ def reply(
                 body_html=body_html,
                 body_text=clean_body,
                 subject=template.subject if template is not None else None,
+                cc_addresses=clean_cc,
+                bcc_addresses=clean_bcc,
                 sent_by_person_id=command.actor_person_id,
                 metadata=reply_metadata,
             ),
@@ -1657,6 +1708,62 @@ def _record_lead_merge(
     conversation.metadata_ = conversation_metadata
 
 
+_OPEN_LEAD_STATUSES = tuple(
+    status.value
+    for status in (
+        LeadStatus.new,
+        LeadStatus.contacted,
+        LeadStatus.qualified,
+        LeadStatus.proposal,
+        LeadStatus.negotiation,
+    )
+)
+
+
+def _locked_subscriber_without_open_lead_conflict(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    lead: Lead,
+    subscriber_id: UUID,
+) -> Subscriber:
+    """Serialize a reviewed merge and reject the open-Lead invariant explicitly."""
+
+    subscriber = (
+        db.query(Subscriber)
+        .filter(Subscriber.id == subscriber_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if subscriber is None:
+        raise InboxCommandRejected(
+            "The selected customer was not found.",
+            conversation_id=conversation.id,
+        )
+
+    identity_filters = [Lead.subscriber_id == subscriber.id]
+    if subscriber.party_id is not None:
+        identity_filters.append(Lead.party_id == subscriber.party_id)
+    query = (
+        db.query(Lead)
+        .filter(Lead.id != lead.id)
+        .filter(Lead.is_active.is_(True))
+        .filter(Lead.status.in_(_OPEN_LEAD_STATUSES))
+        .filter(or_(*identity_filters))
+    )
+    if lead.pipeline_id is None:
+        query = query.filter(Lead.pipeline_id.is_(None))
+    else:
+        query = query.filter(Lead.pipeline_id == lead.pipeline_id)
+    conflict = query.order_by(Lead.created_at.desc()).first()
+    if conflict is not None:
+        raise InboxContactMergeConflict(
+            conversation_id=conversation.id,
+            conflicting_lead_id=conflict.id,
+        )
+    return subscriber
+
+
 def _merge_conversation_lead_uncommitted(
     db: Session,
     *,
@@ -1677,6 +1784,12 @@ def _merge_conversation_lead_uncommitted(
     if target_type == "subscriber":
         if subscriber is None:
             raise InboxCommandRejected("Choose a customer to merge this lead into.")
+        subscriber = _locked_subscriber_without_open_lead_conflict(
+            db,
+            conversation=conversation,
+            lead=lead,
+            subscriber_id=subscriber.id,
+        )
         account_conversion.stage_lead_account_conversion(
             db,
             lead_id=lead.id,

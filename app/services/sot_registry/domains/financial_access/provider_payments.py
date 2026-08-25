@@ -321,19 +321,25 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.payment_webhook_commands",
         owns=(
             "verified payment webhook projection",
+            "Integrator settlement observation projection",
             "billing consequence submission from verified receipts",
         ),
         depends_on=(
             "integration.inbox",
             "financial.account_credit_deposits",
+            "financial.payment_gateway_finance",
             "financial.payment_provider_events",
             "financial.topup_intents",
         ),
         notes=(
             "Signature adapters persist and claim the verified receipt through "
-            "integration.inbox, then submit only its typed identity. This "
-            "coordinator normalizes the stored external observation and commits "
-            "all billing consequences with processed-receipt evidence once."
+            "integration.inbox, then submit only its typed identity. The "
+            "independently deployed Integrator submits a typed provider-neutral "
+            "observation plus an opaque installation UUID; the locally approved "
+            "PaymentProvider mapping selects the financial identity. This "
+            "coordinator commits all billing consequences with processed-receipt "
+            "evidence once. An unobserved provider fee fails closed rather than "
+            "becoming zero."
         ),
         contract=ServiceContract(
             concerns=(
@@ -342,6 +348,16 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "claimed signature-verified payment receipt",
+                        "external provider payment observation",
+                        "canonical provider-event settlement protocol",
+                    ),
+                ),
+                ConcernContract(
+                    name="Integrator settlement observation projection",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "claimed Integrator settlement receipt",
+                        "Integrator installation provider mapping",
                         "external provider payment observation",
                         "canonical provider-event settlement protocol",
                     ),
@@ -376,6 +392,25 @@ SERVICES: tuple[SOTService, ...] = (
                         "signature-verified Paystack or Flutterwave event type, "
                         "transaction identity, amount, fee, currency, status, and "
                         "provider-reflected checkout metadata"
+                    ),
+                ),
+                AuthorityInput(
+                    name="claimed Integrator settlement receipt",
+                    owner="integration.inbox",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked ProductObservation v1 receipt, payload digest, "
+                        "opaque source installation UUID, connector provenance, "
+                        "processing state, and attempt evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Integrator installation provider mapping",
+                    owner="financial.payment_gateway_finance",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "nullable unique PaymentProvider correlation to one "
+                        "Integrator installation; never selected from provider data"
                     ),
                 ),
                 AuthorityInput(
@@ -447,6 +482,11 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_webhooks.receipt_provider_mismatch",
                     "financial.payment_webhooks.topup_intent_mismatch",
                     "financial.payment_webhooks.provider_not_configured",
+                    "financial.payment_webhooks.integrator_provider_not_configured",
+                    "financial.payment_webhooks.provider_fee_unobserved",
+                    "financial.payment_webhooks.receipt_source_mismatch",
+                    "financial.payment_webhooks.receipt_consequence_invalid",
+                    "financial.payment_webhooks.deposit_correlation_unavailable",
                     "financial.payment_webhooks.deposit_rejected",
                     "financial.payment_webhooks.provider_event_rejected",
                     "financial.payment_webhooks.settlement_unlinked",
@@ -460,6 +500,8 @@ SERVICES: tuple[SOTService, ...] = (
                 mapping_owner="Paystack and Flutterwave webhook HTTP adapters",
                 retryable_codes=(
                     "financial.payment_webhooks.provider_not_configured",
+                    "financial.payment_webhooks.integrator_provider_not_configured",
+                    "financial.payment_webhooks.provider_fee_unobserved",
                     "financial.payment_webhooks.settlement_unlinked",
                     "financial.payment_webhooks.topup_projection_rejected",
                 ),
@@ -467,6 +509,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "unclaimed, missing, provider-mismatched, or malformed receipt",
                     "invalid amount, fee, currency, top-up, invoice, or deposit "
                     "correlation evidence",
+                    "unmapped Integrator source or provider fee not observed by "
+                    "the connector contract",
                     "provider success without structurally linked payment evidence",
                     "active caller transaction or manifest mismatch",
                 ),
@@ -503,8 +547,10 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_api_billing_webhooks.py",
                 "tests/test_payment_webhook_settlement.py",
+                "tests/test_integrator_settlement_port.py",
                 "tests/architecture/test_payment_webhook_ownership.py",
                 "tests/architecture/test_payment_settlement_participants.py",
+                "tests/architecture/test_integrator_settlement_boundary.py",
             ),
         ),
     ),
@@ -538,9 +584,9 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                         "external gateway verification observation",
-                        "canonical top-up expiry protocol",
+                        "canonical gateway observation lifecycle protocol",
                     ),
                 ),
                 ConcernContract(
@@ -548,7 +594,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                         "external gateway verification observation",
                     ),
                 ),
@@ -556,7 +602,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name=("verified provider settlement then allocation orchestration"),
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                         "external gateway verification observation",
                         "canonical account-credit deposit protocol",
                         "canonical provider-event settlement protocol",
@@ -568,7 +614,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                     ),
                 ),
             ),
@@ -578,17 +624,18 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="control.settings_spec",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "typed stale window, maximum age, expiry grace, and batch "
-                        "size settings with bounded defaults"
+                        "typed stale window, maximum age, and batch size settings "
+                        "with bounded defaults; intent expiry itself is canonical"
                     ),
                 ),
                 AuthorityInput(
-                    name="canonical pending top-up intent",
+                    name="canonical reconcilable top-up intent",
                     owner="financial.topup_intents",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "locked intent identity, account scope, provider, reference, "
-                        "purpose, currency, invoice instruction, and completion state"
+                        "purpose, currency, invoice instruction, lifecycle status, "
+                        "expiry, normalized safe observation, and completion state"
                     ),
                 ),
                 AuthorityInput(
@@ -596,8 +643,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="external:payment_provider",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "normalized Paystack or Flutterwave transaction identity, "
-                        "gross amount, provider fee, currency, and outcome"
+                        "allowlisted Paystack or Flutterwave transaction status and "
+                        "safe reason; successful observations additionally carry "
+                        "transaction identity, gross amount, fee, and currency"
                     ),
                 ),
                 AuthorityInput(
@@ -625,10 +673,13 @@ SERVICES: tuple[SOTService, ...] = (
                     source="flush-only locked payment-to-intent completion projection",
                 ),
                 AuthorityInput(
-                    name="canonical top-up expiry protocol",
+                    name="canonical gateway observation lifecycle protocol",
                     owner="financial.topup_intents",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="flush-only locked expiry projection from canonical time",
+                    source=(
+                        "flush-only locked terminal/non-terminal observation, "
+                        "effective-expiry, blocker/retry, and late-success protocol"
+                    ),
                 ),
             ),
             transaction=TransactionContract(
@@ -651,7 +702,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "consequences."
                 ),
                 retries=(
-                    "Provider unavailability leaves the intent pending. Each candidate "
+                    "Unavailable or unknown evidence fails closed until canonical "
+                    "expiry; failed or abandoned evidence terminalizes immediately. "
+                    "Failed, abandoned, and expired intents remain bounded late-success "
+                    "candidates. Each candidate "
                     "is an independent transaction, so one rejection cannot roll back "
                     "or repeat another candidate's completed consequence."
                 ),
@@ -700,7 +754,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="top-up reconciliation backlog projection",
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical pending top-up intent",
+                        "canonical reconcilable top-up intent",
                     ),
                     writer="financial.payment_reconciliation",
                     freshness=(

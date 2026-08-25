@@ -18,6 +18,7 @@ from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
 from app.models.wireless_mast import WirelessMast
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
+from app.services.gis import point_wkt
 
 _EARTH_RADIUS_M = 6_371_000.0
 _METERS_PER_DEGREE = 111_320.0
@@ -50,6 +51,13 @@ class _AssetConfig:
     subtitle: Callable[[Any], str | None]
 
 
+@dataclass(frozen=True, slots=True)
+class VendorRouteAuthoringPoiFilter:
+    value: str
+    label: str
+    selected_by_default: bool
+
+
 def _compact(parts: list[str | None]) -> str | None:
     text = " - ".join(part for part in parts if part)
     return text or None
@@ -69,10 +77,6 @@ def _status(row: Any) -> str | None:
     if active is None:
         return None
     return "active" if active else "inactive"
-
-
-def _point_wkt(latitude: float, longitude: float) -> str:
-    return f"SRID=4326;POINT({longitude} {latitude})"
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -153,6 +157,17 @@ _ASSETS: dict[str, _AssetConfig] = {
         subtitle=lambda row: _compact([row.structure_type, row.owner]),
     ),
 }
+SUPPORTED_FIELD_MAP_ASSET_TYPES: tuple[str, ...] = tuple(_ASSETS)
+VENDOR_ROUTE_AUTHORING_POI_FILTERS: tuple[VendorRouteAuthoringPoiFilter, ...] = (
+    VendorRouteAuthoringPoiFilter("fdh_cabinet", "FDH cabinets", True),
+    VendorRouteAuthoringPoiFilter("splice_closure", "Splice closures", True),
+    VendorRouteAuthoringPoiFilter("fiber_access_point", "Access points", True),
+    VendorRouteAuthoringPoiFilter("service_building", "Service buildings", False),
+    VendorRouteAuthoringPoiFilter("wireless_mast", "Wireless masts", False),
+)
+VENDOR_ROUTE_AUTHORING_POI_TYPES: tuple[str, ...] = tuple(
+    filter_option.value for filter_option in VENDOR_ROUTE_AUTHORING_POI_FILTERS
+)
 
 
 def _configs(asset_types: AssetTypeFilter) -> list[_AssetConfig]:
@@ -165,6 +180,24 @@ def _configs(asset_types: AssetTypeFilter) -> list[_AssetConfig]:
             detail=f"Unsupported map asset type: {', '.join(unknown)}",
         )
     return [_ASSETS[asset_type] for asset_type in asset_types]
+
+
+def parse_vendor_route_authoring_asset_types(types: str | None) -> list[str]:
+    if types is None:
+        return list(VENDOR_ROUTE_AUTHORING_POI_TYPES)
+    values = [item.strip() for item in types.split(",") if item.strip()]
+    if not values:
+        raise HTTPException(
+            status_code=422,
+            detail="Select at least one vendor map asset type.",
+        )
+    unknown = sorted(set(values) - set(VENDOR_ROUTE_AUTHORING_POI_TYPES))
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported vendor map asset type: {', '.join(unknown)}",
+        )
+    return values
 
 
 def _base_query(db: Session, config: _AssetConfig):
@@ -358,7 +391,7 @@ class FieldMapAssets:
         row.latitude = float(latitude)
         row.longitude = float(longitude)
         if hasattr(row, "geom"):
-            row.geom = _point_wkt(float(latitude), float(longitude))
+            row.geom = point_wkt(latitude=float(latitude), longitude=float(longitude))
 
         stage_audit_event(
             db,

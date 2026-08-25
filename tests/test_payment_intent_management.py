@@ -102,3 +102,61 @@ def test_history_marks_only_unsubmitted_pending_transfer_cancelable(
 
     assert by_id[cancelable.id].can_cancel is True
     assert by_id[linked.id].can_cancel is False
+
+
+def test_history_uses_safe_authoritative_gateway_projection(db_session, subscriber):
+    observed_at = datetime.now(UTC) - timedelta(minutes=2)
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference=f"GW-{uuid4().hex[:12]}",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("2500.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) + timedelta(minutes=20),
+        metadata_={
+            "gateway_verification": {
+                "schema_version": 1,
+                "outcome": "processing",
+                "provider_status": "ongoing",
+                "reason_code": "provider_reported_processing",
+                "observed_at": observed_at.isoformat(),
+                "source": "gateway_reconciliation",
+            },
+            "private_gateway_payload": {"must": "not be projected"},
+        },
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    view = payment_intent_management.list_for_account(db_session, subscriber.id)[0]
+
+    assert view.status == "processing"
+    assert view.status_label == "Processing"
+    assert view.safe_reason_code == "provider_reported_processing"
+    assert view.last_verification_at == observed_at
+    assert view.blocks_another_attempt is True
+    assert view.customer_retry_allowed is False
+    assert not hasattr(view, "metadata")
+
+
+def test_history_projects_legacy_pending_gateway_as_expired(db_session, subscriber):
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference=f"GW-{uuid4().hex[:12]}",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("2500.00"),
+        status="pending",
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    view = payment_intent_management.list_for_account(db_session, subscriber.id)[0]
+
+    assert view.status == "expired"
+    assert view.status_label == "Expired"
+    assert view.stored_status == "pending"
+    assert view.blocks_another_attempt is False
+    assert view.customer_retry_allowed is True
