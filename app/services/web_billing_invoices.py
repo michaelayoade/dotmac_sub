@@ -69,6 +69,7 @@ class InvoiceIssueFromDetailError(DomainError):
 
 class InvoiceLineItem(TypedDict):
     line_id: UUID | None
+    subscription_id: UUID | None
     description: str
     quantity: Decimal
     unit_price: Decimal
@@ -207,9 +208,17 @@ def parse_create_line_items(
                 raw_line_id = (
                     item.get("id") or item.get("lineId") or item.get("line_id")
                 )
+                raw_subscription_id = (
+                    item.get("subscriptionId") or item.get("subscription_id")
+                )
                 line_items.append(
                     {
                         "line_id": UUID(str(raw_line_id)) if raw_line_id else None,
+                        "subscription_id": (
+                            UUID(str(raw_subscription_id))
+                            if raw_subscription_id
+                            else None
+                        ),
                         "description": description,
                         "quantity": Decimal(str(item.get("quantity", 1))),
                         "unit_price": Decimal(str(item.get("unitPrice", 0))),
@@ -235,6 +244,7 @@ def parse_create_line_items(
         line_items.append(
             {
                 "line_id": None,
+                "subscription_id": None,
                 "description": description.strip(),
                 "quantity": parse_decimal(quantity_raw, "quantity", Decimal("1")),
                 "unit_price": parse_decimal(
@@ -260,6 +270,7 @@ def create_invoice_lines(
                 description=item["description"],
                 quantity=item["quantity"],
                 unit_price=item["unit_price"],
+                subscription_id=item["subscription_id"],
                 tax_rate_id=item["tax_rate_id"],
             ),
         )
@@ -440,6 +451,7 @@ def create_invoice_from_form(
                     quantity=item["quantity"],
                     unit_price=item["unit_price"],
                     tax_rate_id=item["tax_rate_id"],
+                    subscription_id=item["subscription_id"],
                 )
                 for item in line_items
             ),
@@ -522,6 +534,7 @@ def update_invoice_from_form(
                     quantity=item["quantity"],
                     unit_price=item["unit_price"],
                     tax_rate_id=item["tax_rate_id"],
+                    subscription_id=item["subscription_id"],
                 )
                 for item in lines
             ),
