@@ -21,6 +21,17 @@ a second invoice-document authority.
 ## Delivery contract
 
 Only the email channel for `invoice.sent` receives an invoice-PDF descriptor.
+On the admin invoice detail page, **Issue & send invoice** performs the guarded
+draft-to-issued transition and stages `invoice.sent` in that same invoice-owner
+transaction. **Send invoice** on an already-issued document stages the same
+event without another lifecycle transition. Proformas and terminal void or
+written-off documents remain unsendable.
+
+The stock email greets the customer, explains that the attached invoice is for
+review regarding their service, and includes the invoice number, amount, and
+due date. The exact historical stock template is migrated to this copy while
+operator-customized templates remain untouched.
+
 At delivery time the worker:
 
 1. parses the invoice UUID;

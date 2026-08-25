@@ -698,10 +698,30 @@ def invoice_send_and_return(
     request: Request,
     invoice_id: UUID,
     next_url: str = Form("/admin/billing/invoices"),
+    issue_draft: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    invoice_send(request=request, invoice_id=invoice_id, db=db)
-    return RedirectResponse(url=next_url, status_code=303)
+    try:
+        result = web_billing_invoices_service.send_invoice_web(
+            db,
+            request=request,
+            actor_id=_actor_id(request),
+            invoice_id=str(invoice_id),
+            issue_draft=issue_draft == "1",
+        )
+    except (HTTPException, DomainError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc.detail)
+        separator = "&" if "?" in next_url else "?"
+        return RedirectResponse(
+            url=f"{next_url}{separator}error={quote_plus(message)}",
+            status_code=303,
+        )
+    message = "Invoice issued and sent" if result.issued_now else "Invoice sent"
+    separator = "&" if "?" in next_url else "?"
+    return RedirectResponse(
+        url=f"{next_url}{separator}notice={quote_plus(message)}",
+        status_code=303,
+    )
 
 
 @router.post(

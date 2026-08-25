@@ -89,14 +89,17 @@
                     <button type="submit" class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-emerald-700 transition hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-900/20">Repair prepaid coverage</button>
                 </form>
                 {% endif %}
-                {% if status_val in ['issued', 'overdue', 'partially_paid'] and not is_proforma %}
-                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/send-and-return">
+                {% if status_val in ['draft', 'issued', 'overdue', 'partially_paid'] and not is_proforma and can(request, 'billing:invoice:update') %}
+                <form method="post"
+                      action="/admin/billing/invoices/{{ invoice.id }}/send-and-return"
+                      onsubmit="if (!confirm('{{ 'Issue this invoice and email the PDF to the customer?' if status_val == 'draft' else 'Email this invoice PDF to the customer?' }}')) return false; this.querySelector('button[type=submit]').disabled = true;">
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="next_url" value="/admin/billing/invoices/{{ invoice.id }}">
+                    {% if status_val == 'draft' %}<input type="hidden" name="issue_draft" value="1">{% endif %}
                     <button type="submit"
                             class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
                         <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                        Send Email
+                        {{ 'Issue & send invoice' if status_val == 'draft' else 'Send invoice' }}
                     </button>
                 </form>
                 {% endif %}

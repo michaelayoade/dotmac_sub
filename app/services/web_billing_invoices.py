@@ -6,6 +6,7 @@ import json
 import logging
 import secrets
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import TypedDict
@@ -65,6 +66,23 @@ apply_proforma_form_values = invoice_draft_authoring.apply_proforma_form_values
 
 class InvoiceIssueFromDetailError(DomainError):
     """Safe invoice-detail issue rejection for the admin route adapter."""
+
+
+@dataclass(frozen=True, slots=True)
+class SendInvoiceFromDetailCommand:
+    """Typed request to issue when necessary and queue one invoice email."""
+
+    invoice_id: UUID
+    issue_draft: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SendInvoiceFromDetailResult:
+    """Stable invoice-detail send outcome for the web adapter."""
+
+    invoice_id: UUID
+    status: InvoiceStatus
+    issued_now: bool
 
 
 class InvoiceLineItem(TypedDict):
@@ -288,7 +306,12 @@ def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | Non
     return transition.invoice
 
 
-def issue_invoice_from_detail(db: Session, *, invoice_id: UUID) -> Invoice:
+def issue_invoice_from_detail(
+    db: Session,
+    *,
+    invoice_id: UUID,
+    announce: bool = False,
+) -> Invoice:
     """Issue a draft invoice from the admin detail page."""
     invoice_id_text = str(invoice_id)
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id_text)
@@ -320,12 +343,49 @@ def issue_invoice_from_detail(db: Session, *, invoice_id: UUID) -> Invoice:
             issued_at=datetime.now(UTC),
             reason="admin_invoice_detail_issue",
         ),
-        announce=False,
+        announce=announce,
         apply_available_credit=True,
         require_full_available_credit=True,
         commit=True,
     )
     return transition.invoice
+
+
+def send_invoice_from_detail(
+    db: Session,
+    command: SendInvoiceFromDetailCommand,
+) -> SendInvoiceFromDetailResult:
+    """Queue the canonical PDF email, issuing a draft in the same transition."""
+
+    invoice = billing_service.invoices.get(
+        db=db,
+        invoice_id=str(command.invoice_id),
+    )
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    if invoice.status == InvoiceStatus.draft and command.issue_draft:
+        sent_invoice = issue_invoice_from_detail(
+            db,
+            invoice_id=command.invoice_id,
+            announce=True,
+        )
+        return SendInvoiceFromDetailResult(
+            invoice_id=sent_invoice.id,
+            status=sent_invoice.status,
+            issued_now=True,
+        )
+
+    maybe_send_invoice_notification(
+        db,
+        invoice=invoice,
+        send_notification="1",
+    )
+    return SendInvoiceFromDetailResult(
+        invoice_id=invoice.id,
+        status=invoice.status,
+        issued_now=False,
+    )
 
 
 def maybe_send_invoice_notification(
@@ -1020,10 +1080,15 @@ def send_invoice_web(
     request,
     actor_id: str | None,
     invoice_id: str,
-) -> Invoice | None:
-    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    if invoice:
-        maybe_send_invoice_notification(db, invoice=invoice, send_notification="1")
+    issue_draft: bool = False,
+) -> SendInvoiceFromDetailResult:
+    result = send_invoice_from_detail(
+        db,
+        SendInvoiceFromDetailCommand(
+            invoice_id=UUID(invoice_id),
+            issue_draft=issue_draft,
+        ),
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -1032,7 +1097,7 @@ def send_invoice_web(
         entity_id=invoice_id,
         actor_id=actor_id,
     )
-    return invoice
+    return result
 
 
 def void_invoice_web(
