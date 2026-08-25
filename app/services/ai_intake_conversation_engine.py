@@ -689,6 +689,8 @@ def _subscriber_monitoring(db: Session, inputs: dict[str, object]) -> dict[str, 
 def _policy(version: AiIntakePolicyVersion | None) -> dict[str, object]:
     metadata = dict(version.metadata_ or {}) if version is not None else {}
     policy = dict(metadata.get("conversation_policy") or {})
+    conversation_templates = _dict(metadata.get("conversation_templates"))
+    standard_handoff = str(conversation_templates.get("standard_handoff") or "").strip()
     policy["tools"] = metadata.get("tools") or policy.get("tools") or {}
     policy["permitted_identifiers"] = (
         metadata.get("permitted_identifiers")
@@ -700,7 +702,9 @@ def _policy(version: AiIntakePolicyVersion | None) -> dict[str, object]:
     )
     handoff_policy = _dict(policy.get("handoff"))
     policy["handoff"] = {
-        "customer_message": str(handoff_policy.get("customer_message") or "").strip(),
+        "customer_message": str(
+            handoff_policy.get("customer_message") or standard_handoff
+        ).strip(),
         "summary_template": str(handoff_policy.get("summary_template") or "").strip(),
         "announce_destination": bool(handoff_policy.get("announce_destination")),
     }

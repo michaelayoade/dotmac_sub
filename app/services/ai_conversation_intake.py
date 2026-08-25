@@ -32,6 +32,7 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationStatus,
+    InboxMediaAsset,
     InboxMessage,
     InboxMessageDirection,
 )
@@ -53,9 +54,14 @@ from app.services import (
     ai_intake,
     ai_intake_conversation_engine,
     ai_intake_graph,
+    ai_intake_rollout_readiness,
     team_inbox_operations,
     team_inbox_routing,
     team_inbox_status,
+)
+from app.services.ai_intake_text import (
+    human_impersonation_violations,
+    usable_customer_text,
 )
 from app.services.integrations import (
     installations,
@@ -100,10 +106,39 @@ TERMINAL_SESSION_STATES = frozenset(
         "ineligible",
     }
 )
-DEFAULT_DISPLAY_NAME = "Dotmac Virtual Assistant"
-DEFAULT_WELCOME_MESSAGE = (
-    "Hello, I am Dotmac Virtual Assistant. I can help understand your request "
-    "and connect you to the right team."
+DEFAULT_DISPLAY_NAME = "Dotmac Support"
+DEFAULT_WELCOME_MESSAGE = "Welcome to Dotmac Support. How can we help today?"
+DEFAULT_CONVERSATION_TEMPLATES = {
+    "welcome": DEFAULT_WELCOME_MESSAGE,
+    "greeting_only": "Welcome to Dotmac Support. How can we help today?",
+    "standard_handoff": (
+        "Thanks, I have the details I need. I am passing this to our support "
+        "team so they can take a closer look."
+    ),
+    "media_first_handoff": (
+        "Thanks for sending that. I cannot review the attachment here, so I am "
+        "passing this to our support team to take a closer look."
+    ),
+    "direct_ai_question": (
+        "I am Dotmac's automated support assistant. I can help collect the "
+        "right details and pass you to the support team when needed."
+    ),
+    "direct_human_question": (
+        "I am Dotmac's automated support assistant, not a human agent. I can "
+        "still help collect the details or pass you to the support team."
+    ),
+}
+_GREETING_ONLY_RE = re.compile(
+    r"^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|good\s*day)\W*$",
+    re.IGNORECASE,
+)
+_DIRECT_AI_QUESTION_RE = re.compile(
+    r"\b(?:are\s+you|is\s+this)\b.{0,80}\b(?:ai|bot|automated|automation|virtual assistant)\b",
+    re.IGNORECASE,
+)
+_DIRECT_HUMAN_QUESTION_RE = re.compile(
+    r"\b(?:are\s+you|am\s+i\s+speaking\s+to)\b.{0,80}\b(?:human|person|agent|staff)\b",
+    re.IGNORECASE,
 )
 DEFAULT_QUEUE_POSITION_UPDATE_MINUTES = 10
 DEFAULT_QUEUE_HEARTBEAT_MINUTES = 30
@@ -117,7 +152,7 @@ DEFAULT_QUEUE_TEMPLATES = {
         "You are still number {position} in the queue. We will connect you as "
         "soon as an agent is available."
     ),
-    "handoff": "Thanks for waiting. An agent has joined and will continue from here.",
+    "handoff": "Thanks for waiting. A support agent has joined and will continue from here.",
 }
 APPROVED_QUEUE_TEMPLATE_VARIABLES = frozenset(
     {"position", "queue_position", "team_name"}
@@ -218,6 +253,8 @@ class AiPolicyVersionDraftCommand:
     permitted_identifiers: tuple[str, ...] = ()
     tool_config: Mapping[str, object] | None = None
     conversation_policy: Mapping[str, object] | None = None
+    conversation_templates: Mapping[str, object] | None = None
+    channel_overrides: Mapping[str, object] | None = None
     replace_existing_draft: bool = True
 
 
@@ -245,6 +282,8 @@ class AiDraftPolicyCommand:
     permitted_identifiers: tuple[str, ...] = ()
     tool_config: Mapping[str, object] | None = None
     conversation_policy: Mapping[str, object] | None = None
+    conversation_templates: Mapping[str, object] | None = None
+    channel_overrides: Mapping[str, object] | None = None
     replace_existing_draft: bool = False
 
 
@@ -358,6 +397,86 @@ def _normalize_conversation_engine_mode(value: str | None) -> str:
     if mode not in SUPPORTED_CONVERSATION_ENGINE_MODES:
         raise ValueError("AI intake conversation engine mode is unsupported")
     return mode
+
+
+def _clean_conversation_templates(value: Mapping[str, object] | None) -> dict[str, str]:
+    source = dict(value or {})
+    cleaned = dict(DEFAULT_CONVERSATION_TEMPLATES)
+    for key in DEFAULT_CONVERSATION_TEMPLATES:
+        text = str(source.get(key) or "").strip()
+        if text:
+            cleaned[key] = text[:1200]
+    return cleaned
+
+
+def _clean_channel_overrides(value: Mapping[str, object] | None) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    cleaned: dict[str, object] = {}
+    for channel, raw_override in value.items():
+        channel_key = str(channel or "").strip()
+        if channel_key not in SUPPORTED_CONVERSATIONAL_CHANNELS:
+            continue
+        if not isinstance(raw_override, Mapping):
+            continue
+        override: dict[str, object] = {}
+        if isinstance(raw_override.get("conversation_templates"), Mapping):
+            override["conversation_templates"] = _clean_conversation_templates(
+                cast(Mapping[str, object], raw_override["conversation_templates"])
+            )
+        if override:
+            cleaned[channel_key] = override
+    return cleaned
+
+
+def _conversation_templates_from_metadata(
+    version: AiIntakePolicyVersion | None,
+) -> dict[str, str]:
+    metadata = dict(version.metadata_ or {}) if version is not None else {}
+    return _clean_conversation_templates(
+        cast(Mapping[str, object] | None, metadata.get("conversation_templates"))
+    )
+
+
+def _is_greeting_only_text(value: str | None) -> bool:
+    text = usable_customer_text(value)
+    return bool(text and _GREETING_ONLY_RE.fullmatch(text))
+
+
+def _asks_if_ai(value: str | None) -> bool:
+    text = usable_customer_text(value)
+    return bool(text and _DIRECT_AI_QUESTION_RE.search(text))
+
+
+def _asks_if_human(value: str | None) -> bool:
+    text = usable_customer_text(value)
+    return bool(text and _DIRECT_HUMAN_QUESTION_RE.search(text))
+
+
+def _flatten_customer_text_fields(
+    prefix: str,
+    value: object,
+    target: dict[str, object],
+) -> None:
+    if isinstance(value, str):
+        target[prefix] = value
+    elif isinstance(value, Mapping):
+        for key, nested in value.items():
+            _flatten_customer_text_fields(f"{prefix}.{key}", nested, target)
+    elif isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            _flatten_customer_text_fields(f"{prefix}.{index}", nested, target)
+
+
+def _validate_customer_facing_policy_text(fields: Mapping[str, object]) -> None:
+    flattened: dict[str, object] = {}
+    for key, value in fields.items():
+        _flatten_customer_text_fields(str(key), value, flattened)
+    violations = human_impersonation_violations(flattened)
+    if violations:
+        raise ValueError(
+            "AI intake customer-facing policy text cannot impersonate a human employee"
+        )
 
 
 def _provider_scope_key(provider: str, account_scope: str) -> str:
@@ -576,6 +695,8 @@ def create_draft_policy(
                 permitted_identifiers=command.permitted_identifiers,
                 tool_config=command.tool_config,
                 conversation_policy=command.conversation_policy,
+                conversation_templates=command.conversation_templates,
+                channel_overrides=command.channel_overrides,
                 replace_existing_draft=command.replace_existing_draft,
             ),
         )
@@ -642,11 +763,44 @@ def _copy_version_payload(
         metadata["tools"] = dict(command.tool_config)
     if command.conversation_policy is not None:
         metadata["conversation_policy"] = dict(command.conversation_policy)
+    if command.conversation_templates is not None:
+        metadata["conversation_templates"] = _clean_conversation_templates(
+            command.conversation_templates
+        )
+    elif base is None or not isinstance(
+        metadata.get("conversation_templates"), Mapping
+    ):
+        metadata["conversation_templates"] = _clean_conversation_templates(None)
+    if command.channel_overrides is not None:
+        metadata["channel_overrides"] = _clean_channel_overrides(
+            command.channel_overrides
+        )
+    elif base is None or not isinstance(metadata.get("channel_overrides"), Mapping):
+        metadata["channel_overrides"] = {}
+    display_name = command.display_name or (
+        base.display_name if base is not None else DEFAULT_DISPLAY_NAME
+    )
+    welcome_message = command.welcome_message or (
+        base.welcome_message if base is not None else DEFAULT_WELCOME_MESSAGE
+    )
+    metadata["customer_facing_identity"] = display_name
+    _validate_customer_facing_policy_text(
+        {
+            "display_name": display_name,
+            "welcome_message": welcome_message,
+            "business_tone": command.business_tone
+            if command.business_tone is not None
+            else (base.business_tone if base is not None else None),
+            "business_instructions": command.business_instructions
+            if command.business_instructions is not None
+            else (base.business_instructions if base is not None else None),
+            "conversation_templates": metadata.get("conversation_templates"),
+            "channel_overrides": metadata.get("channel_overrides"),
+        }
+    )
     return {
-        "display_name": command.display_name
-        or (base.display_name if base is not None else DEFAULT_DISPLAY_NAME),
-        "welcome_message": command.welcome_message
-        or (base.welcome_message if base is not None else DEFAULT_WELCOME_MESSAGE),
+        "display_name": display_name,
+        "welcome_message": welcome_message,
         "business_tone": command.business_tone
         if command.business_tone is not None
         else (base.business_tone if base is not None else None),
@@ -1074,6 +1228,14 @@ def preview_policy_version(
     version_metadata = (
         dict(version.metadata_ or {}) if isinstance(version.metadata_, Mapping) else {}
     )
+    conversation_templates = _clean_conversation_templates(
+        cast(
+            Mapping[str, object] | None, version_metadata.get("conversation_templates")
+        )
+    )
+    channel_overrides = _clean_channel_overrides(
+        cast(Mapping[str, object] | None, version_metadata.get("channel_overrides"))
+    )
     raw_conversation_policy = version_metadata.get("conversation_policy")
     conversation_policy = (
         dict(raw_conversation_policy)
@@ -1264,6 +1426,14 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         else {}
     )
     conversation_policy = dict(version_metadata.get("conversation_policy") or {})
+    conversation_templates = _clean_conversation_templates(
+        cast(
+            Mapping[str, object] | None, version_metadata.get("conversation_templates")
+        )
+    )
+    channel_overrides = _clean_channel_overrides(
+        cast(Mapping[str, object] | None, version_metadata.get("channel_overrides"))
+    )
     conversation_engine_mode = _normalize_conversation_engine_mode(
         str(
             version_metadata.get("conversation_engine_mode")
@@ -1351,10 +1521,23 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         "ai_intake_engine_metadata": version_metadata,
         "ai_intake_conversation_engine_mode": conversation_engine_mode,
         "ai_intake_conversation_policy": conversation_policy,
+        "ai_intake_conversation_templates": conversation_templates,
+        "ai_intake_channel_overrides_json": json.dumps(
+            channel_overrides,
+            indent=2,
+            sort_keys=True,
+        ),
         "ai_intake_tool_config": tool_config,
         "ai_intake_permitted_identifiers": permitted_identifiers,
         "ai_intake_tool_catalogue": (
             ai_intake_conversation_engine.tool_catalogue_snapshot()
+        ),
+        "ai_intake_canary_matrix": ai_intake_rollout_readiness.scenario_matrix(),
+        "ai_intake_pre_activation_gate": (
+            ai_intake_rollout_readiness.pre_activation_gate_report()
+        ),
+        "ai_intake_activation_plan": (
+            ai_intake_rollout_readiness.CONTROLLED_ACTIVATION_PLAN
         ),
     }
 
@@ -1404,6 +1587,14 @@ def _sync_active_policy_to_legacy_config(
     )
     version_metadata = (
         dict(version.metadata_ or {}) if isinstance(version.metadata_, Mapping) else {}
+    )
+    conversation_templates = _clean_conversation_templates(
+        cast(
+            Mapping[str, object] | None, version_metadata.get("conversation_templates")
+        )
+    )
+    channel_overrides = _clean_channel_overrides(
+        cast(Mapping[str, object] | None, version_metadata.get("channel_overrides"))
     )
     mappings: list[AiIntakeDepartmentMapping] = []
     for raw in version.intent_team_mappings or []:
@@ -1468,6 +1659,8 @@ def _sync_active_policy_to_legacy_config(
                     intent_definitions=version.intent_definitions or [],
                     clarification_questions=version.clarification_questions or [],
                     queue_templates=queue_templates,
+                    conversation_templates=conversation_templates,
+                    channel_overrides=channel_overrides,
                     escalation_rules=escalation_rules,
                     data_cleanup_enabled=bool(
                         data_cleanup_policy.get("production_collection_enabled", False)
@@ -1509,6 +1702,10 @@ def _sync_active_policy_to_legacy_config(
             )
         ),
         "conversation_policy": version_metadata.get("conversation_policy") or {},
+        "conversation_templates": conversation_templates,
+        "channel_overrides": channel_overrides,
+        "customer_facing_identity": version_metadata.get("customer_facing_identity")
+        or version.display_name,
         "tools": version_metadata.get("tools") or {},
         "permitted_identifiers": version_metadata.get("permitted_identifiers") or [],
     }
@@ -1733,6 +1930,12 @@ def ensure_policy_version_from_legacy_config(
     ).strip()
     if not welcome_message:
         welcome_message = DEFAULT_WELCOME_MESSAGE
+    conversation_templates = _clean_conversation_templates(
+        cast(Mapping[str, object] | None, metadata.get("conversation_templates"))
+    )
+    channel_overrides = _clean_channel_overrides(
+        cast(Mapping[str, object] | None, metadata.get("channel_overrides"))
+    )
     policy = (
         db.query(AiIntakePolicy)
         .filter(AiIntakePolicy.legacy_config_id == config.id)
@@ -1872,6 +2075,9 @@ def ensure_policy_version_from_legacy_config(
                 "compatibility_signature": version_signature,
                 "provider_scope_observed": provider,
                 "account_scope_observed": account_scope,
+                "customer_facing_identity": display_name,
+                "conversation_templates": conversation_templates,
+                "channel_overrides": channel_overrides,
             },
         )
         if last_version is not None:
@@ -2104,6 +2310,169 @@ def mark_conversation_ai_metadata(
     conversation.metadata_ = metadata
 
 
+def _inbound_has_media(db: Session, message: InboxMessage) -> bool:
+    metadata = dict(message.metadata_ or {})
+    attachments = metadata.get("attachments")
+    if isinstance(attachments, (list, tuple)) and any(
+        isinstance(item, Mapping) for item in attachments
+    ):
+        return True
+    media_count = (
+        db.query(InboxMediaAsset.id)
+        .filter(InboxMediaAsset.message_id == message.id)
+        .limit(1)
+        .count()
+    )
+    return media_count > 0
+
+
+def _ensure_media_first_handoff_note(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    session: AiIntakeSession,
+    version: AiIntakePolicyVersion | None,
+    inbound: InboxMessage,
+    routing_reason: str | None,
+) -> None:
+    note_key = f"media_first_handoff_note:{inbound.id}"
+    metadata = dict(session.metadata_ or {})
+    if metadata.get(note_key):
+        return
+    note = team_inbox_operations.create_internal_note(
+        db,
+        conversation=conversation,
+        body=(
+            "AI intake summary: the first customer message included media without "
+            "enough usable text. The media was not interpreted and no customer "
+            "lookup or monitoring was run before handoff."
+        ),
+        actor_person_id=None,
+        metadata={
+            "source": "ai_intake_media_first_handoff",
+            "ai_intake_session_id": str(session.id),
+            "ai_intake_policy_version_id": str(version.id)
+            if version is not None
+            else None,
+            "ai_intake_inbound_message_id": str(inbound.id),
+            "routing_reason": routing_reason,
+        },
+    )
+    metadata[note_key] = str(note.id)
+    session.metadata_ = metadata
+
+
+def _handoff_media_first_message(
+    db: Session,
+    *,
+    session: AiIntakeSession,
+    version: AiIntakePolicyVersion | None,
+    conversation: InboxConversation,
+    inbound: InboxMessage,
+    body_text: str,
+) -> bool:
+    from app.services import team_inbox_assignment, team_inbox_outbound
+
+    routing = team_inbox_routing.resolve_channel_routing_decision(
+        db,
+        channel_type=conversation.channel_type,
+        provider=session.provider,
+        account_scope=session.account_scope,
+        fallback_service_team_id=session.fallback_team_id,
+        metadata={"ai_intake_reason": "media_first_no_usable_text"},
+    )
+    inbound_metadata = dict(inbound.metadata_ or {})
+    inbound_metadata["ai_intake_status"] = "media_first_handoff"
+    inbound_metadata["ai_intake_media_first"] = True
+    inbound_metadata["routing"] = {
+        "primary_service_team_id": routing.primary_service_team_id,
+        "channel_service_team_id": routing.channel_service_team_id,
+        "ai_service_team_id": routing.ai_service_team_id,
+        "channel_route_id": routing.channel_route_id,
+        "ai_route_id": routing.ai_route_id,
+        "ai_routing_allowed": routing.ai_routing_allowed,
+        "ai_intent_key": routing.ai_intent_key,
+        "ai_confidence": routing.ai_confidence,
+        "reason": routing.reason,
+    }
+    inbound.metadata_ = inbound_metadata
+    delivery = team_inbox_outbound.send_ai_intake_message(
+        db,
+        conversation=conversation,
+        body_text=body_text,
+        metadata=ai_message_metadata(
+            session=session,
+            version=version,
+            purpose="media_first_handoff",
+        ),
+        dedupe_key=f"ai-intake-media-first-handoff:{session.id}:{inbound.id}",
+    )
+    record_generation_attempt(
+        db,
+        session=session,
+        purpose="media_first_handoff",
+        status="queued" if delivery.kind == "queued" else "failed",
+        inbound_message_id=inbound.id,
+        outbound_message_id=UUID(delivery.message_id) if delivery.message_id else None,
+        error_code=delivery.reason,
+    )
+    conversation_metadata = dict(conversation.metadata_ or {})
+    intake_metadata = dict(conversation_metadata.get("ai_intake") or {})
+    intake_metadata.update(
+        {
+            "engine": "media_first_handoff",
+            "engine_action": "handoff",
+            "handoff_reason": "media_first_no_usable_text",
+            "destination_team_id": routing.primary_service_team_id,
+            "routing_reason": routing.reason,
+        }
+    )
+    conversation_metadata["ai_intake"] = intake_metadata
+    conversation.metadata_ = conversation_metadata
+    _ensure_media_first_handoff_note(
+        db,
+        conversation=conversation,
+        session=session,
+        version=version,
+        inbound=inbound,
+        routing_reason=routing.reason,
+    )
+    if routing.primary_service_team_id:
+        team_inbox_routing.apply_email_routing_plan(
+            db,
+            conversation=conversation,
+            plan=team_inbox_routing.EmailTeamRoutingPlan(
+                primary_service_team_id=routing.primary_service_team_id,
+                participant_service_team_ids=[routing.primary_service_team_id],
+                matches=[],
+                unmatched_recipients=[],
+            ),
+        )
+        mark_handoff_requested(
+            session,
+            destination_team_id=routing.primary_service_team_id,
+        )
+        transition_conversation_status(
+            db,
+            conversation=conversation,
+            status=InboxConversationStatus.open,
+            reason=team_inbox_status.InboxStatusReason.ai_handoff_accepted,
+            source_id=f"ai-intake-media-first-handoff:{session.id}",
+        )
+        team_inbox_assignment.assign_conversation_to_available_agent(
+            db,
+            conversation=conversation,
+            service_team_id=routing.primary_service_team_id,
+            reason="AI intake media-first handoff",
+            source="routing_rule",
+        )
+        complete_session(session)
+    else:
+        complete_session(session, state="fallback_escalated")
+    mark_conversation_ai_metadata(conversation, session=session, active=False)
+    return True
+
+
 def process_ready_sessions(
     db: Session, command: AiSessionProcessCommand
 ) -> AiSessionProcessResult:
@@ -2181,18 +2550,82 @@ def _process_one_session(
         .order_by(InboxMessage.created_at.desc())
         .first()
     )
-    if inbound is None or not inbound.body:
+    if inbound is None:
         return False
     version = (
         db.get(AiIntakePolicyVersion, session.policy_version_id)
         if session.policy_version_id
         else None
     )
+    conversation_templates = _conversation_templates_from_metadata(version)
+    if session.state == "handoff_requested":
+        cleanup_open = _process_data_cleanup_turn(
+            db,
+            session=session,
+            version=version,
+            conversation=conversation,
+            inbound=inbound,
+        )
+        if not cleanup_open:
+            complete_session(session)
+            mark_conversation_ai_metadata(conversation, session=session, active=False)
+        return True
+    usable_body = usable_customer_text(inbound.body)
+    if usable_body is None and _inbound_has_media(db, inbound):
+        return _handoff_media_first_message(
+            db,
+            session=session,
+            version=version,
+            conversation=conversation,
+            inbound=inbound,
+            body_text=conversation_templates["media_first_handoff"],
+        )
+    if usable_body is None:
+        return False
+    processed_key = f"processed_inbound:{inbound.id}"
+    if dict(session.metadata_ or {}).get(processed_key):
+        return False
+    if _asks_if_ai(usable_body) or _asks_if_human(usable_body):
+        from app.services import team_inbox_outbound
+
+        response_key = (
+            "direct_human_question"
+            if _asks_if_human(usable_body)
+            else "direct_ai_question"
+        )
+        delivery = team_inbox_outbound.send_ai_intake_message(
+            db,
+            conversation=conversation,
+            body_text=conversation_templates[response_key],
+            metadata=ai_message_metadata(
+                session=session,
+                version=version,
+                purpose=response_key,
+            ),
+            dedupe_key=f"ai-intake-{response_key}:{session.id}:{inbound.id}",
+        )
+        record_generation_attempt(
+            db,
+            session=session,
+            purpose=response_key,
+            status="queued" if delivery.kind == "queued" else "failed",
+            inbound_message_id=inbound.id,
+            outbound_message_id=UUID(delivery.message_id)
+            if delivery.message_id
+            else None,
+            error_code=delivery.reason,
+        )
+        session_metadata = dict(session.metadata_ or {})
+        session_metadata[processed_key] = True
+        session.metadata_ = session_metadata
+        session.state = "awaiting_customer"
+        mark_conversation_ai_metadata(conversation, session=session, active=True)
+        return True
     if session.state == "welcome_pending":
-        if version is None or not version.welcome_message:
+        if not _is_greeting_only_text(usable_body):
             session.state = "collecting_intent"
         else:
-            welcome_body = version.welcome_message
+            welcome_body = conversation_templates["greeting_only"]
             welcome_metadata = ai_message_metadata(
                 session=session,
                 version=version,
@@ -2226,7 +2659,6 @@ def _process_one_session(
             complete_session(session, state="failed")
             mark_conversation_ai_metadata(conversation, session=session, active=False)
             return True
-    cleanup_only = session.state == "handoff_requested"
     cleanup_open = _process_data_cleanup_turn(
         db,
         session=session,
@@ -2234,15 +2666,7 @@ def _process_one_session(
         conversation=conversation,
         inbound=inbound,
     )
-    if cleanup_only:
-        if not cleanup_open:
-            complete_session(session)
-            mark_conversation_ai_metadata(conversation, session=session, active=False)
-        return True
     metadata = dict(inbound.metadata_ or {})
-    processed_key = f"processed_inbound:{inbound.id}"
-    if dict(session.metadata_ or {}).get(processed_key):
-        return False
     recent_rows = (
         db.query(InboxMessage)
         .filter(InboxMessage.conversation_id == conversation.id)
@@ -2267,7 +2691,7 @@ def _process_one_session(
         provider=session.provider,
         account_scope=session.account_scope,
         inbound_message_id=str(inbound.external_message_id or inbound.id)[:255],
-        body=str(inbound.body or "")[:4000],
+        body=usable_body[:4000],
         conversation_id=conversation.id,
         recent_messages=recent,
         campaign_attributed=False,
@@ -2321,7 +2745,7 @@ def _process_one_session(
                     conversation=conversation,
                     session=session,
                     version=version,
-                    latest_body=str(inbound.body or ""),
+                    latest_body=usable_body,
                     classification=outcome.classification,
                     recent_messages=recent,
                 )
@@ -2346,7 +2770,7 @@ def _process_one_session(
                     conversation=conversation,
                     session=session,
                     version=version,
-                    latest_body=str(inbound.body or ""),
+                    latest_body=usable_body,
                     classification=outcome.classification,
                 )
                 engine_name = "composable_v1_fallback"
@@ -2357,7 +2781,7 @@ def _process_one_session(
                 conversation=conversation,
                 session=session,
                 version=version,
-                latest_body=str(inbound.body or ""),
+                latest_body=usable_body,
                 classification=outcome.classification,
             )
         ai_intake_conversation_engine.persist_state(session, decision.state)
@@ -2760,7 +3184,8 @@ def _process_data_cleanup_turn(
         return state.get("status") == "awaiting_response"
     attempts = _cleanup_attempt_count(state)
     templates = policy["templates"]
-    assert isinstance(templates, Mapping)
+    if not isinstance(templates, Mapping):
+        return False
     field_text = _format_cleanup_fields(missing)
     if state.get("status") != "awaiting_response":
         attempts += 1

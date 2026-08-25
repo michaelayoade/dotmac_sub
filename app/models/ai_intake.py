@@ -102,7 +102,7 @@ class AiIntakePolicy(Base):
         String(160), default="any", nullable=False
     )
     display_name: Mapped[str] = mapped_column(
-        String(120), default="Dotmac Virtual Assistant", nullable=False
+        String(120), default="Dotmac Support", nullable=False
     )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     active_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -152,7 +152,7 @@ class AiIntakePolicyVersion(Base):
         UUID(as_uuid=True)
     )
     display_name: Mapped[str] = mapped_column(
-        String(120), default="Dotmac Virtual Assistant", nullable=False
+        String(120), default="Dotmac Support", nullable=False
     )
     welcome_message: Mapped[str] = mapped_column(Text, nullable=False)
     business_tone: Mapped[str | None] = mapped_column(Text)
@@ -227,7 +227,7 @@ class AiIntakeSession(Base):
     provider: Mapped[str] = mapped_column(String(80), nullable=False)
     account_scope: Mapped[str] = mapped_column(String(160), nullable=False)
     display_name: Mapped[str] = mapped_column(
-        String(120), default="Dotmac Virtual Assistant", nullable=False
+        String(120), default="Dotmac Support", nullable=False
     )
     turn_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_turns: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
