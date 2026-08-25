@@ -64,13 +64,15 @@ class AiIntakeConfigMetadata(BaseModel):
     account_id: str | None = Field(default=None, max_length=160)
     notes: str | None = Field(default=None, max_length=500)
     data_cleaning_support_team_id: UUID | None = None
-    display_name: str | None = Field(default="Dotmac Virtual Assistant", max_length=120)
+    display_name: str | None = Field(default="Dotmac Support", max_length=120)
     welcome_message: str | None = Field(default=None, max_length=800)
     business_tone: str | None = Field(default=None, max_length=1000)
     approved_isp_information: str | None = Field(default=None, max_length=4000)
     intent_definitions: list[dict] | None = None
     clarification_questions: list[str] | None = None
     queue_templates: dict | None = None
+    conversation_templates: dict | None = None
+    channel_overrides: dict | None = None
     escalation_rules: dict | None = None
     data_cleanup_policy: dict | None = None
     data_cleanup_enabled: bool = False

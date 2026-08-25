@@ -304,7 +304,7 @@ def test_high_confidence_routes_team_and_queues_when_no_agent(db_session, monkey
         .all()
     )
     assert outbound[0].metadata_["sender_type"] == "ai"
-    assert outbound[0].metadata_["ai_display_name"] == "Dotmac Virtual Assistant"
+    assert outbound[0].metadata_["ai_display_name"] == "Dotmac Support"
     reasons = [
         event.reason_code
         for event in db_session.query(InboxStatusTransitionEvent)
@@ -602,7 +602,7 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
         db_session,
         fallback_team_id=fallback_id,
         threshold=0.8,
-        welcome_message="Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team.",
+        welcome_message="Welcome to Dotmac Support. How can we help?",
         mappings=[_mapping("technical_support", technical, "technical")],
     )
     gateway = _Gateway(confidence=0.3)
@@ -624,7 +624,7 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
         .all()
     )
     assert [message.body for message in outbound] == [
-        "Hello, I am Dotmac Virtual Assistant. I can help understand your request and connect you to the right team.",
+        "Welcome to Dotmac Support. How can we help?",
         ai_intake.GENERIC_FOLLOW_UP_QUESTION,
     ]
     assert outbound[0].metadata_["ai_message_purpose"] == "welcome"

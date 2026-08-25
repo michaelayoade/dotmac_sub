@@ -85,7 +85,7 @@ class AiIntakeFollowUpPayload:
     session_id: UUID | None = None
     policy_id: UUID | None = None
     policy_version_id: UUID | None = None
-    display_name: str = "Dotmac Virtual Assistant"
+    display_name: str = "Dotmac Support"
 
 
 @dataclass(frozen=True)
@@ -896,7 +896,7 @@ def send_ai_intake_message(
                 "automation_kind": metadata.get("automation_kind") or "ai_intake",
                 "author_name": metadata.get("author_name")
                 or metadata.get("ai_display_name")
-                or "Dotmac Virtual Assistant",
+                or "Dotmac Support",
             },
             dedupe_key=dedupe_key,
         ),

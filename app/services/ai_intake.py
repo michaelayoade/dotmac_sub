@@ -185,6 +185,8 @@ class AiIntakeConfigMetadataOutcome:
     approved_isp_information: str | None = None
     clarification_questions: tuple[str, str] = DEFAULT_CLARIFICATION_QUESTIONS
     queue_templates: dict | None = None
+    conversation_templates: dict | None = None
+    channel_overrides: dict | None = None
     data_cleanup_policy: dict | None = None
     data_cleanup_enabled: bool = False
 
@@ -330,6 +332,16 @@ def _config_outcome(
             queue_templates=(
                 raw_metadata.get("queue_templates")
                 if isinstance(raw_metadata.get("queue_templates"), dict)
+                else None
+            ),
+            conversation_templates=(
+                raw_metadata.get("conversation_templates")
+                if isinstance(raw_metadata.get("conversation_templates"), dict)
+                else None
+            ),
+            channel_overrides=(
+                raw_metadata.get("channel_overrides")
+                if isinstance(raw_metadata.get("channel_overrides"), dict)
                 else None
             ),
             data_cleanup_policy=(
