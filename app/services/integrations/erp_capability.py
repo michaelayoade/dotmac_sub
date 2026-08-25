@@ -107,22 +107,22 @@ class ErpCapabilityClient:
             correlation_id=f"erp-outbox:{key}",
         )
 
-    def get_expense_claim_status(self, omni_id: str) -> dict | None:
+    def get_expense_claim_status(self, source_claim_id: str) -> dict | None:
         return self._execute(
             ERP_STATUS_CAPABILITY,
             "expense_claim_status",
-            {"omni_id": omni_id},
+            {"source_claim_id": source_claim_id},
             trigger=OperationTrigger.reconcile,
-            correlation_id=f"erp-expense-status:{omni_id}",
+            correlation_id=f"erp-expense-status:{source_claim_id}",
         ).get("item")
 
-    def get_material_request_status(self, omni_id: str) -> dict | None:
+    def get_material_request_status(self, source_request_id: str) -> dict | None:
         return self._execute(
             ERP_STATUS_CAPABILITY,
             "material_request_status",
-            {"omni_id": omni_id},
+            {"source_request_id": source_request_id},
             trigger=OperationTrigger.reconcile,
-            correlation_id=f"erp-material-status:{omni_id}",
+            correlation_id=f"erp-material-status:{source_request_id}",
         ).get("item")
 
     def get_purchase_invoice_status(self, source_invoice_id: str) -> dict | None:

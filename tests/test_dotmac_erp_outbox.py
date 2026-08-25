@@ -63,7 +63,7 @@ def _enqueue(db, *, flow=FieldErpSyncFlow.expense_claim, key=None) -> FieldErpSy
         entity_type="expense_request",
         entity_id=uuid4(),
         idempotency_key=key or f"exp-{uuid4()}-submit-v1",
-        payload={"omni_id": str(uuid4()), "amount": "1000.00"},
+        payload={"source_claim_id": str(uuid4()), "amount": "1000.00"},
     )
 
 
@@ -323,7 +323,7 @@ def test_client_sends_api_key_and_idempotency_key():
         return httpx.Response(200, json={"claim_id": "ERP-1"})
 
     client = _client_with_handler(handler)
-    body = client.post("/sync/crm/expense-claims", {"a": 1}, idempotency_key="exp-1-v1")
+    body = client.post("/sync/sub/expense-claims", {"a": 1}, idempotency_key="exp-1-v1")
     assert body == {"claim_id": "ERP-1"}
     assert captured["idempotency-key"] == "exp-1-v1"
 
@@ -334,7 +334,7 @@ def test_client_5xx_is_transient():
 
     client = _client_with_handler(handler)
     with pytest.raises(DotMacERPTransientError):
-        client.post("/sync/crm/expense-claims", {}, idempotency_key="k")
+        client.post("/sync/sub/expense-claims", {}, idempotency_key="k")
 
 
 def test_client_4xx_is_permanent():
@@ -343,7 +343,7 @@ def test_client_4xx_is_permanent():
 
     client = _client_with_handler(handler)
     with pytest.raises(DotMacERPError) as exc_info:
-        client.post("/sync/crm/expense-claims", {})
+        client.post("/sync/sub/expense-claims", {})
     assert not isinstance(exc_info.value, DotMacERPTransientError)
     assert exc_info.value.status_code == 422
 
@@ -354,7 +354,7 @@ def test_client_401_is_auth_error():
 
     client = _client_with_handler(handler)
     with pytest.raises(DotMacERPAuthError):
-        client.post("/sync/crm/expense-claims", {})
+        client.post("/sync/sub/expense-claims", {})
 
 
 def test_client_404_is_not_found():
@@ -363,7 +363,7 @@ def test_client_404_is_not_found():
 
     client = _client_with_handler(handler)
     with pytest.raises(DotMacERPNotFoundError):
-        client.get("/sync/crm/expense-claims/x")
+        client.get("/sync/sub/expense-claims/x")
 
 
 # ---------------------------------------------------------------------------
