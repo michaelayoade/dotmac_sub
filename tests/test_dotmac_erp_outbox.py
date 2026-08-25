@@ -482,9 +482,7 @@ def test_single_alembic_head():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option(
-        "version_locations", str(REPO_ROOT / "alembic" / "versions")
-    )
+    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     assert len(heads) == 1, (
