@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -101,7 +101,12 @@ def ensure_prepaid_entitlement_for_paid_invoice_line(
         or subscription.billing_mode != BillingMode.prepaid
     ):
         return None
-    starts_at, ends_at = _line_period(invoice, line)
+    starts_at, ends_at = _line_period(
+        db,
+        invoice=invoice,
+        line=line,
+        subscription=subscription,
+    )
     if starts_at is None or ends_at is None or ends_at <= starts_at:
         return None
     existing = db.scalar(
@@ -308,14 +313,71 @@ def _base_subscription_lines(lines: list[InvoiceLine]) -> list[InvoiceLine]:
 
 
 def _line_period(
+    db: Session,
+    *,
+    invoice: Invoice,
+    line: InvoiceLine,
+    subscription: Subscription,
+) -> tuple[datetime | None, datetime | None]:
+    starts_at, ends_at = _stored_line_period(invoice, line)
+    if starts_at is not None and ends_at is not None:
+        return starts_at, ends_at
+    return _derive_paid_manual_invoice_period(
+        db,
+        invoice=invoice,
+        line=line,
+        subscription=subscription,
+    )
+
+
+def _stored_line_period(
     invoice: Invoice, line: InvoiceLine
 ) -> tuple[datetime | None, datetime | None]:
-    metadata = line.metadata_ or {}
+    metadata = line.metadata_ if isinstance(line.metadata_, dict) else {}
     starts_at = _coerce_datetime(metadata.get("billing_period_start"))
     ends_at = _coerce_datetime(metadata.get("billing_period_end"))
     if starts_at is not None and ends_at is not None:
         return starts_at, ends_at
     return invoice.billing_period_start, invoice.billing_period_end
+
+
+def _derive_paid_manual_invoice_period(
+    db: Session,
+    *,
+    invoice: Invoice,
+    line: InvoiceLine,
+    subscription: Subscription,
+) -> tuple[datetime | None, datetime | None]:
+    if invoice.paid_at is None:
+        return None, None
+
+    from app.services.catalog.subscriptions import (
+        _compute_next_billing_at,
+        _resolve_billing_cycle,
+    )
+
+    starts_at = _ensure_utc(invoice.paid_at)
+    cycle = _resolve_billing_cycle(
+        db,
+        str(subscription.offer_id),
+        str(subscription.offer_version_id) if subscription.offer_version_id else None,
+        override=subscription.billing_cycle,
+    )
+    ends_at = _compute_next_billing_at(starts_at, cycle)
+    invoice.billing_period_start = starts_at
+    invoice.billing_period_end = ends_at
+    metadata = dict(line.metadata_) if isinstance(line.metadata_, dict) else {}
+    metadata["billing_period_start"] = starts_at.isoformat()
+    metadata["billing_period_end"] = ends_at.isoformat()
+    metadata["billing_period_source"] = "paid_at_manual_invoice"
+    line.metadata_ = metadata
+    return starts_at, ends_at
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _coerce_datetime(value: object) -> datetime | None:

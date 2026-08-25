@@ -344,12 +344,10 @@ def test_invoice_detail_context_includes_bank_details(db_session, subscriber_acc
     }
 
 
-def test_render_invoice_outputs_bank_details(db_session, subscriber_account):
+def test_render_invoice_outputs_paystack_checkout_link(db_session, subscriber_account):
     invoice = _invoice(db_session, subscriber_account)
-    # Bank details come from `collection_accounts`, the owner. They previously
-    # came from the `direct_bank_transfer_accounts` settings blob, which was one
-    # of four copies of the same fact and could name a different account from the
-    # one the portal offered the same customer.
+    # Collection accounts are intentionally irrelevant to customer invoice PDFs:
+    # invoices now direct customers to the current Paystack checkout hand-off.
     db_session.add(
         CollectionAccount(
             name="Dotmac Bank Invoice Account",
@@ -368,14 +366,13 @@ def test_render_invoice_outputs_bank_details(db_session, subscriber_account):
     html = pdf_service._render_invoice_html(invoice, db_session)
     text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
 
-    assert "Bank Details" in html
-    assert "Dotmac Bank" in html
-    assert "Dotmac Technologies Ltd" in html
-    assert "0123456789" in html
-    assert "12-34-56" in html
-    assert "Bank Details:" in text_lines
-    assert "Bank Name: Dotmac Bank" in text_lines
-    assert "Sort Code: 12-34-56" in text_lines
+    expected_url = f"https://selfcare.dotmac.io/pay/invoices/{invoice.id}"
+    assert "Pay with Paystack" in html
+    assert expected_url in html
+    assert "Bank Details" not in html
+    assert "0123456789" not in html
+    assert "Pay with Paystack:" in text_lines
+    assert expected_url in text_lines
 
 
 def _add_lines(db_session, invoice, count):
