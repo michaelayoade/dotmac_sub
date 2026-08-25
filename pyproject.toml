@@ -49,6 +49,7 @@ dependencies = [
     "langgraph==0.6.6",
     "defusedxml==0.7.1",
     "dotmac-kernel==0.1.0a91",
+    "dotmac-payments==0.1.0a1",
     "dotmac-service-orders==0.1.0a1",
     "dotmac-ui==0.1.0a7",
 ]
@@ -66,6 +67,10 @@ requires-poetry = "2.4.1"
 [tool.poetry.dependencies]
 dotmac-integration-client = { git = "https://github.com/michaelayoade/dotmac-integration-client.git", tag = "v0.2.0" }
 dotmac-kernel = { version = "0.1.0a91", source = "forgejo" }
+# First commercial module composed in migration/shadow mode only. Its tenant
+# lineage is registered in alembic.ini; Sub's existing payment writers stay
+# authoritative until a separate backfill, parity and sealed cutover.
+dotmac-payments = { version = "0.1.0a1", source = "forgejo" }
 # First composed domain module. Its `so` lineage is registered in
 # alembic.ini and its prerequisites are bound in app/migration_bindings.py.
 dotmac-service-orders = { version = "0.1.0a1", source = "forgejo" }

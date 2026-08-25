@@ -306,3 +306,22 @@ Nothing here touches applied Sub migrations or production data.
   require re-ruling the collision dispositions.
 - Supersedes or is superseded by: none. Extends ADR-0009 (operator-tenant
   bridge) and depends on ADR-0008's `upgrade heads` finding.
+
+## Amendment, 2026-08-25 — Payments is the second real composed lineage
+
+`dotmac-payments==0.1.0a1` is now exact-pinned and its installed
+`pm_0001_payment_intents` root composes beside Sub and Service Orders. This is
+the first commercial application of this ADR and confirms two boundaries that
+the original network-shaped decision left implicit:
+
+- an atomic tenant-only module declares no `ModulePlaneSelection`; its manifest
+  already makes the full declared table set the only admissible selection;
+- composing its lineage and empty schema does not select a runtime commercial
+  provider or transfer product authority. Sub's legacy payment writers remain
+  authoritative until a distinct data-bearing cutover seals its own evidence.
+
+The real PostgreSQL canary runs Sub's `alembic upgrade heads`, verifies the
+tagged module head and exact table catalogue, exercises ENABLE+FORCE RLS as
+`app_user` with unset, wrong and canonical tenant contexts, and reruns the
+upgrade as a no-op. It does not use `Base.metadata.create_all()` or an
+administrative-only RLS inspection as a substitute for the online-role proof.

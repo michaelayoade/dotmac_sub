@@ -73,6 +73,27 @@ collision inventory re-verified at each rebase rather than assumed to hold:
 The recon is re-run on every pin and Sub model change because a stale inventory
 would silently under-report the very risk the S7 ADR gate exists to hold.
 
+**2026-08-25 — `dotmac-payments==0.1.0a1` lineage composed inertly.** The
+tagged tenant-only package is exact-pinned in Sub's dependency and lock inputs;
+annotated
+tag `dotmac-payments-v0.1.0a1` peels to
+`04b9771320b865b66d1322660fc6d3590605c973`. Sub declares the installed
+`dotmac_payments.migrations:versions` resource in `alembic.ini`, where Alembic
+can discover it before building the revision map, and records
+`pm_0001_payment_intents` as an independent head. The lineage owns
+exactly the three tenant tables in `mod_payments` and uses the prerequisite
+effects Sub already supplies through 545 (`tenant_scope_catalog.v1`) and 546
+(`module_database_roles.v1`). It is tenant-only and therefore has no
+`ModulePlaneSelection`.
+
+This is schema and shadow preparation only. `app/composition.py` still declares
+`commercial_provider="none"`; no application service imports `dotmac_payments`,
+no route or worker delegates to it, and Sub's existing payment-intent,
+confirmation, proof and provider-consequence writers remain authoritative.
+Backfill, complete correlation comparison, effective online-role evidence and
+a separately sealed authority switch remain required before adoption may be
+claimed.
+
 **2026-08-13 — S7 GUC predecessor, no RLS activation.** Sub's existing
 session/transaction authority now applies its one deterministic operator tenant
 to every PostgreSQL SQLAlchemy root transaction through a transaction-local

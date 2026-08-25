@@ -1170,6 +1170,27 @@ url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 reference = "forgejo"
 
 [[package]]
+name = "dotmac-payments"
+version = "0.1.0a1"
+description = "Payment intent and confirmation correlation"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_payments-0.1.0a1-py3-none-any.whl", hash = "sha256:4b26d1c237e1b1f2c089d56b67a941c1e57e1f3aa2ccd7e1cfe066bf2482da6e"},
+    {file = "dotmac_payments-0.1.0a1.tar.gz", hash = "sha256:b2c368abb9f4e301b9194fee10de9aaf228900ce05d5624fbac62c360f74ed0e"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a91"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-service-orders"
 version = "0.1.0a1"
 description = "Service-delivery orders and activation-readiness decisions"
@@ -6059,4 +6080,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "f4ffa91612c6a1cd9a119fc0ceb1462eae90062aca936127fe910affe6551213"
+content-hash = "482cedc7e8284c32613c1a936aa0dd7d6273c4762f21fd53328d8ee209657df0"

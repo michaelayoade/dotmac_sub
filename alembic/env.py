@@ -1,4 +1,3 @@
-from importlib import import_module
 from logging.config import fileConfig
 
 from dotmac_kernel.prerequisites import install_prerequisite_bindings
@@ -61,38 +60,11 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 # loudly here rather than ordering wrongly. See `app/migration_bindings.py`.
 install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
 
-# --- composed module lineages -------------------------------------------
-#
-# Each composed module ships its own Alembic revisions inside its installed
-# distribution and tells us where they are. Appending them here rather than
-# naming a path in `alembic.ini` keeps the config free of the venv layout and
-# the Python version, which differ between a developer checkout, the container
-# and CI.
-#
-# The lineages are APPENDED after Sub's own, which stays first because it
-# supplies the prerequisite effects every module requires — see
-# `app/migration_bindings.py` for which revision supplies which effect.
-#
-# A module absent from the environment is a composition error, not something to
-# skip: the pin in `pyproject.toml` says it is installed, and continuing without
-# its lineage would run `alembic upgrade heads` against a database missing that
-# module's schema while reporting success.
-_COMPOSED_MODULE_LINEAGES: tuple[str, ...] = ("dotmac_service_orders",)
-
-
-def _composed_version_locations() -> list[str]:
-    locations = [
-        location
-        for location in (config.get_main_option("version_locations") or "").split()
-        if location
-    ]
-    for import_name in _COMPOSED_MODULE_LINEAGES:
-        module = import_module(f"{import_name}.migrations")
-        locations.append(str(module.versions_dir()))
-    return locations
-
-
-config.set_main_option("version_locations", " ".join(_composed_version_locations()))
+# Composed module lineages are declared as installed `package:resource`
+# locations in alembic.ini. Alembic builds its ScriptDirectory before this file
+# runs, so changing `version_locations` here would be a silent no-op for the
+# current command. The architecture gate keeps those locations, dependency
+# pins and prerequisite bindings bidirectionally aligned.
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
