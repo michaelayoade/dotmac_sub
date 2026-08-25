@@ -9,6 +9,7 @@ from app.services import ai_intake_rollout_readiness as readiness
 from app.services.ai_intake_canary_runner import (
     CanaryAssertion,
     CanaryAssertionType,
+    CanaryEngineMode,
     CanaryEventType,
     CanaryInboundTurn,
     CanaryMediaType,
