@@ -615,6 +615,11 @@ def materialize_enrollment_email(
         # Fragments stay out of normal HTTP request and access logs. The
         # browser moves the capability into a CSRF-protected POST body.
         token_in_fragment=True,
+        # Subscriber-facing message: let the branding owner resolve the
+        # organization/reseller brand behind this subscriber instead of the
+        # platform default. This selects the display brand only; the sender
+        # identity is unaffected.
+        brand_subscriber_id=subscriber.id,
     )
     return EphemeralEmailContent(
         subject=rendered.subject,

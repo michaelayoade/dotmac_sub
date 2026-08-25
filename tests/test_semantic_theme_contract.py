@@ -8,6 +8,11 @@ from app.services.brand_theme import (
     DEFAULT_SEMANTIC_COLORS,
     LEGACY_TAILWIND_PALETTE_ROLES,
     MIN_SEMANTIC_TEXT_CONTRAST,
+    NEUTRAL_TEXT_ON_DARK,
+    NEUTRAL_TEXT_ON_LIGHT,
+    contrast_ratio,
+    on_color_text_color,
+    readable_text_color,
     semantic_color_contrast_ratios,
 )
 
@@ -172,3 +177,38 @@ def test_migrated_chart_map_and_mobile_slices_have_no_local_color_palette() -> N
             "Colors.teal",
         ):
             assert material_color not in source, f"{path} still owns {material_color}"
+
+
+def test_readable_text_color_lifts_an_illegible_seed_onto_its_own_scale() -> None:
+    """A brand seed is picked for identity; legibility is a separate decision.
+
+    Surfaces that render the seed as text must not ship it raw. The correction
+    stays inside the brand's own generated scale so the result still reads as the
+    brand rather than as a local fallback palette.
+    """
+    light = "#f4f4f9"
+    dark = "#111827"
+    for seed in ("#ffe600", "#06b6d4", "#ff0000", "#000000", "#ffffff"):
+        on_light = readable_text_color(seed, light)
+        on_dark = readable_text_color(seed, dark)
+        assert contrast_ratio(on_light, light) >= MIN_SEMANTIC_TEXT_CONTRAST, seed
+        assert contrast_ratio(on_dark, dark) >= MIN_SEMANTIC_TEXT_CONTRAST, seed
+
+    # An already-legible seed is returned unchanged, not needlessly darkened.
+    assert readable_text_color("#206a07", light) == "#206a07"
+    # A seed that fails is corrected.
+    assert readable_text_color("#ffe600", light) != "#ffe600"
+
+
+def test_on_color_text_color_picks_the_more_legible_neutral() -> None:
+    assert on_color_text_color("#111827") == NEUTRAL_TEXT_ON_DARK
+    assert on_color_text_color("#ffe600") == NEUTRAL_TEXT_ON_LIGHT
+    for fill in ("#206a07", "#1d4ed8", "#ffe600", "#f4f4f9"):
+        label = on_color_text_color(fill)
+        assert label in {NEUTRAL_TEXT_ON_LIGHT, NEUTRAL_TEXT_ON_DARK}
+        assert contrast_ratio(label, fill) >= contrast_ratio(
+            NEUTRAL_TEXT_ON_LIGHT
+            if label == NEUTRAL_TEXT_ON_DARK
+            else NEUTRAL_TEXT_ON_DARK,
+            fill,
+        )

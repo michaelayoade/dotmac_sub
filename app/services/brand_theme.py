@@ -56,6 +56,13 @@ CATEGORICAL_COLOR_ROLES = (
     "semantic-neutral",
 )
 MIN_SEMANTIC_TEXT_CONTRAST = 4.5
+
+# Structural neutrals. The design-system foundation owns these, not the brand:
+# they are the last-resort legible foreground when no stop of a brand scale
+# clears WCAG AA against a given surface.
+NEUTRAL_TEXT_ON_LIGHT = "#111827"
+NEUTRAL_TEXT_ON_DARK = "#ffffff"
+
 _SIX_DIGIT_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # step -> (mix_ratio, mix_toward_white)
@@ -159,3 +166,49 @@ def is_accessible_semantic_color(hex_color: str) -> bool:
         ratio >= MIN_SEMANTIC_TEXT_CONTRAST
         for ratio in semantic_color_contrast_ratios(hex_color)
     )
+
+
+def readable_text_color(
+    hex_color: str,
+    background: str,
+    *,
+    minimum: float = MIN_SEMANTIC_TEXT_CONTRAST,
+) -> str:
+    """Return the nearest scale stop of ``hex_color`` that is legible on ``background``.
+
+    A brand seed is chosen for identity, not for legibility. Surfaces that place
+    the seed as *text* (an email heading, a link) must not render it raw: an
+    unconstrained tenant seed can be any hue or lightness. This walks the brand's
+    own generated scale away from the background until WCAG AA text contrast is
+    met, so the rendered colour still belongs to the brand rather than to a local
+    fallback palette. Only when no stop qualifies does it fall back to a
+    structural neutral, which the design-system foundation owns.
+    """
+    if contrast_ratio(hex_color, background) >= minimum:
+        return _normalize_hex(hex_color)
+    scale = generate_scale(hex_color)
+    background_is_light = _relative_luminance(background) >= 0.5
+    steps = (
+        (700, 800, 900, 950) if background_is_light else (500, 400, 300, 200, 100, 50)
+    )
+    for step in steps:
+        candidate = scale[step]
+        if contrast_ratio(candidate, background) >= minimum:
+            return candidate
+    return NEUTRAL_TEXT_ON_LIGHT if background_is_light else NEUTRAL_TEXT_ON_DARK
+
+
+def on_color_text_color(background: str) -> str:
+    """Return the legible foreground for text sitting *on* a brand fill.
+
+    Used for button labels, where the brand colour is the background rather than
+    the text. Picks whichever structural neutral gives the higher contrast.
+    """
+    light_ratio = contrast_ratio(NEUTRAL_TEXT_ON_DARK, background)
+    dark_ratio = contrast_ratio(NEUTRAL_TEXT_ON_LIGHT, background)
+    return NEUTRAL_TEXT_ON_DARK if light_ratio >= dark_ratio else NEUTRAL_TEXT_ON_LIGHT
+
+
+def _normalize_hex(hex_color: str) -> str:
+    r, g, b = _parse_hex(hex_color)
+    return f"#{r:02x}{g:02x}{b:02x}"

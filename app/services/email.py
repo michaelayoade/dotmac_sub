@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import smtplib
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.mime.application import MIMEApplication
@@ -23,6 +24,7 @@ from app.models.notification import (
 from app.models.subscription_engine import SettingValueType
 from app.schemas.notification import NotificationCreate
 from app.schemas.settings import DomainSettingUpdate
+from app.services.brand_theme import on_color_text_color, readable_text_color
 from app.services.branding_config import get_brand
 from app.services.communication_intents import MAX_EMAIL_ATTACHMENT_BYTES
 from app.services.domain_settings import notification_settings
@@ -131,10 +133,15 @@ SMTP_ACTIVITY_CHOICES: list[tuple[str, str]] = [
     ("observability_smtp_probe", "Inbound SMTP Health Probe"),
 ]
 
-DOTMAC_RED = "#FF0000"
-DOTMAC_GREEN = "#008000"
-DOTMAC_WHITE = "#F4F4F9"
-DOTMAC_BUTTON_TEXT = "#ffffff"
+# Structural neutrals for the email chrome. The design-system foundation owns
+# surfaces, borders, and muted body text; `customer.branding` owns none of them,
+# so they are deliberately NOT part of the resolved brand snapshot below.
+EMAIL_SURFACE_LIGHT = "#f4f4f9"
+EMAIL_SURFACE_DARK = "#111827"
+EMAIL_MUTED_TEXT = "#555555"
+EMAIL_BORDER_LIGHT = "#e2e2e2"
+
+DEFAULT_EMAIL_LOGO_PATH = "/static/branding/favicon/icon-192.png"
 
 
 @dataclass(frozen=True)
@@ -142,6 +149,44 @@ class RenderedEmail:
     subject: str
     body_html: str
     body_text: str
+
+
+@dataclass(frozen=True)
+class EmailBrand:
+    """Display-brand projection for one rendered transactional email.
+
+    Resolved once per render from `customer.branding`
+    (`app.services.brand_profiles.resolve_brand`), which is the single owner of
+    customer-facing brand identity and of the concrete colour behind each role.
+    Email is a reader of that owner; it keeps no branding settings reads, no
+    company-identity lookup, and no local colour literals of its own.
+
+    This snapshot carries DISPLAY brand only. Legal-sender identity -- the
+    envelope sender, the `From:` name and address, and the registered legal
+    entity -- is a separate concern with a separate owner (the SMTP sender
+    profile resolved by `_get_smtp_config`, and `customer.branding`'s
+    `legal_name`/`legal_address` for documents that must attribute a legal
+    entity). Re-skinning a deployment changes what a message looks like; it must
+    never silently change who is legally responsible for it, so the two are not
+    folded together here.
+
+    The `*_color` fields are already contrast-corrected for the surface they are
+    rendered on -- see `resolve_email_brand`.
+    """
+
+    display_name: str
+    logo_url: str
+    support_email: str
+    # Raw resolved seeds, used where the brand colour is a fill rather than text.
+    primary_color: str
+    secondary_color: str
+    # Contrast-corrected text colours for the light and dark email surfaces.
+    heading_color: str
+    heading_color_dark: str
+    link_color: str
+    link_color_dark: str
+    # Legible label colour for text sitting on a `primary_color` fill.
+    button_text_color: str
 
 
 def _env_value(name: str) -> str | None:
@@ -556,7 +601,16 @@ def get_smtp_config(
     sender_key: str | None = None,
     activity: str | None = None,
 ) -> dict:
-    """Public accessor for resolved SMTP configuration."""
+    """Public accessor for resolved SMTP configuration.
+
+    This is the LEGAL SENDER identity -- envelope sender, `From:` name and
+    address -- and it stays separately owned from the display brand resolved by
+    `resolve_email_brand`. A team sender profile is not a brand: Finance,
+    Support, and Field Service legitimately send as different addresses under
+    one brand, and re-skinning a deployment must never silently change who is
+    legally responsible for a message. Do not source `From:` from the brand
+    snapshot, and do not source display copy from this config.
+    """
     return _get_smtp_config(db, sender_key=sender_key, activity=activity)
 
 
@@ -622,29 +676,6 @@ def _get_app_url(db: Session | None, *, next_login_path: str | None = None) -> s
     return "http://localhost:8000"
 
 
-def _get_company_name(db: Session | None) -> str:
-    if db is None:
-        return get_brand()["legal_name"]
-    try:
-        from app.services import (
-            web_system_company_info as web_system_company_info_service,
-        )
-
-        company_name = (
-            web_system_company_info_service.get_company_info(db).get("company_name")
-            or ""
-        ).strip()
-        if company_name:
-            return company_name
-    except Exception:
-        logger.debug("Failed to load company name for email branding", exc_info=True)
-    return get_brand()["legal_name"]
-
-
-def _brand_accent_color() -> str:
-    return DOTMAC_RED
-
-
 def _absolute_asset_url(app_url: str, asset_url: str | None) -> str:
     value = (asset_url or "").strip()
     if not value:
@@ -656,40 +687,107 @@ def _absolute_asset_url(app_url: str, asset_url: str | None) -> str:
     return value
 
 
-def _get_email_branding_logo_url(db: Session | None) -> str:
-    app_url = _get_app_url(db)
-    if db is not None:
-        try:
-            logo_raw = resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
-            logo_url = _absolute_asset_url(
-                app_url, str(logo_raw).strip() if logo_raw else ""
-            )
-            if logo_url:
-                return logo_url
-        except Exception:
-            logger.debug(
-                "Failed to load primary branding logo for email", exc_info=True
-            )
-        try:
-            dark_logo_raw = resolve_value(
-                db, SettingDomain.comms, "sidebar_logo_dark_url"
-            )
-            dark_logo_url = _absolute_asset_url(
-                app_url, str(dark_logo_raw).strip() if dark_logo_raw else ""
-            )
-            if dark_logo_url:
-                return dark_logo_url
-        except Exception:
-            logger.debug("Failed to load dark branding logo for email", exc_info=True)
-    return _absolute_asset_url(app_url, "/static/branding/favicon/icon-192.png")
+def _deployment_email_brand(base_url: str) -> EmailBrand:
+    """Last-resort snapshot from the deployment brand file.
+
+    Used only when the branding owner cannot be queried at all (no session, or a
+    failed lookup). It is still white-label configuration -- `brand.json` and the
+    `BRAND_*` environment keys -- never a literal product colour.
+    """
+    static = get_brand()
+    return _email_brand_from_values(
+        display_name=static["product_name"] or static["name"],
+        logo_url=DEFAULT_EMAIL_LOGO_PATH,
+        support_email=static["support_email"],
+        primary_color=static["primary_color"],
+        secondary_color=static["secondary_color"],
+        base_url=base_url,
+    )
+
+
+def _email_brand_from_values(
+    *,
+    display_name: str,
+    logo_url: str,
+    support_email: str,
+    primary_color: str,
+    secondary_color: str,
+    base_url: str,
+) -> EmailBrand:
+    primary = primary_color.strip() or get_brand()["primary_color"]
+    secondary = secondary_color.strip() or get_brand()["secondary_color"]
+    return EmailBrand(
+        display_name=display_name.strip(),
+        logo_url=_absolute_asset_url(
+            base_url, logo_url.strip() or DEFAULT_EMAIL_LOGO_PATH
+        ),
+        support_email=support_email.strip(),
+        primary_color=primary,
+        secondary_color=secondary,
+        heading_color=readable_text_color(primary, EMAIL_SURFACE_LIGHT),
+        heading_color_dark=readable_text_color(primary, EMAIL_SURFACE_DARK),
+        link_color=readable_text_color(secondary, EMAIL_SURFACE_LIGHT),
+        link_color_dark=readable_text_color(secondary, EMAIL_SURFACE_DARK),
+        button_text_color=on_color_text_color(primary),
+    )
+
+
+def resolve_email_brand(
+    db: Session | None,
+    *,
+    base_url: str | None = None,
+    subscriber_id: str | uuid.UUID | None = None,
+    reseller_id: str | uuid.UUID | None = None,
+    organization_id: str | uuid.UUID | None = None,
+) -> EmailBrand:
+    """Resolve the display brand for one email render, once.
+
+    Reads `customer.branding` (`app.services.brand_profiles.resolve_brand`), so a
+    logo, colour, name, or support address configured through the brand-profile
+    API -- at platform, reseller, or organization scope -- reaches transactional
+    email exactly as it reaches the portal and the invoice PDF. Callers resolve
+    this once per rendered message and pass the snapshot down; helpers must not
+    re-resolve per field.
+
+    Colours are contrast-corrected here rather than at each use site: the brand
+    seed is chosen for identity and may be illegible as text on either email
+    surface, so `readable_text_color` walks the brand's own scale until it clears
+    WCAG AA on the light and dark surfaces, and `on_color_text_color` picks the
+    button label colour against the brand fill. A seed with no legible stop (a
+    saturated mid-tone used as a button fill) resolves to the best available
+    structural neutral rather than to a second brand palette.
+    """
+    app_url = base_url if base_url is not None else _get_app_url(db)
+    if db is None:
+        return _deployment_email_brand(app_url)
+    try:
+        from app.services.brand_profiles import resolve_brand
+
+        brand = resolve_brand(
+            db,
+            subscriber_id=subscriber_id,
+            reseller_id=reseller_id,
+            organization_id=organization_id,
+        )
+    except Exception:
+        logger.debug("Failed to resolve brand profile for email", exc_info=True)
+        return _deployment_email_brand(app_url)
+    return _email_brand_from_values(
+        # Display name, not `legal_name`: re-skinning changes the customer-facing
+        # product name only. Legal attribution stays with the sender identity.
+        display_name=brand.product_name or brand.name,
+        logo_url=brand.logo_url or brand.dark_logo_url or brand.favicon_url,
+        support_email=brand.support_email,
+        primary_color=brand.primary_color,
+        secondary_color=brand.secondary_color,
+        base_url=app_url,
+    )
 
 
 def _render_action_email_html(
     *,
-    company_name: str,
-    logo_url: str,
+    brand: EmailBrand,
     title: str,
-    accent_color: str,
     greeting: str,
     intro_html: str,
     action_url: str,
@@ -697,31 +795,26 @@ def _render_action_email_html(
     expiry_minutes: int,
     details_html: str,
     closing_html: str,
-    support_email: str,
-    secondary_color: str | None = None,
     boxed: bool = False,
     details_suffix_html: str = "",
 ) -> str:
-    logo_block = ""
-    if logo_url:
+    safe_display_name = html.escape(brand.display_name)
+    if brand.logo_url:
         logo_block = f"""
   <div style="text-align: center; margin: 0 0 18px;">
-    <img src="{html.escape(logo_url)}" alt="{html.escape(company_name)} logo" style="max-width: 160px; max-height: 64px; width: auto; height: auto;">
+    <img src="{html.escape(brand.logo_url)}" alt="{safe_display_name} logo" style="max-width: 160px; max-height: 64px; width: auto; height: auto;">
   </div>
 """
     else:
         logo_block = f"""
   <div style="text-align: center; margin: 0 0 18px;">
-    <div style="display: inline-block; color: {DOTMAC_RED}; font-size: 22px; font-weight: 700;">{html.escape(company_name)}</div>
+    <div class="email-heading" style="display: inline-block; color: {brand.heading_color}; font-size: 22px; font-weight: 700;">{safe_display_name}</div>
   </div>
 """
-    support_href = html.escape(support_email)
-    safe_company_name = html.escape(company_name)
-    secondary_color = secondary_color or DOTMAC_GREEN
-    body_background = DOTMAC_WHITE
+    support_href = html.escape(brand.support_email)
     container_style = (
         "font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; "
-        f"line-height: 1.8; color: #333; background-color: {DOTMAC_WHITE}; "
+        f"line-height: 1.8; color: #333; background-color: {EMAIL_SURFACE_LIGHT}; "
         "padding: 25px; position: relative; max-width: 680px; margin: 0 auto;"
     )
     if boxed:
@@ -730,10 +823,11 @@ def _render_action_email_html(
             " box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);"
         )
     details_style = (
-        f"background-color: {DOTMAC_WHITE}; border: 2px solid #e2e2e2; "
+        f"background-color: {EMAIL_SURFACE_LIGHT}; "
+        f"border: 2px solid {EMAIL_BORDER_LIGHT}; "
         "border-radius: 8px; padding: 20px; margin-bottom: 20px;"
         if boxed
-        else f"background-color: {DOTMAC_WHITE}; padding: 0; margin: 22px 0;"
+        else f"background-color: {EMAIL_SURFACE_LIGHT}; padding: 0; margin: 22px 0;"
     )
     return f"""<!DOCTYPE html>
 <html>
@@ -744,50 +838,53 @@ def _render_action_email_html(
   <meta name="supported-color-schemes" content="light dark">
   <style>
     @media (prefers-color-scheme: dark) {{
-      .email-body {{ background-color: #111827 !important; }}
-      .email-container {{ background-color: #111827 !important; color: #e5e7eb !important; }}
+      .email-body {{ background-color: {EMAIL_SURFACE_DARK} !important; }}
+      .email-container {{ background-color: {EMAIL_SURFACE_DARK} !important; color: #e5e7eb !important; }}
       .email-text {{ color: #d1d5db !important; }}
       .email-muted {{ color: #d1d5db !important; }}
-      .email-details {{ background-color: #111827 !important; border-color: #374151 !important; }}
-      .email-highlight-box {{ background-color: #1f2937 !important; border-color: #008000 !important; }}
+      .email-details {{ background-color: {EMAIL_SURFACE_DARK} !important; border-color: #374151 !important; }}
+      .email-highlight-box {{ background-color: #1f2937 !important; border-color: {brand.link_color_dark} !important; }}
+      .email-heading {{ color: {brand.heading_color_dark} !important; }}
+      .email-accent {{ color: {brand.link_color_dark} !important; }}
+      .email-link {{ color: {brand.link_color_dark} !important; }}
     }}
   </style>
 </head>
-<body class="email-body" style="margin: 0; padding: 24px; background-color: {body_background};">
+<body class="email-body" style="margin: 0; padding: 24px; background-color: {EMAIL_SURFACE_LIGHT};">
   <div class="email-container" style="{container_style}">
 {logo_block}
     <div style="text-align: center; margin-bottom: 20px;">
-      <h1 style="color: {accent_color}; font-size: 24px; margin: 0;">{html.escape(title)}</h1>
+      <h1 class="email-heading" style="color: {brand.heading_color}; font-size: 24px; margin: 0;">{html.escape(title)}</h1>
     </div>
 
-    <p style="font-size: 16px; color: {accent_color}; margin-top: 20px;">{html.escape(greeting)}</p>
+    <p class="email-heading" style="font-size: 16px; color: {brand.heading_color}; margin-top: 20px;">{html.escape(greeting)}</p>
 
-    <div class="email-text" style="font-size: 15px; color: #555; margin: 15px 0;">
+    <div class="email-text" style="font-size: 15px; color: {EMAIL_MUTED_TEXT}; margin: 15px 0;">
       {intro_html}
     </div>
 
     <div class="email-details" style="{details_style}">
       {details_html}
       <p style="margin: 18px 0 0;">
-        <a href="{html.escape(action_url)}" style="display: inline-block; padding: 12px 24px; background-color: {accent_color}; color: {DOTMAC_BUTTON_TEXT}; text-decoration: none; border-radius: 6px; font-weight: 600;">{html.escape(action_label)}</a>
+        <a href="{html.escape(action_url)}" style="display: inline-block; padding: 12px 24px; background-color: {brand.primary_color}; color: {brand.button_text_color}; text-decoration: none; border-radius: 6px; font-weight: 600;">{html.escape(action_label)}</a>
       </p>
       <p class="email-muted" style="font-size: 14px; color: #666; margin: 16px 0 0;">If the button does not work, copy and paste this link into your browser:</p>
-      <p style="font-size: 14px; margin: 8px 0 0; word-break: break-all;"><a href="{html.escape(action_url)}" style="color: {secondary_color}; text-decoration: none;">{html.escape(action_url)}</a></p>
+      <p style="font-size: 14px; margin: 8px 0 0; word-break: break-all;"><a class="email-link" href="{html.escape(action_url)}" style="color: {brand.link_color}; text-decoration: none;">{html.escape(action_url)}</a></p>
       {details_suffix_html}
     </div>
 
-    <div class="email-text" style="font-size: 15px; color: #555; margin: 15px 0;">
+    <div class="email-text" style="font-size: 15px; color: {EMAIL_MUTED_TEXT}; margin: 15px 0;">
       {closing_html}
-      <p style="margin: 0;">For help, contact us via <a href="mailto:{support_href}" style="color: {secondary_color}; text-decoration: none;">{support_href}</a>.</p>
+      <p style="margin: 0;">For help, contact us via <a class="email-link" href="mailto:{support_href}" style="color: {brand.link_color}; text-decoration: none;">{support_href}</a>.</p>
     </div>
 
-    <p class="email-text" style="font-size: 15px; color: #555; margin-bottom: 20px;">
-      Thank you for choosing <strong style="color: {secondary_color}; font-size: 18px;">{safe_company_name}</strong>.
+    <p class="email-text" style="font-size: 15px; color: {EMAIL_MUTED_TEXT}; margin-bottom: 20px;">
+      Thank you for choosing <strong class="email-accent" style="color: {brand.link_color}; font-size: 18px;">{safe_display_name}</strong>.
     </p>
 
-    <p style="font-size: 15px; color: {accent_color}; text-align: right; font-style: italic;">
+    <p class="email-heading" style="font-size: 15px; color: {brand.heading_color}; text-align: right; font-style: italic;">
       Best regards,<br>
-      <span style="color: {secondary_color}; font-weight: bold;">{safe_company_name} Support Team</span>
+      <span class="email-accent" style="color: {brand.link_color}; font-weight: bold;">{safe_display_name} Support Team</span>
     </p>
   </div>
 </body>
@@ -1168,6 +1265,9 @@ def render_password_reset_email(
     next_login_path: str | None = None,
     expires_minutes: int | None = None,
     token_in_fragment: bool = False,
+    brand_subscriber_id: str | uuid.UUID | None = None,
+    brand_reseller_id: str | uuid.UUID | None = None,
+    brand_organization_id: str | uuid.UUID | None = None,
 ) -> RenderedEmail:
     """Render a password reset email without sending or persisting it.
 
@@ -1179,6 +1279,9 @@ def render_password_reset_email(
         expires_minutes: Actual token TTL; falls back to the configured setting
 
         token_in_fragment: Keep the bearer out of HTTP request/access logs
+        brand_*_id: Optional brand scope. These select which brand profile the
+            branding owner resolves; they do not identify the recipient. Omit
+            them for a platform-scoped message.
     """
     app_url = _get_app_url(db, next_login_path=next_login_path)
     query = {"token": reset_token}
@@ -1186,6 +1289,11 @@ def render_password_reset_email(
         query["next_login"] = next_login_path
     token_separator = "#" if token_in_fragment else "?"
     reset_url = f"{app_url}/auth/reset-password{token_separator}{urlencode(query)}"
+    brand_scope = {
+        "subscriber_id": brand_subscriber_id,
+        "reseller_id": brand_reseller_id,
+        "organization_id": brand_organization_id,
+    }
 
     # Prefer the actual token TTL; fall back to the configured setting
     expiry_minutes = expires_minutes or (
@@ -1194,19 +1302,14 @@ def render_password_reset_email(
     expiry_duration = _format_expiry_duration(expiry_minutes)
 
     greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
-    company_name = _get_company_name(db)
-    logo_url = _get_email_branding_logo_url(db)
-    support_email = (
-        _setting_value(db, "smtp_from_email") or get_brand()["support_email"]
-    ).strip()
+    brand = resolve_email_brand(db, base_url=app_url, **brand_scope)
+    company_name = brand.display_name
 
     subject = "Password Reset Request"
 
     body_html = _render_action_email_html(
-        company_name=company_name,
-        logo_url=logo_url,
+        brand=brand,
         title="Password Reset Request",
-        accent_color=DOTMAC_RED,
         greeting=greeting,
         intro_html="""
 <p style="margin: 0 0 12px;">We received a request to reset your password for your portal access.</p>
@@ -1216,19 +1319,17 @@ def render_password_reset_email(
         action_label="Reset Password",
         expiry_minutes=expiry_minutes,
         details_html=f"""
-<div class="email-highlight-box" style="background-color: #f8fafc; border: 1px solid {DOTMAC_GREEN}; border-left: 5px solid {DOTMAC_RED}; border-radius: 8px; padding: 18px;">
+<div class="email-highlight-box" style="background-color: #f8fafc; border: 1px solid {brand.link_color}; border-left: 5px solid {brand.heading_color}; border-radius: 8px; padding: 18px;">
   <p style="font-size: 15px; margin: 0; line-height: 1.6;">
-    <strong style="color: {DOTMAC_GREEN};">Action:</strong> <span class="email-muted" style="color: #555;">Reset your account password</span><br>
-    <strong style="color: {DOTMAC_GREEN};">Email:</strong> <span class="email-muted" style="color: #555;">{html.escape(to_email)}</span><br>
-    <strong style="color: {DOTMAC_GREEN};">Expires In:</strong> <span class="email-muted" style="color: #555;">{expiry_duration}</span>
+    <strong class="email-accent" style="color: {brand.link_color};">Action:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">Reset your account password</span><br>
+    <strong class="email-accent" style="color: {brand.link_color};">Email:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">{html.escape(to_email)}</span><br>
+    <strong class="email-accent" style="color: {brand.link_color};">Expires In:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">{expiry_duration}</span>
   </p>
 """.strip(),
         closing_html="""
 <p style="margin: 0 0 12px;">If you did not request this password reset, you can safely ignore this email and your current password will remain unchanged.</p>
 <p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
 """.strip(),
-        support_email=support_email,
-        secondary_color=DOTMAC_GREEN,
         boxed=False,
         details_suffix_html="</div>",
     )
@@ -1290,6 +1391,9 @@ def send_email_verification_email(
     verification_token: str,
     person_name: str | None = None,
     expires_minutes: int | None = None,
+    brand_subscriber_id: str | uuid.UUID | None = None,
+    brand_reseller_id: str | uuid.UUID | None = None,
+    brand_organization_id: str | uuid.UUID | None = None,
 ) -> bool:
     """
     Send an email-address verification email.
@@ -1300,6 +1404,9 @@ def send_email_verification_email(
         verification_token: The JWT email-verification token
         person_name: Optional name to personalize the email
         expires_minutes: Actual token TTL; falls back to the configured setting
+        brand_*_id: Optional brand scope. These select which brand profile the
+            branding owner resolves; they do not identify the recipient. Omit
+            them for a platform-scoped message.
 
     Returns:
         True if email was sent successfully, False otherwise
@@ -1317,20 +1424,20 @@ def send_email_verification_email(
     expiry_duration = _format_expiry_duration(expiry_minutes)
 
     greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
-    company_name = _get_company_name(db)
-    logo_url = _get_email_branding_logo_url(db)
-    support_email = (
-        _setting_value(db, "smtp_from_email") or get_brand()["support_email"]
-    ).strip()
+    brand = resolve_email_brand(
+        db,
+        base_url=app_url,
+        subscriber_id=brand_subscriber_id,
+        reseller_id=brand_reseller_id,
+        organization_id=brand_organization_id,
+    )
+    company_name = brand.display_name
 
     subject = "Verify your email address"
 
-    accent_color = _brand_accent_color()
     body_html = _render_action_email_html(
-        company_name=company_name,
-        logo_url=logo_url,
+        brand=brand,
         title="Verify Your Email Address",
-        accent_color=accent_color,
         greeting=greeting,
         intro_html="""
 <p style="margin: 0 0 12px;">Please confirm that this is the email address for your portal account.</p>
@@ -1341,17 +1448,15 @@ def send_email_verification_email(
         expiry_minutes=expiry_minutes,
         details_html=f"""
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
-  <strong style="color: {DOTMAC_GREEN};">Action:</strong> <span class="email-muted" style="color: #555;">Verify your email address</span><br>
-  <strong style="color: {DOTMAC_GREEN};">Email:</strong> <span class="email-muted" style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: {DOTMAC_GREEN};">Expires In:</strong> <span class="email-muted" style="color: #555;">{expiry_duration}</span>
+  <strong class="email-accent" style="color: {brand.link_color};">Action:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">Verify your email address</span><br>
+  <strong class="email-accent" style="color: {brand.link_color};">Email:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">{html.escape(to_email)}</span><br>
+  <strong class="email-accent" style="color: {brand.link_color};">Expires In:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""
 <p style="margin: 0 0 12px;">If you did not create an account or request this, you can safely ignore this email.</p>
 <p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
 """.strip(),
-        support_email=support_email,
-        secondary_color=DOTMAC_GREEN,
     )
 
     body_text = f"""{greeting}
@@ -1387,6 +1492,9 @@ def render_user_invite_email(
     expires_minutes: int | None = None,
     action_path: str = "/auth/reset-password",
     token_in_fragment: bool = False,
+    brand_subscriber_id: str | uuid.UUID | None = None,
+    brand_reseller_id: str | uuid.UUID | None = None,
+    brand_organization_id: str | uuid.UUID | None = None,
 ) -> RenderedEmail:
     """
     Render a new user invitation email without sending or persisting it.
@@ -1399,6 +1507,9 @@ def render_user_invite_email(
         expires_minutes: Actual token TTL; falls back to the configured setting
         action_path: Portal path that will consume the purpose-bound token
         token_in_fragment: Keep the bearer out of HTTP request/access logs
+        brand_*_id: Optional brand scope. These select which brand profile the
+            branding owner resolves; they do not identify the recipient. Omit
+            them for a platform-scoped message.
     """
     app_url = _get_app_url(db, next_login_path=next_login_path)
     query = {"token": reset_token}
@@ -1417,20 +1528,20 @@ def render_user_invite_email(
     expiry_duration = _format_expiry_duration(expiry_minutes)
 
     greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
-    company_name = _get_company_name(db)
-    logo_url = _get_email_branding_logo_url(db)
-    support_email = (
-        _setting_value(db, "smtp_from_email") or get_brand()["support_email"]
-    ).strip()
+    brand = resolve_email_brand(
+        db,
+        base_url=app_url,
+        subscriber_id=brand_subscriber_id,
+        reseller_id=brand_reseller_id,
+        organization_id=brand_organization_id,
+    )
+    company_name = brand.display_name
 
     subject = f"You're invited to {company_name}"
 
-    accent_color = _brand_accent_color()
     body_html = _render_action_email_html(
-        company_name=company_name,
-        logo_url=logo_url,
+        brand=brand,
         title=f"Welcome to {company_name}",
-        accent_color=accent_color,
         greeting=greeting,
         intro_html="""
 <p style="margin: 0 0 12px;">Your account has been created successfully.</p>
@@ -1441,17 +1552,15 @@ def render_user_invite_email(
         expiry_minutes=expiry_minutes,
         details_html=f"""
 <p style="font-size: 15px; margin: 0; line-height: 1.5;">
-  <strong style="color: {DOTMAC_GREEN};">Portal:</strong> <span class="email-muted" style="color: #555;">{html.escape(company_name)}</span><br>
-  <strong style="color: {DOTMAC_GREEN};">Email:</strong> <span class="email-muted" style="color: #555;">{html.escape(to_email)}</span><br>
-  <strong style="color: {DOTMAC_GREEN};">Expires In:</strong> <span class="email-muted" style="color: #555;">{expiry_duration}</span>
+  <strong class="email-accent" style="color: {brand.link_color};">Portal:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">{html.escape(company_name)}</span><br>
+  <strong class="email-accent" style="color: {brand.link_color};">Email:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">{html.escape(to_email)}</span><br>
+  <strong class="email-accent" style="color: {brand.link_color};">Expires In:</strong> <span class="email-muted" style="color: {EMAIL_MUTED_TEXT};">{expiry_duration}</span>
 </p>
 """.strip(),
         closing_html="""
 <p style="margin: 0 0 12px;">If you need any assistance getting started, our support team is available to help you.</p>
 <p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
 """.strip(),
-        support_email=support_email,
-        secondary_color=DOTMAC_GREEN,
     )
 
     body_text = f"""{greeting}

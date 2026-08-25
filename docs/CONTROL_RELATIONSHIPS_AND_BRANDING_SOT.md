@@ -49,6 +49,38 @@ Finance, Support, and Field Service can use different sender addresses while
 the subscriber's reseller/organization relationship selects the customer-
 facing brand.
 
+### Readers
+
+Every customer-facing render reads this owner rather than resolving branding
+itself: the runtime web theme, the invoice PDF, the queued-notification wrapper
+(`app.services.email_template.wrap_email_html`), and transactional email.
+
+Transactional email (`app.services.email`) resolves exactly one typed
+`EmailBrand` snapshot per rendered message through `resolve_email_brand`, then
+passes it down. It keeps no branding settings reads, no separate
+company-identity lookup, and no colour literals beyond the design-system
+neutrals; the guard is `tests/architecture/test_email_brand_boundary.py`.
+Optional `brand_*_id` arguments on the render entry points forward the brand
+scope to the owner so a reseller- or organization-scoped profile reaches the
+message.
+
+Because a brand seed is chosen for identity rather than legibility, a reader
+that renders a brand colour as *text* corrects it first:
+`brand_theme.readable_text_color` walks the brand's own generated scale until
+WCAG AA is met against the surface, and `brand_theme.on_color_text_color` picks
+the label colour for text sitting on a brand fill. A seed with no legible stop
+resolves to a structural neutral, never to a second palette.
+
+### Display brand is not sender identity
+
+Display brand and legal-sender identity are separately owned and must not be
+folded together. The `From:` name and address come from the SMTP sender profile
+(`app.services.email.get_smtp_config`); `legal_name` and `legal_address`
+attribute the legal entity on documents. A white-label build may change what
+the product looks like; it must never silently change who is legally
+responsible for a message. `EmailBrand` therefore carries display fields only,
+enforced by `test_brand_snapshot_carries_display_identity_only`.
+
 Migration `262_brand_profiles` creates the canonical table and backfills the
 platform profile from existing company and branding settings. The compatibility
 backfill is idempotent and dry-run by default:

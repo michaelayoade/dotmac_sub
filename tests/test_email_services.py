@@ -12,7 +12,9 @@ from app.models.notification import (
 )
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
+from app.services import brand_profiles
 from app.services import email as email_service
+from app.services.brand_theme import MIN_SEMANTIC_TEXT_CONTRAST, contrast_ratio
 from app.services.domain_settings import notification_settings
 from tests.mocks import FakeSMTP
 
@@ -643,8 +645,9 @@ def test_send_user_invite_email_uses_company_name_and_branding_logo(
         "https://selfcare.dotmac.ng/branding/assets/logo-main.png"
         in captured["body_html"]
     )
-    assert "color: #FF0000" in captured["body_html"]
-    assert "color: #008000" in captured["body_html"]
+    brand = email_service.resolve_email_brand(db_session)
+    assert f"color: {brand.heading_color}" in captured["body_html"]
+    assert f"color: {brand.link_color}" in captured["body_html"]
     assert "<img" in captured["body_html"]
     assert "Welcome to Dotmac Selfcare." in captured["body_text"]
     assert captured["activity"] == "auth_user_invite"
@@ -734,13 +737,14 @@ def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
         "https://selfcare.dotmac.ng/branding/assets/logo-main.png"
         in captured["body_html"]
     )
-    assert "background-color: #FF0000" in captured["body_html"]
-    assert "color: #008000" in captured["body_html"]
-    assert "background-color: #F4F4F9" in captured["body_html"]
+    brand = brand_profiles.resolve_brand(db_session)
+    assert f"background-color: {brand.primary_color}" in captured["body_html"]
+    assert (
+        f"background-color: {email_service.EMAIL_SURFACE_LIGHT}"
+        in (captured["body_html"])
+    )
     assert "email-highlight-box" in captured["body_html"]
     assert "background-color: #f8fafc" in captured["body_html"]
-    assert "border: 1px solid #008000" in captured["body_html"]
-    assert "border-left: 5px solid #FF0000" in captured["body_html"]
     assert 'name="color-scheme" content="light dark"' in captured["body_html"]
     assert "@media (prefers-color-scheme: dark)" in captured["body_html"]
     assert "email-muted" in captured["body_html"]
@@ -871,3 +875,274 @@ def test_render_email_bodies_leaves_full_html_document_unwrapped():
     assert body_html.count("<html") == 1
     assert "{{ customer_name }}" in body_html
     assert "Hi {{ customer_name }}" in body_text
+
+
+# --- Transactional email is a reader of the branding owner -------------------
+#
+# `customer.branding` (app.services.brand_profiles) owns customer-facing brand
+# identity and the concrete colour behind each role. Transactional email used to
+# resolve branding itself: it read two `comms` settings for a logo, sourced the
+# company name from billing settings, and hardcoded the product's own red and
+# green. The tests below pin the migrated boundary -- brand-profile values reach
+# a rendered email, and no product-specific literal survives in the output.
+
+# Structural neutrals owned by the design-system foundation, not by the brand.
+# Anything outside this set that appears in a rendered email must be a colour the
+# branding owner resolved.
+_EMAIL_NEUTRAL_HEXES = {
+    "#f4f4f9",  # EMAIL_SURFACE_LIGHT
+    "#111827",  # EMAIL_SURFACE_DARK / neutral text on light
+    "#555555",  # EMAIL_MUTED_TEXT
+    "#e2e2e2",  # EMAIL_BORDER_LIGHT
+    "#333",
+    "#ccc",
+    "#666",
+    "#ffffff",
+    "#e5e7eb",
+    "#d1d5db",
+    "#374151",
+    "#1f2937",
+    "#f8fafc",
+}
+
+
+def _hexes_in(body_html: str) -> set[str]:
+    import re
+
+    return {match.lower() for match in re.findall(r"#[0-9a-fA-F]{3,8}\b", body_html)}
+
+
+def _capture_rendered(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_send_email(
+        db, to_email, subject, body_html, body_text, activity=None, **kwargs
+    ):
+        captured["subject"] = subject
+        captured["body_html"] = body_html
+        captured["body_text"] = body_text
+        return True
+
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+    return captured
+
+
+def test_brand_profile_logo_and_colours_reach_a_rendered_email(db_session, monkeypatch):
+    """A logo set through the brand-profile API must reach transactional email.
+
+    Before the migration this failed: email read `comms.sidebar_logo_url`
+    directly, so a logo configured through `PUT /branding/profiles/platform`
+    never appeared in a password-reset or invite message.
+    """
+    captured = _capture_rendered(monkeypatch)
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
+
+    brand_profiles.upsert_brand_profile_committed(
+        db_session,
+        scope_type="platform",
+        scope_id=None,
+        values={
+            "product_name": "Northwind Fibre",
+            "logo_url": "/branding/assets/northwind-logo.png",
+            "primary_color": "#1d4ed8",
+            "secondary_color": "#7c2d12",
+            "support_email": "help@northwind.example",
+        },
+    )
+
+    assert email_service.send_user_invite_email(
+        db_session, "invitee@example.test", "token-abc"
+    )
+
+    body_html = captured["body_html"]
+    assert (
+        "https://selfcare.example.test/branding/assets/northwind-logo.png" in body_html
+    )
+    assert "Northwind Fibre" in body_html
+    assert "You're invited to Northwind Fibre" == captured["subject"]
+    assert "help@northwind.example" in body_html
+    # The button fill is the brand primary itself.
+    assert "background-color: #1d4ed8" in body_html
+
+
+def test_rendered_email_contains_no_hardcoded_product_colour(db_session, monkeypatch):
+    """Every non-neutral colour in a rendered email comes from the brand owner.
+
+    This is the guard that keeps the retired parallel palette from returning: it
+    fails on any new literal, not just on the two the migration removed.
+    """
+    captured = _capture_rendered(monkeypatch)
+
+    brand_profiles.upsert_brand_profile_committed(
+        db_session,
+        scope_type="platform",
+        scope_id=None,
+        values={"primary_color": "#1d4ed8", "secondary_color": "#7c2d12"},
+    )
+
+    assert email_service.send_password_reset_email(
+        db_session, "user@example.test", "reset-abc"
+    )
+
+    body_html = captured["body_html"]
+    # The literals this slice retired.
+    assert "#ff0000" not in body_html.lower()
+    assert "#008000" not in body_html.lower()
+
+    brand = email_service.resolve_email_brand(db_session)
+    brand_hexes = {
+        brand.primary_color.lower(),
+        brand.secondary_color.lower(),
+        brand.heading_color.lower(),
+        brand.heading_color_dark.lower(),
+        brand.link_color.lower(),
+        brand.link_color_dark.lower(),
+        brand.button_text_color.lower(),
+    }
+    unexplained = _hexes_in(body_html) - brand_hexes - _EMAIL_NEUTRAL_HEXES
+    assert not unexplained, f"unowned colour literals in email body: {unexplained}"
+
+
+def test_rendered_email_brand_text_colours_meet_wcag_aa(db_session, monkeypatch):
+    """A brand seed is chosen for identity, not legibility.
+
+    An unconstrained tenant seed can be illegible as text on either email
+    surface, so the snapshot walks the brand's own scale until AA is met. Seeded
+    here with a pale yellow, which is unreadable raw on the light surface.
+    """
+    captured = _capture_rendered(monkeypatch)
+
+    brand_profiles.upsert_brand_profile_committed(
+        db_session,
+        scope_type="platform",
+        scope_id=None,
+        values={"primary_color": "#ffe600", "secondary_color": "#ffd6e7"},
+    )
+
+    assert email_service.send_password_reset_email(
+        db_session, "user@example.test", "reset-abc"
+    )
+
+    brand = email_service.resolve_email_brand(db_session)
+    light = email_service.EMAIL_SURFACE_LIGHT
+    dark = email_service.EMAIL_SURFACE_DARK
+    assert contrast_ratio(brand.heading_color, light) >= MIN_SEMANTIC_TEXT_CONTRAST
+    assert contrast_ratio(brand.link_color, light) >= MIN_SEMANTIC_TEXT_CONTRAST
+    assert contrast_ratio(brand.heading_color_dark, dark) >= MIN_SEMANTIC_TEXT_CONTRAST
+    assert contrast_ratio(brand.link_color_dark, dark) >= MIN_SEMANTIC_TEXT_CONTRAST
+    # The raw seed would have failed; the corrected colour is what ships.
+    assert contrast_ratio("#ffe600", light) < MIN_SEMANTIC_TEXT_CONTRAST
+    assert brand.heading_color.lower() != "#ffe600"
+    assert brand.heading_color in captured["body_html"]
+    # Both themes are addressed explicitly rather than inheriting the light value.
+    assert f"color: {brand.heading_color_dark} !important" in captured["body_html"]
+
+
+def test_email_brand_is_resolved_once_per_render(db_session, monkeypatch):
+    """The projection is resolved once and passed down, not per field.
+
+    Previously the logo, the company name, and the support address were three
+    independent lookups per message.
+    """
+    _capture_rendered(monkeypatch)
+    calls: list[dict[str, object]] = []
+    real_resolve = brand_profiles.resolve_brand
+
+    def counting_resolve(db, **kwargs):
+        calls.append(kwargs)
+        return real_resolve(db, **kwargs)
+
+    monkeypatch.setattr(brand_profiles, "resolve_brand", counting_resolve)
+
+    assert email_service.send_user_invite_email(
+        db_session, "invitee@example.test", "token-abc"
+    )
+
+    assert len(calls) == 1
+
+
+def test_email_brand_scope_is_forwarded_to_the_branding_owner(
+    db_session, subscriber, monkeypatch
+):
+    """A subscriber-scoped message resolves that subscriber's brand.
+
+    Reseller and organization profiles only reach email if the scope travels to
+    the owner; a platform-only resolution would silently ignore a white-labelled
+    reseller.
+    """
+    from app.models.subscriber import Reseller
+
+    captured = _capture_rendered(monkeypatch)
+    reseller = Reseller(name="Channel Partner")
+    db_session.add(reseller)
+    db_session.flush()
+    subscriber.reseller_id = reseller.id
+    brand_profiles.upsert_brand_profile(
+        db_session,
+        scope_type="platform",
+        scope_id=None,
+        values={"product_name": "Platform Brand", "primary_color": "#1d4ed8"},
+    )
+    brand_profiles.upsert_brand_profile(
+        db_session,
+        scope_type="reseller",
+        scope_id=reseller.id,
+        values={"product_name": "Partner Brand", "primary_color": "#7c2d12"},
+    )
+    db_session.commit()
+
+    rendered = email_service.render_user_invite_email(
+        db_session,
+        to_email="invitee@example.test",
+        reset_token="token-abc",
+        brand_subscriber_id=subscriber.id,
+    )
+
+    assert "Partner Brand" in rendered.body_html
+    assert "Platform Brand" not in rendered.body_html
+    assert "background-color: #7c2d12" in rendered.body_html
+    assert captured == {}
+
+
+def test_sender_identity_is_not_taken_from_the_display_brand(db_session, monkeypatch):
+    """Re-skinning changes what a message looks like, never who sent it.
+
+    Display brand and legal-sender identity are separately owned: the `From:`
+    header comes from the SMTP sender profile, so a brand profile carrying its
+    own `from_email`/`from_name` must not leak into the envelope.
+    """
+    fake_smtp = FakeSMTP()
+    monkeypatch.setattr(smtplib, "SMTP", lambda *a, **k: fake_smtp)
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "billing@sender.example")
+    monkeypatch.setenv("SMTP_FROM_NAME", "Sender Finance")
+
+    brand_profiles.upsert_brand_profile_committed(
+        db_session,
+        scope_type="platform",
+        scope_id=None,
+        values={
+            "product_name": "Northwind Fibre",
+            "from_email": "brand@northwind.example",
+            "from_name": "Northwind",
+            "primary_color": "#1d4ed8",
+        },
+    )
+
+    rendered = email_service.render_user_invite_email(
+        db_session, to_email="invitee@example.test", reset_token="token-abc"
+    )
+    assert email_service.send_email(
+        db_session,
+        "invitee@example.test",
+        rendered.subject,
+        rendered.body_html,
+        rendered.body_text,
+        track=False,
+    )
+
+    message = message_from_string(fake_smtp.messages[0][2])
+    assert message["From"] == "Sender Finance <billing@sender.example>"
+    assert "northwind.example" not in message["From"]
+    # The display brand still reached the body.
+    assert "Northwind Fibre" in rendered.body_html

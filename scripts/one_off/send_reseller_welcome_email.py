@@ -59,8 +59,8 @@ RESELLERS: list[tuple[str, str]] = [
 
 
 def _body(db, *, to_email: str, reseller_name: str | None = None) -> tuple[str, str]:
-    company_name = email_service._get_company_name(db)
-    logo_url = email_service._get_email_branding_logo_url(db)
+    brand = email_service.resolve_email_brand(db)
+    company_name = brand.display_name
     reseller_label = reseller_name.strip() if reseller_name else ""
     greeting = f"Hello {reseller_label}," if reseller_label else "Hello,"
     escaped_email = html.escape(to_email)
@@ -70,20 +70,21 @@ def _body(db, *, to_email: str, reseller_name: str | None = None) -> tuple[str, 
 <p style="margin: 0;">You can manage customers, view account details, and carry out reseller admin tasks from one place.</p>
 """.strip()
 
+    muted = email_service.EMAIL_MUTED_TEXT
     details_html = f"""
 <p style="font-size: 15px; margin: 0; line-height: 1.7;">
-  <strong style="color: {email_service.DOTMAC_GREEN};">Portal:</strong> <span class="email-muted" style="color: #555;">Reseller Self-Care</span><br>
-  <strong style="color: {email_service.DOTMAC_GREEN};">Login email:</strong> <span class="email-muted" style="color: #555;">{escaped_email}</span><br>
-  <strong style="color: {email_service.DOTMAC_GREEN};">Temporary password:</strong> <span class="email-muted" style="color: #555;">{html.escape(TEMPORARY_PASSWORD)}</span>
+  <strong class="email-accent" style="color: {brand.link_color};">Portal:</strong> <span class="email-muted" style="color: {muted};">Reseller Self-Care</span><br>
+  <strong class="email-accent" style="color: {brand.link_color};">Login email:</strong> <span class="email-muted" style="color: {muted};">{escaped_email}</span><br>
+  <strong class="email-accent" style="color: {brand.link_color};">Temporary password:</strong> <span class="email-muted" style="color: {muted};">{html.escape(TEMPORARY_PASSWORD)}</span>
 </p>
 """.strip()
 
     details_suffix_html = f"""
-<div class="email-highlight-box" style="background-color: #f8fafc; border: 1px solid {email_service.DOTMAC_GREEN}; border-left: 5px solid {email_service.DOTMAC_RED}; border-radius: 8px; padding: 16px; margin-top: 18px;">
-  <p style="margin: 0 0 10px;"><strong style="color: {email_service.DOTMAC_GREEN};">How to sign in</strong></p>
-  <ol class="email-muted" style="margin: 0; padding-left: 20px; color: #555;">
+<div class="email-highlight-box" style="background-color: #f8fafc; border: 1px solid {brand.link_color}; border-left: 5px solid {brand.heading_color}; border-radius: 8px; padding: 16px; margin-top: 18px;">
+  <p style="margin: 0 0 10px;"><strong class="email-accent" style="color: {brand.link_color};">How to sign in</strong></p>
+  <ol class="email-muted" style="margin: 0; padding-left: 20px; color: {muted};">
     <li>Click the button above to open the reseller login page directly.</li>
-    <li>If you visit <a href="{html.escape(MAIN_URL)}" style="color: {email_service.DOTMAC_GREEN}; text-decoration: none;">{html.escape(MAIN_URL)}</a> instead, click the <strong>Reseller</strong> icon on the login page.</li>
+    <li>If you visit <a class="email-link" href="{html.escape(MAIN_URL)}" style="color: {brand.link_color}; text-decoration: none;">{html.escape(MAIN_URL)}</a> instead, click the <strong>Reseller</strong> icon on the login page.</li>
     <li>Use this email address and the temporary password shown above.</li>
     <li>After signing in, change your password from your account settings.</li>
   </ol>
@@ -95,10 +96,8 @@ def _body(db, *, to_email: str, reseller_name: str | None = None) -> tuple[str, 
 """.strip()
 
     body_html = email_service._render_action_email_html(
-        company_name=company_name,
-        logo_url=logo_url,
+        brand=brand,
         title="Access Your Reseller Portal",
-        accent_color=email_service._brand_accent_color(),
         greeting=greeting,
         intro_html=intro_html,
         action_url=PORTAL_URL,
@@ -107,8 +106,6 @@ def _body(db, *, to_email: str, reseller_name: str | None = None) -> tuple[str, 
         details_html=details_html,
         details_suffix_html=details_suffix_html,
         closing_html=closing_html,
-        support_email=SUPPORT_EMAIL,
-        secondary_color=email_service.DOTMAC_GREEN,
     )
 
     body_text = f"""{greeting}
@@ -125,7 +122,7 @@ How to sign in:
 
 After signing in, change your password from your account settings.
 
-If you need help or run into any issue, reply to this email or contact {SUPPORT_EMAIL}.
+If you need help or run into any issue, reply to this email or contact {brand.support_email or SUPPORT_EMAIL}.
 
 Thanks and welcome aboard.
 {company_name} Support Team

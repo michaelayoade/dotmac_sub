@@ -2761,6 +2761,15 @@ invoice generation does not silently invoke another financial workflow.
    through `/branding/theme.css`; both Flutter clients resolve the same
    `BRAND_SEMANTIC_*_COLOR` build inputs from `brand.json`. Renderers select a
    role and icon; they do not keep local role-to-color dictionaries.
+   Transactional email is a renderer under the same rule: it resolves one typed
+   `EmailBrand` display snapshot per message through
+   `app.services.email.resolve_email_brand` and keeps no branding settings read
+   and no product colour literal of its own. Because an email renders brand
+   colours as text on a fixed light or dark surface, it corrects them through
+   `brand_theme.readable_text_color` / `on_color_text_color` instead of emitting
+   a raw seed that may fail WCAG AA. Display brand and legal-sender identity
+   remain separately owned; see
+   `docs/CONTROL_RELATIONSHIPS_AND_BRANDING_SOT.md`.
    The runtime stylesheet also owns compatibility aliases for legacy non-neutral
    Tailwind palette names and the ordered `data-1` through `data-7` categorical
    palette used by charts and maps. Structural neutral surfaces, text, borders,

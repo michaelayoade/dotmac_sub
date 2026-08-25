@@ -2168,6 +2168,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "legacy branding convergence",
                 ),
                 depends_on=("customer.identity_scope", "control.domain_settings"),
+                notes=(
+                    "Every customer-facing render is a reader of this owner: the "
+                    "web theme, the invoice PDF, the queued-notification wrapper, "
+                    "and transactional email, which resolves one typed display "
+                    "snapshot per message through "
+                    "app.services.email.resolve_email_brand instead of reading "
+                    "branding settings itself. Display brand and legal-sender "
+                    "identity stay separate. A team sender profile is not a "
+                    "brand: the From: name and address come from the SMTP sender "
+                    "profile, and legal_name/legal_address attribute the legal "
+                    "entity on documents. Re-skinning a deployment changes what a "
+                    "message looks like, never who is legally responsible for it, "
+                    "so readers never source sender identity from the display "
+                    "projection."
+                ),
             ),
         ),
         entrypoints=(
