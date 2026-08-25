@@ -526,3 +526,57 @@ def test_read_tier_matching_is_segment_exact_not_substring():
     assert _is_read_tier("billing:ledger:read") is True
     assert _is_read_tier("catalog:billing_write") is False
     assert _is_read_tier("gis:serviceability:check") is True
+
+
+def test_every_permission_guard_factory_declares_what_it_demands():
+    """The gate's own blind spot, closed.
+
+    Tiering a route depends on ``permission_requirement()`` being able to read
+    the key a guard closed over, and that only works because each factory stamps
+    a ``PermissionRequirement`` onto the dependency it returns. A NEW factory
+    added without the stamp would not make this gate fail — it would make the
+    routes it guards look unguarded, and the gate skips those. That is a silent
+    hole, so assert the property directly on the source: every module-level
+    ``require_*permission*`` factory must return through
+    ``_declare_permissions``.
+    """
+    import ast
+    import inspect
+    import pathlib
+
+    from app.services import auth_dependencies
+
+    source_path = pathlib.Path(inspect.getsourcefile(auth_dependencies) or "")
+    module = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    undeclared: list[str] = []
+    factories: list[str] = []
+    for node in module.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if not (node.name.startswith("require_") and "permission" in node.name):
+            continue
+        factories.append(node.name)
+        # Only the factory's OWN returns; the nested dependency's returns live
+        # one scope down and are not part of this contract.
+        returns = [stmt for stmt in node.body if isinstance(stmt, ast.Return)]
+        if not returns or not all(
+            isinstance(stmt.value, ast.Call)
+            and getattr(stmt.value.func, "id", "") == "_declare_permissions"
+            for stmt in returns
+        ):
+            undeclared.append(node.name)
+
+    # Sensitivity: an empty scan would pass this test for the wrong reason.
+    assert len(factories) >= 4, (
+        "Found no permission guard factories to check — the discovery rule "
+        f"(module-level `require_*permission*`) has drifted. Saw: {factories}"
+    )
+    assert not undeclared, (
+        "These permission guard factories return a dependency that does not "
+        "carry a PermissionRequirement, so "
+        "test_every_mutating_route_requires_a_write_tier_permission cannot see "
+        "which permission they demand and will silently skip every route they "
+        "guard. Wrap the returned dependency in _declare_permissions(...):\n  "
+        + "\n  ".join(undeclared)
+    )
