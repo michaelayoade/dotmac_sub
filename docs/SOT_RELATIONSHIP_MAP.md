@@ -3622,7 +3622,9 @@ notification rows, choose email/SMS/WhatsApp directly, or maintain recipient
 read state outside the owning service. Admin inbox routes must not load or
 mutate inbox ORM rows, control commits, or select alternate mutation helpers.
 Invoice issue/send actions emit `invoice_sent` once through the invoice owner;
-web and bulk adapters do not hand-compose or directly deliver a second email.
+the detail-page draft action composes issuance and that event in one owner
+transition, while an already-issued document stages only the event. Web and
+bulk adapters do not hand-compose or directly deliver a second email.
 
 ## Events and Webhooks
 

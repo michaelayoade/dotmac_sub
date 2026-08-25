@@ -1010,6 +1010,13 @@ contract used by the invoice table; internal account UUIDs are not exported.
 }
 ```
 
+The overflow menu exposes a permission-scoped invoice email action. A draft
+shows **Issue & send invoice** and confirms that issuing is part of the
+customer-visible action; an issued, overdue, or partially-paid invoice shows
+**Send invoice**. Both use the canonical `invoice.sent` consequence, whose
+email delivery attaches the same PDF produced by the invoice download owner.
+Proformas, void invoices, and written-off invoices do not expose the action.
+
 An actionable prepaid draft exposes **Reconcile prepaid draft** only to staff
 with `billing:invoice:update`. Its POST preview renders the authoritative
 payment/opening-funding breakdown and a shared `ActionForm`. Confirmation sends

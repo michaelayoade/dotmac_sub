@@ -819,6 +819,7 @@ SERVICES: tuple[SOTService, ...] = (
             "unfunded prepaid invoice return-to-draft eligibility",
             "invoice-originated ledger postings",
             "invoice receivable settlement summary",
+            "invoice customer notification eligibility and request event",
             "invoice void eligibility preview and confirmation",
             "invoice write-off eligibility preview and confirmation",
             "exact invoice closure ledger evidence",
