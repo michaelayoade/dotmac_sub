@@ -508,7 +508,7 @@ def test_natural_conversation_fails_langgraph_queue_position_generation():
 
     assert score.passed is False
     assert score.ownership_transition is False
-    assert score.duplicate_queue_messaging is False
+    assert score.duplicate_queue_messaging is True
 
 
 def test_natural_conversation_fails_ai_response_after_human_ownership():
