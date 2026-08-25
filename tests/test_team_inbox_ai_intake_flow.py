@@ -304,7 +304,10 @@ def test_high_confidence_routes_team_and_queues_when_no_agent(db_session, monkey
         .all()
     )
     assert outbound[0].metadata_["sender_type"] == "ai"
-    assert outbound[0].metadata_["ai_display_name"] == "Dotmac Support"
+    assert (
+        outbound[0].metadata_["ai_display_name"]
+        == ai_conversation_intake.DEFAULT_DISPLAY_NAME
+    )
     reasons = [
         event.reason_code
         for event in db_session.query(InboxStatusTransitionEvent)
