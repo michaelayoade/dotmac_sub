@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import public_invoice_paystack_checkout
-from app.web.customer.branding import get_brand
+from app.services.branding_config import get_brand
 
 router = APIRouter(tags=["web-public"])
 
