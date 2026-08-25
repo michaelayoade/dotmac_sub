@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
 from pydantic import ValidationError
@@ -25,6 +25,7 @@ from app.models.catalog import (
     OfferStatus,
     PlanCategory,
     PriceBasis,
+    PriceType,
     PriceUnit,
     RadiusProfile,
     ServiceType,
@@ -58,7 +59,7 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.catalog.subscriptions import apply_offer_radius_profile
-from app.services.common import coerce_uuid
+from app.services.common import coerce_uuid, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.network.profile_sync import (
     enqueue_offer_profile_sync_tasks_for_existing_bundles,
@@ -1249,6 +1250,89 @@ def assert_sellable_capped_offer_can_enforce(
     )
 
 
+class SellableOfferWithoutBillablePrice(DomainError):
+    """An offer put on sale with nothing to charge for it."""
+
+
+def assert_sellable_offer_has_a_billable_price(
+    db: Session,
+    *,
+    offer_id: str | None,
+    available_for_services: bool,
+    incoming_price_amount: object = None,
+) -> None:
+    """Refuse to put an offer on sale with no positive recurring price.
+
+    Production carries offers that are active, available for sale and priced at
+    N0.00 — the exact configuration behind the incident migration 489 was
+    written for, where two subscriptions were created against a free duplicate
+    of "25 Mbps Fiber" in one day. Migration 489 adjudicated the two rows it
+    knew about; it did not stop the next one being made.
+
+    A zero price is not a discount. It reads as a real product to every picker
+    and creates an unbilled customer silently, because nothing downstream
+    treats zero as an error: the recurring run skips a zero-amount line and
+    advances the billing anchor as though it had charged.
+
+    Deliberately NOT a blanket ban on zero-priced offers. A withdrawn offer may
+    keep a zero price and its history, and a genuinely free-to-everyone product
+    is a real thing. The rule is only about *offering it for sale*: past that
+    point, free-for-this-customer belongs in a billing arrangement with an
+    approver and a reason, where the foregone revenue stays visible, rather
+    than in a duplicate catalogue row that hides it.
+
+    Checked on the sellable transition rather than at creation, because prices
+    hang off the offer and cannot exist before it — the same reason
+    ``assert_sellable_capped_offer_can_enforce`` sits here.
+
+    ``incoming_price_amount`` is the amount being submitted alongside this
+    change, if any. Without it an operator raising a zero-priced offer to a
+    real price in one submission would be refused for the very state they are
+    fixing.
+    """
+    if not available_for_services:
+        return
+    if not offer_id:
+        # Nothing to price yet; the update path re-checks once it exists.
+        return
+
+    if incoming_price_amount not in (None, ""):
+        try:
+            if to_decimal(incoming_price_amount) > Decimal("0.00"):
+                return
+        except (TypeError, ValueError, InvalidOperation):
+            # A malformed amount is the price validator's business, not ours;
+            # fall through and judge the stored state instead of guessing.
+            pass
+
+    stored = (
+        db.query(OfferPrice)
+        .filter(
+            OfferPrice.offer_id == coerce_uuid(offer_id),
+            OfferPrice.is_active.is_(True),
+            OfferPrice.price_type == PriceType.recurring,
+        )
+        .all()
+    )
+    if len(stored) == 1 and to_decimal(stored[0].amount) > Decimal("0.00"):
+        return
+
+    raise SellableOfferWithoutBillablePrice(
+        code="catalog.offer.sellable_without_billable_price",
+        message=(
+            "An offer cannot be available for sale without exactly one active "
+            "recurring price above zero. Set a real price, or withdraw it from "
+            "sale. If this service is free for particular customers, record "
+            "that as a billing arrangement on their subscription so the "
+            "foregone revenue stays visible, rather than as a zero-priced plan."
+        ),
+        details={
+            "offer_id": str(offer_id),
+            "active_recurring_prices": len(stored),
+        },
+    )
+
+
 def assert_sellable_name_is_unique(
     db: Session, name: str, *, exclude_offer_id: str | None = None
 ) -> None:
@@ -1385,6 +1469,19 @@ def update_offer_with_audit(
         db,
         str(offer_data.get("name") or getattr(existing_offer, "name", "") or ""),
         exclude_offer_id=offer_id,
+    )
+    # Same transition, same reason prices cannot be checked on create: a
+    # sellable offer must have something to charge.
+    assert_sellable_offer_has_a_billable_price(
+        db,
+        offer_id=offer_id,
+        available_for_services=bool(
+            offer_data.get(
+                "available_for_services",
+                getattr(existing_offer, "available_for_services", False),
+            )
+        ),
+        incoming_price_amount=offer_data.get("price_amount"),
     )
     # Checked here rather than on create: rules hang off the offer, so it must
     # exist before it can have a ladder. This is the transition that matters —
