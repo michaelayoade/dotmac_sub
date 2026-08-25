@@ -271,7 +271,15 @@ def create_tr069_profile(
 @router.post(
     "/olt-devices/{olt_id}/config-backup",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:olt:read"))],
+    # NOT a read despite reading the device: ``run_config_backup`` writes the
+    # config to disk under the backup directory and commits an
+    # ``OltConfigBackup`` row (the artefact a later restore reads). A read-only
+    # OLT grant must not be able to create restorable artefacts or grow the
+    # backup volume; the write tier is what every other persisting route in
+    # this file already uses. The non-persisting equivalents
+    # (``/test-connection`` here, ``/ssh-get-config`` on the admin surface)
+    # deliberately keep ``network:olt:read``.
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def fetch_config_backup(
     olt_id: str, db: Session = Depends(get_db)

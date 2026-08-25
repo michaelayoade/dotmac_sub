@@ -223,9 +223,14 @@ def test_dispatch_router_registered_with_permission_guard():
     from app.main import _DEFERRED_API_ROUTER_SPECS
 
     # Router floor is operations:dispatch:read; mutations add write/assign gates.
+    # It must be "readperm:" (the key verbatim). "perm:" appends :read/:write to
+    # the DOMAIN, so "perm:operations:dispatch:read" required the unseeded
+    # operations:dispatch:read:read / :read:write and 403'd the whole surface
+    # for every non-admin principal — see
+    # tests/architecture/test_router_mount_permission_keys.py.
     assert (
         "app.api.dispatch",
         "router",
         "api",
-        "perm:operations:dispatch:read",
+        "readperm:operations:dispatch:read",
     ) in _DEFERRED_API_ROUTER_SPECS

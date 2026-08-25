@@ -35,6 +35,7 @@ from app.web.admin.catalog_settings import legacy_add_ons_router
 from app.web.admin.catalog_settings import router as catalog_settings_router
 from app.web.admin.configuration import router as configuration_router
 from app.web.admin.crm_referrals import router as crm_referrals_router
+from app.web.admin.customer_experience import router as customer_experience_router
 from app.web.admin.customer_retention import router as customer_retention_router
 from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
@@ -82,6 +83,7 @@ from app.web.admin.network_onu_types import router as network_onu_types_router
 from app.web.admin.network_operations import router as network_operations_router
 from app.web.admin.network_pop_sites import router as network_pop_sites_router
 from app.web.admin.network_radius import router as network_radius_router
+from app.web.admin.network_routers import router as network_routers_router
 from app.web.admin.network_speed_profiles import router as network_speed_profiles_router
 from app.web.admin.network_speedtests import router as network_speedtests_router
 from app.web.admin.network_tr069 import router as network_tr069_router
@@ -192,6 +194,7 @@ def admin_nas_legacy_path_redirect(path: str):
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(customer_retention_router)
+router.include_router(customer_experience_router)
 router.include_router(help_center_router)
 router.include_router(meta_connection_router)
 router.include_router(surveys_router)
@@ -381,6 +384,15 @@ router.include_router(
 )
 router.include_router(
     network_radius_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+# Mounted here rather than as its own /admin entry in app.main: an out-of-band
+# admin mount receives no dependencies at all (``_mount_router`` drops them for
+# mount kind "admin"), so it silently skipped the ``require_admin_web_auth``
+# staff baseline every other admin screen gets AND was invisible to
+# tests/architecture/test_admin_web_route_guards.py, which walks THIS router.
+router.include_router(
+    network_routers_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

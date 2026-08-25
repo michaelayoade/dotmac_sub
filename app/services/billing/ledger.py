@@ -6,13 +6,14 @@ be modified. To correct an entry, create a reversing entry using the
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import (
     LedgerCategory,
@@ -41,6 +42,37 @@ _REVERSE_TYPE = {
 # Every reversal memo carries this reference to the entry it reverses, so the
 # pairing survives an operator-supplied memo and stays machine-findable.
 _REVERSAL_REFERENCE = "Reversal of ledger entry {entry_id}"
+
+
+@dataclass(frozen=True)
+class LedgerEntryDetail:
+    """Canonical ledger record with its structural reversal reference."""
+
+    entry: LedgerEntry
+    reversed_by_entry_id: UUID | None
+
+
+def get_ledger_entry_detail(
+    db: Session,
+    *,
+    entry_id: UUID,
+) -> LedgerEntryDetail | None:
+    """Read one immutable ledger record through the financial ledger owner."""
+
+    entry = db.scalar(
+        select(LedgerEntry)
+        .options(joinedload(LedgerEntry.account))
+        .where(LedgerEntry.id == entry_id)
+    )
+    if entry is None:
+        return None
+    reversed_by_entry_id = db.scalar(
+        select(LedgerEntry.id).where(LedgerEntry.reversal_of_entry_id == entry.id)
+    )
+    return LedgerEntryDetail(
+        entry=entry,
+        reversed_by_entry_id=reversed_by_entry_id,
+    )
 
 
 class LedgerAccountAdjustmentError(ValueError):

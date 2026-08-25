@@ -1,0 +1,66 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, detail_header, card, info_row, status_badge, animation_styles %}
+
+{% block title %}Ledger Entry - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+{% set is_credit = entry.entry_type.value == 'credit' %}
+{% set status_html %}{{ status_badge('Active' if entry.is_active else 'Inactive', variant='success' if entry.is_active else 'neutral', size='sm') }}{% endset %}
+
+<div class="relative space-y-8">
+    {% call detail_header(
+        title="Ledger Entry",
+        subtitle=(entry.source.value | replace('_', ' ') | title) ~ " · " ~ (entry.id | string),
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+        color="emerald",
+        color2="teal",
+        back_href="/admin/billing/ledger?customer_ref=" ~ entry.account_id,
+        back_label="Customer ledger",
+        status=status_html
+    ) %}
+        <a href="/admin/customers/person/{{ entry.account_id }}" class="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">View customer</a>
+    {% endcall %}
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="space-y-6 lg:col-span-2">
+            {% call card("Transaction", color="emerald") %}
+            <div class="rounded-2xl border p-5 {% if is_credit %}border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-950/20{% else %}border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/20{% endif %}">
+                <p class="text-xs font-semibold uppercase tracking-wider {% if is_credit %}text-emerald-700 dark:text-emerald-300{% else %}text-amber-700 dark:text-amber-300{% endif %}">{{ entry.entry_type.value | title }}</p>
+                <p class="mt-2 break-words font-mono text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ entry.currency }} {{ '{:,.2f}'.format(entry.amount) }}</p>
+            </div>
+            <div class="mt-4 grid gap-x-6 md:grid-cols-2">
+                {{ info_row("Source", entry.source.value | replace('_', ' ') | title) }}
+                {{ info_row("Category", (entry.category.value | replace('_', ' ') | title) if entry.category else 'Not specified') }}
+                {{ info_row("Effective date", entry.occurred_at | app_datetime('%b %d, %Y %I:%M %p', '—')) }}
+                {{ info_row("Recorded", entry.created_at | app_datetime('%b %d, %Y %I:%M %p', '—')) }}
+            </div>
+            {% endcall %}
+
+            {% call card("Description", color="slate") %}
+            <p class="whitespace-pre-wrap text-sm leading-6 text-slate-700 dark:text-slate-300">{{ entry.description or 'No description was recorded for this entry.' }}</p>
+            {% endcall %}
+        </div>
+
+        <div class="space-y-6">
+            {% call card("Customer", color="emerald") %}
+                {% call info_row("Account") %}<a href="/admin/customers/person/{{ entry.account_id }}" class="text-emerald-700 hover:underline dark:text-emerald-400">{{ entry.account_label }}</a>{% endcall %}
+                {{ info_row("Account ID", entry.account_id) }}
+                {{ info_row("Affects customer position", 'Yes' if entry.affects_customer_position else 'No') }}
+            {% endcall %}
+
+            {% call card("Related records", color="violet") %}
+                {% if entry.invoice_id %}{% call info_row("Invoice") %}<a href="/admin/billing/invoices/{{ entry.invoice_id }}" class="text-violet-700 hover:underline dark:text-violet-400">View invoice</a>{% endcall %}{% endif %}
+                {% if entry.payment_id %}{% call info_row("Payment") %}<a href="/admin/billing/payments/{{ entry.payment_id }}" class="text-violet-700 hover:underline dark:text-violet-400">View payment</a>{% endcall %}{% endif %}
+                {% if entry.reversal_of_entry_id %}{% call info_row("Reverses entry") %}<a href="/admin/billing/ledger/{{ entry.reversal_of_entry_id }}" class="text-violet-700 hover:underline dark:text-violet-400">View original entry</a>{% endcall %}{% endif %}
+                {% if entry.reversed_by_entry_id %}{% call info_row("Reversed by") %}<a href="/admin/billing/ledger/{{ entry.reversed_by_entry_id }}" class="text-violet-700 hover:underline dark:text-violet-400">View reversal entry</a>{% endcall %}{% endif %}
+                {% if not entry.invoice_id and not entry.payment_id and not entry.reversal_of_entry_id and not entry.reversed_by_entry_id %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No directly linked billing document or reversal.</p>
+                {% endif %}
+            {% endcall %}
+        </div>
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

@@ -12,6 +12,11 @@ from app.models.ai_insight import (  # noqa: F401
     InsightSeverity,
 )
 from app.models.ai_intake import (  # noqa: F401
+    AiIntakeCanaryRun,
+    AiIntakeCanaryScenario,
+    AiIntakeCanaryScenarioRevision,
+    AiIntakeCanarySuite,
+    AiIntakeCanarySuiteScenario,
     AiIntakeConfig,
     AiIntakeGenerationAttempt,
     AiIntakePolicy,

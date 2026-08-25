@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -405,6 +406,62 @@ def test_material_request_form_uses_dynamic_item_typeahead():
     assert '<select name="item_id"' not in source
     assert "typeahead.removeAttribute('data-typeahead-ready')" in source
     assert "window.initTypeaheadFields(row)" in source
+
+
+def test_material_request_form_uses_the_standard_centered_editor_layout():
+    source = Path("templates/admin/material_requests/form.html").read_text()
+
+    assert 'class="mx-auto max-w-3xl space-y-4"' in source
+    assert 'aria-label="Breadcrumb"' in source
+    assert 'class="{{ label_class }}"' in source
+    assert 'class="{{ input_class }}"' in source
+    assert "detail_header" not in source
+    assert "ambient_background" not in source
+
+
+def test_material_request_form_composes_with_owner_provided_context():
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            csrf_token="test-csrf-token",
+            csp_nonce="test-csp-nonce",
+            auth={"permission_keys": {"*"}},
+        ),
+        query_params={},
+        headers={},
+        cookies={},
+        url=SimpleNamespace(path="/admin/operations/material-requests/new"),
+        session={},
+        client=None,
+        scope={},
+    )
+    options = SimpleNamespace(
+        context_label="PROJ-1134",
+        work_orders=(),
+        warehouses=(SimpleNamespace(code="ABJ", label="Abuja warehouse"),),
+        has_eligible_inventory_items=True,
+    )
+
+    html = material_requests_web.templates.env.get_template(
+        "admin/material_requests/form.html"
+    ).render(
+        request=request,
+        active_page="material-requests",
+        active_menu="operations",
+        current_user={"name": "Test Admin", "email": "admin@example.com"},
+        sidebar_stats={},
+        options=options,
+        selected_work_order_id="",
+        material_scope=material_requests.MaterialRequestScope(),
+        values={},
+        priorities=tuple(material_requests.MaterialRequestPriority),
+        error=None,
+        request_id=str(uuid4()),
+    )
+
+    assert "New material request" in html
+    assert "PROJ-1134" in html
+    assert "max-w-3xl" in html
+    assert 'action="/admin/operations/material-requests"' in html
 
 
 def test_material_item_typeahead_endpoint_requires_material_write_permission():

@@ -276,6 +276,18 @@ DEFAULT_PERMISSIONS = [
     ("support:automation:read", "View ticket automation rules"),
     ("support:automation:write", "Manage ticket automation rules"),
     ("support:inbox_ai:read", "Use manager AI for Team Inbox insight"),
+    (
+        "customer_experience:handoff:read",
+        "View customer-experience handoff queue",
+    ),
+    (
+        "customer_experience:handoff:accept",
+        "Accept ready customer-experience handoffs",
+    ),
+    (
+        "customer_experience:handoff:attention",
+        "Flag and resolve customer-experience handoff attention items",
+    ),
     # CRM
     ("crm:contact:read", "View CRM contacts"),
     ("crm:contact:write", "Manage CRM contacts"),

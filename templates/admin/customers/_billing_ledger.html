@@ -1,0 +1,76 @@
+<div class="space-y-4" data-testid="customer-ledger-panel" data-account-id="{{ customer_ledger.account_id }}">
+    <div class="flex flex-col gap-3 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-700/70 dark:bg-slate-800 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h3 class="font-semibold text-slate-900 dark:text-white">Customer Ledger</h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Credits, debits and net financial activity for this customer only.</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <a href="{{ customer_ledger.export_url }}" class="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Export CSV</a>
+            <a href="{{ customer_ledger.full_ledger_url }}" class="inline-flex items-center rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700">Open full ledger</a>
+        </div>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <a href="{{ customer_ledger.full_ledger_url }}&amp;entry_type=credit" class="rounded-2xl border border-emerald-200/70 bg-emerald-50 p-4 shadow-sm transition hover:border-emerald-300 dark:border-emerald-900/50 dark:bg-emerald-950/20">
+            <p class="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Total Credits</p>
+            <p class="mt-2 break-words font-mono text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ customer_ledger.summary.credit_display }}</p>
+            <p class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">{{ customer_ledger.summary.credit_count }} entr{{ 'y' if customer_ledger.summary.credit_count == 1 else 'ies' }}</p>
+        </a>
+        <a href="{{ customer_ledger.full_ledger_url }}&amp;entry_type=debit" class="rounded-2xl border border-amber-200/70 bg-amber-50 p-4 shadow-sm transition hover:border-amber-300 dark:border-amber-900/50 dark:bg-amber-950/20">
+            <p class="text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">Total Debits</p>
+            <p class="mt-2 break-words font-mono text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ customer_ledger.summary.debit_display }}</p>
+            <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ customer_ledger.summary.debit_count }} entr{{ 'y' if customer_ledger.summary.debit_count == 1 else 'ies' }}</p>
+        </a>
+        <a href="{{ customer_ledger.full_ledger_url }}" class="rounded-2xl border border-violet-200/70 bg-violet-50 p-4 shadow-sm transition hover:border-violet-300 dark:border-violet-900/50 dark:bg-violet-950/20">
+            <p class="text-xs font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300">Net Balance</p>
+            <p class="mt-2 break-words font-mono text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ customer_ledger.summary.net_display }}</p>
+            <p class="mt-1 text-xs text-violet-700 dark:text-violet-300">Credits less debits</p>
+        </a>
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+            <h3 class="font-semibold text-slate-900 dark:text-white">Financial Activity</h3>
+            {% if customer_ledger.is_truncated %}<span class="text-xs text-amber-600 dark:text-amber-400">Showing the latest 200 entries</span>{% endif %}
+        </div>
+        {% if customer_ledger.entries %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Entry</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Type</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Source</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Debit</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Credit</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Description</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Date</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for entry in customer_ledger.entries %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <td class="px-4 py-3">
+                            <a href="{{ entry.detail_url }}" class="block font-mono text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-400" title="View entry {{ entry.id }}">{{ entry.id|string|truncate(12, True, '') }}</a>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="inline-flex rounded-full px-2 py-1 text-xs font-semibold {% if entry.entry_type.value == 'credit' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400{% endif %}">{{ entry.entry_type.value|title }}</span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ entry.source.value|replace('_', ' ')|title }}</td>
+                        <td class="whitespace-nowrap px-4 py-3 text-right font-mono text-sm font-semibold tabular-nums text-amber-700 dark:text-amber-300">{% if entry.entry_type.value == 'debit' %}{{ entry.currency }} {{ '{:,.2f}'.format(entry.amount) }}{% else %}&mdash;{% endif %}</td>
+                        <td class="whitespace-nowrap px-4 py-3 text-right font-mono text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">{% if entry.entry_type.value == 'credit' %}{{ entry.currency }} {{ '{:,.2f}'.format(entry.amount) }}{% else %}&mdash;{% endif %}</td>
+                        <td class="max-w-xs px-4 py-3 text-sm text-slate-600 dark:text-slate-300"><a href="{{ entry.detail_url }}" class="block truncate hover:text-emerald-700 hover:underline dark:hover:text-emerald-400" title="{{ entry.description or 'View entry details' }}">{{ entry.description or 'View entry details' }}</a></td>
+                        <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ entry.occurred_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="px-5 py-12 text-center">
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">No ledger activity yet</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Customer credits and debits will appear here when billing activity occurs.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>

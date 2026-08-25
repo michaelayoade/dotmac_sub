@@ -20,9 +20,25 @@ from app.schemas.auth import (
 )
 from app.schemas.common import ListResponse
 from app.services import auth as auth_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_permission, require_role
 
 router = APIRouter()
+
+# Defence in depth for the API-key minting/rewriting routes below.
+#
+# The whole ``app.api.auth`` router is already mounted admin-only
+# (``("app.api.auth", "router", "api", "admin")`` in ``app/main.py``), and that
+# mount stays the first layer. This is the second: minting or rewriting an API
+# key is credential administration, and it should not depend on a single word
+# in a mount spec staying correct.
+#
+# Deliberately the admin ROLE rather than a permission key
+# (e.g. ``system:settings:write``): the authority to mint credentials must not
+# silently widen if a permission later becomes assignable to a non-admin role.
+#
+# The exact route set is pinned by
+# ``tests/architecture/test_credential_minting_route_guards.py``.
+_credential_admin = Depends(require_role("admin"))
 
 
 @router.post(
@@ -237,6 +253,7 @@ def delete_session(session_id: str, db: Session = Depends(get_db)):
     response_model=ApiKeyRead,
     status_code=status.HTTP_201_CREATED,
     tags=["api-keys"],
+    dependencies=[_credential_admin],
 )
 def create_api_key(payload: ApiKeyCreate, db: Session = Depends(get_db)):
     return auth_service.api_keys.create(db, payload)
@@ -247,6 +264,7 @@ def create_api_key(payload: ApiKeyCreate, db: Session = Depends(get_db)):
     response_model=ApiKeyGenerateResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["api-keys"],
+    dependencies=[_credential_admin],
 )
 def generate_api_key(
     payload: ApiKeyGenerateRequest,
@@ -294,6 +312,7 @@ def list_api_keys(
     "/api-keys/{key_id}",
     response_model=ApiKeyRead,
     tags=["api-keys"],
+    dependencies=[_credential_admin],
 )
 def update_api_key(key_id: str, payload: ApiKeyUpdate, db: Session = Depends(get_db)):
     return auth_service.api_keys.update(db, key_id, payload)

@@ -99,9 +99,10 @@ def test_every_inbox_route_declares_a_permission():
     assert not ungated, f"inbox routes without require_permission: {ungated}"
 
 
-# Saving a personal view is a preference, not a conversation mutation, so it is
-# deliberately gated on :read. Anything else posting under :read is a mistake.
-READ_GATED_POSTS = {"/filters/save"}
+# POST-shaped reads are exceptional. Saving a filter persists state and may
+# share it with a team, so it is correctly write-tiered; no inbox POST currently
+# qualifies for a read-tier exemption.
+READ_GATED_POSTS: set[str] = set()
 MANAGER_AI_ROUTES = {
     ("GET", "/manager-ai"): "support:inbox_ai:read",
     ("POST", "/manager-ai"): "support:inbox_ai:read",
@@ -138,8 +139,8 @@ def test_mutating_routes_require_update_and_reads_require_read():
 
 
 def test_the_read_gated_post_allowlist_stays_small():
-    """Each entry weakens the write gate, so it must be justified and few."""
-    assert READ_GATED_POSTS == {"/filters/save"}
+    """The exception list is empty and cannot silently acquire an entry."""
+    assert READ_GATED_POSTS == set()
 
 
 def test_manager_ai_routes_use_their_own_permission():

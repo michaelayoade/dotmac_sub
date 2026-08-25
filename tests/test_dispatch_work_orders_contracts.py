@@ -17,7 +17,7 @@ import pytest
 
 from app.services import web_dispatch_work_orders as service
 from app.services.ui_contracts import Action, Kpi, StateValue
-from app.web.admin.dispatch_work_orders import _redirect
+from app.web.admin.dispatch_work_orders import _redirect, templates
 
 _COUNTS = {
     "total": 12,
@@ -133,9 +133,54 @@ def test_template_consumes_the_kpi_and_action_contracts():
     # Task-originated creation locks the validated subscriber/project/task scope.
     assert 'name="project_task_id"' in source
     assert "create_prefill.project_task_id" in source
-    assert 'href="#create-work-order"' in source
+    assert 'aria-controls="create-work-order-dialog"' in source
+    assert '@click="createOpen = true;' in source
+    assert 'id="create-work-order-dialog"' in source
+    assert '<details id="create-work-order"' not in source
+    assert "Open form" not in source
     assert 'href="/admin/dispatch/work-orders/{{ wo.public_id }}"' in source
     assert 'name="assigned_technician_id"' not in source
+
+
+def test_work_order_list_composes_with_one_header_form_trigger(db_session):
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            csrf_token="test-csrf-token",
+            csp_nonce="test-csp-nonce",
+            auth={"permission_keys": {"*"}},
+        ),
+        query_params={},
+        headers={},
+        cookies={},
+        url=SimpleNamespace(path="/admin/dispatch/work-orders"),
+        session={},
+        client=None,
+        scope={},
+    )
+    context = service.list_page(db_session, can_create=True)
+    context.update(
+        {
+            "request": request,
+            "active_page": "dispatch-work-orders",
+            "active_menu": "operations",
+            "current_user": {
+                "name": "Test Admin",
+                "email": "admin@example.com",
+            },
+            "sidebar_stats": {},
+            "notice": None,
+            "error": None,
+        }
+    )
+
+    html = templates.env.get_template("admin/dispatch/work_orders.html").render(
+        **context
+    )
+
+    assert html.count('aria-controls="create-work-order-dialog"') == 1
+    assert 'id="create-work-order-dialog"' in html
+    assert "Open form" not in html
+    assert "<details" not in html
 
 
 def test_detail_template_owns_the_visible_assignment_next_action():
