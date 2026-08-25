@@ -209,9 +209,11 @@ def test_without_the_route_level_guard_a_weakened_mount_lets_a_non_admin_through
 
     Same weakened mount, same non-admin principal, but the route-level
     ``require_role("admin")`` is neutralized (stand-in for it never having been
-    added). The request must now get PAST authorization — it is refused for a
-    different reason entirely (an empty body fails schema validation), which is
-    exactly the point: nothing is checking the caller's role any more.
+    added). The request must now get PAST authorization. The eventual adapter
+    outcome is deliberately not pinned: depending on the route it may be
+    schema validation, unavailable Redis, or the deliberately skeletal fake
+    database. The contract under test is only that authorization no longer
+    returns 403.
     """
     app = _weakened_mount_app()
     route = _find_route(auth_router, method, path)
@@ -234,4 +236,3 @@ def test_without_the_route_level_guard_a_weakened_mount_lets_a_non_admin_through
         "the forward-direction assertion is passing for some other reason and "
         "this canary does not actually test the guard."
     )
-    assert response.status_code == 422
