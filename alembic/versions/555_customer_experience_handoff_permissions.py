@@ -1,7 +1,7 @@
 """Seed granular customer-experience handoff permissions.
 
-Revision ID: 554_customer_experience_handoff_permissions
-Revises: 553_invoice_sent_review_email
+Revision ID: 555_customer_experience_handoff_permissions
+Revises: 554_ai_intake_canary_library
 Create Date: 2026-08-25
 """
 
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "554_customer_experience_handoff_permissions"
-down_revision: str | None = "553_invoice_sent_review_email"
+revision: str = "555_customer_experience_handoff_permissions"
+down_revision: str | None = "554_ai_intake_canary_library"
 branch_labels = None
 depends_on = None
 
