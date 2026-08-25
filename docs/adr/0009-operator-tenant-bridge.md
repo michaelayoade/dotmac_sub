@@ -64,15 +64,17 @@ One mechanical schema delta remains after that adoption decision:
 and `ck_domain_settings_scope_alignment`, and fails if existing data contains
 an orphan rather than silently deleting or re-attributing it.
 
-The current a40 remeasurement also corrects this ADR's historical count. Six
-competing model declarations existed when the decision below was written; the
-kernel and Sub have since both advanced. `domain_setting_history` and
-`communication_suppressions` bring that set to eight, enforced by
-`tests/architecture/test_kernel_table_collisions.py`. The broader migration
-lineage has ten table-name overlaps because it also includes `tenants` and
+The current a42 remeasurement also corrects this ADR's historical count. Six
+competing model declarations existed when the decision below was written;
+`domain_setting_history` and `communication_suppressions` first brought that set
+to eight. Kernel a41 then renamed its unrelated RBAC grant from `party_roles` to
+`party_role_grants`, leaving seven current competing model declarations,
+enforced by `tests/architecture/test_kernel_table_collisions.py`. The current
+lineage head has nine overlaps because it also includes `tenants` and
 `tenant_domains`, intentionally hosted through the kernel models under this
-ADR. That does not change the identity decision: no additional kernel identity
-model is admitted.
+ADR. The kernel chain still creates `party_roles` at 0003 before renaming it at
+0022, so that transient tenth name retains an explicit migration disposition.
+None of this admits another kernel identity or authorization model.
 
 The decision below stands unchanged. Only its premise has moved: it now records
 what Sub already does rather than what Sub should start doing.

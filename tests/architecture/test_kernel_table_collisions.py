@@ -27,7 +27,6 @@ EXPECTED_COMPETING_MODEL_TABLES = frozenset(
         "domain_setting_history",
         "domain_settings",
         "parties",
-        "party_roles",
         "roles",
         "user_credentials",
     }
@@ -56,7 +55,7 @@ def _declared_tables(root: Path) -> frozenset[str]:
     return frozenset(tables)
 
 
-def test_kernel_sub_competing_models_match_the_reviewed_a40_inventory() -> None:
+def test_kernel_sub_competing_models_match_the_reviewed_a42_inventory() -> None:
     collisions = _declared_tables(KERNEL_ROOT) & _declared_tables(SUB_MODELS)
     assert collisions == EXPECTED_COMPETING_MODEL_TABLES, (
         "kernel/Sub competing-model inventory changed; classify every added or "
