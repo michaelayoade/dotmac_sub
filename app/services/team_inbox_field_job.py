@@ -52,7 +52,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
 )
 from app.models.work_order import WorkOrder
-from app.services import service_team_lifecycle, team_inbox_status
+from app.services import inbox_writes, service_team_lifecycle, team_inbox_status
 from app.services.team_inbox_assignment import (
     assign_conversation_to_agent,
     queue_conversation_for_team,
@@ -274,9 +274,7 @@ def record_customer_message(
         },
     )
     db.add(message)
-    conversation.last_message_at = moment
-    if conversation.first_message_at is None:
-        conversation.first_message_at = moment
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=moment)
     db.flush()
 
     # Snapshot inside the transaction. Reading an ORM attribute after the

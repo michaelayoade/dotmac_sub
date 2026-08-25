@@ -59,6 +59,13 @@ class InboxAgentPresenceStatus(enum.Enum):
     offline = "offline"
 
 
+class InboxAgentAwayReason(enum.Enum):
+    """Product-owned roster detail when dispatch availability is `AWAY`."""
+
+    away = "away"
+    break_ = "break"
+
+
 class InboxTeamRole(enum.Enum):
     owner = "owner"
     participant = "participant"
@@ -1254,6 +1261,38 @@ class InboxAgentPresence(Base):
     )
 
 
+class InboxAgentPresenceDetail(Base):
+    """Current roster reason orthogonal to module-owned dispatch availability.
+
+    `dotmac-inbox-operations` answers whether the agent may receive work. Sub
+    retains why an unavailable-but-present agent is away so the roster and
+    adherence reports do not collapse a break into ordinary away time.
+    """
+
+    __tablename__ = "inbox_agent_presence_details"
+    __table_args__ = (
+        CheckConstraint(
+            "away_reason IS NULL OR away_reason IN ('away', 'break')",
+            name="ck_inbox_agent_presence_details_away_reason",
+        ),
+    )
+
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    away_reason: Mapped[str | None] = mapped_column(String(24))
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
 class InboxAgentIntroductionPreference(Base):
     __tablename__ = "inbox_agent_introduction_preferences"
     __table_args__ = (
@@ -1697,4 +1736,109 @@ class InboxAuditReconstructionRun(Base):
     exception_count: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class InboxQueueBinding(Base):
+    """Which `mod_inbox_ops` queue a Sub service team drains.
+
+    Workforce owns `service_teams`; `dotmac-inbox-operations` owns
+    `mod_inbox_ops.inbox_queues`; this row is the binding, and Sub owns it.
+    Both sides are unique, so the mapping is 1:1 today without the module's
+    primary key becoming a Workforce identifier — see ADR-0013 § 7 for why
+    reusing `service_teams.id` as the queue id was rejected.
+
+    There is deliberately no foreign key to the queue: it lives in another
+    schema owned by another distribution, and ADR-0011 keeps `public` and
+    `mod_*` free of cross-plane references. The binding is proven by the
+    reconciler, not by the database.
+    """
+
+    __tablename__ = "inbox_queue_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "service_team_id", name="uq_inbox_queue_bindings_service_team"
+        ),
+        UniqueConstraint("queue_id", name="uq_inbox_queue_bindings_queue"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    service_team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("service_teams.id"), nullable=False
+    )
+    #: The `mod_inbox_ops.inbox_queues.id` this team drains. Unconstrained by
+    #: design; see the class docstring.
+    queue_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    #: The queue `code` the module row carries, mirrored so an operator can read
+    #: the binding without querying another schema. The module stays the owner.
+    queue_code: Mapped[str] = mapped_column(String(80), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    service_team = relationship("ServiceTeam")
+
+
+class InboxAuthorityCutover(Base):
+    """One irreversible activation of composed-inbox write authority.
+
+    Presence of the single row IS the switch (ADR-0013 P5). The shape follows
+    `CustomerSubledgerAuthorityCutover`: a singleton key, the evidence the
+    activation rested on, who activated it, and when. There is deliberately no
+    `active` boolean and no deactivation path — a switch that can be flipped
+    back is a switch that will be, and after the module has written rows Sub
+    never wrote, flipping back silently forks authority.
+
+    Rolling back after this row exists is the reverse reconciler run described
+    in ADR-0013's rollback section, performed knowingly — not a column update.
+    """
+
+    __tablename__ = "inbox_authority_cutovers"
+    __table_args__ = (
+        UniqueConstraint(
+            "singleton_key", name="uq_inbox_authority_cutover_singleton"
+        ),
+        CheckConstraint(
+            "singleton_key = 'inbox'",
+            name="ck_inbox_authority_cutover_singleton_key",
+        ),
+        CheckConstraint(
+            "length(drift_fingerprint) = 64",
+            name="ck_inbox_authority_cutover_fingerprint",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    singleton_key: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="inbox"
+    )
+    #: SHA-256 over the clean `DriftReport` that gated the activation. Stored so
+    #: the claim "the comparator was clean" is checkable afterwards against a
+    #: re-run, rather than resting on someone having looked.
+    drift_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversations_verified: Mapped[int] = mapped_column(Integer, nullable=False)
+    messages_verified: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: The named acceptance of the behaviour changes in ADR-0013 § 6 — queue
+    #: ordering stops honouring `priority`. Free text because it references a
+    #: decision made outside this system; NOT NULL because activating without
+    #: one is the thing this column exists to prevent.
+    review_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    activated_by: Mapped[str] = mapped_column(String(160), nullable=False)
+    command_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    correlation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    cutover_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

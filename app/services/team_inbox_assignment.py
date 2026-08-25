@@ -16,6 +16,7 @@ from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxAgentPresence,
+    InboxAgentPresenceDetail,
     InboxAgentPresenceEvent,
     InboxAgentPresenceStatus,
     InboxAuditEvidenceGrade,
@@ -34,6 +35,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
 )
 from app.services import team_inbox_agent_introduction, team_inbox_queue_notifications
+from app.services.inbox_module.references import presence_away_reason
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -60,6 +62,50 @@ _ROUTING_COMMAND = OwnerCommandDefinition(
     concern="routing assignment and escalation transitions",
     name="execute_team_inbox_routing_command",
 )
+
+
+class InboxAgentPresenceDetailConflict(RuntimeError):
+    """Historical roster detail disagrees with the already-imported row."""
+
+
+def _instant(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _away_reason(status: InboxAgentPresenceStatus | str) -> str | None:
+    reason = presence_away_reason(status)
+    return reason.value if reason is not None else None
+
+
+def import_agent_presence_detail(
+    db: Session,
+    *,
+    person_id: UUID,
+    status: InboxAgentPresenceStatus | str,
+    observed_at: datetime,
+) -> tuple[InboxAgentPresenceDetail, bool]:
+    """Import or exactly replay the Sub-owned half of historical presence."""
+    expected_reason = _away_reason(status)
+    detail = db.get(InboxAgentPresenceDetail, person_id)
+    if detail is None:
+        detail = InboxAgentPresenceDetail(
+            person_id=person_id,
+            away_reason=expected_reason,
+            observed_at=observed_at,
+        )
+        db.add(detail)
+        return detail, True
+    changed: list[str] = []
+    if detail.away_reason != expected_reason:
+        changed.append("away_reason")
+    if _instant(detail.observed_at) != _instant(observed_at):
+        changed.append("observed_at")
+    if changed:
+        raise InboxAgentPresenceDetailConflict(
+            f"historical roster detail for person {person_id} differs in "
+            f"{', '.join(changed)}"
+        )
+    return detail, False
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
@@ -324,6 +370,18 @@ def set_agent_presence(
         db.add(presence)
 
     previous_effective_status = effective_presence_status(presence)
+    detail = db.get(InboxAgentPresenceDetail, person_uuid)
+    reason = _away_reason(clean_status)
+    if detail is None:
+        detail = InboxAgentPresenceDetail(
+            person_id=person_uuid,
+            away_reason=reason,
+            observed_at=observed_at,
+        )
+        db.add(detail)
+    else:
+        detail.away_reason = reason
+        detail.observed_at = observed_at
     if previous_effective_status == clean_status:
         presence.last_seen_at = observed_at
         db.flush()

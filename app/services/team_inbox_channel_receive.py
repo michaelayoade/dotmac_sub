@@ -34,6 +34,7 @@ from app.schemas.ai_intake import (
 from app.services import (
     ai_conversation_intake,
     ai_intake,
+    inbox_writes,
     team_inbox_automation,
     team_inbox_media,
     team_inbox_operations,
@@ -611,6 +612,25 @@ def _classify_inbound(
     return request, ai_intake.prepare_async_intake(db, request)
 
 
+def _provider_account_scope(metadata: dict) -> str | None:
+    """The connected account a provider payload arrived at.
+
+    Three provider vocabularies for one fact, which is why this is a function
+    rather than the same `or` chain in three places. It is the strongest rung of
+    the ADR-0013 § 5 account-scope ladder: what the provider told us beats
+    anything inferred from routing.
+    """
+    return (
+        str(
+            metadata.get("provider_account_scope")
+            or metadata.get("page_or_account_id")
+            or metadata.get("phone_number_id")
+            or ""
+        )[:160]
+        or None
+    )
+
+
 def receive_inbound_channel(
     db: Session,
     payload: InboundChannelPayload,
@@ -691,21 +711,22 @@ def receive_inbound_channel(
         if contact_name := str(payload.contact_name or "").strip():
             conversation_metadata["contact_name"] = contact_name[:200]
             conversation_metadata["contact_name_source"] = "provider_observation"
-        conversation = InboxConversation(
-            subscriber_id=resolution.subscriber_id,
-            channel_type=channel_type,
-            status=InboxConversationStatus.open.value,
-            subject=payload.subject or payload.contact_name,
-            contact_address=resolution.normalized_contact or payload.contact_address,
+        conversation = inbox_writes.open_conversation(
+            db,
+            channel=channel_type,
+            contact=resolution.normalized_contact or payload.contact_address,
             external_thread_id=external_thread_id,
-            first_message_at=received_at,
-            last_message_at=received_at,
+            subject=payload.subject or payload.contact_name,
+            occurred_at=received_at,
+            status=InboxConversationStatus.open.value,
+            provider_account_scope=_provider_account_scope(metadata),
+            subscriber_id=resolution.subscriber_id,
             metadata_=conversation_metadata,
         )
-        db.add(conversation)
-        db.flush()
     else:
-        conversation.last_message_at = received_at
+        inbox_writes.touch_activity(
+            db, conversation=conversation, occurred_at=received_at
+        )
         if resolution.subscriber_id and not conversation.subscriber_id:
             conversation.subscriber_id = resolution.subscriber_id
         conversation_metadata = dict(conversation.metadata_ or {})
@@ -801,13 +822,7 @@ def receive_inbound_channel(
         db,
         channel_type=channel_type,
         provider=str(metadata.get("provider") or "") or None,
-        account_scope=str(
-            metadata.get("provider_account_scope")
-            or metadata.get("page_or_account_id")
-            or metadata.get("phone_number_id")
-            or ""
-        )
-        or None,
+        account_scope=_provider_account_scope(metadata),
         fallback_service_team_id=(
             payload.fallback_service_team_id
             or team_inbox_routing.default_service_team_id(db)
@@ -874,20 +889,21 @@ def receive_inbound_channel(
     intake_state["routing_reason"] = routing_decision.reason
     conversation_metadata["ai_intake"] = intake_state
     conversation.metadata_ = conversation_metadata
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=channel_type,
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=channel_type,
         direction=InboxMessageDirection.inbound.value,
+        occurred_at=received_at,
+        external_message_id=payload.external_message_id,
         subject=payload.subject,
         body=body,
-        external_message_id=payload.external_message_id,
+        provider_account_scope=_provider_account_scope(metadata),
         external_thread_id=external_thread_id,
         from_address=resolution.normalized_contact or payload.contact_address,
         received_at=received_at,
         metadata_=metadata,
     )
-    db.add(message)
-    db.flush()
     # Shadow projection: record which endpoints took part. Nothing reads it for
     # a threading or export decision yet, so a failure here must not cost us an
     # ingested message.
@@ -899,7 +915,7 @@ def receive_inbound_channel(
         message=message,
         provider=str(metadata.get("provider") or "") or None,
     )
-    conversation.last_message_at = received_at
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=received_at)
     # A conversation snoozed "until the customer replies" wakes here — this is
     # the reply.
     team_inbox_operations.wake_on_inbound(db, conversation=conversation)

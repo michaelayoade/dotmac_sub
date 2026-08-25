@@ -20,6 +20,7 @@ from app.models.team_inbox import (
 from app.schemas.fiber_inquiry import FiberInquiryRequest
 from app.services import (
     conversation_lead_relationships,
+    inbox_writes,
     team_inbox_assignment,
     team_inbox_automation,
     team_inbox_channel_receive,
@@ -145,19 +146,18 @@ def receive_fiber_inquiry(
         metadata["lead_id"] = str(lead_result.lead.id)
         metadata["party_id"] = str(lead_result.party_id)
 
-    conversation = InboxConversation(
-        subscriber_id=identity.subscriber_id,
-        channel_type=channel.value,
-        status=InboxConversationStatus.open.value,
-        subject=f"Fiber inquiry: {payload.interest.label}",
-        contact_address=normalized_email,
+    conversation = inbox_writes.open_conversation(
+        db,
+        channel=channel.value,
+        contact=normalized_email,
         external_thread_id=f"fiber:{delivery_id}",
-        first_message_at=payload.submitted_at,
-        last_message_at=payload.submitted_at,
+        subject=f"Fiber inquiry: {payload.interest.label}",
+        occurred_at=payload.submitted_at,
+        status=InboxConversationStatus.open.value,
+        provider_account_scope=site_id,
+        subscriber_id=identity.subscriber_id,
         metadata_=metadata,
     )
-    db.add(conversation)
-    db.flush()
     participant_team_ids = [
         team_id
         for team_id in (
@@ -176,13 +176,16 @@ def receive_fiber_inquiry(
             unmatched_recipients=[],
         ),
     )
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=channel.value,
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=channel.value,
         direction=InboxMessageDirection.inbound.value,
+        occurred_at=payload.submitted_at,
+        external_message_id=delivery_id,
         subject=conversation.subject,
         body=team_inbox_fiber_receive.render_fiber_inquiry_body(payload),
-        external_message_id=delivery_id,
+        provider_account_scope=site_id,
         external_thread_id=conversation.external_thread_id,
         from_address=normalized_email,
         received_at=payload.submitted_at,
@@ -196,8 +199,6 @@ def receive_fiber_inquiry(
             "party_id": str(lead_result.party_id) if lead_result else None,
         },
     )
-    db.add(message)
-    db.flush()
     team_inbox_participants.record_message_participants(
         db,
         conversation=conversation,
@@ -432,28 +433,29 @@ def receive_inbound_email(
     created_conversation = conversation is None
 
     if conversation is None:
-        conversation = InboxConversation(
-            subscriber_id=resolution.subscriber_id,
-            channel_type=InboxChannelType.email.value,
-            status=InboxConversationStatus.open.value,
-            subject=_trim_subject(payload.subject),
-            contact_address=normalized_from,
+        conversation = inbox_writes.open_conversation(
+            db,
+            channel=InboxChannelType.email.value,
+            contact=normalized_from,
             external_thread_id=thread_message_ids[0]
             if thread_message_ids
             else external_message_id,
+            subject=_trim_subject(payload.subject),
+            occurred_at=received_at,
+            status=InboxConversationStatus.open.value,
+            subscriber_id=resolution.subscriber_id,
             continued_from_conversation_id=(
                 thread_resolution.continued_from_conversation_id
             ),
-            first_message_at=received_at,
-            last_message_at=received_at,
             metadata_={"contact_resolution": resolution.as_metadata()},
         )
-        db.add(conversation)
-        db.flush()
     else:
-        conversation.last_message_at = received_at
-        if normalized_from and not conversation.contact_address:
-            conversation.contact_address = normalized_from
+        inbox_writes.touch_activity(
+            db,
+            conversation=conversation,
+            occurred_at=received_at,
+            contact=normalized_from,
+        )
         if resolution.subscriber_id and not conversation.subscriber_id:
             conversation.subscriber_id = resolution.subscriber_id
         metadata = dict(conversation.metadata_ or {})
@@ -494,13 +496,15 @@ def receive_inbound_email(
         "participant_service_team_ids": routing_plan.participant_service_team_ids,
         "unmatched_recipients": routing_plan.unmatched_recipients,
     }
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=InboxChannelType.email.value,
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=InboxChannelType.email.value,
         direction=InboxMessageDirection.inbound.value,
+        occurred_at=received_at,
+        external_message_id=external_message_id,
         subject=_trim_subject(payload.subject),
         body=payload.body,
-        external_message_id=external_message_id,
         external_thread_id=conversation.external_thread_id,
         from_address=normalized_from,
         to_addresses=normalized_to,
@@ -508,8 +512,6 @@ def receive_inbound_email(
         received_at=received_at,
         metadata_=metadata,
     )
-    db.add(message)
-    db.flush()
 
     # Shadow projection: record which endpoints took part. Nothing reads it for
     # a threading or export decision yet, so a failure here must not cost us an
@@ -518,11 +520,9 @@ def receive_inbound_email(
         db, conversation=conversation, message=message
     )
 
-    conversation.last_message_at = received_at
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=received_at)
     # Same wake rule as the channel path: an inbound email is the reply.
     team_inbox_operations.wake_on_inbound(db, conversation=conversation)
-    if conversation.first_message_at is None:
-        conversation.first_message_at = received_at
     # Same liveness signal as the channel path. Without it an inbound email was
     # the one arrival an operator with a healthy socket never saw.
     team_inbox_realtime.publish_conversation_event(

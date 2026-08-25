@@ -107,6 +107,44 @@ per-table cutover decisions.
 
 ## Pin history
 
+**2026-08-23 — the staffed inbox pair is COMPOSED, not yet authoritative.**
+Sub pins `dotmac-inbox==0.1.0a1` and `dotmac-inbox-operations==0.1.0a3` from the
+Forgejo index and composes both lineages (`ib` → `mod_inbox`, `io` →
+`mod_inbox_ops`) in `alembic/env.py`. This is the second and third module Sub
+composes, after Service Orders.
+
+No kernel move was needed: `dotmac-inbox` floors at `0.1.0a85` and
+`dotmac-inbox-operations` at `0.1.0a91`, and Sub already pins a91. That is the
+first time a module's floor has been satisfied by a pin Sub already held rather
+than forcing one — recorded because the a91 entry above establishes the opposite
+as the normal case.
+
+Neither module needed a new prerequisite migration. Both declare exactly
+`tenant_scope_catalog.v1` and `module_database_roles.v1`, which
+`app/migration_bindings.py` already binds to migrations 545 and 546, so
+`ASSEMBLY_PREREQUISITE_BINDINGS` is UNCHANGED by this composition. That is what
+those two migrations were written for.
+
+Locking moved nothing else: the `poetry.lock` diff is 43 lines and contains only
+the two new packages. Recorded artifacts —
+
+| distribution | version | wheel SHA256 | sdist SHA256 |
+| --- | --- | --- | --- |
+| `dotmac-inbox` | 0.1.0a1 | `d6f006e24c9639ac3938f24bc373432ee9809e1cdcd8f70959be73dbbe5df873` | `d80f0b6e0a138289d7728cd8db975eab5312a464af129e9ac5e0245fc74b246e` |
+| `dotmac-inbox-operations` | 0.1.0a3 | `689f31f88e757b7586c53f218e67c8db04fce8e09d4bdb69840fb7698745cc4f` | `51fed17d18a63e36ed0b7e7220721be2c7dad11384931aa155c63e377854a2fd` |
+
+The annotated tags `dotmac-inbox-v0.1.0a1` and
+`dotmac-inbox-operations-v0.1.0a3` are the ADR-0013-of-governance oracle for
+both: in Starter a tag is written only after the version is published and
+installed back from the private index. `dotmac-inbox-operations-v0.1.0a3` peels
+to Starter `5b2798b80f6ac903fb132a0b1c205dd1dde3c528`.
+
+**Composition is not adoption, and this entry claims only composition.** Sub's
+own `public.inbox_*` tables remain the authority for every conversation,
+message, queue, presence and assignment fact. The authority move is ruled by
+`docs/adr/0013-inbox-authority-cutover.md` and is gated on a production backfill
+census that has not been run — see "Inbox cutover state" below.
+
 **2026-08-22 — `0.1.0a90` → `0.1.0a91`.** Forced by composition, not chosen.
 `dotmac-service-orders 0.1.0a1` declares `dotmac-kernel >=0.1.0a91`, so
 `poetry lock` refused the a90 pin outright: the module's floor sets the
@@ -456,6 +494,109 @@ plus `KERNEL_PIN` in `tests/architecture/test_kernel_compatibility.py`.
 **Not delivered by this bump:** Sub declares no `ModuleManifest`, so D1's
 namespace and migration-lineage rules govern nothing here yet. They become
 relevant if and when Sub extracts stateful modules.
+
+
+## Inbox cutover state (ADR-0013)
+
+Phase-by-phase, so a reader can tell what is built from what has happened.
+
+| phase | what it is | state |
+| --- | --- | --- |
+| P0 composition | pins, lock, `_COMPOSED_MODULE_LINEAGES` | **done** |
+| P1 decision | ADR-0013, owner map, derivation rules | **done, status `proposed`** |
+| P2 adapter | `app/services/inbox_module/`, `app/services/inbox_channels.py` | **built, unused by any `team_inbox_*` service** |
+| P3 backfill | `app/services/inbox_backfill.py` — census and exact-replay apply | **built, never run against real data; temporary direct-model bridge retires after Inbox a2 / Operations a4 are released and pinned** |
+| P4 shadow | `app/services/inbox_projection_reconciler.py` — `reconcile()` and `compare()` | **built, no shadow window has been observed** |
+| P5 writer switch | `app/services/inbox_writes.py` seam + `inbox_authority` sealed switch (migration 551) | **built; assignments and admission routed, 5 modules blocked on four module gaps** |
+| P6 retirement | drop the five retired tables, narrow the two projections | **not started** |
+
+**The gate on P5 is a measurement nobody has taken.** `census()` derives an
+`account_scope` and a `thread_key` for every historical conversation and refuses
+rather than guessing. How many rows it refuses — for an underivable account
+scope, or a `thread_key` that collides with another conversation's — is unknown
+until it is run against a production-shaped database, and no host has been
+named. That census is the next action, and its result may change the derivation
+rules rather than merely satisfy them.
+
+One contact-centre policy decision is still outstanding, while the presence
+narrowing is now an implemented compatibility boundary:
+
+- **`inbox_conversations.priority` stops ordering the queue.** The module orders
+  by durable FIFO position, deliberately. This is a behaviour change for the
+  contact centre and needs acceptance by name before P5 (ADR-0013 § 6).
+- **Implemented: presence `on_break` collapses into `AWAY`.** No dispatch behaviour changes;
+  the roster distinction is preserved in Sub's product-owned
+  `inbox_agent_presence_details.away_reason`, and the exhaustive two-input map
+  round-trips all four operator states (ADR-0013 § 6).
+
+### P5 as built, and what still blocks activation
+
+Authority is staged, not switched: `LOCAL` (today) -> `SHADOW` -> `MODULE`. The
+stage is DERIVED — the `inbox_authority_cutovers` row means MODULE, the
+`inbox_module_shadow_writes_enabled` setting means SHADOW, neither means LOCAL —
+and `app/services/inbox_writes.py` is the ONLY module that reads it, guarded by
+`test_only_the_write_seam_branches_on_the_cutover_stage`.
+
+The switch is a durable, uniquely-keyed, delete-free row rather than a setting,
+following `customer_subledger_authority_cutovers`. `inbox_authority.activate`
+refuses unless the drift comparator is run THERE AND THEN and comes back clean,
+something was actually compared, and a named review reference is supplied.
+Migration 551's `downgrade()` refuses once the row exists.
+
+**Both halves are routed: field assignment AND admission.** An earlier revision
+of this work routed only assignments, so `inbox_writes.open_conversation` and
+`record_message` had zero callers while nineteen direct
+`InboxConversation(...)` / `InboxMessage(...)` sites remained — at MODULE those
+would have created Sub-only rows immediately. The writer census was blind to it
+because it deliberately excluded constructors, on the circular grounds that P6
+retires them; P6 runs AFTER the activation the census gates. Both are fixed: the
+census counts construction, and admission is routed in `team_inbox_receive`,
+`team_inbox_channel_receive`, `team_inbox_widget`, `team_inbox_campaigns`,
+`team_inbox_commands` and two of four `team_inbox_outbound` sites.
+
+The comparator was also asymmetric — it detected Sub-only conversations but not
+Sub-only messages, so a message written straight into `public.inbox_messages`
+escaped both the baseline and the comparator by disagreeing with nothing. It now
+reports orphans for both entities, and `missing`/`orphan` carry `(entity, id)`.
+
+**Five modules remain, blocked on four module gaps, not on effort** (ADR-0013
+§ 6a):
+
+1. **Indefinite snooze.** "Snooze until reply" is SNOOZED with no wake time; the
+   module requires one. That path routes through the seam and fails LOUDLY at
+   MODULE rather than inventing a sentinel every report would read as a deadline.
+2. **Delivery outcome learned late.** `sent_at` / `external_message_id` are
+   stamped after the provider accepts; `record_message` takes the transport ref
+   at admission because it feeds the dedup key, so a late update would mutate
+   `message_key`. Blocks `communication_intents`, `team_inbox_outbound`,
+   `app/tasks/notifications`.
+3. **No typed internal principal.** An internal note, a field-job chat and a
+   pre-identification widget session have no external party. The seam now
+   REFUSES them at MODULE (`MissingConversationContact`) rather than admitting
+   them under an empty contact — which would put every anonymous visitor in one
+   thread.
+4. **An internal channel cannot carry provider thread identity.** `ChannelSpec`
+   forbids `INTERNAL` + `PROVIDER`, but `field_job` has a real per-work-order
+   thread id. Declared `DERIVED`, every work order for one subscriber collapses
+   into one conversation. Blocks `team_inbox_field_job`, `team_inbox_operations`.
+
+Until all four are closed and released, **an empty writer baseline is part of
+the activation gate** (ADR-0013 cutover gate (e)): at MODULE the reconciler
+rebuilds the projection from `mod_inbox`, so a remaining Sub writer's value is
+silently discarded on the next reconcile.
+
+Behaviour is now covered by `tests/test_inbox_authority_stages.py` — 23 cases
+over stage resolution, identity parity across SHADOW, shadow-swallows-failure,
+missing-contact refusal, comparator symmetry in both directions and for both
+entities, all four activation refusals, fingerprint stability, and the
+account-scope ladder's fourth rung.
+
+Two Starter releases are prerequisites to retiring the temporary backfill
+exception: `dotmac-inbox` 0.1.0a2 and `dotmac-inbox-operations` 0.1.0a4. Their
+source implementations are not publication evidence. Sub remains pinned to the
+registry-verified a1/a3 pair until the protected release workflows install back
+and tag a2/a4; the architecture gate then requires the direct mapped-class
+writes to disappear.
 
 
 ## The adoption frame

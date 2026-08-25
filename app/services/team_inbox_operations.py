@@ -27,6 +27,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
 )
 from app.services import (
+    inbox_writes,
     team_inbox_assignment,
     team_inbox_filters,
     team_inbox_outbound,
@@ -783,7 +784,8 @@ def update_conversation_workflow(
             else None,
             "to": target.isoformat() if target else None,
         }
-        conversation.snoozed_until = target
+        # The wake time travels WITH the transition (ADR-0013 P5): status and
+        # snooze deadline are one fact, owned by `dotmac-inbox` after cutover.
         if target is not None:
             team_inbox_status.apply_status_transition(
                 db,
@@ -792,6 +794,20 @@ def update_conversation_workflow(
                 actor_person_id=coerce_uuid(actor_person_id),
                 reason=team_inbox_status.InboxStatusReason.snooze,
                 source_id=f"workflow-snooze:{conversation.id}:{uuid4()}",
+                snoozed_until=target,
+            )
+        elif conversation.status == InboxConversationStatus.snoozed.value:
+            # Clearing the deadline on a sleeping conversation is a wake, not a
+            # column edit. Saying so explicitly is what lets the module own it;
+            # the previous `snoozed_until = None` was the same intent expressed
+            # as a write nobody could route.
+            team_inbox_status.apply_status_transition(
+                db,
+                conversation=conversation,
+                status=InboxConversationStatus.open,
+                actor_person_id=coerce_uuid(actor_person_id),
+                reason=team_inbox_status.InboxStatusReason.snooze,
+                source_id=f"workflow-unsnooze:{conversation.id}:{uuid4()}",
             )
     history.append(event)
     metadata["workflow_history"] = history[-50:]
@@ -1202,7 +1218,13 @@ def snooze_until_reply(
     )
     metadata["workflow_history"] = history[-50:]
     conversation.metadata_ = metadata
-    conversation.snoozed_until = None
+    inbox_writes.clear_snooze(db, conversation=conversation)
+    # UNRESOLVED (ADR-0013 § 6a): snooze-until-reply is SNOOZED with no wake
+    # time, and `dotmac_inbox.lifecycle` requires one for that status. At MODULE
+    # stage the module refuses this transition — loudly, which is correct: the
+    # alternative was a far-future sentinel timestamp that would read as a real
+    # deadline to every report and every operator. The module needs to accept an
+    # indefinite snooze carrying a reason code before this path can cut over.
     team_inbox_status.apply_status_transition(
         db,
         conversation=conversation,
@@ -1264,7 +1286,7 @@ def wake_due_snoozed_conversations(
         )
         metadata["workflow_history"] = history[-50:]
         conversation.metadata_ = metadata
-        conversation.snoozed_until = None
+        inbox_writes.clear_snooze(db, conversation=conversation)
         # A conversation resolved while asleep stays resolved: the wake time
         # passing is not a reason to reopen closed work.
         if conversation.status == "snoozed":
@@ -1315,7 +1337,7 @@ def wake_conversation(
     )
     metadata["workflow_history"] = history[-50:]
     conversation.metadata_ = metadata
-    conversation.snoozed_until = None
+    inbox_writes.clear_snooze(db, conversation=conversation)
     if conversation.status == "snoozed":
         team_inbox_status.apply_status_transition(
             db,
@@ -1357,7 +1379,7 @@ def wake_on_inbound(db: Session, *, conversation: InboxConversation) -> bool:
     )
     metadata["workflow_history"] = history[-50:]
     conversation.metadata_ = metadata
-    conversation.snoozed_until = None
+    inbox_writes.clear_snooze(db, conversation=conversation)
     if conversation.status == "snoozed":
         team_inbox_status.apply_status_transition(
             db,

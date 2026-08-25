@@ -978,8 +978,10 @@ from app.models.task_execution import (  # noqa: F401
     TaskExecutionStatus,
 )
 from app.models.team_inbox import (  # noqa: F401
+    InboxAgentAwayReason,
     InboxAgentIntroductionPreference,
     InboxAgentPresence,
+    InboxAgentPresenceDetail,
     InboxAgentPresenceStatus,
     InboxAutomationActionType,
     InboxAutomationRule,
@@ -999,6 +1001,7 @@ from app.models.team_inbox import (  # noqa: F401
     InboxMessage,
     InboxMessageDirection,
     InboxMessageTemplate,
+    InboxQueueBinding,
     InboxQueueNotification,
     InboxReplyMacro,
     InboxReplyReminder,

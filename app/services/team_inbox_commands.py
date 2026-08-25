@@ -54,9 +54,7 @@ from app.schemas.sales import (
     LeadOriginCaptureCreate,
 )
 from app.services import (
-    party as party_service,
-)
-from app.services import (
+    inbox_writes,
     team_inbox_assignment,
     team_inbox_contact_links,
     team_inbox_field_job,
@@ -67,6 +65,9 @@ from app.services import (
     team_inbox_participants,
     team_inbox_routing,
     team_inbox_status,
+)
+from app.services import (
+    party as party_service,
 )
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
@@ -2641,22 +2642,23 @@ def start_conversation(
         clean_contact_name = str(contact_name or "").strip()
         if clean_contact_name:
             conversation_metadata["contact_name"] = clean_contact_name[:200]
-        conversation = InboxConversation(
-            channel_type=clean_channel,
+        conversation = inbox_writes.open_conversation(
+            db,
+            channel=clean_channel,
+            contact=(resolution.normalized_contact or resolved_contact_address),
+            external_thread_id=None,
             subject=(
                 (subject or "").strip()
                 or (str(template.subject or "").strip() if template is not None else "")
             )[:200]
             or None,
-            contact_address=(resolution.normalized_contact or resolved_contact_address),
+            occurred_at=datetime.now(UTC),
             status=InboxConversationStatus.open.value,
+            service_team_id=coerce_uuid(service_team_id),
             subscriber_id=resolution.subscriber_id,
             primary_service_team_id=coerce_uuid(service_team_id),
-            first_message_at=datetime.now(UTC),
             metadata_=conversation_metadata,
         )
-        db.add(conversation)
-        db.flush()
 
         # Give the thread an owning team link, not just a primary id. An
         # operator-started conversation used to have no `InboxConversationTeam`

@@ -11,7 +11,7 @@ rows itself (SOT map §Communications: inbox rows have no writer outside the
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -25,7 +25,7 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import team_inbox_status
+from app.services import inbox_writes, team_inbox_status
 
 
 def ensure_campaign_conversation(
@@ -61,24 +61,23 @@ def ensure_campaign_conversation(
             )
         return conversation
 
-    conversation = InboxConversation(
+    conversation = inbox_writes.open_conversation(
+        db,
+        channel=channel_type,
+        contact=contact_address,
+        external_thread_id=external_thread_id,
+        subject=subject,
+        occurred_at=now,
+        status=InboxConversationStatus.open.value,
+        service_team_id=service_team_id,
         subscriber_id=subscriber_id,
         primary_service_team_id=service_team_id,
-        channel_type=channel_type,
-        status=InboxConversationStatus.open.value,
-        subject=subject,
-        contact_address=contact_address,
-        external_thread_id=external_thread_id,
-        first_message_at=now,
-        last_message_at=now,
         metadata_={
             "source": "native_campaign",
             "campaign_id": str(campaign_id),
             "campaign_recipient_id": str(campaign_recipient_id),
         },
     )
-    db.add(conversation)
-    db.flush()
     if service_team_id is not None:
         db.add(
             InboxConversationTeam(
@@ -106,13 +105,15 @@ def record_campaign_message(
     metadata: dict[str, Any],
 ) -> InboxMessage:
     """The outbound campaign message row for a queued send."""
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        notification_id=notification_id,
-        channel_type=channel_type,
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=channel_type,
         direction=InboxMessageDirection.outbound.value,
+        occurred_at=datetime.now(UTC),
         subject=subject,
         body=body,
+        notification_id=notification_id,
         external_thread_id=conversation.external_thread_id,
         from_address=from_address,
         to_addresses=[to_address],

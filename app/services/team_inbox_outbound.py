@@ -23,6 +23,7 @@ from app.models.team_inbox import (
 from app.schemas.ai_intake import APPROVED_FOLLOW_UP_QUESTIONS
 from app.schemas.notification import NotificationDeliveryLatency
 from app.services import (
+    inbox_writes,
     team_inbox_realtime,
     team_inbox_reply_window,
     team_inbox_routing,
@@ -238,7 +239,7 @@ def _queue_outbox_reply(
     message.metadata_ = {**intent_metadata, "delivery_status": "queued"}
     if existing_message is None:
         db.add(message)
-    conversation.last_message_at = queued_at
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=queued_at)
     db.flush()
     author_name = str(
         intent_metadata.get("author_name")
@@ -378,7 +379,7 @@ def _send_field_job_reply(
     }
     if existing_message is None:
         db.add(message)
-    conversation.last_message_at = sent_at
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=sent_at)
     db.flush()
     team_inbox_realtime.publish_conversation_event(
         db,
@@ -983,10 +984,12 @@ def _record_failed_outbound(
     )
     if provider_result:
         combined_metadata["provider_result"] = provider_result
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=channel_type,
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=channel_type,
         direction=InboxMessageDirection.outbound.value,
+        occurred_at=attempted_at,
         subject=subject or payload.subject,
         body=payload.body_text or payload.body_html,
         external_thread_id=conversation.external_thread_id,
@@ -996,8 +999,7 @@ def _record_failed_outbound(
         sent_at=attempted_at,
         metadata_=combined_metadata,
     )
-    db.add(message)
-    conversation.last_message_at = attempted_at
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=attempted_at)
     db.flush()
     return str(message.id)
 
@@ -1118,10 +1120,15 @@ def schedule_inbox_reply(
             "bcc": list(payload.bcc_addresses),
         }
     )
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=conversation.channel_type,
+    # A scheduled reply is drafted now and sent later, so it has no occurrence
+    # yet. `occurred_at` is the moment it was accepted for sending — the module
+    # orders by it, and a null would make the draft unorderable.
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=conversation.channel_type,
         direction="outbound",
+        occurred_at=send_after,
         subject=_reply_subject(conversation, payload.subject),
         body=payload.body_text,
         from_address=None,
@@ -1129,8 +1136,6 @@ def schedule_inbox_reply(
         sent_at=None,
         metadata_=metadata,
     )
-    db.add(message)
-    db.flush()
     return message
 
 

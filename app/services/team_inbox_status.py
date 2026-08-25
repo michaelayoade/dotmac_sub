@@ -16,6 +16,7 @@ from app.models.team_inbox import (
     InboxConversationStatus,
     InboxStatusTransitionEvent,
 )
+from app.services import inbox_writes
 
 OWNER = "communications.team_inbox_status"
 
@@ -52,6 +53,12 @@ class InboxStatusTransitionCommand:
     occurred_at: datetime
     compatibility_source: str
     macro_id: UUID | None = None
+    #: The wake time a `snoozed` transition is asking for, and `None` for every
+    #: other status. It travels WITH the transition rather than being assigned
+    #: to the conversation beforehand, because after ADR-0013 P5 the status and
+    #: the wake time are one fact owned by `dotmac-inbox` — setting the column
+    #: first and transitioning second would be two writers for one decision.
+    snoozed_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +122,15 @@ def _apply_status_transition(
     history.append(compatibility_entry)
     metadata["status_history"] = history[-50:]
     conversation.metadata_ = metadata
-    conversation.status = command.status.value
+    # `metadata_` stays Sub's; the status itself belongs to `dotmac-inbox` once
+    # authority has moved, so it goes through the one write seam (ADR-0013 P5).
+    inbox_writes.set_status(
+        db,
+        conversation=conversation,
+        status=command.status.value,
+        occurred_at=effective_at,
+        snoozed_until=command.snoozed_until,
+    )
     db.flush()
     return InboxStatusTransitionOutcome(
         conversation_id=conversation.id,
@@ -137,6 +152,7 @@ def apply_status_transition(
     occurred_at: datetime | None = None,
     compatibility_source: str | None = None,
     macro_id: UUID | None = None,
+    snoozed_until: datetime | None = None,
 ) -> InboxStatusTransitionOutcome:
     """Normalize callers into the one typed, flush-only command contract."""
 
@@ -152,5 +168,6 @@ def apply_status_transition(
             occurred_at=occurred_at or datetime.now(UTC),
             compatibility_source=compatibility_source or reason.value,
             macro_id=macro_id,
+            snoozed_until=snoozed_until,
         ),
     )

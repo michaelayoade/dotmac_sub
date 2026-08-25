@@ -2280,6 +2280,31 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.team_inbox_agent_presence",
+            module="app.services.team_inbox_assignment",
+            owns=("agent roster availability and away-reason projection",),
+            depends_on=("auth.permission_gate",),
+            contract=_team_inbox_contract(
+                service_name="communications.team_inbox_agent_presence",
+                concerns=(
+                    (
+                        "agent roster availability and away-reason projection",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="operator authorization",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Granular agent-presence mutation permission evidence.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                test_refs=("tests/test_team_inbox_assignment.py",),
+            ),
+        ),
+        SOTService(
             name="communications.team_inbox_queue_notifications",
             module="app.services.team_inbox_queue_notifications",
             owns=("queue notification delivery ledger writes",),

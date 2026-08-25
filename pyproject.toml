@@ -48,6 +48,8 @@ dependencies = [
     "dotmac-integration-client",
     "langgraph==0.6.6",
     "defusedxml==0.7.1",
+    "dotmac-inbox==0.1.0a1",
+    "dotmac-inbox-operations==0.1.0a3",
     "dotmac-kernel==0.1.0a91",
     "dotmac-service-orders==0.1.0a1",
     "dotmac-ui==0.1.0a7",
@@ -69,6 +71,14 @@ dotmac-kernel = { version = "0.1.0a91", source = "forgejo" }
 # First composed domain module. Its `so` lineage is registered in
 # alembic.ini and its prerequisites are bound in app/migration_bindings.py.
 dotmac-service-orders = { version = "0.1.0a1", source = "forgejo" }
+
+# The staffed-inbox pair. Two independent lineages (`ib` -> mod_inbox,
+# `io` -> mod_inbox_ops) with no foreign key between them: inbox-operations
+# holds an opaque `conversation_reference`, never a conversation row. Pinned
+# together because Sub's cutover moves conversation facts and queue/assignment
+# decisions in one sequence — see docs/adr/0013-inbox-authority-cutover.md.
+dotmac-inbox = { version = "0.1.0a1", source = "forgejo" }
+dotmac-inbox-operations = { version = "0.1.0a3", source = "forgejo" }
 
 # The shared presentation contract. Pinned exactly for the same reason as the
 # kernel: a token vocabulary change is reviewed deliberately, never pulled in

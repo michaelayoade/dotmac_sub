@@ -77,7 +77,11 @@ install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
 # skip: the pin in `pyproject.toml` says it is installed, and continuing without
 # its lineage would run `alembic upgrade heads` against a database missing that
 # module's schema while reporting success.
-_COMPOSED_MODULE_LINEAGES: tuple[str, ...] = ("dotmac_service_orders",)
+_COMPOSED_MODULE_LINEAGES: tuple[str, ...] = (
+    "dotmac_service_orders",
+    "dotmac_inbox",
+    "dotmac_inbox_operations",
+)
 
 
 def _composed_version_locations() -> list[str]:

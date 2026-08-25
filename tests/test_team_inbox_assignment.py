@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
+
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
     InboxAgentPresence,
+    InboxAgentPresenceDetail,
     InboxAgentPresenceStatus,
     InboxConversation,
     InboxConversationAssignment,
@@ -301,3 +304,42 @@ def test_set_agent_presence_creates_manual_override(db_session):
     assert presence.status == InboxAgentPresenceStatus.away.value
     assert presence.manual_override_status == InboxAgentPresenceStatus.away.value
     assert presence.last_seen_at is not None
+    detail = db_session.get(InboxAgentPresenceDetail, person_id)
+    assert detail is not None
+    assert detail.away_reason == "away"
+    replay, created = team_inbox_assignment.import_agent_presence_detail(
+        db_session,
+        person_id=person_id,
+        status=InboxAgentPresenceStatus.away,
+        observed_at=detail.observed_at,
+    )
+    assert replay is detail
+    assert not created
+    with pytest.raises(
+        team_inbox_assignment.InboxAgentPresenceDetailConflict,
+        match="away_reason",
+    ):
+        team_inbox_assignment.import_agent_presence_detail(
+            db_session,
+            person_id=person_id,
+            status=InboxAgentPresenceStatus.on_break,
+            observed_at=detail.observed_at,
+        )
+
+    team_inbox_assignment.set_agent_presence(
+        db_session,
+        person_id=person_id,
+        status=InboxAgentPresenceStatus.on_break.value,
+    )
+    db_session.flush()
+
+    assert detail.away_reason == "break"
+
+    team_inbox_assignment.set_agent_presence(
+        db_session,
+        person_id=person_id,
+        status=InboxAgentPresenceStatus.online.value,
+    )
+    db_session.flush()
+
+    assert detail.away_reason is None

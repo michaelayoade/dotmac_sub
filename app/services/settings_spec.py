@@ -3879,6 +3879,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.comms,
+        key="inbox_module_shadow_writes_enabled",
+        env_var="INBOX_MODULE_SHADOW_WRITES_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Mirror inbox writes into the composed modules (shadow window)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
         key="inbox_agent_default_max_concurrent_conversations",
         env_var="INBOX_AGENT_DEFAULT_MAX_CONCURRENT_CONVERSATIONS",
         value_type=SettingValueType.integer,

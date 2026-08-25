@@ -31,6 +31,7 @@ from app.schemas.sales import (
 from app.services import auth_flow as auth_flow_service
 from app.services import (
     conversation_lead_relationships,
+    inbox_writes,
     team_inbox_automation,
     team_inbox_participants,
     team_inbox_realtime,
@@ -352,29 +353,34 @@ def _conversation(
     }
     if conversation is None:
         now = datetime.now(UTC)
-        conversation = InboxConversation(
-            subscriber_id=subscriber_id,
-            channel_type=InboxChannelType.chat_widget.value,
-            status=InboxConversationStatus.open.value,
-            subject=subject[:200],
-            contact_address=contact_address,
+        conversation = inbox_writes.open_conversation(
+            db,
+            channel=InboxChannelType.chat_widget.value,
+            contact=contact_address,
             external_thread_id=external_thread_id,
-            first_message_at=now,
-            last_message_at=now,
+            subject=subject[:200],
+            occurred_at=now,
+            status=InboxConversationStatus.open.value,
+            provider_account_scope=_WIDGET_ACCOUNT_SCOPE,
+            subscriber_id=subscriber_id,
             metadata_=metadata,
         )
-        db.add(conversation)
-        db.flush()
     else:
         merged = dict(conversation.metadata_ or {})
         merged.update({key: value for key, value in metadata.items() if value})
         conversation.metadata_ = merged
         if subscriber_id and not conversation.subscriber_id:
             conversation.subscriber_id = subscriber_id
-        if contact_address and not conversation.contact_address:
-            conversation.contact_address = contact_address
+        inbox_writes.set_contact(db, conversation=conversation, contact=contact_address)
         db.flush()
     return conversation
+
+
+#: The widget's connected account. `chat_widget` is declared with an EXTERNAL
+#: transport (a visitor does arrive somewhere), so it does not get the internal
+#: literal — it needs a real scope, and the site it is embedded on is that
+#: scope. Named once here rather than repeated at three admission sites.
+_WIDGET_ACCOUNT_SCOPE = "fiber.dotmac.ng"
 
 
 def _session_response(
@@ -726,12 +732,15 @@ def broker_fiber_visitor_session(
     _apply_fiber_chat_routing(db, conversation=conversation)
 
     now = datetime.now(UTC)
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=InboxChannelType.chat_widget.value,
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=InboxChannelType.chat_widget.value,
         direction=InboxMessageDirection.inbound.value,
-        body=command.message,
+        occurred_at=now,
         external_message_id=external_message_id,
+        body=command.message,
+        provider_account_scope=_WIDGET_ACCOUNT_SCOPE,
         external_thread_id=conversation.external_thread_id,
         from_address=normalized_email,
         received_at=now,
@@ -746,8 +755,7 @@ def broker_fiber_visitor_session(
         },
     )
     db.add(message)
-    conversation.first_message_at = conversation.first_message_at or now
-    conversation.last_message_at = now
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=now)
     db.flush()
     team_inbox_participants.record_message_participants(
         db,
@@ -898,17 +906,19 @@ def add_visitor_message(
         "session_id": principal.session_id,
         "surface": principal.surface,
     }
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=InboxChannelType.chat_widget.value,
+    message = inbox_writes.record_message(
+        db,
+        conversation=conversation,
+        channel=InboxChannelType.chat_widget.value,
         direction=InboxMessageDirection.inbound.value,
+        occurred_at=now,
         body=clean_body,
+        provider_account_scope=_WIDGET_ACCOUNT_SCOPE,
         from_address=conversation.contact_address,
         received_at=now,
         metadata_=metadata,
     )
-    db.add(message)
-    conversation.last_message_at = now
+    inbox_writes.touch_activity(db, conversation=conversation, occurred_at=now)
     if conversation.status == InboxConversationStatus.resolved.value:
         team_inbox_status.apply_status_transition(
             db,

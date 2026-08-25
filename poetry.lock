@@ -1120,6 +1120,48 @@ trio = ["trio (>=0.30)"]
 wmi = ["wmi (>=1.5.1) ; platform_system == \"Windows\""]
 
 [[package]]
+name = "dotmac-inbox"
+version = "0.1.0a1"
+description = "Dotmac Inbox — tenant-scoped conversation, message, lifecycle, threading, and read-state ownership"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_inbox-0.1.0a1-py3-none-any.whl", hash = "sha256:d6f006e24c9639ac3938f24bc373432ee9809e1cdcd8f70959be73dbbe5df873"},
+    {file = "dotmac_inbox-0.1.0a1.tar.gz", hash = "sha256:d80f0b6e0a138289d7728cd8db975eab5312a464af129e9ac5e0245fc74b246e"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a85"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
+name = "dotmac-inbox-operations"
+version = "0.1.0a3"
+description = "Staffed inbox queues, routing, presence, and assignments"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_inbox_operations-0.1.0a3-py3-none-any.whl", hash = "sha256:689f31f88e757b7586c53f218e67c8db04fce8e09d4bdb69840fb7698745cc4f"},
+    {file = "dotmac_inbox_operations-0.1.0a3.tar.gz", hash = "sha256:51fed17d18a63e36ed0b7e7220721be2c7dad11384931aa155c63e377854a2fd"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a91"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-integration-client"
 version = "0.2.0"
 description = "Canonical HTTP transport for Dotmac inter-service integration edges: policy-driven retry with jitter, Retry-After, reachability circuit, idempotency keys, request-id propagation, and metrics hooks."
@@ -6059,4 +6101,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "f4ffa91612c6a1cd9a119fc0ceb1462eae90062aca936127fe910affe6551213"
+content-hash = "61772ebf78af19addf1ff8d9b90f5c18dd538d1b70f92bed08448821551916cc"
