@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.party import PartyType
-from app.models.subscriber import Reseller, SubscriberCategory
+from app.models.subscriber import Reseller, SubscriberCategory, UserType
 from app.services import (
     conversation_lead_relationships,
     customer_portal,
@@ -37,6 +37,7 @@ from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import (
     web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
 )
@@ -1040,6 +1041,38 @@ def customer_party_binding_repair_submit(
             f"?party_binding_success={quote_plus('Party binding repaired')}&party_id={outcome.party_id}"
         ),
         status_code=303,
+    )
+
+
+@router.get(
+    "/person/{customer_id}/billing/ledger",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("customer:read")),
+        Depends(require_permission("billing:ledger:read")),
+    ],
+)
+def customer_billing_ledger(
+    request: Request,
+    customer_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Lazy customer-scoped ledger panel for the customer billing workspace."""
+
+    customer = _get_subscriber(db, str(customer_id))
+    if customer.user_type != UserType.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    ledger = web_billing_ledger_service.build_customer_ledger_view(
+        db,
+        query=web_billing_ledger_service.CustomerLedgerQuery(account_id=customer.id),
+    )
+    return templates.TemplateResponse(
+        "admin/customers/_billing_ledger.html",
+        {
+            "request": request,
+            "customer": customer,
+            "customer_ledger": ledger,
+        },
     )
 
 

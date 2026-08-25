@@ -5,10 +5,36 @@ from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.subscriber import Reseller, Subscriber
-from app.services.web_billing_ledger import build_ledger_entries_data, render_ledger_csv
+from app.services.web_billing_ledger import (
+    CustomerLedgerQuery,
+    LedgerEntryDetailQuery,
+    build_customer_ledger_view,
+    build_ledger_entries_data,
+    build_ledger_entry_detail,
+    render_ledger_csv,
+)
+from app.web.admin import billing_reporting
+
+
+def _request(path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("utf-8"),
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 5555),
+            "server": ("testserver", 80),
+        }
+    )
 
 
 def _create_ledger_entry(
@@ -250,6 +276,100 @@ def test_build_ledger_entries_data_filters_by_partner(db_session):
     assert len(state["entries"]) == 1
     assert state["entries"][0].account_id == account_a.id
     assert state["selected_partner_id"] == str(reseller_a.id)
+
+
+def test_customer_ledger_view_is_strictly_scoped_and_entries_are_clickable(
+    db_session, subscriber
+):
+    other = Subscriber(
+        first_name="Other",
+        last_name="Customer",
+        email="other-customer-ledger@example.com",
+    )
+    db_session.add(other)
+    db_session.commit()
+    customer_entry = _create_ledger_entry(
+        db_session,
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.credit,
+        amount="120.00",
+        source=LedgerSource.payment,
+    )
+    _create_ledger_entry(
+        db_session,
+        account_id=other.id,
+        entry_type=LedgerEntryType.debit,
+        amount="900.00",
+        source=LedgerSource.adjustment,
+    )
+
+    view = build_customer_ledger_view(
+        db_session,
+        query=CustomerLedgerQuery(account_id=subscriber.id),
+    )
+
+    assert [entry.id for entry in view.entries] == [customer_entry.id]
+    assert view.entries[0].detail_url == (f"/admin/billing/ledger/{customer_entry.id}")
+    assert view.summary.credit_display == "NGN 120.00"
+    assert view.summary.debit_display == "NGN 0.00"
+    assert view.full_ledger_url == (
+        f"/admin/billing/ledger?customer_ref={subscriber.id}"
+    )
+    assert view.export_url == (
+        f"/admin/billing/ledger/export.csv?customer_ref={subscriber.id}"
+    )
+
+
+def test_ledger_entry_detail_preserves_customer_and_source_evidence(
+    db_session, subscriber
+):
+    entry = _create_ledger_entry(
+        db_session,
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.debit,
+        amount="45.00",
+        source=LedgerSource.adjustment,
+    )
+
+    detail = build_ledger_entry_detail(
+        db_session,
+        query=LedgerEntryDetailQuery(entry_id=entry.id),
+    )
+
+    assert detail is not None
+    assert detail.id == entry.id
+    assert detail.account_id == subscriber.id
+    assert detail.entry_type is LedgerEntryType.debit
+    assert detail.source is LedgerSource.adjustment
+    assert detail.amount == Decimal("45.00")
+
+
+def test_ledger_entry_detail_route_renders_clickthrough_target(
+    monkeypatch, db_session, subscriber
+):
+    entry = _create_ledger_entry(
+        db_session,
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.credit,
+        amount="88.00",
+        source=LedgerSource.payment,
+    )
+    import app.web.admin as admin_module
+
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+
+    response = billing_reporting.billing_ledger_entry_detail(
+        request=_request(f"/admin/billing/ledger/{entry.id}"),
+        entry_id=entry.id,
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+
+    assert response.status_code == 200
+    assert "Ledger Entry" in rendered
+    assert "NGN 88.00" in rendered
+    assert f'href="/admin/customers/person/{subscriber.id}"' in rendered
 
 
 def test_render_ledger_csv_contains_split_debit_and_credit(db_session, subscriber):
