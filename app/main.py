@@ -101,7 +101,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.web.vendor_auth", "router", "web", "none"),
     ("app.web.vendor_portal", "router", "web", "none"),
     ("app.web.public", "router", "web", "none"),
-    ("app.web.admin.network_routers", "router", "admin", "none"),
     ("app.websocket.router", "router", "ws", "none"),
     ("app.websocket.workqueue_router", "router", "ws", "none"),
     ("app.api.notifications", "router", "api", "perm:monitoring"),
