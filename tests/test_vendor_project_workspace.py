@@ -24,6 +24,7 @@ from app.models.vendor_routes import (
 from app.schemas.vendor_portal import (
     VendorQuoteCreate,
     VendorQuoteLineCreate,
+    VendorQuoteLineUpdate,
     VendorRouteRevisionCreate,
 )
 from app.services import vendor_project_records
@@ -34,8 +35,10 @@ from app.services.vendor_portal_operations import (
     ConfigureVendorProcurementCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
+    DeleteVendorQuoteLineCommand,
     ReviewVendorQuoteCommand,
     SubmitVendorRouteRevisionCommand,
+    UpdateVendorQuoteLineCommand,
     VendorProjectWorkspaceError,
     vendor_portal_operations,
 )
@@ -472,6 +475,78 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
         .count()
         == 2
     )
+
+
+def test_quote_line_edits_recalculate_vat_totals(db_session):
+    installation, vendor, user = _chain(db_session)
+    vendor_id = str(vendor.id)
+    user_id = str(user.id)
+    db_session_adapter.release_read_transaction(db_session)
+    quote = vendor_portal_operations.create_quote(
+        db_session,
+        _create_quote_command(installation, vendor_id, user_id),
+    )
+    quote = vendor_portal_operations.add_quote_line(
+        db_session,
+        AddVendorQuoteLineCommand(
+            context=_context(
+                actor=user_id,
+                scope=vendor_id,
+                reason="test quote line creation",
+            ),
+            quote_id=str(quote["id"]),
+            payload=VendorQuoteLineCreate(
+                description="Installation labor",
+                quantity=Decimal("2"),
+                unit_price=Decimal("10000"),
+            ),
+            vendor_id=vendor_id,
+        ),
+    )
+    line_id = str(quote["line_items"][0].id)
+
+    quote = vendor_portal_operations.update_quote_line(
+        db_session,
+        UpdateVendorQuoteLineCommand(
+            context=_context(
+                actor=user_id,
+                scope=vendor_id,
+                reason="test quote line update",
+            ),
+            quote_id=str(quote["id"]),
+            line_id=line_id,
+            payload=VendorQuoteLineUpdate(
+                description="Updated installation labor",
+                quantity=Decimal("3"),
+                unit_price=Decimal("10000"),
+            ),
+            vendor_id=vendor_id,
+        ),
+    )
+
+    assert quote["subtotal"] == Decimal("30000.00")
+    assert quote["tax_total"] == Decimal("2250.00")
+    assert quote["total"] == Decimal("32250.00")
+    assert quote["line_items"][0].description == "Updated installation labor"
+
+    quote = vendor_portal_operations.delete_quote_line(
+        db_session,
+        DeleteVendorQuoteLineCommand(
+            context=_context(
+                actor=user_id,
+                scope=vendor_id,
+                reason="test quote line deletion",
+            ),
+            quote_id=str(quote["id"]),
+            line_id=line_id,
+            vendor_id=vendor_id,
+        ),
+    )
+
+    assert quote["line_items"] == []
+    assert quote["subtotal"] == Decimal("0.00")
+    assert quote["tax_total"] == Decimal("0.00")
+    assert quote["total"] == Decimal("0.00")
 
 
 def test_rejected_quote_edit_rolls_back_the_owner_transaction(db_session):
