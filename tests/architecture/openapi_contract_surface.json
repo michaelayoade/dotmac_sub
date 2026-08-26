@@ -5097,6 +5097,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/integration/observations/payment-settlements/{capability_binding_id}/descriptor/v3": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "29a47f047c9c",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/integration/observations/{capability_binding_id}/descriptor": {
    "params": [
     "header:authorization",
@@ -5106,6 +5118,18 @@
    "request": null,
    "responses": {
     "200": "a6c70c734df6",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integration/observations/{capability_binding_id}/descriptor/v3": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_binding_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "9642b6d04c85",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19073,6 +19097,9 @@
   "CampaignStepUpdate": "6804fecaf7e3",
   "CampaignUnsubscribeRead": "1d4ff16606cf",
   "CampaignUpdate": "7681c918673f",
+  "CapabilityContractDeprecationDocument": "dcc5be1f8474",
+  "CapabilityContractDocument": "e0fe9802015d",
+  "CapabilitySchemaGraceDocument": "fdefcbb27b1c",
   "CatalogOfferCreate": "48cc4d12ca81",
   "CatalogOfferRead": "207c31b5e582",
   "CatalogOfferUpdate": "17ed53516c46",
@@ -19939,6 +19966,7 @@
   "PriceType": "991176fa607a",
   "PriceUnit": "8587e7348110",
   "ProductPortDescriptorV1": "7fa027fa20f0",
+  "ProductPortDescriptorV3": "cdcc534fd811",
   "ProjectCostSummary": "f953c7ceefa5",
   "ProjectCreate": "306ae5d9f212",
   "ProjectGanttUpdate": "38b022ae411d",
@@ -20109,6 +20137,7 @@
   "SessionUpdate": "67c007064d12",
   "SettlementObservation": "c2bf3c0a85cd",
   "SettlementProductPortDescriptorV2": "28ea93e0d2df",
+  "SettlementProductPortDescriptorV3": "ffdb1f5619e4",
   "SettlementTransportEvidence": "c1bc3e9c99ad",
   "ShiftCreate": "60488314a714",
   "ShiftRead": "360213b8ce8f",

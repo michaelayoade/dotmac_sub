@@ -17,6 +17,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.integrator_capability_contract import CapabilityContractDocument
+
 MESSAGING_RECEIVE_CAPABILITY = "messaging.receive.v1"
 #: The contract versions this deployment has actually deployed. An envelope
 #: naming any other version is refused rather than best-effort parsed.
@@ -167,4 +169,28 @@ class ProductPortDescriptorV1(BaseModel):
         "configured_disabled", "enabled", "quarantined", "retired"
     ]
     source_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ProductPortDescriptorV3(BaseModel):
+    """Sub's payload-contract declaration, independent of its delivery wire."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["dotmac.io/product-port-descriptor/v3"]
+    wire_schema_version: Literal["dotmac.io/integrator-observation-envelope/v1"]
+    application: Literal["sub"]
+    owner_module: str = Field(min_length=1, max_length=160)
+    capability_id: Literal["messaging.receive.v1"]
+    capability_summary: str = Field(min_length=1, max_length=500)
+    contract_version: Literal[1]
+    destination_binding_id: UUID
+    delivery_path: str = Field(pattern=r"^/")
+    mirror_path: str = Field(pattern=r"^/")
+    destination_scope: IntegratorScope
+    activation_state: Literal[
+        "configured_disabled", "enabled", "quarantined", "retired"
+    ]
+    source_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    capability_contract: CapabilityContractDocument
     descriptor_digest: str = Field(pattern=r"^[0-9a-f]{64}$")

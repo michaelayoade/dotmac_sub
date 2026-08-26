@@ -435,3 +435,35 @@ def test_descriptor_declares_the_generic_v2_wire(client, binding):
         "kind": "payment_provider_events",
         "ref": "verified",
     }
+
+
+def test_descriptor_v3_publishes_settlements_dated_schema_grace(client, binding):
+    response = client.get(
+        f"/api/v1/integration/observations/payment-settlements/{binding.id}"
+        "/descriptor/v3",
+        headers={"X-Api-Key": MIRROR_TOKEN},
+    )
+
+    assert response.status_code == 200, response.text
+    descriptor = response.json()
+    assert descriptor["schema_version"] == "dotmac.io/product-port-descriptor/v3"
+    assert descriptor["wire_schema_version"] == PRODUCT_OBSERVATION_SCHEMA_VERSION
+    assert descriptor["capability_id"] == SETTLEMENT_CAPABILITY
+    assert descriptor["capability_contract"] == {
+        "command_schema": None,
+        "result_schema": None,
+        "observation_schema": None,
+        "deprecation": None,
+        "schema_grace": {
+            "reason": (
+                "Paystack and Flutterwave do not yet publish one product-owned "
+                "pre-delivery settlement observation schema with exact connector "
+                "digest claims."
+            ),
+            "retire_after": "2026-09-30",
+            "tracked_by": (
+                "docs/designs/INTEGRATION_PLATFORM_SOT.md#capability-schema-grace"
+            ),
+        },
+        "contract_digest": None,
+    }
