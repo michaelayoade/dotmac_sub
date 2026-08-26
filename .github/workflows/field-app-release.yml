@@ -67,8 +67,11 @@ env:
   FIELD_JAVA_VERSION: ${{ vars.FIELD_JAVA_VERSION || '17' }}
   FIELD_JAVA_DISTRIBUTION: ${{ vars.FIELD_JAVA_DISTRIBUTION || 'temurin' }}
   FIELD_ANDROID_BUILD_TOOLS_VERSION: ${{ vars.FIELD_ANDROID_BUILD_TOOLS_VERSION || '35.0.0' }}
-  FIELD_APP_DIR: field_mobile
-  FIELD_BRAND_FILE: brand.json
+  # Repo-relative; the Xcode Cloud hook's own FIELD_APP_DIR / FIELD_BRAND_FILE
+  # knobs take ABSOLUTE paths and are set explicitly where the hook is invoked,
+  # so the two never collide.
+  FIELD_APP_SUBDIR: field_mobile
+  FIELD_BRAND_FILE_NAME: brand.json
   FIELD_APPLICATION_ID: ${{ vars.FIELD_APPLICATION_ID || 'io.dotmac.field' }}
   FIELD_BUNDLE_ID: ${{ vars.FIELD_BUNDLE_ID || 'io.dotmac.field' }}
   # The customer app's identifiers, named here only so the guards below can prove
@@ -117,7 +120,7 @@ jobs:
               if not ok:
                   fail.append(message)
 
-          FIELD_DIR = os.environ["FIELD_APP_DIR"]
+          FIELD_DIR = os.environ["FIELD_APP_SUBDIR"]
           # Assembled from parts nowhere else in this file, so the containment
           # guard below can scan this workflow's own text for the customer app's
           # project directory without matching its own source.
@@ -138,7 +141,7 @@ jobs:
               # including inside a run block, and a literal opener here would
               # make the whole workflow unparseable.
               if wd.startswith("$" + "{{"):
-                  continue  # an expression, resolved from FIELD_APP_DIR
+                  continue  # an expression, resolved from FIELD_APP_SUBDIR
               check(wd.startswith(FIELD_DIR),
                     f"{WORKFLOW}: working-directory '{wd}' is not under {FIELD_DIR}/")
           for path in set(re.findall(r"^\s{12}(\S+/\S*)$", wf_raw, re.M)):
@@ -193,7 +196,7 @@ jobs:
                 f"expected {{{FIELD_BUNDLE_ID}}}")
 
           # --- 4. The brand file exists and is neither orphaned nor incomplete.
-          brand_path = field / os.environ["FIELD_BRAND_FILE"]
+          brand_path = field / os.environ["FIELD_BRAND_FILE_NAME"]
           check(brand_path.exists(),
                 f"{brand_path} is missing; without it release builds silently fall "
                 f"back to Flutter's default theme")
@@ -276,7 +279,7 @@ jobs:
           PY
 
       - name: Shell-syntax check the Xcode Cloud hook
-        run: sh -n ${{ env.FIELD_APP_DIR }}/ios/ci_scripts/ci_post_clone.sh
+        run: sh -n ${{ env.FIELD_APP_SUBDIR }}/ios/ci_scripts/ci_post_clone.sh
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -291,7 +294,7 @@ jobs:
       # "single-sourced" true instead of merely intended - a Flutter bump that
       # updates one and not the other fails here, on the pull request.
       - name: Flutter pin agrees with .metadata
-        working-directory: ${{ env.FIELD_APP_DIR }}
+        working-directory: ${{ env.FIELD_APP_SUBDIR }}
         run: |
           set -euo pipefail
           declared="$(awk -F'"' '/^  revision: /{print $2; exit}' .metadata)"
@@ -315,7 +318,7 @@ jobs:
       # version source of truth and the tag has to agree with it.
       - name: Tag agrees with the pubspec version
         if: startsWith(github.ref, 'refs/tags/field-mobile-v')
-        working-directory: ${{ env.FIELD_APP_DIR }}
+        working-directory: ${{ env.FIELD_APP_SUBDIR }}
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#field-mobile-v}"
@@ -463,14 +466,14 @@ jobs:
       - name: Require the brand file
         run: |
           set -euo pipefail
-          if [ ! -f "$FIELD_BRAND_FILE" ]; then
-            echo "::error::$FIELD_APP_DIR/$FIELD_BRAND_FILE is missing. Without it the"
+          if [ ! -f "$FIELD_BRAND_FILE_NAME" ]; then
+            echo "::error::$FIELD_APP_SUBDIR/$FIELD_BRAND_FILE_NAME is missing. Without it the"
             echo "::error::build silently uses Flutter's default theme instead of the"
             echo "::error::brand palette, so this fails rather than shipping."
             exit 1
           fi
-          python3 -c "import json;json.load(open('$FIELD_BRAND_FILE'))"
-          echo "Brand file present and valid: $FIELD_APP_DIR/$FIELD_BRAND_FILE"
+          python3 -c "import json;json.load(open('$FIELD_BRAND_FILE_NAME'))"
+          echo "Brand file present and valid: $FIELD_APP_SUBDIR/$FIELD_BRAND_FILE_NAME"
 
       # Brand values come from the committed brand file; the Sentry DSN is
       # injected from a secret. A later --dart-define overrides the same key from
@@ -482,7 +485,7 @@ jobs:
         run: |
           set -euo pipefail
           TRACK="${{ github.event.inputs.track || 'appbundle' }}"
-          set -- --dart-define-from-file="$FIELD_BRAND_FILE"
+          set -- --dart-define-from-file="$FIELD_BRAND_FILE_NAME"
           if [ -n "${API_BASE_URL_OVERRIDE:-}" ]; then
             echo "API base URL overridden to $API_BASE_URL_OVERRIDE"
             set -- "$@" --dart-define=API_BASE_URL="$API_BASE_URL_OVERRIDE"
@@ -657,6 +660,9 @@ jobs:
         env:
           CI_PRIMARY_REPOSITORY_PATH: ${{ github.workspace }}
           FLUTTER_ROOT: ${{ steps.flutter.outputs['cache-path'] || env.FLUTTER_ROOT }}
+          # The hook's documented inputs, absolute as it expects them.
+          FIELD_APP_DIR: ${{ github.workspace }}/${{ env.FIELD_APP_SUBDIR }}
+          FIELD_BRAND_FILE: ${{ github.workspace }}/${{ env.FIELD_APP_SUBDIR }}/${{ env.FIELD_BRAND_FILE_NAME }}
         run: |
           set -euo pipefail
           if [ -z "${FLUTTER_ROOT:-}" ] || [ ! -x "${FLUTTER_ROOT}/bin/flutter" ]; then
@@ -664,10 +670,10 @@ jobs:
             export FLUTTER_ROOT
           fi
           echo "Reusing the pinned SDK at $FLUTTER_ROOT"
-          ./${{ env.FIELD_APP_DIR }}/ios/ci_scripts/ci_post_clone.sh
+          ./${{ env.FIELD_APP_SUBDIR }}/ios/ci_scripts/ci_post_clone.sh
 
       - name: Assert the built app is the field app
-        working-directory: ${{ env.FIELD_APP_DIR }}
+        working-directory: ${{ env.FIELD_APP_SUBDIR }}
         run: |
           set -euo pipefail
           PLIST=build/ios/iphoneos/Runner.app/Info.plist
