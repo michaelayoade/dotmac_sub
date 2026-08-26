@@ -831,8 +831,15 @@ void main() {
     });
 
     test('redact strips the shapes that keep leaking', () {
+      // Regression: the header rule used to consume only the word "Bearer",
+      // leaving the credential itself in the line.
       expect(Log.redact('Authorization: Bearer abc.def.ghi'),
+          'Authorization: [redacted]');
+      expect(
+          Log.redact('authorization=abc.def.ghi'), 'authorization=[redacted]');
+      expect(Log.redact('{"authorization":"Bearer abc.def.ghi","n":1}'),
           isNot(contains('abc.def.ghi')));
+      expect(Log.redact('Bearer abc.def.ghi'), isNot(contains('abc.def.ghi')));
       expect(Log.redact('GET /x?refresh_token=abcdef123456'),
           isNot(contains('abcdef123456')));
       expect(Log.redact('{"password":"hunter2"}'), isNot(contains('hunter2')));
