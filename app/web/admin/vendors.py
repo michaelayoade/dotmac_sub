@@ -312,6 +312,35 @@ def vendor_user_role_update(
 
 
 @router.post(
+    "/{vendor_id}/users/{membership_id}/edit",
+    dependencies=[Depends(require_permission("inventory:write"))],
+)
+def vendor_user_profile_update(
+    request: Request,
+    vendor_id: str,
+    membership_id: str,
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    email: str = Form(...),
+    role: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_vendors_service.update_vendor_user_profile_from_form(
+            db,
+            membership_id=membership_id,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            role=role,
+            actor_id=_actor_id(request),
+        )
+    except (ValueError, DomainError) as exc:
+        return _detail_with_error(request, db, vendor_id, _error_detail(exc))
+    return RedirectResponse(url=f"/admin/vendors/{vendor_id}", status_code=303)
+
+
+@router.post(
     "/{vendor_id}/users/{membership_id}/enable",
     dependencies=[Depends(require_permission("inventory:write"))],
 )
