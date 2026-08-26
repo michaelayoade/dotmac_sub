@@ -33,6 +33,7 @@ from app.services.team_inbox_support_identity import (
 
 STATE_KEY = "conversation_state"
 EVENTS_KEY = "conversation_events"
+CUSTOMER_IDENTIFIER_REQUEST = "customer_identifier"
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PHONE_RE = re.compile(r"(?:\+?234|0)?[789][01]\d{8}\b")
@@ -1237,6 +1238,11 @@ def _strip_empty_summary_lines(text: str) -> str:
 
 
 def _identifier_question(identifier_type: str) -> str:
+    if identifier_type == CUSTOMER_IDENTIFIER_REQUEST:
+        return (
+            "Please send the registered phone number, registered email, or "
+            "Portal ID on the account."
+        )
     if identifier_type == "registered_email":
         return "Please send the registered email on the account so I can identify it."
     if identifier_type == "registered_phone":
@@ -1247,12 +1253,19 @@ def _identifier_question(identifier_type: str) -> str:
 def _next_identifier_to_request(
     state: ConversationalState, policy: dict[str, object]
 ) -> str | None:
+    permitted = _permitted_identifiers(policy)
     supplied = {
         "registered_email": bool(state.registered_email),
         "registered_phone": bool(state.registered_phone),
         "portal_id": bool(state.portal_id),
     }
-    for identifier in _permitted_identifiers(policy):
+    if len(permitted) > 1:
+        if any(supplied.get(identifier) for identifier in permitted):
+            return None
+        if CUSTOMER_IDENTIFIER_REQUEST in state.already_requested_fields:
+            return None
+        return CUSTOMER_IDENTIFIER_REQUEST
+    for identifier in permitted:
         if supplied.get(identifier):
             continue
         if identifier in state.already_requested_fields:
