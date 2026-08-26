@@ -312,6 +312,26 @@ def _admin_command_context(
     )
 
 
+def update_vendor_user_role(
+    db: Session,
+    *,
+    membership_id: str,
+    role: str,
+    actor_id: str | None = None,
+) -> None:
+    db_session_adapter.release_read_transaction(db)
+    vendor_user_provisioning.set_role_committed(
+        db,
+        coerce_uuid(membership_id),
+        role,
+        context=_admin_command_context(
+            actor_id=actor_id,
+            scope=membership_id,
+            reason="Administrative vendor role change",
+        ),
+    )
+
+
 def enable_vendor_user_login(
     db: Session,
     *,
