@@ -114,6 +114,8 @@ class ConversationalState:
     previous_intent: str | None = None
     category: str | None = None
     confidence: float | None = None
+    classification_requires_follow_up: bool = False
+    classification_follow_up_question: str | None = None
     subscriber_id: str | None = None
     contact_identity: dict[str, object] = field(default_factory=dict)
     portal_id: str | None = None
@@ -163,6 +165,12 @@ class ConversationalState:
                 previous_intent=_text_or_none(raw.get("previous_intent")),
                 category=_text_or_none(raw.get("category")),
                 confidence=_float_or_none(raw.get("confidence")),
+                classification_requires_follow_up=bool(
+                    raw.get("classification_requires_follow_up")
+                ),
+                classification_follow_up_question=_text_or_none(
+                    raw.get("classification_follow_up_question")
+                ),
                 subscriber_id=_text_or_none(raw.get("subscriber_id")),
                 contact_identity=_dict(raw.get("contact_identity")),
                 portal_id=_text_or_none(raw.get("portal_id")),
@@ -210,6 +218,10 @@ class ConversationalState:
             "previous_intent": self.previous_intent,
             "category": self.category,
             "confidence": self.confidence,
+            "classification_requires_follow_up": (
+                self.classification_requires_follow_up
+            ),
+            "classification_follow_up_question": self.classification_follow_up_question,
             "subscriber_id": self.subscriber_id,
             "contact_identity": self.contact_identity,
             "portal_id": self.portal_id,
@@ -761,6 +773,8 @@ def _merge_classification(
     state.current_intent = next_intent
     state.category = classification.category.value
     state.confidence = classification.confidence
+    state.classification_requires_follow_up = classification.requires_follow_up
+    state.classification_follow_up_question = classification.follow_up_question
 
 
 def _identify_customer(
@@ -1054,7 +1068,9 @@ def _compare_number(value: int, condition: dict[str, object]) -> bool:
 def _should_handoff_after_classification(
     state: ConversationalState, policy: dict[str, object]
 ) -> bool:
-    if policy.get("handoff_after_classification") is False:
+    if not bool(policy.get("handoff_after_classification", False)):
+        return False
+    if state.classification_requires_follow_up:
         return False
     return bool(state.current_intent and state.confidence is not None)
 
