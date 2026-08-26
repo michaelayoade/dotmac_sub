@@ -144,10 +144,7 @@ class ScopedOfflineWipe implements OfflineWipe {
       if (decoded is! List) {
         throw const FormatException('journal is not a list');
       }
-      return [
-        for (final entry in decoded)
-          if (WipeRequest.fromJson(entry) case final request?) request,
-      ];
+      return [for (final entry in decoded) ?WipeRequest.fromJson(entry)];
     } on Object {
       // An unreadable journal must not strand a wipe. We cannot tell which
       // scope it named, so sweep every scope this device still holds keys for.

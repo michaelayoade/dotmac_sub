@@ -168,12 +168,21 @@ class AppDatabase extends _$AppDatabase {
   /// Tables the server can rebuild. A wipe drops them; the plaintext migration
   /// never carries them.
   Iterable<TableInfo<Table, dynamic>> get rebuildableProjections =>
-      allTables.where((table) => table is RebuildableProjection);
+      allTables.where(_declaresRebuildable);
 
   /// Tables holding evidence the server has not accepted yet. Losing a row here
   /// loses a technician's work.
   Iterable<TableInfo<Table, dynamic>> get pendingOutbound =>
-      allTables.where((table) => table is PendingOutbound);
+      allTables.where(_declaresPendingOutbound);
+
+  // Named predicates rather than `whereType`: callers need the TableInfo back,
+  // and whereType would narrow the element type to the marker mixin and lose
+  // the table with it.
+  static bool _declaresRebuildable(TableInfo<Table, dynamic> table) =>
+      table is RebuildableProjection;
+
+  static bool _declaresPendingOutbound(TableInfo<Table, dynamic> table) =>
+      table is PendingOutbound;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(

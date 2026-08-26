@@ -14,7 +14,6 @@ import 'package:dotmac_field/core/offline/sync_service.dart';
 import 'package:dotmac_field/core/photos/photo_queue.dart';
 import 'package:dotmac_field/core/secure/evidence_cipher.dart';
 import 'package:dotmac_field/core/secure/evidence_files.dart';
-import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:dotmac_field/features/location/location_cadence.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -38,13 +38,13 @@ void main() {
         tokenStore: store,
         dio: dio,
       );
-      final store = await openTestStore();
-      final db = store.database;
+      final secure = await openTestStore();
+      final db = secure.database;
       final sync = SyncService(
         db: db,
         api: api,
         connectivity: FakeConnectivity(),
-        evidence: store.evidence,
+        evidence: secure.evidence,
         throttle: Duration.zero,
       );
       final container = ProviderContainer(
