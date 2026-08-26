@@ -5,17 +5,16 @@ import 'package:dio/dio.dart';
 import 'package:dotmac_field/core/api/api_client.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/offline/connectivity.dart';
-import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/execution/execution_controller.dart';
 import 'package:dotmac_field/features/jobs/jobs_providers.dart';
-import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 void main() {
   setUpAll(() {
@@ -39,11 +38,13 @@ void main() {
         tokenStore: store,
         dio: dio,
       );
-      final db = AppDatabase(NativeDatabase.memory());
+      final store = await openTestStore();
+      final db = store.database;
       final sync = SyncService(
         db: db,
         api: api,
         connectivity: FakeConnectivity(),
+        evidence: store.evidence,
         throttle: Duration.zero,
       );
       final container = ProviderContainer(

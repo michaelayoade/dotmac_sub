@@ -14,7 +14,16 @@ dependencies:
   dio: ^5.7.0
   drift: ^2.28.0
   sqlite3: ^2.4.0
-  sqlite3_flutter_libs: ^0.5.27
+  # SQLCipher rather than plain sqlite: the offline store holds customer
+  # evidence, so the database file itself is encrypted at rest. Swapping this
+  # back for sqlite3_flutter_libs would not "just work" — the store checks
+  # PRAGMA cipher_version at open and refuses to run without it.
+  sqlcipher_flutter_libs: ^0.6.0
+  # AES-256-GCM for the evidence envelopes (photos, signatures, drafts, queued
+  # mutations, the location queue). Pure Dart, no platform channel.
+  pointycastle: ^3.9.1
+  # SHA-256 for the opaque scope identifier written into every row and path.
+  crypto: ^3.0.6
   flutter_secure_storage: ^9.2.2
   connectivity_plus: ^6.1.0
   url_launcher: ^6.3.0

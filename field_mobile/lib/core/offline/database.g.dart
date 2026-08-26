@@ -9,6 +9,17 @@ class $CachedJobsTable extends CachedJobs
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $CachedJobsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _idMeta = const VerificationMeta('id');
   @override
   late final GeneratedColumn<String> id = GeneratedColumn<String>(
@@ -94,6 +105,7 @@ class $CachedJobsTable extends CachedJobs
   );
   @override
   List<GeneratedColumn> get $columns => [
+    scopeKey,
     id,
     title,
     status,
@@ -115,6 +127,14 @@ class $CachedJobsTable extends CachedJobs
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('id')) {
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
     } else if (isInserting) {
@@ -179,11 +199,15 @@ class $CachedJobsTable extends CachedJobs
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {id};
+  Set<GeneratedColumn> get $primaryKey => {scopeKey, id};
   @override
   CachedJob map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return CachedJob(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       id: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}id'],
@@ -226,6 +250,7 @@ class $CachedJobsTable extends CachedJobs
 }
 
 class CachedJob extends DataClass implements Insertable<CachedJob> {
+  final String scopeKey;
   final String id;
   final String title;
   final String status;
@@ -235,6 +260,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   final String? detailJson;
   final DateTime cachedAt;
   const CachedJob({
+    required this.scopeKey,
     required this.id,
     required this.title,
     required this.status,
@@ -247,6 +273,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['id'] = Variable<String>(id);
     map['title'] = Variable<String>(title);
     map['status'] = Variable<String>(status);
@@ -264,6 +291,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
 
   CachedJobsCompanion toCompanion(bool nullToAbsent) {
     return CachedJobsCompanion(
+      scopeKey: Value(scopeKey),
       id: Value(id),
       title: Value(title),
       status: Value(status),
@@ -285,6 +313,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return CachedJob(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       id: serializer.fromJson<String>(json['id']),
       title: serializer.fromJson<String>(json['title']),
       status: serializer.fromJson<String>(json['status']),
@@ -299,6 +328,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'id': serializer.toJson<String>(id),
       'title': serializer.toJson<String>(title),
       'status': serializer.toJson<String>(status),
@@ -311,6 +341,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   }
 
   CachedJob copyWith({
+    String? scopeKey,
     String? id,
     String? title,
     String? status,
@@ -320,6 +351,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
     Value<String?> detailJson = const Value.absent(),
     DateTime? cachedAt,
   }) => CachedJob(
+    scopeKey: scopeKey ?? this.scopeKey,
     id: id ?? this.id,
     title: title ?? this.title,
     status: status ?? this.status,
@@ -333,6 +365,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   );
   CachedJob copyWithCompanion(CachedJobsCompanion data) {
     return CachedJob(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       id: data.id.present ? data.id.value : this.id,
       title: data.title.present ? data.title.value : this.title,
       status: data.status.present ? data.status.value : this.status,
@@ -351,6 +384,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   @override
   String toString() {
     return (StringBuffer('CachedJob(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('id: $id, ')
           ..write('title: $title, ')
           ..write('status: $status, ')
@@ -365,6 +399,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
 
   @override
   int get hashCode => Object.hash(
+    scopeKey,
     id,
     title,
     status,
@@ -378,6 +413,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is CachedJob &&
+          other.scopeKey == this.scopeKey &&
           other.id == this.id &&
           other.title == this.title &&
           other.status == this.status &&
@@ -389,6 +425,7 @@ class CachedJob extends DataClass implements Insertable<CachedJob> {
 }
 
 class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
+  final Value<String> scopeKey;
   final Value<String> id;
   final Value<String> title;
   final Value<String> status;
@@ -399,6 +436,7 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
   final Value<DateTime> cachedAt;
   final Value<int> rowid;
   const CachedJobsCompanion({
+    this.scopeKey = const Value.absent(),
     this.id = const Value.absent(),
     this.title = const Value.absent(),
     this.status = const Value.absent(),
@@ -410,6 +448,7 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
     this.rowid = const Value.absent(),
   });
   CachedJobsCompanion.insert({
+    required String scopeKey,
     required String id,
     required String title,
     required String status,
@@ -419,13 +458,15 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
     this.detailJson = const Value.absent(),
     required DateTime cachedAt,
     this.rowid = const Value.absent(),
-  }) : id = Value(id),
+  }) : scopeKey = Value(scopeKey),
+       id = Value(id),
        title = Value(title),
        status = Value(status),
        workType = Value(workType),
        priority = Value(priority),
        cachedAt = Value(cachedAt);
   static Insertable<CachedJob> custom({
+    Expression<String>? scopeKey,
     Expression<String>? id,
     Expression<String>? title,
     Expression<String>? status,
@@ -437,6 +478,7 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (id != null) 'id': id,
       if (title != null) 'title': title,
       if (status != null) 'status': status,
@@ -450,6 +492,7 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
   }
 
   CachedJobsCompanion copyWith({
+    Value<String>? scopeKey,
     Value<String>? id,
     Value<String>? title,
     Value<String>? status,
@@ -461,6 +504,7 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
     Value<int>? rowid,
   }) {
     return CachedJobsCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       id: id ?? this.id,
       title: title ?? this.title,
       status: status ?? this.status,
@@ -476,6 +520,9 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (id.present) {
       map['id'] = Variable<String>(id.value);
     }
@@ -509,6 +556,7 @@ class CachedJobsCompanion extends UpdateCompanion<CachedJob> {
   @override
   String toString() {
     return (StringBuffer('CachedJobsCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('id: $id, ')
           ..write('title: $title, ')
           ..write('status: $status, ')
@@ -529,6 +577,17 @@ class $CachedScheduleEntriesTable extends CachedScheduleEntries
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $CachedScheduleEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _referenceIdMeta = const VerificationMeta(
     'referenceId',
   );
@@ -580,6 +639,7 @@ class $CachedScheduleEntriesTable extends CachedScheduleEntries
   );
   @override
   List<GeneratedColumn> get $columns => [
+    scopeKey,
     referenceId,
     type,
     startAt,
@@ -598,6 +658,14 @@ class $CachedScheduleEntriesTable extends CachedScheduleEntries
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('reference_id')) {
       context.handle(
         _referenceIdMeta,
@@ -643,11 +711,15 @@ class $CachedScheduleEntriesTable extends CachedScheduleEntries
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {referenceId, startAt};
+  Set<GeneratedColumn> get $primaryKey => {scopeKey, referenceId, startAt};
   @override
   CachedScheduleEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return CachedScheduleEntry(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       referenceId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}reference_id'],
@@ -679,12 +751,14 @@ class $CachedScheduleEntriesTable extends CachedScheduleEntries
 
 class CachedScheduleEntry extends DataClass
     implements Insertable<CachedScheduleEntry> {
+  final String scopeKey;
   final String referenceId;
   final String type;
   final DateTime startAt;
   final DateTime? endAt;
   final String title;
   const CachedScheduleEntry({
+    required this.scopeKey,
     required this.referenceId,
     required this.type,
     required this.startAt,
@@ -694,6 +768,7 @@ class CachedScheduleEntry extends DataClass
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['reference_id'] = Variable<String>(referenceId);
     map['type'] = Variable<String>(type);
     map['start_at'] = Variable<DateTime>(startAt);
@@ -706,6 +781,7 @@ class CachedScheduleEntry extends DataClass
 
   CachedScheduleEntriesCompanion toCompanion(bool nullToAbsent) {
     return CachedScheduleEntriesCompanion(
+      scopeKey: Value(scopeKey),
       referenceId: Value(referenceId),
       type: Value(type),
       startAt: Value(startAt),
@@ -722,6 +798,7 @@ class CachedScheduleEntry extends DataClass
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return CachedScheduleEntry(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       referenceId: serializer.fromJson<String>(json['referenceId']),
       type: serializer.fromJson<String>(json['type']),
       startAt: serializer.fromJson<DateTime>(json['startAt']),
@@ -733,6 +810,7 @@ class CachedScheduleEntry extends DataClass
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'referenceId': serializer.toJson<String>(referenceId),
       'type': serializer.toJson<String>(type),
       'startAt': serializer.toJson<DateTime>(startAt),
@@ -742,12 +820,14 @@ class CachedScheduleEntry extends DataClass
   }
 
   CachedScheduleEntry copyWith({
+    String? scopeKey,
     String? referenceId,
     String? type,
     DateTime? startAt,
     Value<DateTime?> endAt = const Value.absent(),
     String? title,
   }) => CachedScheduleEntry(
+    scopeKey: scopeKey ?? this.scopeKey,
     referenceId: referenceId ?? this.referenceId,
     type: type ?? this.type,
     startAt: startAt ?? this.startAt,
@@ -756,6 +836,7 @@ class CachedScheduleEntry extends DataClass
   );
   CachedScheduleEntry copyWithCompanion(CachedScheduleEntriesCompanion data) {
     return CachedScheduleEntry(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       referenceId: data.referenceId.present
           ? data.referenceId.value
           : this.referenceId,
@@ -769,6 +850,7 @@ class CachedScheduleEntry extends DataClass
   @override
   String toString() {
     return (StringBuffer('CachedScheduleEntry(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('referenceId: $referenceId, ')
           ..write('type: $type, ')
           ..write('startAt: $startAt, ')
@@ -779,11 +861,19 @@ class CachedScheduleEntry extends DataClass
   }
 
   @override
-  int get hashCode => Object.hash(referenceId, type, startAt, endAt, title);
+  int get hashCode => Object.hash(
+    scopeKey,
+    referenceId,
+    type,
+    startAt,
+    endAt,
+    title,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is CachedScheduleEntry &&
+          other.scopeKey == this.scopeKey &&
           other.referenceId == this.referenceId &&
           other.type == this.type &&
           other.startAt == this.startAt &&
@@ -793,6 +883,7 @@ class CachedScheduleEntry extends DataClass
 
 class CachedScheduleEntriesCompanion
     extends UpdateCompanion<CachedScheduleEntry> {
+  final Value<String> scopeKey;
   final Value<String> referenceId;
   final Value<String> type;
   final Value<DateTime> startAt;
@@ -800,6 +891,7 @@ class CachedScheduleEntriesCompanion
   final Value<String> title;
   final Value<int> rowid;
   const CachedScheduleEntriesCompanion({
+    this.scopeKey = const Value.absent(),
     this.referenceId = const Value.absent(),
     this.type = const Value.absent(),
     this.startAt = const Value.absent(),
@@ -808,17 +900,20 @@ class CachedScheduleEntriesCompanion
     this.rowid = const Value.absent(),
   });
   CachedScheduleEntriesCompanion.insert({
+    required String scopeKey,
     required String referenceId,
     required String type,
     required DateTime startAt,
     this.endAt = const Value.absent(),
     required String title,
     this.rowid = const Value.absent(),
-  }) : referenceId = Value(referenceId),
+  }) : scopeKey = Value(scopeKey),
+       referenceId = Value(referenceId),
        type = Value(type),
        startAt = Value(startAt),
        title = Value(title);
   static Insertable<CachedScheduleEntry> custom({
+    Expression<String>? scopeKey,
     Expression<String>? referenceId,
     Expression<String>? type,
     Expression<DateTime>? startAt,
@@ -827,6 +922,7 @@ class CachedScheduleEntriesCompanion
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (referenceId != null) 'reference_id': referenceId,
       if (type != null) 'type': type,
       if (startAt != null) 'start_at': startAt,
@@ -837,6 +933,7 @@ class CachedScheduleEntriesCompanion
   }
 
   CachedScheduleEntriesCompanion copyWith({
+    Value<String>? scopeKey,
     Value<String>? referenceId,
     Value<String>? type,
     Value<DateTime>? startAt,
@@ -845,6 +942,7 @@ class CachedScheduleEntriesCompanion
     Value<int>? rowid,
   }) {
     return CachedScheduleEntriesCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       referenceId: referenceId ?? this.referenceId,
       type: type ?? this.type,
       startAt: startAt ?? this.startAt,
@@ -857,6 +955,9 @@ class CachedScheduleEntriesCompanion
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (referenceId.present) {
       map['reference_id'] = Variable<String>(referenceId.value);
     }
@@ -881,6 +982,7 @@ class CachedScheduleEntriesCompanion
   @override
   String toString() {
     return (StringBuffer('CachedScheduleEntriesCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('referenceId: $referenceId, ')
           ..write('type: $type, ')
           ..write('startAt: $startAt, ')
@@ -898,6 +1000,17 @@ class $CachedMapAssetsTable extends CachedMapAssets
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $CachedMapAssetsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _assetTypeMeta = const VerificationMeta(
     'assetType',
   );
@@ -995,6 +1108,7 @@ class $CachedMapAssetsTable extends CachedMapAssets
   );
   @override
   List<GeneratedColumn> get $columns => [
+    scopeKey,
     assetType,
     assetId,
     title,
@@ -1017,6 +1131,14 @@ class $CachedMapAssetsTable extends CachedMapAssets
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('asset_type')) {
       context.handle(
         _assetTypeMeta,
@@ -1087,11 +1209,15 @@ class $CachedMapAssetsTable extends CachedMapAssets
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {assetType, assetId};
+  Set<GeneratedColumn> get $primaryKey => {scopeKey, assetType, assetId};
   @override
   CachedMapAsset map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return CachedMapAsset(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       assetType: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}asset_type'],
@@ -1138,6 +1264,7 @@ class $CachedMapAssetsTable extends CachedMapAssets
 }
 
 class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
+  final String scopeKey;
   final String assetType;
   final String assetId;
   final String title;
@@ -1148,6 +1275,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   final DateTime? updatedAt;
   final DateTime cachedAt;
   const CachedMapAsset({
+    required this.scopeKey,
     required this.assetType,
     required this.assetId,
     required this.title,
@@ -1161,6 +1289,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['asset_type'] = Variable<String>(assetType);
     map['asset_id'] = Variable<String>(assetId);
     map['title'] = Variable<String>(title);
@@ -1181,6 +1310,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
 
   CachedMapAssetsCompanion toCompanion(bool nullToAbsent) {
     return CachedMapAssetsCompanion(
+      scopeKey: Value(scopeKey),
       assetType: Value(assetType),
       assetId: Value(assetId),
       title: Value(title),
@@ -1205,6 +1335,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return CachedMapAsset(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       assetType: serializer.fromJson<String>(json['assetType']),
       assetId: serializer.fromJson<String>(json['assetId']),
       title: serializer.fromJson<String>(json['title']),
@@ -1220,6 +1351,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'assetType': serializer.toJson<String>(assetType),
       'assetId': serializer.toJson<String>(assetId),
       'title': serializer.toJson<String>(title),
@@ -1233,6 +1365,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   }
 
   CachedMapAsset copyWith({
+    String? scopeKey,
     String? assetType,
     String? assetId,
     String? title,
@@ -1243,6 +1376,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
     Value<DateTime?> updatedAt = const Value.absent(),
     DateTime? cachedAt,
   }) => CachedMapAsset(
+    scopeKey: scopeKey ?? this.scopeKey,
     assetType: assetType ?? this.assetType,
     assetId: assetId ?? this.assetId,
     title: title ?? this.title,
@@ -1255,6 +1389,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   );
   CachedMapAsset copyWithCompanion(CachedMapAssetsCompanion data) {
     return CachedMapAsset(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       assetType: data.assetType.present ? data.assetType.value : this.assetType,
       assetId: data.assetId.present ? data.assetId.value : this.assetId,
       title: data.title.present ? data.title.value : this.title,
@@ -1270,6 +1405,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   @override
   String toString() {
     return (StringBuffer('CachedMapAsset(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('assetType: $assetType, ')
           ..write('assetId: $assetId, ')
           ..write('title: $title, ')
@@ -1285,6 +1421,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
 
   @override
   int get hashCode => Object.hash(
+    scopeKey,
     assetType,
     assetId,
     title,
@@ -1299,6 +1436,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is CachedMapAsset &&
+          other.scopeKey == this.scopeKey &&
           other.assetType == this.assetType &&
           other.assetId == this.assetId &&
           other.title == this.title &&
@@ -1311,6 +1449,7 @@ class CachedMapAsset extends DataClass implements Insertable<CachedMapAsset> {
 }
 
 class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
+  final Value<String> scopeKey;
   final Value<String> assetType;
   final Value<String> assetId;
   final Value<String> title;
@@ -1322,6 +1461,7 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
   final Value<DateTime> cachedAt;
   final Value<int> rowid;
   const CachedMapAssetsCompanion({
+    this.scopeKey = const Value.absent(),
     this.assetType = const Value.absent(),
     this.assetId = const Value.absent(),
     this.title = const Value.absent(),
@@ -1334,6 +1474,7 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
     this.rowid = const Value.absent(),
   });
   CachedMapAssetsCompanion.insert({
+    required String scopeKey,
     required String assetType,
     required String assetId,
     required String title,
@@ -1344,13 +1485,15 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
     this.updatedAt = const Value.absent(),
     required DateTime cachedAt,
     this.rowid = const Value.absent(),
-  }) : assetType = Value(assetType),
+  }) : scopeKey = Value(scopeKey),
+       assetType = Value(assetType),
        assetId = Value(assetId),
        title = Value(title),
        latitude = Value(latitude),
        longitude = Value(longitude),
        cachedAt = Value(cachedAt);
   static Insertable<CachedMapAsset> custom({
+    Expression<String>? scopeKey,
     Expression<String>? assetType,
     Expression<String>? assetId,
     Expression<String>? title,
@@ -1363,6 +1506,7 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (assetType != null) 'asset_type': assetType,
       if (assetId != null) 'asset_id': assetId,
       if (title != null) 'title': title,
@@ -1377,6 +1521,7 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
   }
 
   CachedMapAssetsCompanion copyWith({
+    Value<String>? scopeKey,
     Value<String>? assetType,
     Value<String>? assetId,
     Value<String>? title,
@@ -1389,6 +1534,7 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
     Value<int>? rowid,
   }) {
     return CachedMapAssetsCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       assetType: assetType ?? this.assetType,
       assetId: assetId ?? this.assetId,
       title: title ?? this.title,
@@ -1405,6 +1551,9 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (assetType.present) {
       map['asset_type'] = Variable<String>(assetType.value);
     }
@@ -1441,6 +1590,7 @@ class CachedMapAssetsCompanion extends UpdateCompanion<CachedMapAsset> {
   @override
   String toString() {
     return (StringBuffer('CachedMapAssetsCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('assetType: $assetType, ')
           ..write('assetId: $assetId, ')
           ..write('title: $title, ')
@@ -1462,6 +1612,17 @@ class $CachedMapAssetSyncCursorsTable extends CachedMapAssetSyncCursors
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $CachedMapAssetSyncCursorsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _assetTypeMeta = const VerificationMeta(
     'assetType',
   );
@@ -1485,7 +1646,7 @@ class $CachedMapAssetSyncCursorsTable extends CachedMapAssetSyncCursors
     requiredDuringInsert: true,
   );
   @override
-  List<GeneratedColumn> get $columns => [assetType, syncedAt];
+  List<GeneratedColumn> get $columns => [scopeKey, assetType, syncedAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1498,6 +1659,14 @@ class $CachedMapAssetSyncCursorsTable extends CachedMapAssetSyncCursors
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('asset_type')) {
       context.handle(
         _assetTypeMeta,
@@ -1518,7 +1687,7 @@ class $CachedMapAssetSyncCursorsTable extends CachedMapAssetSyncCursors
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {assetType};
+  Set<GeneratedColumn> get $primaryKey => {scopeKey, assetType};
   @override
   CachedMapAssetSyncCursor map(
     Map<String, dynamic> data, {
@@ -1526,6 +1695,10 @@ class $CachedMapAssetSyncCursorsTable extends CachedMapAssetSyncCursors
   }) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return CachedMapAssetSyncCursor(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       assetType: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}asset_type'],
@@ -1545,15 +1718,18 @@ class $CachedMapAssetSyncCursorsTable extends CachedMapAssetSyncCursors
 
 class CachedMapAssetSyncCursor extends DataClass
     implements Insertable<CachedMapAssetSyncCursor> {
+  final String scopeKey;
   final String assetType;
   final DateTime syncedAt;
   const CachedMapAssetSyncCursor({
+    required this.scopeKey,
     required this.assetType,
     required this.syncedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['asset_type'] = Variable<String>(assetType);
     map['synced_at'] = Variable<DateTime>(syncedAt);
     return map;
@@ -1561,6 +1737,7 @@ class CachedMapAssetSyncCursor extends DataClass
 
   CachedMapAssetSyncCursorsCompanion toCompanion(bool nullToAbsent) {
     return CachedMapAssetSyncCursorsCompanion(
+      scopeKey: Value(scopeKey),
       assetType: Value(assetType),
       syncedAt: Value(syncedAt),
     );
@@ -1572,6 +1749,7 @@ class CachedMapAssetSyncCursor extends DataClass
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return CachedMapAssetSyncCursor(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       assetType: serializer.fromJson<String>(json['assetType']),
       syncedAt: serializer.fromJson<DateTime>(json['syncedAt']),
     );
@@ -1580,20 +1758,26 @@ class CachedMapAssetSyncCursor extends DataClass
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'assetType': serializer.toJson<String>(assetType),
       'syncedAt': serializer.toJson<DateTime>(syncedAt),
     };
   }
 
-  CachedMapAssetSyncCursor copyWith({String? assetType, DateTime? syncedAt}) =>
-      CachedMapAssetSyncCursor(
-        assetType: assetType ?? this.assetType,
-        syncedAt: syncedAt ?? this.syncedAt,
-      );
+  CachedMapAssetSyncCursor copyWith({
+    String? scopeKey,
+    String? assetType,
+    DateTime? syncedAt,
+  }) => CachedMapAssetSyncCursor(
+    scopeKey: scopeKey ?? this.scopeKey,
+    assetType: assetType ?? this.assetType,
+    syncedAt: syncedAt ?? this.syncedAt,
+  );
   CachedMapAssetSyncCursor copyWithCompanion(
     CachedMapAssetSyncCursorsCompanion data,
   ) {
     return CachedMapAssetSyncCursor(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       assetType: data.assetType.present ? data.assetType.value : this.assetType,
       syncedAt: data.syncedAt.present ? data.syncedAt.value : this.syncedAt,
     );
@@ -1602,6 +1786,7 @@ class CachedMapAssetSyncCursor extends DataClass
   @override
   String toString() {
     return (StringBuffer('CachedMapAssetSyncCursor(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('assetType: $assetType, ')
           ..write('syncedAt: $syncedAt')
           ..write(')'))
@@ -1609,37 +1794,44 @@ class CachedMapAssetSyncCursor extends DataClass
   }
 
   @override
-  int get hashCode => Object.hash(assetType, syncedAt);
+  int get hashCode => Object.hash(scopeKey, assetType, syncedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is CachedMapAssetSyncCursor &&
+          other.scopeKey == this.scopeKey &&
           other.assetType == this.assetType &&
           other.syncedAt == this.syncedAt);
 }
 
 class CachedMapAssetSyncCursorsCompanion
     extends UpdateCompanion<CachedMapAssetSyncCursor> {
+  final Value<String> scopeKey;
   final Value<String> assetType;
   final Value<DateTime> syncedAt;
   final Value<int> rowid;
   const CachedMapAssetSyncCursorsCompanion({
+    this.scopeKey = const Value.absent(),
     this.assetType = const Value.absent(),
     this.syncedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   CachedMapAssetSyncCursorsCompanion.insert({
+    required String scopeKey,
     required String assetType,
     required DateTime syncedAt,
     this.rowid = const Value.absent(),
-  }) : assetType = Value(assetType),
+  }) : scopeKey = Value(scopeKey),
+       assetType = Value(assetType),
        syncedAt = Value(syncedAt);
   static Insertable<CachedMapAssetSyncCursor> custom({
+    Expression<String>? scopeKey,
     Expression<String>? assetType,
     Expression<DateTime>? syncedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (assetType != null) 'asset_type': assetType,
       if (syncedAt != null) 'synced_at': syncedAt,
       if (rowid != null) 'rowid': rowid,
@@ -1647,11 +1839,13 @@ class CachedMapAssetSyncCursorsCompanion
   }
 
   CachedMapAssetSyncCursorsCompanion copyWith({
+    Value<String>? scopeKey,
     Value<String>? assetType,
     Value<DateTime>? syncedAt,
     Value<int>? rowid,
   }) {
     return CachedMapAssetSyncCursorsCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       assetType: assetType ?? this.assetType,
       syncedAt: syncedAt ?? this.syncedAt,
       rowid: rowid ?? this.rowid,
@@ -1661,6 +1855,9 @@ class CachedMapAssetSyncCursorsCompanion
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (assetType.present) {
       map['asset_type'] = Variable<String>(assetType.value);
     }
@@ -1676,6 +1873,7 @@ class CachedMapAssetSyncCursorsCompanion
   @override
   String toString() {
     return (StringBuffer('CachedMapAssetSyncCursorsCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('assetType: $assetType, ')
           ..write('syncedAt: $syncedAt, ')
           ..write('rowid: $rowid')
@@ -1694,6 +1892,17 @@ class $CachedWorkOrderEvidenceMapsTable extends CachedWorkOrderEvidenceMaps
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $CachedWorkOrderEvidenceMapsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _principalScopeMeta = const VerificationMeta(
     'principalScope',
   );
@@ -1763,6 +1972,7 @@ class $CachedWorkOrderEvidenceMapsTable extends CachedWorkOrderEvidenceMaps
   );
   @override
   List<GeneratedColumn> get $columns => [
+    scopeKey,
     principalScope,
     workOrderPublicId,
     reportSha256,
@@ -1782,6 +1992,14 @@ class $CachedWorkOrderEvidenceMapsTable extends CachedWorkOrderEvidenceMaps
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('principal_scope')) {
       context.handle(
         _principalScopeMeta,
@@ -1850,6 +2068,7 @@ class $CachedWorkOrderEvidenceMapsTable extends CachedWorkOrderEvidenceMaps
 
   @override
   Set<GeneratedColumn> get $primaryKey => {
+    scopeKey,
     principalScope,
     workOrderPublicId,
     reportSha256,
@@ -1861,6 +2080,10 @@ class $CachedWorkOrderEvidenceMapsTable extends CachedWorkOrderEvidenceMaps
   }) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return CachedWorkOrderEvidenceMap(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       principalScope: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}principal_scope'],
@@ -1896,6 +2119,7 @@ class $CachedWorkOrderEvidenceMapsTable extends CachedWorkOrderEvidenceMaps
 
 class CachedWorkOrderEvidenceMap extends DataClass
     implements Insertable<CachedWorkOrderEvidenceMap> {
+  final String scopeKey;
   final String principalScope;
   final String workOrderPublicId;
   final String reportSha256;
@@ -1903,6 +2127,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
   final String payloadJson;
   final DateTime cachedAt;
   const CachedWorkOrderEvidenceMap({
+    required this.scopeKey,
     required this.principalScope,
     required this.workOrderPublicId,
     required this.reportSha256,
@@ -1913,6 +2138,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['principal_scope'] = Variable<String>(principalScope);
     map['work_order_public_id'] = Variable<String>(workOrderPublicId);
     map['report_sha256'] = Variable<String>(reportSha256);
@@ -1924,6 +2150,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
 
   CachedWorkOrderEvidenceMapsCompanion toCompanion(bool nullToAbsent) {
     return CachedWorkOrderEvidenceMapsCompanion(
+      scopeKey: Value(scopeKey),
       principalScope: Value(principalScope),
       workOrderPublicId: Value(workOrderPublicId),
       reportSha256: Value(reportSha256),
@@ -1939,6 +2166,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return CachedWorkOrderEvidenceMap(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       principalScope: serializer.fromJson<String>(json['principalScope']),
       workOrderPublicId: serializer.fromJson<String>(json['workOrderPublicId']),
       reportSha256: serializer.fromJson<String>(json['reportSha256']),
@@ -1953,6 +2181,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'principalScope': serializer.toJson<String>(principalScope),
       'workOrderPublicId': serializer.toJson<String>(workOrderPublicId),
       'reportSha256': serializer.toJson<String>(reportSha256),
@@ -1963,6 +2192,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
   }
 
   CachedWorkOrderEvidenceMap copyWith({
+    String? scopeKey,
     String? principalScope,
     String? workOrderPublicId,
     String? reportSha256,
@@ -1970,6 +2200,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
     String? payloadJson,
     DateTime? cachedAt,
   }) => CachedWorkOrderEvidenceMap(
+    scopeKey: scopeKey ?? this.scopeKey,
     principalScope: principalScope ?? this.principalScope,
     workOrderPublicId: workOrderPublicId ?? this.workOrderPublicId,
     reportSha256: reportSha256 ?? this.reportSha256,
@@ -1981,6 +2212,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
     CachedWorkOrderEvidenceMapsCompanion data,
   ) {
     return CachedWorkOrderEvidenceMap(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       principalScope: data.principalScope.present
           ? data.principalScope.value
           : this.principalScope,
@@ -2003,6 +2235,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
   @override
   String toString() {
     return (StringBuffer('CachedWorkOrderEvidenceMap(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('principalScope: $principalScope, ')
           ..write('workOrderPublicId: $workOrderPublicId, ')
           ..write('reportSha256: $reportSha256, ')
@@ -2015,6 +2248,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
 
   @override
   int get hashCode => Object.hash(
+    scopeKey,
     principalScope,
     workOrderPublicId,
     reportSha256,
@@ -2026,6 +2260,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is CachedWorkOrderEvidenceMap &&
+          other.scopeKey == this.scopeKey &&
           other.principalScope == this.principalScope &&
           other.workOrderPublicId == this.workOrderPublicId &&
           other.reportSha256 == this.reportSha256 &&
@@ -2036,6 +2271,7 @@ class CachedWorkOrderEvidenceMap extends DataClass
 
 class CachedWorkOrderEvidenceMapsCompanion
     extends UpdateCompanion<CachedWorkOrderEvidenceMap> {
+  final Value<String> scopeKey;
   final Value<String> principalScope;
   final Value<String> workOrderPublicId;
   final Value<String> reportSha256;
@@ -2044,6 +2280,7 @@ class CachedWorkOrderEvidenceMapsCompanion
   final Value<DateTime> cachedAt;
   final Value<int> rowid;
   const CachedWorkOrderEvidenceMapsCompanion({
+    this.scopeKey = const Value.absent(),
     this.principalScope = const Value.absent(),
     this.workOrderPublicId = const Value.absent(),
     this.reportSha256 = const Value.absent(),
@@ -2053,6 +2290,7 @@ class CachedWorkOrderEvidenceMapsCompanion
     this.rowid = const Value.absent(),
   });
   CachedWorkOrderEvidenceMapsCompanion.insert({
+    required String scopeKey,
     required String principalScope,
     required String workOrderPublicId,
     required String reportSha256,
@@ -2060,13 +2298,15 @@ class CachedWorkOrderEvidenceMapsCompanion
     required String payloadJson,
     required DateTime cachedAt,
     this.rowid = const Value.absent(),
-  }) : principalScope = Value(principalScope),
+  }) : scopeKey = Value(scopeKey),
+       principalScope = Value(principalScope),
        workOrderPublicId = Value(workOrderPublicId),
        reportSha256 = Value(reportSha256),
        sourceOverlaySha256 = Value(sourceOverlaySha256),
        payloadJson = Value(payloadJson),
        cachedAt = Value(cachedAt);
   static Insertable<CachedWorkOrderEvidenceMap> custom({
+    Expression<String>? scopeKey,
     Expression<String>? principalScope,
     Expression<String>? workOrderPublicId,
     Expression<String>? reportSha256,
@@ -2076,6 +2316,7 @@ class CachedWorkOrderEvidenceMapsCompanion
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (principalScope != null) 'principal_scope': principalScope,
       if (workOrderPublicId != null) 'work_order_public_id': workOrderPublicId,
       if (reportSha256 != null) 'report_sha256': reportSha256,
@@ -2088,6 +2329,7 @@ class CachedWorkOrderEvidenceMapsCompanion
   }
 
   CachedWorkOrderEvidenceMapsCompanion copyWith({
+    Value<String>? scopeKey,
     Value<String>? principalScope,
     Value<String>? workOrderPublicId,
     Value<String>? reportSha256,
@@ -2097,6 +2339,7 @@ class CachedWorkOrderEvidenceMapsCompanion
     Value<int>? rowid,
   }) {
     return CachedWorkOrderEvidenceMapsCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       principalScope: principalScope ?? this.principalScope,
       workOrderPublicId: workOrderPublicId ?? this.workOrderPublicId,
       reportSha256: reportSha256 ?? this.reportSha256,
@@ -2110,6 +2353,9 @@ class CachedWorkOrderEvidenceMapsCompanion
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (principalScope.present) {
       map['principal_scope'] = Variable<String>(principalScope.value);
     }
@@ -2139,6 +2385,7 @@ class CachedWorkOrderEvidenceMapsCompanion
   @override
   String toString() {
     return (StringBuffer('CachedWorkOrderEvidenceMapsCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('principalScope: $principalScope, ')
           ..write('workOrderPublicId: $workOrderPublicId, ')
           ..write('reportSha256: $reportSha256, ')
@@ -2157,6 +2404,17 @@ class $OutboxEntriesTable extends OutboxEntries
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $OutboxEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _seqMeta = const VerificationMeta('seq');
   @override
   late final GeneratedColumn<int> seq = GeneratedColumn<int>(
@@ -2248,6 +2506,7 @@ class $OutboxEntriesTable extends OutboxEntries
   );
   @override
   List<GeneratedColumn> get $columns => [
+    scopeKey,
     seq,
     clientRef,
     kind,
@@ -2269,6 +2528,14 @@ class $OutboxEntriesTable extends OutboxEntries
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('seq')) {
       context.handle(
         _seqMeta,
@@ -2337,6 +2604,10 @@ class $OutboxEntriesTable extends OutboxEntries
   OutboxEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return OutboxEntry(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       seq: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}seq'],
@@ -2379,6 +2650,7 @@ class $OutboxEntriesTable extends OutboxEntries
 }
 
 class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
+  final String scopeKey;
   final int seq;
   final String clientRef;
   final String kind;
@@ -2388,6 +2660,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   final String? lastError;
   final DateTime createdAt;
   const OutboxEntry({
+    required this.scopeKey,
     required this.seq,
     required this.clientRef,
     required this.kind,
@@ -2400,6 +2673,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['seq'] = Variable<int>(seq);
     map['client_ref'] = Variable<String>(clientRef);
     map['kind'] = Variable<String>(kind);
@@ -2415,6 +2689,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
 
   OutboxEntriesCompanion toCompanion(bool nullToAbsent) {
     return OutboxEntriesCompanion(
+      scopeKey: Value(scopeKey),
       seq: Value(seq),
       clientRef: Value(clientRef),
       kind: Value(kind),
@@ -2434,6 +2709,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return OutboxEntry(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       seq: serializer.fromJson<int>(json['seq']),
       clientRef: serializer.fromJson<String>(json['clientRef']),
       kind: serializer.fromJson<String>(json['kind']),
@@ -2448,6 +2724,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'seq': serializer.toJson<int>(seq),
       'clientRef': serializer.toJson<String>(clientRef),
       'kind': serializer.toJson<String>(kind),
@@ -2460,6 +2737,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   }
 
   OutboxEntry copyWith({
+    String? scopeKey,
     int? seq,
     String? clientRef,
     String? kind,
@@ -2469,6 +2747,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
     Value<String?> lastError = const Value.absent(),
     DateTime? createdAt,
   }) => OutboxEntry(
+    scopeKey: scopeKey ?? this.scopeKey,
     seq: seq ?? this.seq,
     clientRef: clientRef ?? this.clientRef,
     kind: kind ?? this.kind,
@@ -2480,6 +2759,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   );
   OutboxEntry copyWithCompanion(OutboxEntriesCompanion data) {
     return OutboxEntry(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       seq: data.seq.present ? data.seq.value : this.seq,
       clientRef: data.clientRef.present ? data.clientRef.value : this.clientRef,
       kind: data.kind.present ? data.kind.value : this.kind,
@@ -2496,6 +2776,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   @override
   String toString() {
     return (StringBuffer('OutboxEntry(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('seq: $seq, ')
           ..write('clientRef: $clientRef, ')
           ..write('kind: $kind, ')
@@ -2510,6 +2791,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
 
   @override
   int get hashCode => Object.hash(
+    scopeKey,
     seq,
     clientRef,
     kind,
@@ -2523,6 +2805,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is OutboxEntry &&
+          other.scopeKey == this.scopeKey &&
           other.seq == this.seq &&
           other.clientRef == this.clientRef &&
           other.kind == this.kind &&
@@ -2534,6 +2817,7 @@ class OutboxEntry extends DataClass implements Insertable<OutboxEntry> {
 }
 
 class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
+  final Value<String> scopeKey;
   final Value<int> seq;
   final Value<String> clientRef;
   final Value<String> kind;
@@ -2543,6 +2827,7 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
   final Value<String?> lastError;
   final Value<DateTime> createdAt;
   const OutboxEntriesCompanion({
+    this.scopeKey = const Value.absent(),
     this.seq = const Value.absent(),
     this.clientRef = const Value.absent(),
     this.kind = const Value.absent(),
@@ -2553,6 +2838,7 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
     this.createdAt = const Value.absent(),
   });
   OutboxEntriesCompanion.insert({
+    required String scopeKey,
     this.seq = const Value.absent(),
     required String clientRef,
     required String kind,
@@ -2561,11 +2847,13 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
     this.attempts = const Value.absent(),
     this.lastError = const Value.absent(),
     required DateTime createdAt,
-  }) : clientRef = Value(clientRef),
+  }) : scopeKey = Value(scopeKey),
+       clientRef = Value(clientRef),
        kind = Value(kind),
        payloadJson = Value(payloadJson),
        createdAt = Value(createdAt);
   static Insertable<OutboxEntry> custom({
+    Expression<String>? scopeKey,
     Expression<int>? seq,
     Expression<String>? clientRef,
     Expression<String>? kind,
@@ -2576,6 +2864,7 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
     Expression<DateTime>? createdAt,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (seq != null) 'seq': seq,
       if (clientRef != null) 'client_ref': clientRef,
       if (kind != null) 'kind': kind,
@@ -2588,6 +2877,7 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
   }
 
   OutboxEntriesCompanion copyWith({
+    Value<String>? scopeKey,
     Value<int>? seq,
     Value<String>? clientRef,
     Value<String>? kind,
@@ -2598,6 +2888,7 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
     Value<DateTime>? createdAt,
   }) {
     return OutboxEntriesCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       seq: seq ?? this.seq,
       clientRef: clientRef ?? this.clientRef,
       kind: kind ?? this.kind,
@@ -2612,6 +2903,9 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (seq.present) {
       map['seq'] = Variable<int>(seq.value);
     }
@@ -2642,6 +2936,7 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
   @override
   String toString() {
     return (StringBuffer('OutboxEntriesCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('seq: $seq, ')
           ..write('clientRef: $clientRef, ')
           ..write('kind: $kind, ')
@@ -2661,6 +2956,17 @@ class $PendingPhotosTable extends PendingPhotos
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $PendingPhotosTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _clientRefMeta = const VerificationMeta(
     'clientRef',
   );
@@ -2789,6 +3095,7 @@ class $PendingPhotosTable extends PendingPhotos
   );
   @override
   List<GeneratedColumn> get $columns => [
+    scopeKey,
     clientRef,
     localPath,
     kind,
@@ -2813,6 +3120,14 @@ class $PendingPhotosTable extends PendingPhotos
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('client_ref')) {
       context.handle(
         _clientRefMeta,
@@ -2895,11 +3210,15 @@ class $PendingPhotosTable extends PendingPhotos
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {clientRef};
+  Set<GeneratedColumn> get $primaryKey => {scopeKey, clientRef};
   @override
   PendingPhoto map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return PendingPhoto(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       clientRef: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}client_ref'],
@@ -2954,6 +3273,7 @@ class $PendingPhotosTable extends PendingPhotos
 }
 
 class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
+  final String scopeKey;
   final String clientRef;
   final String localPath;
   final String kind;
@@ -2966,6 +3286,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   final bool failed;
   final String? lastError;
   const PendingPhoto({
+    required this.scopeKey,
     required this.clientRef,
     required this.localPath,
     required this.kind,
@@ -2981,6 +3302,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['client_ref'] = Variable<String>(clientRef);
     map['local_path'] = Variable<String>(localPath);
     map['kind'] = Variable<String>(kind);
@@ -3007,6 +3329,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
 
   PendingPhotosCompanion toCompanion(bool nullToAbsent) {
     return PendingPhotosCompanion(
+      scopeKey: Value(scopeKey),
       clientRef: Value(clientRef),
       localPath: Value(localPath),
       kind: Value(kind),
@@ -3037,6 +3360,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return PendingPhoto(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       clientRef: serializer.fromJson<String>(json['clientRef']),
       localPath: serializer.fromJson<String>(json['localPath']),
       kind: serializer.fromJson<String>(json['kind']),
@@ -3056,6 +3380,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'clientRef': serializer.toJson<String>(clientRef),
       'localPath': serializer.toJson<String>(localPath),
       'kind': serializer.toJson<String>(kind),
@@ -3073,6 +3398,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   }
 
   PendingPhoto copyWith({
+    String? scopeKey,
     String? clientRef,
     String? localPath,
     String? kind,
@@ -3085,6 +3411,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
     bool? failed,
     Value<String?> lastError = const Value.absent(),
   }) => PendingPhoto(
+    scopeKey: scopeKey ?? this.scopeKey,
     clientRef: clientRef ?? this.clientRef,
     localPath: localPath ?? this.localPath,
     kind: kind ?? this.kind,
@@ -3101,6 +3428,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   );
   PendingPhoto copyWithCompanion(PendingPhotosCompanion data) {
     return PendingPhoto(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       clientRef: data.clientRef.present ? data.clientRef.value : this.clientRef,
       localPath: data.localPath.present ? data.localPath.value : this.localPath,
       kind: data.kind.present ? data.kind.value : this.kind,
@@ -3124,6 +3452,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   @override
   String toString() {
     return (StringBuffer('PendingPhoto(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('clientRef: $clientRef, ')
           ..write('localPath: $localPath, ')
           ..write('kind: $kind, ')
@@ -3141,6 +3470,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
 
   @override
   int get hashCode => Object.hash(
+    scopeKey,
     clientRef,
     localPath,
     kind,
@@ -3157,6 +3487,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is PendingPhoto &&
+          other.scopeKey == this.scopeKey &&
           other.clientRef == this.clientRef &&
           other.localPath == this.localPath &&
           other.kind == this.kind &&
@@ -3171,6 +3502,7 @@ class PendingPhoto extends DataClass implements Insertable<PendingPhoto> {
 }
 
 class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
+  final Value<String> scopeKey;
   final Value<String> clientRef;
   final Value<String> localPath;
   final Value<String> kind;
@@ -3184,6 +3516,7 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
   final Value<String?> lastError;
   final Value<int> rowid;
   const PendingPhotosCompanion({
+    this.scopeKey = const Value.absent(),
     this.clientRef = const Value.absent(),
     this.localPath = const Value.absent(),
     this.kind = const Value.absent(),
@@ -3198,6 +3531,7 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
     this.rowid = const Value.absent(),
   });
   PendingPhotosCompanion.insert({
+    required String scopeKey,
     required String clientRef,
     required String localPath,
     this.kind = const Value.absent(),
@@ -3210,10 +3544,12 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
     this.failed = const Value.absent(),
     this.lastError = const Value.absent(),
     this.rowid = const Value.absent(),
-  }) : clientRef = Value(clientRef),
+  }) : scopeKey = Value(scopeKey),
+       clientRef = Value(clientRef),
        localPath = Value(localPath),
        capturedAt = Value(capturedAt);
   static Insertable<PendingPhoto> custom({
+    Expression<String>? scopeKey,
     Expression<String>? clientRef,
     Expression<String>? localPath,
     Expression<String>? kind,
@@ -3228,6 +3564,7 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (clientRef != null) 'client_ref': clientRef,
       if (localPath != null) 'local_path': localPath,
       if (kind != null) 'kind': kind,
@@ -3245,6 +3582,7 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
   }
 
   PendingPhotosCompanion copyWith({
+    Value<String>? scopeKey,
     Value<String>? clientRef,
     Value<String>? localPath,
     Value<String>? kind,
@@ -3259,6 +3597,7 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
     Value<int>? rowid,
   }) {
     return PendingPhotosCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       clientRef: clientRef ?? this.clientRef,
       localPath: localPath ?? this.localPath,
       kind: kind ?? this.kind,
@@ -3278,6 +3617,9 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (clientRef.present) {
       map['client_ref'] = Variable<String>(clientRef.value);
     }
@@ -3322,6 +3664,7 @@ class PendingPhotosCompanion extends UpdateCompanion<PendingPhoto> {
   @override
   String toString() {
     return (StringBuffer('PendingPhotosCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('clientRef: $clientRef, ')
           ..write('localPath: $localPath, ')
           ..write('kind: $kind, ')
@@ -3345,6 +3688,17 @@ class $DraftEntriesTable extends DraftEntries
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
   $DraftEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _scopeKeyMeta = const VerificationMeta(
+    'scopeKey',
+  );
+  @override
+  late final GeneratedColumn<String> scopeKey = GeneratedColumn<String>(
+    'scope_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _idMeta = const VerificationMeta('id');
   @override
   late final GeneratedColumn<String> id = GeneratedColumn<String>(
@@ -3386,7 +3740,13 @@ class $DraftEntriesTable extends DraftEntries
     requiredDuringInsert: true,
   );
   @override
-  List<GeneratedColumn> get $columns => [id, type, payloadJson, updatedAt];
+  List<GeneratedColumn> get $columns => [
+    scopeKey,
+    id,
+    type,
+    payloadJson,
+    updatedAt,
+  ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -3399,6 +3759,14 @@ class $DraftEntriesTable extends DraftEntries
   }) {
     final context = VerificationContext();
     final data = instance.toColumns(true);
+    if (data.containsKey('scope_key')) {
+      context.handle(
+        _scopeKeyMeta,
+        scopeKey.isAcceptableOrUnknown(data['scope_key']!, _scopeKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scopeKeyMeta);
+    }
     if (data.containsKey('id')) {
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
     } else if (isInserting) {
@@ -3435,11 +3803,15 @@ class $DraftEntriesTable extends DraftEntries
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {id};
+  Set<GeneratedColumn> get $primaryKey => {scopeKey, id};
   @override
   DraftEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return DraftEntry(
+      scopeKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope_key'],
+      )!,
       id: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}id'],
@@ -3466,11 +3838,13 @@ class $DraftEntriesTable extends DraftEntries
 }
 
 class DraftEntry extends DataClass implements Insertable<DraftEntry> {
+  final String scopeKey;
   final String id;
   final String type;
   final String payloadJson;
   final DateTime updatedAt;
   const DraftEntry({
+    required this.scopeKey,
     required this.id,
     required this.type,
     required this.payloadJson,
@@ -3479,6 +3853,7 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    map['scope_key'] = Variable<String>(scopeKey);
     map['id'] = Variable<String>(id);
     map['type'] = Variable<String>(type);
     map['payload_json'] = Variable<String>(payloadJson);
@@ -3488,6 +3863,7 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
 
   DraftEntriesCompanion toCompanion(bool nullToAbsent) {
     return DraftEntriesCompanion(
+      scopeKey: Value(scopeKey),
       id: Value(id),
       type: Value(type),
       payloadJson: Value(payloadJson),
@@ -3501,6 +3877,7 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return DraftEntry(
+      scopeKey: serializer.fromJson<String>(json['scopeKey']),
       id: serializer.fromJson<String>(json['id']),
       type: serializer.fromJson<String>(json['type']),
       payloadJson: serializer.fromJson<String>(json['payloadJson']),
@@ -3511,6 +3888,7 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
   Map<String, dynamic> toJson({ValueSerializer? serializer}) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
+      'scopeKey': serializer.toJson<String>(scopeKey),
       'id': serializer.toJson<String>(id),
       'type': serializer.toJson<String>(type),
       'payloadJson': serializer.toJson<String>(payloadJson),
@@ -3519,11 +3897,13 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
   }
 
   DraftEntry copyWith({
+    String? scopeKey,
     String? id,
     String? type,
     String? payloadJson,
     DateTime? updatedAt,
   }) => DraftEntry(
+    scopeKey: scopeKey ?? this.scopeKey,
     id: id ?? this.id,
     type: type ?? this.type,
     payloadJson: payloadJson ?? this.payloadJson,
@@ -3531,6 +3911,7 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
   );
   DraftEntry copyWithCompanion(DraftEntriesCompanion data) {
     return DraftEntry(
+      scopeKey: data.scopeKey.present ? data.scopeKey.value : this.scopeKey,
       id: data.id.present ? data.id.value : this.id,
       type: data.type.present ? data.type.value : this.type,
       payloadJson: data.payloadJson.present
@@ -3543,6 +3924,7 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
   @override
   String toString() {
     return (StringBuffer('DraftEntry(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('id: $id, ')
           ..write('type: $type, ')
           ..write('payloadJson: $payloadJson, ')
@@ -3552,11 +3934,12 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
   }
 
   @override
-  int get hashCode => Object.hash(id, type, payloadJson, updatedAt);
+  int get hashCode => Object.hash(scopeKey, id, type, payloadJson, updatedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is DraftEntry &&
+          other.scopeKey == this.scopeKey &&
           other.id == this.id &&
           other.type == this.type &&
           other.payloadJson == this.payloadJson &&
@@ -3564,12 +3947,14 @@ class DraftEntry extends DataClass implements Insertable<DraftEntry> {
 }
 
 class DraftEntriesCompanion extends UpdateCompanion<DraftEntry> {
+  final Value<String> scopeKey;
   final Value<String> id;
   final Value<String> type;
   final Value<String> payloadJson;
   final Value<DateTime> updatedAt;
   final Value<int> rowid;
   const DraftEntriesCompanion({
+    this.scopeKey = const Value.absent(),
     this.id = const Value.absent(),
     this.type = const Value.absent(),
     this.payloadJson = const Value.absent(),
@@ -3577,16 +3962,19 @@ class DraftEntriesCompanion extends UpdateCompanion<DraftEntry> {
     this.rowid = const Value.absent(),
   });
   DraftEntriesCompanion.insert({
+    required String scopeKey,
     required String id,
     required String type,
     required String payloadJson,
     required DateTime updatedAt,
     this.rowid = const Value.absent(),
-  }) : id = Value(id),
+  }) : scopeKey = Value(scopeKey),
+       id = Value(id),
        type = Value(type),
        payloadJson = Value(payloadJson),
        updatedAt = Value(updatedAt);
   static Insertable<DraftEntry> custom({
+    Expression<String>? scopeKey,
     Expression<String>? id,
     Expression<String>? type,
     Expression<String>? payloadJson,
@@ -3594,6 +3982,7 @@ class DraftEntriesCompanion extends UpdateCompanion<DraftEntry> {
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
+      if (scopeKey != null) 'scope_key': scopeKey,
       if (id != null) 'id': id,
       if (type != null) 'type': type,
       if (payloadJson != null) 'payload_json': payloadJson,
@@ -3603,6 +3992,7 @@ class DraftEntriesCompanion extends UpdateCompanion<DraftEntry> {
   }
 
   DraftEntriesCompanion copyWith({
+    Value<String>? scopeKey,
     Value<String>? id,
     Value<String>? type,
     Value<String>? payloadJson,
@@ -3610,6 +4000,7 @@ class DraftEntriesCompanion extends UpdateCompanion<DraftEntry> {
     Value<int>? rowid,
   }) {
     return DraftEntriesCompanion(
+      scopeKey: scopeKey ?? this.scopeKey,
       id: id ?? this.id,
       type: type ?? this.type,
       payloadJson: payloadJson ?? this.payloadJson,
@@ -3621,6 +4012,9 @@ class DraftEntriesCompanion extends UpdateCompanion<DraftEntry> {
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
+    if (scopeKey.present) {
+      map['scope_key'] = Variable<String>(scopeKey.value);
+    }
     if (id.present) {
       map['id'] = Variable<String>(id.value);
     }
@@ -3642,6 +4036,7 @@ class DraftEntriesCompanion extends UpdateCompanion<DraftEntry> {
   @override
   String toString() {
     return (StringBuffer('DraftEntriesCompanion(')
+          ..write('scopeKey: $scopeKey, ')
           ..write('id: $id, ')
           ..write('type: $type, ')
           ..write('payloadJson: $payloadJson, ')
@@ -3686,6 +4081,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
 
 typedef $$CachedJobsTableCreateCompanionBuilder =
     CachedJobsCompanion Function({
+      required String scopeKey,
       required String id,
       required String title,
       required String status,
@@ -3698,6 +4094,7 @@ typedef $$CachedJobsTableCreateCompanionBuilder =
     });
 typedef $$CachedJobsTableUpdateCompanionBuilder =
     CachedJobsCompanion Function({
+      Value<String> scopeKey,
       Value<String> id,
       Value<String> title,
       Value<String> status,
@@ -3718,6 +4115,11 @@ class $$CachedJobsTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
     builder: (column) => ColumnFilters(column),
@@ -3768,6 +4170,11 @@ class $$CachedJobsTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get id => $composableBuilder(
     column: $table.id,
     builder: (column) => ColumnOrderings(column),
@@ -3818,6 +4225,9 @@ class $$CachedJobsTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
 
@@ -3878,6 +4288,7 @@ class $$CachedJobsTableTableManager
               $$CachedJobsTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<String> id = const Value.absent(),
                 Value<String> title = const Value.absent(),
                 Value<String> status = const Value.absent(),
@@ -3888,6 +4299,7 @@ class $$CachedJobsTableTableManager
                 Value<DateTime> cachedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CachedJobsCompanion(
+                scopeKey: scopeKey,
                 id: id,
                 title: title,
                 status: status,
@@ -3900,6 +4312,7 @@ class $$CachedJobsTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 required String id,
                 required String title,
                 required String status,
@@ -3910,6 +4323,7 @@ class $$CachedJobsTableTableManager
                 required DateTime cachedAt,
                 Value<int> rowid = const Value.absent(),
               }) => CachedJobsCompanion.insert(
+                scopeKey: scopeKey,
                 id: id,
                 title: title,
                 status: status,
@@ -3944,6 +4358,7 @@ typedef $$CachedJobsTableProcessedTableManager =
     >;
 typedef $$CachedScheduleEntriesTableCreateCompanionBuilder =
     CachedScheduleEntriesCompanion Function({
+      required String scopeKey,
       required String referenceId,
       required String type,
       required DateTime startAt,
@@ -3953,6 +4368,7 @@ typedef $$CachedScheduleEntriesTableCreateCompanionBuilder =
     });
 typedef $$CachedScheduleEntriesTableUpdateCompanionBuilder =
     CachedScheduleEntriesCompanion Function({
+      Value<String> scopeKey,
       Value<String> referenceId,
       Value<String> type,
       Value<DateTime> startAt,
@@ -3970,6 +4386,11 @@ class $$CachedScheduleEntriesTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get referenceId => $composableBuilder(
     column: $table.referenceId,
     builder: (column) => ColumnFilters(column),
@@ -4005,6 +4426,11 @@ class $$CachedScheduleEntriesTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get referenceId => $composableBuilder(
     column: $table.referenceId,
     builder: (column) => ColumnOrderings(column),
@@ -4040,6 +4466,9 @@ class $$CachedScheduleEntriesTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<String> get referenceId => $composableBuilder(
     column: $table.referenceId,
     builder: (column) => column,
@@ -4104,6 +4533,7 @@ class $$CachedScheduleEntriesTableTableManager
               ),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<String> referenceId = const Value.absent(),
                 Value<String> type = const Value.absent(),
                 Value<DateTime> startAt = const Value.absent(),
@@ -4111,6 +4541,7 @@ class $$CachedScheduleEntriesTableTableManager
                 Value<String> title = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CachedScheduleEntriesCompanion(
+                scopeKey: scopeKey,
                 referenceId: referenceId,
                 type: type,
                 startAt: startAt,
@@ -4120,6 +4551,7 @@ class $$CachedScheduleEntriesTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 required String referenceId,
                 required String type,
                 required DateTime startAt,
@@ -4127,6 +4559,7 @@ class $$CachedScheduleEntriesTableTableManager
                 required String title,
                 Value<int> rowid = const Value.absent(),
               }) => CachedScheduleEntriesCompanion.insert(
+                scopeKey: scopeKey,
                 referenceId: referenceId,
                 type: type,
                 startAt: startAt,
@@ -4165,6 +4598,7 @@ typedef $$CachedScheduleEntriesTableProcessedTableManager =
     >;
 typedef $$CachedMapAssetsTableCreateCompanionBuilder =
     CachedMapAssetsCompanion Function({
+      required String scopeKey,
       required String assetType,
       required String assetId,
       required String title,
@@ -4178,6 +4612,7 @@ typedef $$CachedMapAssetsTableCreateCompanionBuilder =
     });
 typedef $$CachedMapAssetsTableUpdateCompanionBuilder =
     CachedMapAssetsCompanion Function({
+      Value<String> scopeKey,
       Value<String> assetType,
       Value<String> assetId,
       Value<String> title,
@@ -4199,6 +4634,11 @@ class $$CachedMapAssetsTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get assetType => $composableBuilder(
     column: $table.assetType,
     builder: (column) => ColumnFilters(column),
@@ -4254,6 +4694,11 @@ class $$CachedMapAssetsTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get assetType => $composableBuilder(
     column: $table.assetType,
     builder: (column) => ColumnOrderings(column),
@@ -4309,6 +4754,9 @@ class $$CachedMapAssetsTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<String> get assetType =>
       $composableBuilder(column: $table.assetType, builder: (column) => column);
 
@@ -4374,6 +4822,7 @@ class $$CachedMapAssetsTableTableManager
               $$CachedMapAssetsTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<String> assetType = const Value.absent(),
                 Value<String> assetId = const Value.absent(),
                 Value<String> title = const Value.absent(),
@@ -4385,6 +4834,7 @@ class $$CachedMapAssetsTableTableManager
                 Value<DateTime> cachedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CachedMapAssetsCompanion(
+                scopeKey: scopeKey,
                 assetType: assetType,
                 assetId: assetId,
                 title: title,
@@ -4398,6 +4848,7 @@ class $$CachedMapAssetsTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 required String assetType,
                 required String assetId,
                 required String title,
@@ -4409,6 +4860,7 @@ class $$CachedMapAssetsTableTableManager
                 required DateTime cachedAt,
                 Value<int> rowid = const Value.absent(),
               }) => CachedMapAssetsCompanion.insert(
+                scopeKey: scopeKey,
                 assetType: assetType,
                 assetId: assetId,
                 title: title,
@@ -4447,12 +4899,14 @@ typedef $$CachedMapAssetsTableProcessedTableManager =
     >;
 typedef $$CachedMapAssetSyncCursorsTableCreateCompanionBuilder =
     CachedMapAssetSyncCursorsCompanion Function({
+      required String scopeKey,
       required String assetType,
       required DateTime syncedAt,
       Value<int> rowid,
     });
 typedef $$CachedMapAssetSyncCursorsTableUpdateCompanionBuilder =
     CachedMapAssetSyncCursorsCompanion Function({
+      Value<String> scopeKey,
       Value<String> assetType,
       Value<DateTime> syncedAt,
       Value<int> rowid,
@@ -4467,6 +4921,11 @@ class $$CachedMapAssetSyncCursorsTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get assetType => $composableBuilder(
     column: $table.assetType,
     builder: (column) => ColumnFilters(column),
@@ -4487,6 +4946,11 @@ class $$CachedMapAssetSyncCursorsTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get assetType => $composableBuilder(
     column: $table.assetType,
     builder: (column) => ColumnOrderings(column),
@@ -4507,6 +4971,9 @@ class $$CachedMapAssetSyncCursorsTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<String> get assetType =>
       $composableBuilder(column: $table.assetType, builder: (column) => column);
 
@@ -4560,20 +5027,24 @@ class $$CachedMapAssetSyncCursorsTableTableManager
               ),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<String> assetType = const Value.absent(),
                 Value<DateTime> syncedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CachedMapAssetSyncCursorsCompanion(
+                scopeKey: scopeKey,
                 assetType: assetType,
                 syncedAt: syncedAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 required String assetType,
                 required DateTime syncedAt,
                 Value<int> rowid = const Value.absent(),
               }) => CachedMapAssetSyncCursorsCompanion.insert(
+                scopeKey: scopeKey,
                 assetType: assetType,
                 syncedAt: syncedAt,
                 rowid: rowid,
@@ -4609,6 +5080,7 @@ typedef $$CachedMapAssetSyncCursorsTableProcessedTableManager =
     >;
 typedef $$CachedWorkOrderEvidenceMapsTableCreateCompanionBuilder =
     CachedWorkOrderEvidenceMapsCompanion Function({
+      required String scopeKey,
       required String principalScope,
       required String workOrderPublicId,
       required String reportSha256,
@@ -4619,6 +5091,7 @@ typedef $$CachedWorkOrderEvidenceMapsTableCreateCompanionBuilder =
     });
 typedef $$CachedWorkOrderEvidenceMapsTableUpdateCompanionBuilder =
     CachedWorkOrderEvidenceMapsCompanion Function({
+      Value<String> scopeKey,
       Value<String> principalScope,
       Value<String> workOrderPublicId,
       Value<String> reportSha256,
@@ -4637,6 +5110,11 @@ class $$CachedWorkOrderEvidenceMapsTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get principalScope => $composableBuilder(
     column: $table.principalScope,
     builder: (column) => ColumnFilters(column),
@@ -4677,6 +5155,11 @@ class $$CachedWorkOrderEvidenceMapsTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get principalScope => $composableBuilder(
     column: $table.principalScope,
     builder: (column) => ColumnOrderings(column),
@@ -4717,6 +5200,9 @@ class $$CachedWorkOrderEvidenceMapsTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<String> get principalScope => $composableBuilder(
     column: $table.principalScope,
     builder: (column) => column,
@@ -4792,6 +5278,7 @@ class $$CachedWorkOrderEvidenceMapsTableTableManager
               ),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<String> principalScope = const Value.absent(),
                 Value<String> workOrderPublicId = const Value.absent(),
                 Value<String> reportSha256 = const Value.absent(),
@@ -4800,6 +5287,7 @@ class $$CachedWorkOrderEvidenceMapsTableTableManager
                 Value<DateTime> cachedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CachedWorkOrderEvidenceMapsCompanion(
+                scopeKey: scopeKey,
                 principalScope: principalScope,
                 workOrderPublicId: workOrderPublicId,
                 reportSha256: reportSha256,
@@ -4810,6 +5298,7 @@ class $$CachedWorkOrderEvidenceMapsTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 required String principalScope,
                 required String workOrderPublicId,
                 required String reportSha256,
@@ -4818,6 +5307,7 @@ class $$CachedWorkOrderEvidenceMapsTableTableManager
                 required DateTime cachedAt,
                 Value<int> rowid = const Value.absent(),
               }) => CachedWorkOrderEvidenceMapsCompanion.insert(
+                scopeKey: scopeKey,
                 principalScope: principalScope,
                 workOrderPublicId: workOrderPublicId,
                 reportSha256: reportSha256,
@@ -4857,6 +5347,7 @@ typedef $$CachedWorkOrderEvidenceMapsTableProcessedTableManager =
     >;
 typedef $$OutboxEntriesTableCreateCompanionBuilder =
     OutboxEntriesCompanion Function({
+      required String scopeKey,
       Value<int> seq,
       required String clientRef,
       required String kind,
@@ -4868,6 +5359,7 @@ typedef $$OutboxEntriesTableCreateCompanionBuilder =
     });
 typedef $$OutboxEntriesTableUpdateCompanionBuilder =
     OutboxEntriesCompanion Function({
+      Value<String> scopeKey,
       Value<int> seq,
       Value<String> clientRef,
       Value<String> kind,
@@ -4887,6 +5379,11 @@ class $$OutboxEntriesTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<int> get seq => $composableBuilder(
     column: $table.seq,
     builder: (column) => ColumnFilters(column),
@@ -4937,6 +5434,11 @@ class $$OutboxEntriesTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get seq => $composableBuilder(
     column: $table.seq,
     builder: (column) => ColumnOrderings(column),
@@ -4987,6 +5489,9 @@ class $$OutboxEntriesTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<int> get seq =>
       $composableBuilder(column: $table.seq, builder: (column) => column);
 
@@ -5045,6 +5550,7 @@ class $$OutboxEntriesTableTableManager
               $$OutboxEntriesTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<int> seq = const Value.absent(),
                 Value<String> clientRef = const Value.absent(),
                 Value<String> kind = const Value.absent(),
@@ -5054,6 +5560,7 @@ class $$OutboxEntriesTableTableManager
                 Value<String?> lastError = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => OutboxEntriesCompanion(
+                scopeKey: scopeKey,
                 seq: seq,
                 clientRef: clientRef,
                 kind: kind,
@@ -5065,6 +5572,7 @@ class $$OutboxEntriesTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 Value<int> seq = const Value.absent(),
                 required String clientRef,
                 required String kind,
@@ -5074,6 +5582,7 @@ class $$OutboxEntriesTableTableManager
                 Value<String?> lastError = const Value.absent(),
                 required DateTime createdAt,
               }) => OutboxEntriesCompanion.insert(
+                scopeKey: scopeKey,
                 seq: seq,
                 clientRef: clientRef,
                 kind: kind,
@@ -5110,6 +5619,7 @@ typedef $$OutboxEntriesTableProcessedTableManager =
     >;
 typedef $$PendingPhotosTableCreateCompanionBuilder =
     PendingPhotosCompanion Function({
+      required String scopeKey,
       required String clientRef,
       required String localPath,
       Value<String> kind,
@@ -5125,6 +5635,7 @@ typedef $$PendingPhotosTableCreateCompanionBuilder =
     });
 typedef $$PendingPhotosTableUpdateCompanionBuilder =
     PendingPhotosCompanion Function({
+      Value<String> scopeKey,
       Value<String> clientRef,
       Value<String> localPath,
       Value<String> kind,
@@ -5148,6 +5659,11 @@ class $$PendingPhotosTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get clientRef => $composableBuilder(
     column: $table.clientRef,
     builder: (column) => ColumnFilters(column),
@@ -5213,6 +5729,11 @@ class $$PendingPhotosTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get clientRef => $composableBuilder(
     column: $table.clientRef,
     builder: (column) => ColumnOrderings(column),
@@ -5278,6 +5799,9 @@ class $$PendingPhotosTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<String> get clientRef =>
       $composableBuilder(column: $table.clientRef, builder: (column) => column);
 
@@ -5349,6 +5873,7 @@ class $$PendingPhotosTableTableManager
               $$PendingPhotosTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<String> clientRef = const Value.absent(),
                 Value<String> localPath = const Value.absent(),
                 Value<String> kind = const Value.absent(),
@@ -5362,6 +5887,7 @@ class $$PendingPhotosTableTableManager
                 Value<String?> lastError = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PendingPhotosCompanion(
+                scopeKey: scopeKey,
                 clientRef: clientRef,
                 localPath: localPath,
                 kind: kind,
@@ -5377,6 +5903,7 @@ class $$PendingPhotosTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 required String clientRef,
                 required String localPath,
                 Value<String> kind = const Value.absent(),
@@ -5390,6 +5917,7 @@ class $$PendingPhotosTableTableManager
                 Value<String?> lastError = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PendingPhotosCompanion.insert(
+                scopeKey: scopeKey,
                 clientRef: clientRef,
                 localPath: localPath,
                 kind: kind,
@@ -5430,6 +5958,7 @@ typedef $$PendingPhotosTableProcessedTableManager =
     >;
 typedef $$DraftEntriesTableCreateCompanionBuilder =
     DraftEntriesCompanion Function({
+      required String scopeKey,
       required String id,
       required String type,
       required String payloadJson,
@@ -5438,6 +5967,7 @@ typedef $$DraftEntriesTableCreateCompanionBuilder =
     });
 typedef $$DraftEntriesTableUpdateCompanionBuilder =
     DraftEntriesCompanion Function({
+      Value<String> scopeKey,
       Value<String> id,
       Value<String> type,
       Value<String> payloadJson,
@@ -5454,6 +5984,11 @@ class $$DraftEntriesTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
     builder: (column) => ColumnFilters(column),
@@ -5484,6 +6019,11 @@ class $$DraftEntriesTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get scopeKey => $composableBuilder(
+    column: $table.scopeKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get id => $composableBuilder(
     column: $table.id,
     builder: (column) => ColumnOrderings(column),
@@ -5514,6 +6054,9 @@ class $$DraftEntriesTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get scopeKey =>
+      $composableBuilder(column: $table.scopeKey, builder: (column) => column);
+
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
 
@@ -5560,12 +6103,14 @@ class $$DraftEntriesTableTableManager
               $$DraftEntriesTableAnnotationComposer($db: db, $table: table),
           updateCompanionCallback:
               ({
+                Value<String> scopeKey = const Value.absent(),
                 Value<String> id = const Value.absent(),
                 Value<String> type = const Value.absent(),
                 Value<String> payloadJson = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => DraftEntriesCompanion(
+                scopeKey: scopeKey,
                 id: id,
                 type: type,
                 payloadJson: payloadJson,
@@ -5574,12 +6119,14 @@ class $$DraftEntriesTableTableManager
               ),
           createCompanionCallback:
               ({
+                required String scopeKey,
                 required String id,
                 required String type,
                 required String payloadJson,
                 required DateTime updatedAt,
                 Value<int> rowid = const Value.absent(),
               }) => DraftEntriesCompanion.insert(
+                scopeKey: scopeKey,
                 id: id,
                 type: type,
                 payloadJson: payloadJson,
