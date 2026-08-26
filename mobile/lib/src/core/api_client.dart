@@ -29,7 +29,28 @@ enum _RefreshOutcome {
 
   /// The refresh completed but belonged to a session that has since ended (a
   /// sign-out raced it). The result was discarded and nothing was written.
-  stale
+  stale,
+}
+
+/// URL path prefixes whose next segment is a secret and must never leave the
+/// device inside a crash-report breadcrumb.
+///
+/// `DELETE /me/push-tokens/{token}` carries the device's FCM registration
+/// token in the path (that is the server contract, unchanged here), and the
+/// breadcrumb interceptor below ships the path to the crash reporter verbatim.
+/// An FCM token addresses that device for push, so it does not belong in
+/// third-party telemetry.
+const _secretPathPrefixes = ['/me/push-tokens/'];
+
+/// Replace the secret-bearing segment of [path] with a placeholder, leaving
+/// every other path untouched (breadcrumbs stay useful).
+String redactSensitivePath(String path) {
+  for (final prefix in _secretPathPrefixes) {
+    if (path.startsWith(prefix) && path.length > prefix.length) {
+      return '$prefix<redacted>';
+    }
+  }
+  return path;
 }
 
 /// Thin wrapper around Dio configured for the DotMac API.
@@ -54,16 +75,17 @@ enum _RefreshOutcome {
 ///    itself is fenced in [TokenStorage]. A sign-out that races an in-flight
 ///    refresh cannot be undone by it.
 class ApiClient {
-  ApiClient(
-      {required TokenStorage storage,
-      SessionFence? fence,
-      this.cache,
-      this.onSessionExpired,
-      this.onImpersonationExpired,
-      this.onCacheState})
-      : _storage = storage,
-        _fence = fence ?? SessionFence() {
-    _dio = Dio(BaseOptions(
+  ApiClient({
+    required TokenStorage storage,
+    SessionFence? fence,
+    this.cache,
+    this.onSessionExpired,
+    this.onImpersonationExpired,
+    this.onCacheState,
+  }) : _storage = storage,
+       _fence = fence ?? SessionFence() {
+    _dio = Dio(
+      BaseOptions(
         baseUrl: Env.apiRoot,
         connectTimeout: const Duration(seconds: 15),
         receiveTimeout: const Duration(seconds: 20),
@@ -77,14 +99,17 @@ class ApiClient {
         headers: {
           'X-Auth-Refresh-In-Body': 'true',
           'User-Agent':
-              'DotmacSelfcare/${Brand.version} (${Platform.operatingSystem})'
+              'DotmacSelfcare/${Brand.version} (${Platform.operatingSystem})',
         },
         // We parse error bodies ourselves; let any status through to the
         // interceptor/caller rather than throwing on every 4xx blindly.
-        validateStatus: (status) => status != null && status < 500));
+        validateStatus: (status) => status != null && status < 500,
+      ),
+    );
 
     _dio.interceptors.add(
-        InterceptorsWrapper(onRequest: _onRequest, onResponse: _onResponse));
+      InterceptorsWrapper(onRequest: _onRequest, onResponse: _onResponse),
+    );
 
     // Stale-while-revalidate fallback: serve the last good GET body when a
     // request fails at the transport level (timeout/reset/5xx). Added after the
@@ -92,28 +117,46 @@ class ApiClient {
     // a DioException — also gets served from cache. No-op when no cache wired.
     if (cache != null) {
       _dio.interceptors.add(
-          CacheInterceptor(cache!, onCacheState: onCacheState, fence: _fence));
+        CacheInterceptor(cache!, onCacheState: onCacheState, fence: _fence),
+      );
     }
 
     // Breadcrumb every call (method + path + status only — never headers/body,
     // which carry the bearer token and passwords) so crashes have an API trail.
-    // Log.breadcrumb redacts on top of that: a path can still arrive with an
-    // inline query string, and a DioException stringifies its whole response.
-    _dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
-      Log.breadcrumb('${options.method} ${options.path}', category: 'http');
-      handler.next(options);
-    }, onResponse: (response, handler) {
-      Log.breadcrumb('${response.statusCode} ${response.requestOptions.path}',
-          category: 'http',
-          level: (response.statusCode ?? 0) >= 400
-              ? SentryLevel.warning
-              : SentryLevel.info);
-      handler.next(response);
-    }, onError: (err, handler) {
-      Log.breadcrumb('${err.type.name} ${err.requestOptions.path}',
-          category: 'http', level: SentryLevel.error);
-      handler.next(err);
-    }));
+    // Paths go through [redactSensitivePath] first: a couple of endpoints put
+    // a secret in the URL itself (the FCM device token on
+    // DELETE /me/push-tokens/{token}), and a breadcrumb leaves the device.
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          Log.breadcrumb(
+            '${options.method} ${redactSensitivePath(options.path)}',
+            category: 'http',
+          );
+          handler.next(options);
+        },
+        onResponse: (response, handler) {
+          final path = redactSensitivePath(response.requestOptions.path);
+          Log.breadcrumb(
+            '${response.statusCode} $path',
+            category: 'http',
+            level: (response.statusCode ?? 0) >= 400
+                ? SentryLevel.warning
+                : SentryLevel.info,
+          );
+          handler.next(response);
+        },
+        onError: (err, handler) {
+          final path = redactSensitivePath(err.requestOptions.path);
+          Log.breadcrumb(
+            '${err.type.name} $path',
+            category: 'http',
+            level: SentryLevel.error,
+          );
+          handler.next(err);
+        },
+      ),
+    );
   }
 
   final TokenStorage _storage;
@@ -155,7 +198,9 @@ class ApiClient {
       _cachedDeviceId ??= await _storage.deviceId();
 
   Future<void> _onRequest(
-      RequestOptions options, RequestInterceptorHandler handler) async {
+    RequestOptions options,
+    RequestInterceptorHandler handler,
+  ) async {
     if (options.extra['skipAuth'] != true) {
       final override = impersonationToken;
       if (override != null) {
@@ -182,7 +227,9 @@ class ApiClient {
   }
 
   Future<void> _onResponse(
-      Response response, ResponseInterceptorHandler handler) async {
+    Response response,
+    ResponseInterceptorHandler handler,
+  ) async {
     final isAuthRetry = response.requestOptions.extra['authRetried'] == true;
     final skipAuth = response.requestOptions.extra['skipAuth'] == true;
 
@@ -267,9 +314,11 @@ class ApiClient {
     final fenced = _fence.isOpen;
 
     try {
-      final res = await _dio.post('/auth/refresh',
-          data: {'refresh_token': refresh},
-          options: Options(extra: {'skipAuth': true}));
+      final res = await _dio.post(
+        '/auth/refresh',
+        data: {'refresh_token': refresh},
+        options: Options(extra: {'skipAuth': true}),
+      );
       final status = res.statusCode ?? 0;
       if (status == 200 && res.data is Map) {
         final data = res.data as Map;
@@ -278,17 +327,20 @@ class ApiClient {
           // Re-check after the round trip: this is where a sign-out that ran
           // while we were waiting gets caught.
           if (fenced && !_fence.holds(generation)) {
-            Log.breadcrumb('refresh result discarded: session ended in flight',
-                category: 'auth');
+            Log.breadcrumb(
+              'refresh result discarded: session ended in flight',
+              category: 'auth',
+            );
             return _RefreshOutcome.stale;
           }
           // The durable check. Even with no fence (a rebuilt client), storage
           // refuses a write whose generation is not the stored one — and after
           // a wipe there is no stored record at all.
           final persisted = await _storage.renewSession(
-              generation: generation,
-              accessToken: access,
-              refreshToken: data['refresh_token'] as String?);
+            generation: generation,
+            accessToken: access,
+            refreshToken: data['refresh_token'] as String?,
+          );
           return persisted ? _RefreshOutcome.renewed : _RefreshOutcome.stale;
         }
       }

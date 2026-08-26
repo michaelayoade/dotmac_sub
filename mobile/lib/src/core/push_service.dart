@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'observability.dart';
+import 'push_intent.dart';
 
 typedef PushRouteHandler = FutureOr<void> Function(String route);
 
@@ -192,12 +193,11 @@ class PushService {
   }
 
   void _handleRemoteMessage(RemoteMessage message) {
-    final route = routeForNotificationData(
+    _openRoute(routeForNotificationData(
       message.data,
       title: message.notification?.title,
       body: message.notification?.body,
-    );
-    if (route != null) _openRoute(route);
+    ));
   }
 
   void _handleLocalPayload(String? payload) {
@@ -206,8 +206,14 @@ class PushService {
       final decoded = jsonDecode(payload);
       if (decoded is! Map) return;
       final data = decoded.map((k, v) => MapEntry(k.toString(), v));
-      final route = routeForNotificationData(data);
-      if (route != null) _openRoute(route);
+      // `_showForeground` stashes the display text under `_title`/`_body`;
+      // pass it through so a foreground tap classifies exactly like a
+      // background one (the queued-push path names no intent code).
+      _openRoute(routeForNotificationData(
+        data,
+        title: data['_title']?.toString(),
+        body: data['_body']?.toString(),
+      ));
     } catch (e) {
       Log.breadcrumb('push: local notification payload ignored',
           category: 'push', data: {'error': '$e'});
@@ -231,67 +237,18 @@ class PushService {
     }
   }
 
+  /// Resolve an FCM payload to an app-owned route.
+  ///
+  /// The payload names an INTENT; `push_intent.dart` decides the route. A
+  /// `route`/`path`/`deep_link`/`link`/`url` key in the payload is inert —
+  /// see the security contract on [PushIntent].
   @visibleForTesting
-  static String? routeForNotificationData(
+  static String routeForNotificationData(
     Map<String, dynamic> data, {
     String? title,
     String? body,
-  }) {
-    for (final key in const [
-      'route',
-      'path',
-      'deep_link',
-      'deeplink',
-      'link',
-      'url',
-    ]) {
-      final route = _internalRoute(data[key]);
-      if (route != null) return route;
-    }
-
-    final hay = [
-      title,
-      body,
-      for (final entry in data.entries) entry.key,
-      for (final entry in data.entries) entry.value,
-    ].whereType<Object>().join(' ').toLowerCase();
-
-    bool has(List<String> words) => words.any(hay.contains);
-    if (has([
-      'message.outbound',
-      'message_outbound',
-      'message-new',
-      'message_new',
-      'chat_message',
-      'support message',
-      'new message',
-      'agent replied',
-      'agent message',
-      'live chat',
-      'chat',
-      'crm',
-    ])) {
-      if (has(['reseller'])) return '/reseller/chat';
-      return '/support/chat';
-    }
-    if (has(['ticket', 'support'])) return '/support';
-    if (has(
-        ['invoice', 'payment', 'billing', 'suspend', 'overdue', 'charge'])) {
-      return '/billing';
-    }
-    if (has(['usage', 'quota', 'data', 'cap'])) return '/usage';
-    return '/dashboard/notifications';
-  }
-
-  static String? _internalRoute(Object? value) {
-    final raw = value?.toString().trim();
-    if (raw == null || raw.isEmpty) return null;
-    if (raw.startsWith('/')) return raw;
-    final uri = Uri.tryParse(raw);
-    if (uri == null) return null;
-    if (uri.scheme.isNotEmpty && uri.path.startsWith('/')) return uri.path;
-    return null;
-  }
+  }) =>
+      resolvePushDestination(data, title: title, body: body).route;
 
   /// The current device FCM token, or null when unavailable.
   Future<String?> currentToken() async {

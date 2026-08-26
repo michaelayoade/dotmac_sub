@@ -120,16 +120,14 @@ void main() {
   });
 
   group('push notification routing', () {
-    test('honours explicit internal routes from FCM data', () {
+    // Payload-supplied locations are no longer honoured at all — the payload
+    // names an intent and the app decides the route. The full security
+    // regression suite lives in push_intent_test.dart; this canary just keeps
+    // the old behaviour from creeping back into this file's expectations.
+    test('ignores a payload-supplied route', () {
       expect(
-        PushService.routeForNotificationData({'route': '/support/chat'}),
-        '/support/chat',
-      );
-      expect(
-        PushService.routeForNotificationData(
-          {'deep_link': 'dotmac://open/billing'},
-        ),
-        '/billing',
+        PushService.routeForNotificationData({'route': '/reset-password?t=x'}),
+        '/dashboard/notifications',
       );
     });
 
