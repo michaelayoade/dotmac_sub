@@ -146,6 +146,8 @@ def test_vendor_detail_shows_empty_portal_access_state(db_session):
 
     assert response.status_code == 200
     assert "No one is added yet." in response.text
+
+
 def test_admin_can_update_existing_vendor_user_profile(db_session):
     vendor = vendor_admin.create_committed(
         db_session,
