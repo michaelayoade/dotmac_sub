@@ -2923,6 +2923,7 @@ def team_inbox_ai_intake_policy_draft_update(
     enable_customer_lookup_tool: bool = Form(default=True),
     enable_subscriber_monitoring_tool: bool = Form(default=False),
     max_conversation_turns: int = Form(default=6),
+    handoff_after_classification: bool = Form(default=False),
     handoff_customer_message: str | None = Form(default=None),
     handoff_summary_template: str | None = Form(default=None),
     announce_destination_team: bool = Form(default=False),
@@ -3207,7 +3208,7 @@ def team_inbox_ai_intake_policy_draft_update(
             raise ValueError("Channel overrides must be a JSON object.")
         conversation_policy = {
             "require_identity_before_tools": True,
-            "handoff_after_classification": True,
+            "handoff_after_classification": bool(handoff_after_classification),
             "max_turns": max(1, min(int(max_conversation_turns), 10)),
             "handoff": {
                 "customer_message": (

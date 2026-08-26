@@ -128,14 +128,20 @@ def _session(db_session, conversation, version, *, metadata=None, expires_at=Non
 
 
 def _classification(
-    intent="technical_support", category="no_internet", confidence=0.95
+    intent="technical_support",
+    category="no_internet",
+    confidence=0.95,
+    *,
+    requires_follow_up: bool = False,
+    follow_up_question: str | None = None,
 ):
     return AiIntakeClassification(
         intent=AiIntakeIntent(intent),
         category=AiIntakeCategory(category),
         confidence=confidence,
         department=None,
-        requires_follow_up=False,
+        requires_follow_up=requires_follow_up,
+        follow_up_question=follow_up_question,
         summary="Customer needs support.",
     )
 
@@ -590,6 +596,41 @@ def test_explicit_human_request_escalates(db_session):
     assert decision.action == "handoff"
     assert decision.state.human_requested is True
     assert decision.state.escalation_reason == "human_requested"
+
+
+def test_follow_up_classification_is_not_handed_off_by_engine(db_session):
+    conversation = _conversation(db_session)
+    version = _version(
+        db_session,
+        metadata={
+            "conversation_policy": {
+                "max_turns": 6,
+                "handoff_after_classification": True,
+            }
+        },
+    )
+    session = _session(db_session, conversation, version)
+
+    decision = engine.run_conversational_turn(
+        db_session,
+        conversation=conversation,
+        session=session,
+        version=version,
+        latest_body="Hello",
+        classification=_classification(
+            intent="general_enquiry",
+            category="general_enquiry",
+            confidence=0.2,
+            requires_follow_up=True,
+            follow_up_question="Please tell me what you need help with today.",
+        ),
+    )
+
+    assert decision.action == "continue_classifier"
+    assert decision.state.classification_requires_follow_up is True
+    assert decision.state.classification_follow_up_question == (
+        "Please tell me what you need help with today."
+    )
 
 
 def test_turn_limit_and_timeout_escalate(db_session):

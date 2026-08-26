@@ -656,6 +656,120 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
     assert _non_queue_outbound_count(db_session) == 2
 
 
+def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkeypatch):
+    account_scope = f"phone-clarify-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "Composable Clarification Fallback")
+    help_desk = _team(db_session, "Composable Clarification Help Desk")
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test composable clarification before handoff",
+    )
+    db_session_adapter.release_read_transaction(db_session)
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback.id,
+            welcome_message="Hello from AI intake.",
+            intent_definitions=(
+                {
+                    "key": "general_enquiry",
+                    "display_name": "General enquiry",
+                    "category": "general_enquiry",
+                    "enabled": True,
+                    "priority": 1,
+                },
+            ),
+            intent_team_mappings=(
+                {
+                    "intent": "general_enquiry",
+                    "service_team_id": str(help_desk.id),
+                    "enabled": True,
+                },
+            ),
+            escalation_rules={
+                "confidence_threshold": 0.8,
+                "allow_followup_questions": True,
+                "max_clarification_turns": 1,
+                "escalate_after_minutes": 5,
+                "exclude_campaign_attribution": True,
+            },
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={
+                "customer_lookup": {"enabled": False},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            conversation_policy={
+                "max_turns": 6,
+                "handoff_after_classification": True,
+            },
+        ),
+    )
+    ai_conversation_intake.activate_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyVersionActivateCommand(
+            context=context,
+            version_id=draft.version_id,
+        ),
+    )
+    gateway = _Gateway(
+        confidence=0.3,
+        intent="general_enquiry",
+        category="general_enquiry",
+    )
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+
+    received = team_inbox_channel_receive.receive_inbound_channel(
+        db_session,
+        team_inbox_channel_receive.InboundChannelPayload(
+            channel_type=InboxChannelType.whatsapp.value,
+            contact_address="2348012345678",
+            body="Hello",
+            external_message_id="wamid-composable-clarify",
+            external_thread_id=f"thread-{uuid4()}",
+            metadata={
+                "provider": WHATSAPP_PROVIDER_META,
+                "provider_account_scope": account_scope,
+            },
+        ),
+    )
+    _process_ai(db_session)
+
+    conversation = db_session.get(InboxConversation, received.conversation_id)
+    first_message = db_session.get(InboxMessage, received.message_id)
+    outbound = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction == "outbound")
+        .order_by(InboxMessage.created_at.asc())
+        .all()
+    )
+
+    assert conversation.primary_service_team_id is None
+    assert first_message.metadata_["ai_intake_status"] == "awaiting_follow_up"
+    assert first_message.metadata_["ai_intake_engine_action"] == "continue_classifier"
+    assert (
+        first_message.metadata_["ai_intake_engine_reason"] == "legacy_classifier_path"
+    )
+    assert first_message.metadata_["ai_intake_requires_follow_up"] is True
+    assert [message.body for message in outbound] == [
+        "Hello from AI intake.",
+        ai_intake.GENERIC_FOLLOW_UP_QUESTION,
+    ]
+    assert (
+        db_session.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .count()
+        == 0
+    )
+
+
 def test_second_uncertain_reply_falls_back_without_another_question(
     db_session, monkeypatch
 ):
