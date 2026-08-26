@@ -81,10 +81,25 @@ def test_vendor_detail_exposes_login_enablement_actions(db_session):
 
     assert response.status_code == 200
     html = response.text
+    assert "Ada Obi" in html
+    assert "Active" in html
     assert "/enable" in html
     assert "Enable" in html
     assert "/setup-link" in html
     assert "Send setup link" in html
+
+
+def test_vendor_detail_shows_empty_portal_access_state(db_session):
+    vendor = vendor_admin.create_committed(
+        db_session,
+        name="Vendor Without Users",
+        code=f"VWU-{uuid4().hex[:8]}",
+    )
+
+    response = _client(db_session).get(f"/admin/vendors/{vendor.id}")
+
+    assert response.status_code == 200
+    assert "No one is added yet." in response.text
 
 
 def test_setup_link_route_delegates_to_vendor_service(db_session, monkeypatch):
