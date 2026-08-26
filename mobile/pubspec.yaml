@@ -27,6 +27,13 @@ dependencies:
   # Secure token storage
   flutter_secure_storage: ^9.2.2
 
+  # Pure-Dart AES-GCM + SHA-256 for the on-disk response cache (see
+  # core/cache_crypto.dart). Deliberately pure Dart, not a platform plugin:
+  # the sealing/opening path must be exercisable in `flutter test` on CI,
+  # where no device keystore exists. The *key* still lives in the platform
+  # secure store — only the cipher itself is Dart.
+  pointycastle: ^3.9.1
+
   # App-support directory for the on-disk response cache (SWR fallback)
   path_provider: ^2.1.0
 
