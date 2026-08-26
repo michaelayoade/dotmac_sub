@@ -26,6 +26,7 @@ from app.models.billing import (
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.idempotency import IdempotencyKey
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
@@ -323,6 +324,64 @@ def test_get_topup_page_keeps_submitted_receipt_blocking_after_intent_expiry(
     assert page["deposit_allowed"] is False
     assert page["active_deposit_request"]["phase"] == "under_review"
     assert page["active_deposit_request"]["can_cancel"] is False
+
+
+def test_get_topup_page_allows_deposit_when_stale_submitted_receipt_was_paid(
+    monkeypatch,
+    db_session,
+    subscriber,
+):
+    _patch_topup_settings(monkeypatch)
+    reference = "TRF-PORTAL-PAID-DRIFT"
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("20000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        external_id=reference,
+        paid_at=datetime.now(UTC),
+    )
+    db_session.add(payment)
+    db_session.flush()
+    proof = PaymentProof(
+        account_id=subscriber.id,
+        submitted_by=subscriber.id,
+        amount=Decimal("20000.00"),
+        verified_amount=Decimal("20000.00"),
+        currency="NGN",
+        reference=reference,
+        paid_at=datetime.now(UTC),
+        file_path="uploads/payment_proofs/portal-paid-drift.png",
+        status=PaymentProofStatus.verified,
+        payment_id=payment.id,
+    )
+    db_session.add(proof)
+    db_session.flush()
+    _active_direct_transfer_deposit(
+        db_session,
+        subscriber,
+        status="submitted",
+        expires_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    intent = (
+        db_session.query(TopupIntent)
+        .filter_by(reference="TRF-ACTIVE-SUBMITTED")
+        .one()
+    )
+    intent.reference = reference
+    intent.metadata_ = {
+        **dict(intent.metadata_ or {}),
+        "payment_proof_id": str(proof.id),
+    }
+    db_session.commit()
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["deposit_allowed"] is True
+    assert "active_deposit_request" not in page
 
 
 def test_get_topup_page_does_not_fallback_to_customer_direct_transfer(
