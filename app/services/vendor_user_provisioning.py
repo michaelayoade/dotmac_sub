@@ -70,6 +70,11 @@ _ROLE_COMMAND = OwnerCommandDefinition(
     concern="vendor organisation role assignment",
     name="set_vendor_user_role",
 )
+_PROFILE_UPDATE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern="vendor portal profile repair and CRM contact import",
+    name="update_vendor_user_profile",
+)
 _IMPORT_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
     concern="vendor portal profile repair and CRM contact import",
@@ -134,6 +139,23 @@ class ImportVendorContactLoginOutcome:
     email: str
     crm_vendor_user_id: str
     crm_person_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateVendorUserProfile:
+    membership_id: UUID
+    first_name: str
+    last_name: str
+    email: str
+    role: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VendorUserProfileUpdateOutcome:
+    membership_id: UUID
+    system_user_id: UUID
+    email: str
+    role: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,6 +314,41 @@ def _active_local_credential(
         .order_by(UserCredential.created_at.desc())
         .limit(1)
     )
+
+
+def _require_editable_membership(
+    db: Session, membership_id: UUID
+) -> tuple[FieldVendorUser, SystemUser, UserCredential]:
+    membership = db.scalar(
+        select(FieldVendorUser)
+        .where(FieldVendorUser.id == coerce_uuid(membership_id))
+        .with_for_update()
+    )
+    if membership is None:
+        raise VendorUserProvisioningError(
+            "membership_not_found", "Vendor user not found.", kind="not_found"
+        )
+    principal = db.scalar(
+        select(SystemUser)
+        .where(SystemUser.id == membership.system_user_id)
+        .with_for_update()
+    )
+    if principal is None or principal.user_type != UserType.vendor:
+        raise VendorUserProvisioningError(
+            "principal_not_vendor", "Vendor user principal is not available."
+        )
+    credential = db.scalar(
+        select(UserCredential)
+        .where(UserCredential.system_user_id == principal.id)
+        .where(UserCredential.provider == AuthProvider.local)
+        .order_by(UserCredential.created_at.desc())
+        .limit(1)
+    )
+    if credential is None:
+        raise VendorUserProvisioningError(
+            "credential_not_found", "A local credential was not found."
+        )
+    return membership, principal, credential
 
 
 def provision(
@@ -549,6 +606,112 @@ def provision_committed(
     )
     db.refresh(membership)
     return membership
+
+
+def update_profile(
+    db: Session,
+    command: UpdateVendorUserProfile,
+    *,
+    actor: str = _SYSTEM_ACTOR,
+) -> VendorUserProfileUpdateOutcome:
+    first_name = _clean(command.first_name)
+    last_name = _clean(command.last_name)
+    email = (_clean(command.email) or "").lower() or None
+    if not first_name or not last_name:
+        raise VendorUserProvisioningError(
+            "name_required", "Vendor user first and last name are required."
+        )
+    if not email or "@" not in email:
+        raise VendorUserProvisioningError(
+            "email_required", "A valid vendor user email is required."
+        )
+    role = normalize_role(command.role)
+    membership, principal, credential = _require_editable_membership(
+        db, command.membership_id
+    )
+    existing_principal_id = db.scalar(
+        select(SystemUser.id)
+        .where(func.lower(SystemUser.email) == email)
+        .where(SystemUser.id != principal.id)
+        .limit(1)
+    )
+    if existing_principal_id is not None:
+        raise VendorUserProvisioningError(
+            "email_in_use",
+            f"'{email}' already belongs to another account.",
+        )
+    existing_credential_id = db.scalar(
+        select(UserCredential.id)
+        .where(UserCredential.provider == AuthProvider.local)
+        .where(func.lower(UserCredential.username) == email)
+        .where(UserCredential.id != credential.id)
+        .limit(1)
+    )
+    if existing_credential_id is not None:
+        raise VendorUserProvisioningError(
+            "email_in_use",
+            f"'{email}' already belongs to another account.",
+        )
+
+    previous_role = normalize_role(membership.role)
+    previous_email = principal.email
+    principal.first_name = first_name
+    principal.last_name = last_name
+    principal.display_name = f"{first_name} {last_name}".strip()
+    principal.email = email
+    credential.username = email
+    membership.role = role
+    db.flush()
+    emit_event(
+        db,
+        EventType.vendor_user_profile_updated,
+        {
+            "schema_version": 1,
+            "vendor_user_id": str(membership.id),
+            "field_vendor_id": str(membership.vendor_id),
+            "system_user_id": str(principal.id),
+            "role": role,
+            "email_changed": previous_email.lower() != email,
+        },
+        actor=actor,
+    )
+    if role != previous_role:
+        emit_event(
+            db,
+            EventType.vendor_user_role_changed,
+            {
+                "schema_version": 1,
+                "vendor_user_id": str(membership.id),
+                "field_vendor_id": str(membership.vendor_id),
+                "role": membership.role,
+            },
+            actor=actor,
+        )
+    return VendorUserProfileUpdateOutcome(
+        membership_id=membership.id,
+        system_user_id=principal.id,
+        email=email,
+        role=role,
+    )
+
+
+def update_profile_committed(
+    db: Session,
+    command: UpdateVendorUserProfile,
+    *,
+    context: CommandContext | None = None,
+) -> VendorUserProfileUpdateOutcome:
+    ctx = context or CommandContext.system(
+        actor=_SYSTEM_ACTOR,
+        scope=str(command.membership_id),
+        reason="vendor_user_profile_update",
+    )
+    return execute_owner_command(
+        db,
+        definition=_PROFILE_UPDATE_COMMAND,
+        context=ctx,
+        operation=lambda: update_profile(db, command, actor=ctx.actor),
+    )
 
 
 def enable_login(

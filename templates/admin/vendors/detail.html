@@ -93,43 +93,98 @@
             </div>
             <ul class="mt-4 grid gap-3 lg:grid-cols-2">
                 {% for user in vendor_users %}
-                <li class="min-w-0 space-y-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900">
-                    <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                        <div class="min-w-0">
-                            <p class="break-words font-medium text-slate-900 dark:text-white">{{ user.display_name or user.email or 'Unnamed user' }}</p>
-                            <p class="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">{{ user.role }} &middot; {{ user.capability_summary }}</p>
+                <li class="rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex min-w-0 flex-wrap items-center gap-2">
+                                <p class="truncate font-medium text-slate-900 dark:text-white">{{ user.display_name or user.email or 'Unnamed user' }}</p>
+                                {{ status_badge('Active' if user.is_active else 'Revoked', 'success' if user.is_active else 'inactive', size='sm') }}
+                            </div>
+                            <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{{ user.email or 'No email' }}</p>
+                            <p class="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{{ user.role }} &middot; {{ user.capability_summary }}</p>
                         </div>
-                        <div class="shrink-0">
-                            {{ status_badge('Active' if user.is_active else 'Revoked', 'success' if user.is_active else 'inactive', size='sm') }}
+                        <details class="relative shrink-0">
+                            <summary class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700" aria-label="Portal user actions">
+                                <svg class="h-4 w-4" aria-hidden="true" viewBox="0 0 20 20" fill="currentColor">
+                                    <circle cx="10" cy="4" r="1.5" />
+                                    <circle cx="10" cy="10" r="1.5" />
+                                    <circle cx="10" cy="16" r="1.5" />
+                                </svg>
+                            </summary>
+                            <div class="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                                {% if user.is_active %}
+                                <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/enable">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800">Enable</button>
+                                </form>
+                                <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/setup-link">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800">Send setup link</button>
+                                </form>
+                                {% endif %}
+                                <button type="button" onclick="document.getElementById('vendor-user-edit-{{ user.id }}').showModal(); this.closest('details').removeAttribute('open');" class="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800">Edit</button>
+                                {% if user.is_active %}
+                                <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/revoke"
+                                      onsubmit="return confirm('Revoke portal access for {{ user.display_name or user.email }}?');">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="block w-full px-3 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/30">Revoke</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </details>
+                    </div>
+                    <dialog id="vendor-user-edit-{{ user.id }}" class="w-[min(92vw,30rem)] rounded-xl border border-slate-200 bg-white p-0 text-left shadow-xl backdrop:bg-slate-950/40 dark:border-slate-700 dark:bg-slate-900">
+                        <div class="p-5">
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Edit portal user</h3>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ user.email or 'No email' }}</p>
+                                </div>
+                                <button type="button" onclick="document.getElementById('vendor-user-edit-{{ user.id }}').close();" class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 dark:text-slate-300 dark:hover:bg-slate-800" aria-label="Close edit dialog">
+                                    <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+                            <form id="vendor-user-edit-form-{{ user.id }}" method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/edit" class="mt-4 space-y-3">
+                                {% include "components/forms/csrf_input.html" %}
+                                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <div>
+                                        <label for="vendor-user-first-name-{{ user.id }}" class="text-xs font-semibold text-slate-600 dark:text-slate-300">First name</label>
+                                        <input id="vendor-user-first-name-{{ user.id }}" name="first_name" value="{{ user.first_name or '' }}" required class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                                    </div>
+                                    <div>
+                                        <label for="vendor-user-last-name-{{ user.id }}" class="text-xs font-semibold text-slate-600 dark:text-slate-300">Last name</label>
+                                        <input id="vendor-user-last-name-{{ user.id }}" name="last_name" value="{{ user.last_name or '' }}" required class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="vendor-user-email-{{ user.id }}" class="text-xs font-semibold text-slate-600 dark:text-slate-300">Email</label>
+                                    <input id="vendor-user-email-{{ user.id }}" name="email" type="email" value="{{ user.email or '' }}" required class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="vendor-user-role-{{ user.id }}" class="text-xs font-semibold text-slate-600 dark:text-slate-300">Role</label>
+                                    <select id="vendor-user-role-{{ user.id }}" name="role" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                                        {% for role in vendor_user_roles %}
+                                        <option value="{{ role.value }}"{% if role.value == user.role %} selected{% endif %}>{{ role.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </form>
+                            <div class="mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+                                {% if user.is_active %}
+                                <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/setup-link">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="w-full rounded-lg border border-cyan-200 px-3 py-2 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 dark:border-cyan-900/50 dark:text-cyan-300 dark:hover:bg-cyan-950/30 sm:w-auto">Password reset</button>
+                                </form>
+                                {% else %}
+                                <div></div>
+                                {% endif %}
+                                <div class="flex items-center justify-end gap-2">
+                                    <button type="button" onclick="document.getElementById('vendor-user-edit-{{ user.id }}').close();" class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+                                    <button type="submit" form="vendor-user-edit-form-{{ user.id }}" class="rounded-lg bg-cyan-600 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-700">Save changes</button>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2">
-                        <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/role" class="flex min-w-[13rem] flex-1 items-center gap-2">
-                            {% include "components/forms/csrf_input.html" %}
-                            <label for="vendor-user-role-{{ user.id }}" class="sr-only">Role</label>
-                            <select id="vendor-user-role-{{ user.id }}" name="role" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                                {% for role in vendor_user_roles %}
-                                <option value="{{ role.value }}"{% if role.value == user.role %} selected{% endif %}>{{ role.label }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="rounded-lg bg-cyan-600 px-2 py-1 text-xs font-medium text-white hover:bg-cyan-700">Save role</button>
-                        </form>
-                        {% if user.is_active %}
-                        <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/enable">
-                            {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">Enable</button>
-                        </form>
-                        <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/setup-link">
-                            {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="rounded-lg border border-cyan-200 px-2 py-1 text-xs font-medium text-cyan-700 hover:bg-cyan-50 dark:border-cyan-900/50 dark:text-cyan-300 dark:hover:bg-cyan-950/30">Send setup link</button>
-                        </form>
-                        <form method="post" action="/admin/vendors/{{ vendor.id }}/users/{{ user.id }}/revoke"
-                              onsubmit="return confirm('Revoke portal access for {{ user.display_name or user.email }}?');">
-                            {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">Revoke</button>
-                        </form>
-                        {% endif %}
-                    </div>
+                    </dialog>
                 </li>
                 {% else %}
                 <li class="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 lg:col-span-2">

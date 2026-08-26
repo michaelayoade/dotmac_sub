@@ -192,6 +192,8 @@ def _vendor_user_row(membership: Any) -> dict[str, Any]:
         "role": role,
         "capability_summary": _capability_summary(role),
         "is_active": membership.is_active,
+        "first_name": getattr(principal, "first_name", None),
+        "last_name": getattr(principal, "last_name", None),
         "display_name": getattr(principal, "display_name", None),
         "email": getattr(principal, "email", None),
     }
@@ -328,6 +330,34 @@ def update_vendor_user_role(
             actor_id=actor_id,
             scope=membership_id,
             reason="Administrative vendor role change",
+        ),
+    )
+
+
+def update_vendor_user_profile_from_form(
+    db: Session,
+    *,
+    membership_id: str,
+    first_name: str,
+    last_name: str,
+    email: str,
+    role: str,
+    actor_id: str | None = None,
+) -> None:
+    db_session_adapter.release_read_transaction(db)
+    vendor_user_provisioning.update_profile_committed(
+        db,
+        vendor_user_provisioning.UpdateVendorUserProfile(
+            membership_id=coerce_uuid(membership_id),
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            role=role,
+        ),
+        context=_admin_command_context(
+            actor_id=actor_id,
+            scope=membership_id,
+            reason="Administrative vendor profile update",
         ),
     )
 
