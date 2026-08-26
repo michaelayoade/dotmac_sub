@@ -5154,11 +5154,23 @@ live owners are:
    inventory, workforce, expense, procurement, and payables collaboration. It
    resolves the default enabled versioned capability binding; domain owners do
    not select or import `dotmac.erp`, Zoho, or another provider connector.
+   ERP-owned NCC financial and workforce observations use the same neutral
+   collaboration boundary at `/api/v1/sync/sub/ncc/financials` and
+   `/api/v1/sync/sub/ncc/staff-headcount`; no CRM-named route remains live.
+   ERP authorizes those reads with the exact `sub:ncc:read` scope on the
+   existing regulator service credential. That scope is provisioned by ERP's
+   credential owner, not by Sub's material-request bootstrap.
 9. `integration.erp_material_support`: maps an approved Sub material need to
    the versioned backoffice contract, assigns the stable idempotency key, and
    observes or reconciles provider outcomes. The current connector is
    `dotmac.erp`; replacing it changes the binding and connector, not Sub's
    service-workflow owner or provider-neutral fields.
+   The live Sub/ERP wire contract identifies local inputs by their typed source
+   roles (`source_claim_id`, `source_request_id`, `source_work_order_id`,
+   `source_quote_id`, `source_project_id`, and the applicable
+   `*_source_reference`). It neither emits nor accepts predecessor application
+   names as compatibility aliases. ERP-owned claim, request, purchase-order,
+   and invoice identifiers keep their distinct response roles.
 10. `integration.workforce_attendance_adapter`: captures the authenticated
    staff subject and browser location, then invokes the enabled provider-neutral
    attendance capability. Dotmac ERP remains the sole attendance decision and
