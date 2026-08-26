@@ -812,6 +812,21 @@ their existing customer, access, and identity owners.
 - Subscription records are investigated and managed in the Services tab; the
   Account tab does not duplicate an Active Subscriptions preview.
 
+**Billing Ledger tab presentation contract:**
+`app.services.web_billing_ledger.build_customer_ledger_view` owns the embedded,
+customer-scoped read model. The first page contains the 10 newest financial
+entries in deterministic reverse-chronological order. Previous and Next controls
+request older or newer 10-entry pages without replacing the customer-detail URL.
+Credit, debit, and net headline values always summarize the complete scoped
+ledger, not only the visible page. The full-ledger and CSV actions retain the
+same customer scope and existing ledger-read permission.
+
+**Network tab presentation contract:** The lazy Network projection remains a
+sibling of the other primary customer tabs. HTMX replaces only the inner Network
+fragment; the stable outer element retains the `activeTab === 'network'`
+visibility owner so Network Access content cannot appear beneath Billing or
+another primary tab after refresh.
+
 **Timeline tab presentation contract:**
 `ui.customer_timeline_projection` supplies each typed `CustomerTimelineItem`.
 The template displays the recorded actor category and label, plain-language

@@ -58,6 +58,7 @@ _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
 # cutover are already represented by migrated ledger rows — including them would
 # double-count, so only issued_at strictly after this is merged.
 _LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
+CUSTOMER_LEDGER_PAGE_SIZE = 10
 
 
 @dataclass(frozen=True)
@@ -68,14 +69,19 @@ class LedgerDateRange:
     end_date: date | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CustomerLedgerQuery:
     """Typed customer scope for the embedded admin ledger projection."""
 
     account_id: UUID
+    page: int = 1
+
+    def __post_init__(self) -> None:
+        if self.page < 1:
+            raise ValueError("Customer ledger page must be positive")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CustomerLedgerEntryView:
     id: UUID
     entry_type: LedgerEntryType
@@ -87,7 +93,7 @@ class CustomerLedgerEntryView:
     detail_url: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CustomerLedgerSummary:
     credit_count: int
     debit_count: int
@@ -96,22 +102,29 @@ class CustomerLedgerSummary:
     net_display: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CustomerLedgerView:
     account_id: UUID
     entries: tuple[CustomerLedgerEntryView, ...]
     summary: CustomerLedgerSummary
     full_ledger_url: str
     export_url: str
-    is_truncated: bool
+    page: int
+    per_page: int
+    total_entries: int
+    total_pages: int
+    page_start: int
+    page_end: int
+    previous_page_url: str | None
+    next_page_url: str | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LedgerEntryDetailQuery:
     entry_id: UUID
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LedgerEntryDetailView:
     id: UUID
     account_id: UUID
@@ -327,7 +340,11 @@ def build_ledger_entries_data(
         row_query = ledger_query.options(joinedload(LedgerEntry.account))
         if want_type is not None:
             row_query = row_query.filter(LedgerEntry.entry_type == want_type)
-        ledger_rows = row_query.order_by(ledger_date.desc()).limit(limit).all()
+        ledger_rows = (
+            row_query.order_by(ledger_date.desc(), LedgerEntry.id.desc())
+            .limit(limit)
+            .all()
+        )
 
         # Merge post-cutover invoices as synthetic debit rows so the ledger view
         # reflects ongoing billing (native invoices don't post to ledger_entries).
@@ -378,14 +395,14 @@ def build_ledger_entries_data(
                 invoice_rows = [
                     _invoice_as_ledger_row(invoice)
                     for invoice in inv_q.options(joinedload(Invoice.account))
-                    .order_by(Invoice.issued_at.desc())
+                    .order_by(Invoice.issued_at.desc(), Invoice.id.desc())
                     .limit(limit)
                     .all()
                 ]
 
         entries = sorted(
             [*ledger_rows, *invoice_rows],
-            key=_display_date,
+            key=lambda entry: (_display_date(entry), str(entry.id)),
             reverse=True,
         )[:limit]
 
@@ -487,23 +504,32 @@ def build_customer_ledger_view(
     projection into a stable typed view contract for the customer UI.
     """
 
-    display_limit = 200
+    requested_limit = query.page * CUSTOMER_LEDGER_PAGE_SIZE
     customer_ref = str(query.account_id)
     state = build_ledger_entries_data(
         db,
         customer_ref=customer_ref,
         entry_type=None,
-        limit=display_limit,
+        limit=requested_limit,
     )
     totals = state["ledger_totals"]
     if not isinstance(totals, dict):
         raise TypeError("Ledger projection returned invalid totals")
 
-    entries: list[CustomerLedgerEntryView] = []
     raw_entries = state["entries"]
     if not isinstance(raw_entries, list):
         raise TypeError("Ledger projection returned invalid entries")
-    for entry in raw_entries:
+    total_entries = int(totals["credit_count"]) + int(totals["debit_count"])
+    total_pages = max(
+        1,
+        (total_entries + CUSTOMER_LEDGER_PAGE_SIZE - 1) // CUSTOMER_LEDGER_PAGE_SIZE,
+    )
+    page = min(query.page, total_pages)
+    offset = (page - 1) * CUSTOMER_LEDGER_PAGE_SIZE
+    page_entries = raw_entries[offset : offset + CUSTOMER_LEDGER_PAGE_SIZE]
+
+    entries: list[CustomerLedgerEntryView] = []
+    for entry in page_entries:
         raw_entry_type = getattr(getattr(entry, "entry_type", None), "value", None)
         raw_source = getattr(getattr(entry, "source", None), "value", None)
         entries.append(
@@ -532,13 +558,23 @@ def build_customer_ledger_view(
         net_display=str(totals["net_display"]),
     )
     query_string = urlencode({"customer_ref": customer_ref})
+    page_url = f"/admin/customers/person/{query.account_id}/billing/ledger"
+    page_start = offset + 1 if entries else 0
+    page_end = offset + len(entries)
     return CustomerLedgerView(
         account_id=query.account_id,
         entries=tuple(entries),
         summary=summary,
         full_ledger_url=f"/admin/billing/ledger?{query_string}",
         export_url=f"/admin/billing/ledger/export.csv?{query_string}",
-        is_truncated=(summary.credit_count + summary.debit_count) > len(entries),
+        page=page,
+        per_page=CUSTOMER_LEDGER_PAGE_SIZE,
+        total_entries=total_entries,
+        total_pages=total_pages,
+        page_start=page_start,
+        page_end=page_end,
+        previous_page_url=(f"{page_url}?page={page - 1}" if page > 1 else None),
+        next_page_url=(f"{page_url}?page={page + 1}" if page < total_pages else None),
     )
 
 
