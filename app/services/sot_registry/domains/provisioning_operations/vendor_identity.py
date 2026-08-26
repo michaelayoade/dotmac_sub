@@ -115,6 +115,7 @@ SERVICES: tuple[SOTService, ...] = (
                 event_types=(
                     "vendor_user.provisioned",
                     "vendor_user.revoked",
+                    "vendor_user.profile_updated",
                     "vendor_user.role_changed",
                 ),
                 schema_version=1,
