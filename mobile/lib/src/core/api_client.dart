@@ -8,6 +8,27 @@ import 'observability.dart';
 import 'response_cache.dart';
 import 'token_storage.dart';
 
+/// URL path prefixes whose next segment is a secret and must never leave the
+/// device inside a crash-report breadcrumb.
+///
+/// `DELETE /me/push-tokens/{token}` carries the device's FCM registration
+/// token in the path (that is the server contract, unchanged here), and the
+/// breadcrumb interceptor below ships the path to the crash reporter verbatim.
+/// An FCM token addresses that device for push, so it does not belong in
+/// third-party telemetry.
+const _secretPathPrefixes = ['/me/push-tokens/'];
+
+/// Replace the secret-bearing segment of [path] with a placeholder, leaving
+/// every other path untouched (breadcrumbs stay useful).
+String redactSensitivePath(String path) {
+  for (final prefix in _secretPathPrefixes) {
+    if (path.startsWith(prefix) && path.length > prefix.length) {
+      return '$prefix<redacted>';
+    }
+  }
+  return path;
+}
+
 /// Thin wrapper around Dio configured for the DotMac API.
 ///
 /// Responsibilities:
@@ -64,18 +85,22 @@ class ApiClient {
 
     // Breadcrumb every call (method + path + status only — never headers/body,
     // which carry the bearer token and passwords) so crashes have an API trail.
+    // Paths go through [redactSensitivePath] first: a couple of endpoints put
+    // a secret in the URL itself (the FCM device token on
+    // DELETE /me/push-tokens/{token}), and a breadcrumb leaves the device.
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
           Log.breadcrumb(
-            '${options.method} ${options.path}',
+            '${options.method} ${redactSensitivePath(options.path)}',
             category: 'http',
           );
           handler.next(options);
         },
         onResponse: (response, handler) {
+          final path = redactSensitivePath(response.requestOptions.path);
           Log.breadcrumb(
-            '${response.statusCode} ${response.requestOptions.path}',
+            '${response.statusCode} $path',
             category: 'http',
             level: (response.statusCode ?? 0) >= 400
                 ? SentryLevel.warning
@@ -84,8 +109,9 @@ class ApiClient {
           handler.next(response);
         },
         onError: (err, handler) {
+          final path = redactSensitivePath(err.requestOptions.path);
           Log.breadcrumb(
-            '${err.type.name} ${err.requestOptions.path}',
+            '${err.type.name} $path',
             category: 'http',
             level: SentryLevel.error,
           );

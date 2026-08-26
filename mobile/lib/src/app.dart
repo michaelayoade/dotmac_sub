@@ -6,6 +6,7 @@ import 'config/env.dart';
 import 'core/messenger.dart';
 import 'core/semantic_colors.dart';
 import 'core/payment_link_handler.dart';
+import 'core/push_intent.dart';
 import 'providers/auth_controller.dart';
 import 'providers/theme_controller.dart';
 import 'router/app_router.dart';
@@ -34,7 +35,15 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
     ref.read(pushServiceProvider).wireRouteHandler(_openPushRoute);
   }
 
+  /// Navigate to a push destination.
+  ///
+  /// [PushService] already resolves payloads through the closed intent set in
+  /// `core/push_intent.dart`, so [route] is app-owned by construction. The
+  /// re-check here is deliberate defence in depth: this is the one place a
+  /// push can drive the router, and it must be impossible for a payload-shaped
+  /// string to reach `GoRouter.go()` even if the resolver were regressed.
   void _openPushRoute(String route) {
+    if (!isAppOwnedPushRoute(route)) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final context = rootNavigatorKey.currentContext;
       if (context == null) return;
