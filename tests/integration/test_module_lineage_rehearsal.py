@@ -154,9 +154,9 @@ def _composed_config(database_url: URL, standin: Path) -> Config:
     """
     config = Config("alembic.ini")
     config.set_main_option("script_location", "alembic")
-    config.set_main_option(
-        "version_locations", f"{Path('alembic/versions').resolve()} {standin}"
-    )
+    installed_locations = config.get_main_option("version_locations")
+    assert installed_locations, "alembic.ini must declare installed module lineages"
+    config.set_main_option("version_locations", f"{installed_locations} {standin}")
     config.set_main_option("path_separator", "space")
     config.set_main_option("sqlalchemy.url", _render(database_url))
     return config

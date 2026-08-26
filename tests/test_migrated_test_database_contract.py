@@ -119,6 +119,6 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
             "cl_0001_collections",
             "pm_0001_payment_intents",
             "so_0001_service_delivery_orders",
-            "su_0002_offer_pricing",
+            "su_0003_billing_treatments",
         }
     )

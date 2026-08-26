@@ -44,7 +44,13 @@ LINEAGE_TABLES: tuple[LineageTableName, ...] = (
 )
 RevisionId = Annotated[
     str,
-    StringConstraints(pattern=r"^[0-9]{3}_[a-z0-9_]{1,28}$"),
+    StringConstraints(
+        pattern=(
+            r"^(?:[0-9]{3}_[a-z0-9_]+|"
+            r"[a-z][a-z0-9]*_[0-9]{4}_[a-z0-9_]+)$"
+        ),
+        max_length=32,
+    ),
 ]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 

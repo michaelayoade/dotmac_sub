@@ -215,7 +215,7 @@ def _insert(conn, **overrides) -> None:
 def test_head_builds_the_table_with_its_migration_only_constraints(
     engine, migrated_database
 ):
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     found = _constraints(migrated_database)
     assert "ex_sla_policy_versions_no_overlap" in found
@@ -300,7 +300,7 @@ def test_existing_policy_table_gains_family_identity_constraints(
 def test_overlapping_versions_of_one_policy_are_rejected(engine, migrated_database):
     """Two versions covering the same instant would make "the policy in force
     at T" ambiguous. Only the database can enforce this against concurrency."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         _insert(
@@ -319,7 +319,7 @@ def test_overlapping_versions_of_one_policy_are_rejected(engine, migrated_databa
 def test_abutting_versions_of_one_policy_are_allowed(engine, migrated_database):
     """Half-open ranges must let one version end exactly where the next
     begins — otherwise a lawful policy change could not be recorded."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
     boundary = NOW + timedelta(days=30)
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
@@ -334,7 +334,7 @@ def test_abutting_versions_of_one_policy_are_allowed(engine, migrated_database):
 
 
 def test_a_precedence_claim_requires_its_scope(engine, migrated_database):
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         # subscription_contract with no subscription_id. The key is set to the
@@ -357,7 +357,7 @@ def test_a_contractual_policy_may_not_omit_its_target(engine, migrated_database)
     """The design forbids inventing a target, so the schema forbids a
     contractual row without one — while still allowing the internal
     measurement policy to stay silent about what was promised."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
     subscription_id = uuid.uuid4()
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
@@ -404,7 +404,7 @@ def test_two_series_cannot_cover_one_scope_for_the_same_period(
     """Keying the exclusion on policy_key alone would let two different keys
     target one subscription for the same period, producing two
     equal-precedence policies and an undefined resolver winner."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         _insert(
@@ -435,7 +435,7 @@ def test_two_series_cannot_cover_one_scope_for_the_same_period(
 
 
 def test_policy_key_must_match_the_derived_scope_identity(engine, migrated_database):
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
@@ -447,7 +447,7 @@ def test_distinct_plan_families_may_have_overlapping_defaults(
     engine, migrated_database
 ):
     """Family scope, not a global sentinel, owns the exclusion identity."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         _insert(
@@ -469,7 +469,7 @@ def test_distinct_plan_families_may_have_overlapping_defaults(
 
 
 def test_family_policy_key_is_derived_from_its_family(engine, migrated_database):
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
@@ -485,7 +485,7 @@ def test_family_policy_key_is_derived_from_its_family(engine, migrated_database)
 def test_family_scope_rejects_values_outside_the_sla_protocol(
     engine, migrated_database
 ):
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         with pytest.raises(pg_errors.CheckViolation) as caught:
@@ -504,7 +504,7 @@ def test_family_history_makes_the_scope_migration_non_downgradable(
     engine, migrated_database
 ):
     """Append-only contractual history is refused, never silently discarded."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         _insert(
@@ -521,7 +521,7 @@ def test_family_history_makes_the_scope_migration_non_downgradable(
 def test_contractual_history_outlives_its_parents(engine, migrated_database):
     """CASCADE would erase the record of what a customer was owed. The FKs
     must RESTRICT so a parent delete fails loudly instead."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database)) as conn:
         rows = conn.execute(
@@ -545,7 +545,7 @@ def test_contractual_history_outlives_its_parents(engine, migrated_database):
 def test_a_replayed_command_cannot_append_a_second_row(engine, migrated_database):
     """The fingerprint uniqueness is the durable backstop for replay, holding
     even when two processes retry concurrently."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         # Close the first range so the ranges abut rather than overlap — the
@@ -571,7 +571,7 @@ def test_concurrent_idempotency_key_reuse_is_arbitrated_by_the_database(
 ):
     """The read-side check cannot serialise two processes on its own, so the
     key carries a unique constraint as the real arbiter."""
-    _alembic(migrated_database, "head")
+    _alembic(migrated_database, "heads")
 
     with psycopg.connect(_render(migrated_database), autocommit=True) as conn:
         _insert(

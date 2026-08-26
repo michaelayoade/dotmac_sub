@@ -22,7 +22,10 @@ from scripts.migration.kernel_lineage_rehearsal_evidence import (
 def _evidence() -> KernelLineageRehearsalEvidence:
     empty_digest = "0" * 64
     return KernelLineageRehearsalEvidence(
-        source_revisions=("528_roles_kernel_r1_additive",),
+        source_revisions=(
+            "528_roles_kernel_r1_additive",
+            "su_0003_billing_treatments",
+        ),
         tables=tuple(
             TableContract(
                 table_name=table_name,

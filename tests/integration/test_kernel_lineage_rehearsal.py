@@ -96,12 +96,12 @@ from scripts.migration.kernel_lineage_rehearsal_evidence import (
 #: reason: an earlier failure means something regressed.
 EXPECTED_FIRST_FAILURE = "0001_initial_tenant_schema"
 
-#: Lineage-head collisions remeasured against kernel 0.1.0a42 and Sub's
-#: party-identity integration batch on 2026-08-13. Kernel 0022 renamed its RBAC
-#: grant from `party_roles` to `party_role_grants`, so the current head has nine
-#: overlaps. The lineage still creates `party_roles` at 0003 before renaming it;
-#: that transient chain hazard remains a required disposition even though it is
-#: intentionally absent from this current-metadata intersection.
+#: Lineage-head collisions remeasured against kernel 0.1.0a94 and Sub's
+#: commercial-module prerequisite train on 2026-08-25. Kernel 0022 renamed its
+#: RBAC grant from `party_roles` to `party_role_grants`; the lineage still
+#: creates `party_roles` at 0003 before renaming it, so that transient chain
+#: hazard remains a required disposition even though it is intentionally absent
+#: from this current-metadata intersection.
 EXPECTED_COLLISIONS = {
     "audit_events",
     "communication_suppressions",
@@ -114,7 +114,15 @@ EXPECTED_COLLISIONS = {
     # it is identical by construction rather than by measurement. Its
     # disposition is STAMP, not union — see the dispositions inventory.
     "machine_credentials",
+    # Added deliberately by product-owned provider migrations 556 and 557.
+    # They reproduce the pinned kernel's storage contracts so composed modules
+    # can satisfy prerequisites without composing the conflicting kernel
+    # lineage or transferring Sub's existing runtime authorities.
+    "idempotency_records",
+    "outbox_events",
     "parties",
+    "platform_idempotency_records",
+    "platform_outbox_events",
     "roles",
     "tenant_domains",
     "tenants",
