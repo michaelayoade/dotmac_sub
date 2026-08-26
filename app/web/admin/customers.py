@@ -1055,6 +1055,7 @@ def customer_party_binding_repair_submit(
 def customer_billing_ledger(
     request: Request,
     customer_id: UUID,
+    page: int = Query(1, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     """Lazy customer-scoped ledger panel for the customer billing workspace."""
@@ -1064,7 +1065,10 @@ def customer_billing_ledger(
         raise HTTPException(status_code=404, detail="Customer not found")
     ledger = web_billing_ledger_service.build_customer_ledger_view(
         db,
-        query=web_billing_ledger_service.CustomerLedgerQuery(account_id=customer.id),
+        query=web_billing_ledger_service.CustomerLedgerQuery(
+            account_id=customer.id,
+            page=page,
+        ),
     )
     return templates.TemplateResponse(
         "admin/customers/_billing_ledger.html",
