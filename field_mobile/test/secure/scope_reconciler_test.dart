@@ -11,6 +11,8 @@ import '../helpers/fake_http.dart';
 import '../helpers/secure_store.dart';
 
 void main() {
+  useHostSqlite3();
+
   test('data belonging to another principal is destroyed at startup', () async {
     final device = newTestDevice();
     final stranger = await device.open(techTwo);

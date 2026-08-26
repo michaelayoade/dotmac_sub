@@ -31,6 +31,8 @@ const _draftNote = 'Two drums of 12F drop cable for 14B Ogunlana Drive';
 const _premises = '14B Ogunlana Drive, Surulere';
 
 void main() {
+  useHostSqlite3();
+
   test('an evidence envelope reveals nothing without the scope key', () async {
     final store = await openTestStore();
     final photo = Uint8List.fromList(utf8.encode(_customerName));

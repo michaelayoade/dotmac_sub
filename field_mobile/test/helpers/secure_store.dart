@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 
 import 'package:dotmac_field/core/api/token_store.dart';
@@ -14,6 +15,18 @@ import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:dotmac_field/core/secure/session_lifecycle.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqlite3/open.dart';
+
+/// Host machines ship libsqlite3.so.0 without the unversioned symlink sqlite3
+/// looks for by default. Every suite that touches a database calls this first,
+/// the same way the pre-existing suites do.
+void useHostSqlite3() {
+  if (!Platform.isLinux) return;
+  open.overrideFor(
+    OperatingSystem.linux,
+    () => DynamicLibrary.open('libsqlite3.so.0'),
+  );
+}
 
 /// The two technicians and two deployments the isolation tests use. Distinct in
 /// both dimensions so a test can cross either one on its own.
@@ -97,6 +110,7 @@ class TestDevice {
 /// Builds a device whose storage lives in a fresh temporary directory, torn
 /// down at the end of the test.
 TestDevice newTestDevice({TokenStore? tokenStore}) {
+  useHostSqlite3();
   final documents = Directory.systemTemp.createTempSync('field-secure-test');
   final vault = InMemorySecretVault();
   final keyRing = ScopeKeyRing(vault);

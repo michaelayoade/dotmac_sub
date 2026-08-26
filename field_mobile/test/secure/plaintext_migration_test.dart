@@ -16,6 +16,8 @@ const _draftNote = 'Two drums of 12F drop cable';
 const _photoBytes = 'the photograph the technician took';
 
 void main() {
+  useHostSqlite3();
+
   late TestDevice device;
 
   /// Writes the exact plaintext store the app shipped before this change: an

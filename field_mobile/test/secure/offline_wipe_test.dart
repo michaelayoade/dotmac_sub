@@ -52,6 +52,8 @@ const _wiped = (
 );
 
 void main() {
+  useHostSqlite3();
+
   String tokenFor(String subject) => fakeJwt(
     expiry: DateTime.now().toUtc().add(const Duration(hours: 1)),
     sub: subject,
