@@ -303,22 +303,21 @@ class ApiClient {
     }
   }
 
-  /// Could-not-get-an-answer, as opposed to an answer of "no". `validateStatus`
-  /// lets every 4xx through as a response, so a thrown `badResponse` is a 5xx.
+  /// Could-not-get-an-answer, as opposed to an answer of "no".
+  ///
+  /// Deliberately written as "everything except a real response", rather than
+  /// as an exhaustive list of the transport failure kinds. The list would be
+  /// the more explicit shape, but it fails in the wrong direction: a dio
+  /// release that adds a failure kind would either break the build or, worse,
+  /// land in a `default` that reads it as an authoritative refusal and signs
+  /// the user out. Anything unrecognised must mean "we could not ask".
+  ///
+  /// `validateStatus` lets every 4xx through as a response, so a thrown
+  /// `badResponse` is a 5xx — a server fault, not an auth answer.
   bool _isTransportFailure(DioException e) {
-    switch (e.type) {
-      case DioExceptionType.connectionTimeout:
-      case DioExceptionType.sendTimeout:
-      case DioExceptionType.receiveTimeout:
-      case DioExceptionType.connectionError:
-      case DioExceptionType.cancel:
-      case DioExceptionType.unknown:
-        return true;
-      case DioExceptionType.badCertificate:
-        // Never an auth answer — and never a reason to hand the session away.
-        return true;
-      case DioExceptionType.badResponse:
-        return (e.response?.statusCode ?? 500) >= 500;
+    if (e.type == DioExceptionType.badResponse) {
+      return (e.response?.statusCode ?? 500) >= 500;
     }
+    return true;
   }
 }
