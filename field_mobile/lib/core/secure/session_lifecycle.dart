@@ -109,9 +109,7 @@ class SessionLifecycle {
       // The session ended before we could tell whose it was. The tokens and the
       // legacy plaintext still have to go through the one wipe, and then every
       // scope on the device is swept, because none of them can be current.
-      await runtime.wipe.wipe(
-        WipeRequest(scopeKey: '', trigger: trigger),
-      );
+      await runtime.wipe.wipe(WipeRequest(scopeKey: '', trigger: trigger));
       await runtime.reconciler.reconcile(DataScope.unbound);
       _adopt(null);
       return;

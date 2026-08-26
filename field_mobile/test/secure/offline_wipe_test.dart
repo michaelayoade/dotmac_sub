@@ -174,11 +174,9 @@ void main() {
       );
     }
 
-    expect(
-      implementations,
-      {ScopedOfflineWipe},
-      reason: 'three triggers, one implementation',
-    );
+    expect(implementations, {
+      ScopedOfflineWipe,
+    }, reason: 'three triggers, one implementation');
     for (final trigger in outcomes.keys) {
       expect(outcomes[trigger], _wiped, reason: 'aftermath of $trigger');
     }

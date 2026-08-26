@@ -171,18 +171,17 @@ class SyncService {
   }
 
   Future<void> cacheJobDetail(String jobId, Map<String, dynamic> detail) async {
-    await (db.update(db.cachedJobs)..where(
-          (row) => row.scopeKey.equals(scopeKey) & row.id.equals(jobId),
-        ))
+    await (db.update(
+          db.cachedJobs,
+        )..where((row) => row.scopeKey.equals(scopeKey) & row.id.equals(jobId)))
         .write(CachedJobsCompanion(detailJson: Value(jsonEncode(detail))));
   }
 
   /// Cached job-detail JSON, or null if not cached.
   Future<Map<String, dynamic>?> readCachedDetail(String jobId) async {
     final row =
-        await (db.select(db.cachedJobs)..where(
-              (r) => r.scopeKey.equals(scopeKey) & r.id.equals(jobId),
-            ))
+        await (db.select(db.cachedJobs)
+              ..where((r) => r.scopeKey.equals(scopeKey) & r.id.equals(jobId)))
             .getSingleOrNull();
     if (row?.detailJson == null) return null;
     return (jsonDecode(row!.detailJson!) as Map).cast<String, dynamic>();
@@ -199,9 +198,9 @@ class SyncService {
   /// than upsert) ensures entries dropped server-side don't linger offline.
   Future<void> cacheSchedule(List<Map> items) async {
     await db.transaction(() async {
-      await (db.delete(db.cachedScheduleEntries)
-            ..where((row) => row.scopeKey.equals(scopeKey)))
-          .go();
+      await (db.delete(
+        db.cachedScheduleEntries,
+      )..where((row) => row.scopeKey.equals(scopeKey))).go();
       await db.batch((batch) {
         for (final item in items) {
           batch.insert(
