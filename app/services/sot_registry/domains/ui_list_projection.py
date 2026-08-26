@@ -521,6 +521,8 @@ DOMAIN = DomainSOT(
                 "customer.account_visibility",
                 "customer.accounts",
                 "access.subscription_lifecycle",
+                "financial.billing_profile",
+                "financial.subscription_billing_treatments",
                 "service_intent.catalog_policy",
                 "network.identity",
                 "network.ip_assignment_lifecycle",
@@ -531,7 +533,11 @@ DOMAIN = DomainSOT(
                 "subscription, catalog, access identity, IP assignment, NAS, and "
                 "POP facts without mutating or re-owning them. Customer rows "
                 "retain the full account name while the list presentation limits "
-                "visible names to four words and exposes the full text when cut."
+                "visible names to four words and exposes the full text when cut. "
+                "Billing cohorts consume the canonical billing profile and "
+                "effective non-standard treatments plus canonical recurring "
+                "catalog prices; offer names and billing activation flags never "
+                "classify free service."
             ),
             contract=ServiceContract(
                 concerns=tuple(
@@ -542,6 +548,9 @@ DOMAIN = DomainSOT(
                             "normalized customer list query",
                             "canonical visible customer accounts",
                             "canonical subscription lifecycle records",
+                            "canonical billing-mode profile",
+                            "effective non-standard billing treatment",
+                            "canonical recurring catalog price",
                             "canonical catalog offers",
                             "canonical network access identities",
                             "canonical service IP assignments",
@@ -578,6 +587,33 @@ DOMAIN = DomainSOT(
                         owner="access.subscription_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="committed Subscription rows and lifecycle status",
+                    ),
+                    AuthorityInput(
+                        name="canonical billing-mode profile",
+                        owner="financial.billing_profile",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "effective prepaid/postpaid mode resolved from "
+                            "collectible subscription modes with account fallback"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="effective non-standard billing treatment",
+                        owner="financial.subscription_billing_treatments",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "effective complimentary/sponsored arrangement "
+                            "suppression, including protected drift"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical recurring catalog price",
+                        owner="service_intent.catalog_policy",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "newest active recurring offer-version price with "
+                            "offer-price fallback and positive contract override"
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical catalog offers",

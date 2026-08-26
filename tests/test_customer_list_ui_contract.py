@@ -40,6 +40,7 @@ def test_customer_route_delegates_query_normalization_to_list_owner():
     assert "web_customer_lists_service.build_customer_list_query" in calls
     assert "web_customer_lists_service.build_customers_index_context" in calls
     assert args["per_page"] == "str | None"
+    assert args["billing_mode"] == "str | None"
 
 
 def test_customer_table_consumes_contract_urls_and_accessibility_state():
@@ -126,6 +127,10 @@ def test_customer_filter_form_keeps_canonical_query_state_in_browser_history():
     assert "dynamic-table-config.js" not in template
     assert "data-dynamic-table" not in template
     assert "/api/v1/tables/customers" not in template
+    assert 'filter_select("billing_mode"' in template
+    assert '{"value": "non_billable", "label": "Non-billable"}' in template
+    assert "currentBillingMode" in template
+    assert "billingModeLabel()" in template
 
 
 def test_customer_expanded_filters_fill_the_card_without_a_gutter():
@@ -142,6 +147,8 @@ def test_customer_expanded_filters_fill_the_card_without_a_gutter():
         'dark:backdrop-blur-none sm:px-5"' not in template
     )
     assert "border-slate-100 px-4 pb-4" not in template
+    type_options_position = template.index("{% set customer_type_options")
+    assert template[:type_options_position].rstrip().endswith("<div>")
 
 
 def test_customer_export_button_renders_accessible_checkbox_options():
