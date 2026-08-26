@@ -94,6 +94,9 @@
       </form>
       {% else %}
       {% set quote_vat_rate = quote.vat_rate_percent or 0 %}
+      {% set quote_subtotal = quote.subtotal|default(0, true) %}
+      {% set quote_tax_total = quote.tax_total|default(0, true) %}
+      {% set quote_total = quote.total|default(0, true) %}
       <div class="mb-4 rounded-md border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -103,9 +106,9 @@
           {{ status_badge('VAT added' if quote_vat_rate else 'No VAT', 'success' if quote_vat_rate else 'neutral', size='sm') }}
         </div>
         <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-          <div class="rounded-md bg-white p-3 dark:bg-slate-900"><dt class="text-xs font-semibold uppercase text-slate-500">Subtotal</dt><dd class="mt-1 font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(quote.subtotal) }}</dd></div>
-          <div class="rounded-md bg-white p-3 dark:bg-slate-900"><dt class="text-xs font-semibold uppercase text-slate-500">VAT{% if quote_vat_rate %} ({{ quote_vat_rate }}%){% endif %}</dt><dd class="mt-1 font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(quote.tax_total) }}</dd></div>
-          <div class="rounded-md bg-white p-3 dark:bg-slate-900"><dt class="text-xs font-semibold uppercase text-slate-500">Total</dt><dd class="mt-1 font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(quote.total) }}</dd></div>
+          <div class="rounded-md bg-white p-3 dark:bg-slate-900"><dt class="text-xs font-semibold uppercase text-slate-500">Subtotal</dt><dd class="mt-1 font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(quote_subtotal) }}</dd></div>
+          <div class="rounded-md bg-white p-3 dark:bg-slate-900"><dt class="text-xs font-semibold uppercase text-slate-500">VAT{% if quote_vat_rate %} ({{ quote_vat_rate }}%){% endif %}</dt><dd class="mt-1 font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(quote_tax_total) }}</dd></div>
+          <div class="rounded-md bg-white p-3 dark:bg-slate-900"><dt class="text-xs font-semibold uppercase text-slate-500">Total</dt><dd class="mt-1 font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(quote_total) }}</dd></div>
         </dl>
       </div>
       <div class="mb-4 space-y-3">

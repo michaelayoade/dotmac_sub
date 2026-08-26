@@ -200,7 +200,6 @@ def _vendor_call(operation: Callable[[], ResultT]) -> ResultT:
 def list_available_projects(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    search: str | None = Query(default=None, max_length=120),
     context: dict = Depends(
         require_vendor_capability(vendor_capabilities.PROJECT_READ)
     ),
@@ -212,7 +211,6 @@ def list_available_projects(
         available=True,
         limit=limit,
         offset=offset,
-        search=search,
     )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
@@ -221,7 +219,6 @@ def list_available_projects(
 def list_my_projects(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    search: str | None = Query(default=None, max_length=120),
     context: dict = Depends(
         require_vendor_capability(vendor_capabilities.PROJECT_READ)
     ),
@@ -233,7 +230,6 @@ def list_my_projects(
         available=False,
         limit=limit,
         offset=offset,
-        search=search,
     )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 

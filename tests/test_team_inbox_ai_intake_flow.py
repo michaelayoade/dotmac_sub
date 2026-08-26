@@ -719,6 +719,8 @@ def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkey
         scope="ai:intake-policy-draft",
         reason="test composable clarification before handoff",
     )
+    fallback_id = fallback.id
+    help_desk_id = help_desk.id
     db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
@@ -727,7 +729,7 @@ def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkey
             channel_type=InboxChannelType.whatsapp.value,
             provider=WHATSAPP_PROVIDER_META,
             account_scope=account_scope,
-            fallback_team_id=fallback.id,
+            fallback_team_id=fallback_id,
             welcome_message="Hello from AI intake.",
             intent_definitions=(
                 {
@@ -741,7 +743,7 @@ def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkey
             intent_team_mappings=(
                 {
                     "intent": "general_enquiry",
-                    "service_team_id": str(help_desk.id),
+                    "service_team_id": str(help_desk_id),
                     "enabled": True,
                 },
             ),

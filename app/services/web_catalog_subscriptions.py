@@ -1601,44 +1601,6 @@ def _resolve_ipv4_selector_target(db: Session, selector: str) -> IPv4SelectorTar
     )
 
 
-def _is_ipv4_available_in_network(
-    db: Session,
-    *,
-    ip_text: str,
-    network: ipaddress.IPv4Network,
-    pool: IpPool,
-) -> bool:
-    try:
-        ip_obj = ipaddress.ip_address(ip_text)
-    except ValueError:
-        return False
-    if ip_obj.version != 4 or ip_obj not in network:
-        return False
-    if (
-        not _pool_allows_network_broadcast(pool)
-        and network.prefixlen < 31
-        and ip_obj in {network.network_address, network.broadcast_address}
-    ):
-        return False
-    row = (
-        db.query(IPv4Address, IPAssignment)
-        .outerjoin(
-            IPAssignment,
-            and_(
-                IPAssignment.ipv4_address_id == IPv4Address.id,
-                IPAssignment.is_active.is_(True),
-            ),
-        )
-        .filter(IPv4Address.pool_id == pool.id)
-        .filter(IPv4Address.address == ip_text)
-        .first()
-    )
-    if row is None:
-        return True
-    address, assignment = row
-    return assignment is None and not bool(address.is_reserved)
-
-
 def _available_ipv4_selector_result(
     db: Session,
     *,
@@ -1659,16 +1621,21 @@ def _available_ipv4_selector_result(
         except ValueError:
             exact_ip = None
         if exact_ip and exact_ip.version == 4:
-            available_ips = (
-                [needle]
-                if _is_ipv4_available_in_network(
-                    db,
-                    ip_text=needle,
-                    network=target.network,
-                    pool=target.pool,
-                )
-                else []
+            pool_state = _ipv4_address_state_by_pool(db).get(str(target.pool.id), {})
+            row = pool_state.get(needle)
+            is_boundary_address = (
+                not _pool_allows_network_broadcast(target.pool)
+                and target.network.prefixlen < 31
+                and exact_ip
+                in {target.network.network_address, target.network.broadcast_address}
             )
+            available_ips = []
+            if exact_ip in target.network and not is_boundary_address:
+                available_ips = [needle]
+                if row is not None:
+                    is_reserved, is_assigned = row
+                    if is_reserved or is_assigned:
+                        available_ips = []
         else:
             available_ips = [
                 ip

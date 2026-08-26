@@ -481,6 +481,7 @@ def test_quote_line_edits_recalculate_vat_totals(db_session):
     installation, vendor, user = _chain(db_session)
     vendor_id = str(vendor.id)
     user_id = str(user.id)
+    db_session.commit()
     db_session_adapter.release_read_transaction(db_session)
     quote = vendor_portal_operations.create_quote(
         db_session,
