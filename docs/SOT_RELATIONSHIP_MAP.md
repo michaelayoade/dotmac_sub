@@ -1577,7 +1577,13 @@ detailed security and delivery boundary is
    canonical bases decided 2026-07-16 — figures labelled "Revenue" use the
    invoice settled-value basis, the payments basis is labelled Collections,
    and recurring revenue uses the MRR-countable basis. Report/web layers
-   compose these reads and own presentation only.
+   compose these reads and own presentation only. The same owner now defines
+   the Upcoming Charges reminder cohort: collectible postpaid invoice due
+   facts and exact prepaid entitlement endings are selected as bounded,
+   indexed pages; visible prepaid candidates compose the canonical
+   `financial.prepaid_service_renewals` charge resolver and
+   `customer.financial_position` funding resolver. This projection is
+   read-only and never changes billing, collection, or access state.
 11. `financial.prepaid_enforcement` owns the account-scoped warn, suspend, and
    restore decision. Every scheduled pass consumes the live currency-bound
    funding owner, canonical coverage, quarantine, billing profile, shields,
