@@ -1,0 +1,674 @@
+name: Field App Release
+
+# Signed release builds for the dotmac_field TECHNICIAN app (io.dotmac.field).
+#
+# Deliberately a separate workflow file from the customer selfcare release
+# (Mobile Release). Structural separation is what makes "the two apps cannot
+# accidentally build each other" enforceable rather than aspirational: this file
+# never names the customer app's project directory, that one never names
+# field_mobile, and the preflight job below fails the build if either starts to.
+# The previous scaffold of this pipeline was lost before it merged, and the field
+# app's Xcode Cloud hook was left archiving the customer app.
+#
+# Triggers:
+#   workflow_dispatch          - manual signed build (choose appbundle or apk)
+#   push tag field-mobile-v*   - signed build for that version
+#   pull_request               - PREFLIGHT + iOS no-codesign build ONLY. The
+#                                signing job is skipped: no secrets on PRs, and a
+#                                release must never be producible from a PR.
+#
+# Store publication is explicitly OUT OF SCOPE. This workflow produces and
+# verifies an artifact; it never uploads to Play or TestFlight.
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: "Build artifact (appbundle for Play, apk for sideload)"
+        type: choice
+        options: [appbundle, apk]
+        default: appbundle
+      flutter_version:
+        description: "Override the pinned Flutter version (blank = repository default)"
+        type: string
+        required: false
+      api_base_url:
+        description: "Override the backend base URL (blank = the value in field_mobile/brand.json)"
+        type: string
+        required: false
+  push:
+    tags:
+      - "field-mobile-v*"
+  pull_request:
+    branches: [main, dev, 'integration/**', 'consolidate/**']
+    paths:
+      - '.github/workflows/field-app-release.yml'
+      - 'field_mobile/brand.json'
+      - 'field_mobile/android/**'
+      - 'field_mobile/ios/**'
+      - 'field_mobile/pubspec.yaml'
+      - 'field_mobile/pubspec.lock'
+      - 'field_mobile/.metadata'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: field-app-release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Everything environment-specific is a knob with a documented default, per the
+# "everything by config, no hardcoding" rule. Each is declared EXACTLY ONCE here
+# and overridable per repository (Settings -> Variables -> Actions) without
+# editing this file. FIELD_FLUTTER_VERSION additionally takes a per-run override
+# through the workflow_dispatch input above.
+env:
+  FIELD_FLUTTER_VERSION: ${{ vars.FIELD_FLUTTER_VERSION || '3.44.1' }}
+  FIELD_FLUTTER_CHANNEL: ${{ vars.FIELD_FLUTTER_CHANNEL || 'stable' }}
+  FIELD_JAVA_VERSION: ${{ vars.FIELD_JAVA_VERSION || '17' }}
+  FIELD_JAVA_DISTRIBUTION: ${{ vars.FIELD_JAVA_DISTRIBUTION || 'temurin' }}
+  FIELD_ANDROID_BUILD_TOOLS_VERSION: ${{ vars.FIELD_ANDROID_BUILD_TOOLS_VERSION || '35.0.0' }}
+  FIELD_APP_DIR: field_mobile
+  FIELD_BRAND_FILE: brand.json
+  FIELD_APPLICATION_ID: ${{ vars.FIELD_APPLICATION_ID || 'io.dotmac.field' }}
+  FIELD_BUNDLE_ID: ${{ vars.FIELD_BUNDLE_ID || 'io.dotmac.field' }}
+  # The customer app's identifiers, named here only so the guards below can prove
+  # this pipeline never produces them.
+  CUSTOMER_APPLICATION_ID: ${{ vars.CUSTOMER_APPLICATION_ID || 'io.dotmac.selfcare' }}
+  # Set to '1' to allow the installed Flutter to differ from the revision
+  # recorded in field_mobile/.metadata (escape hatch during a Flutter bump).
+  FIELD_ALLOW_FLUTTER_REVISION_DRIFT: ${{ vars.FIELD_ALLOW_FLUTTER_REVISION_DRIFT || '0' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Static, secret-free, PR-runnable. Everything that can be proven without a
+  # signing key is proven here, so a broken pipeline is caught on the pull
+  # request instead of on a release tag.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Preflight (config, identity, docs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The release must start from a pristine tree. actions/checkout gives a
+      # clean one on a hosted runner; asserting it makes that a gate rather than
+      # an assumption, and catches a self-hosted runner with leftover state.
+      - name: Assert a clean checkout
+        run: |
+          set -euo pipefail
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "::error::The checkout is not clean; a release must build from a pristine tree."
+            echo "$dirty"
+            exit 1
+          fi
+          echo "Clean checkout at $(git rev-parse HEAD)."
+
+      - name: Validate workflow, config, identity and documentation
+        env:
+          FIELD_RELEASE_WORKFLOW: .github/workflows/field-app-release.yml
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess, sys
+
+          fail = []
+          def check(ok, message):
+              if not ok:
+                  fail.append(message)
+
+          FIELD_DIR = os.environ["FIELD_APP_DIR"]
+          # Assembled from parts nowhere else in this file, so the containment
+          # guard below can scan this workflow's own text for the customer app's
+          # project directory without matching its own source.
+          CUSTOMER_DIR = "mo" + "bile"
+          FIELD_APP_ID = os.environ["FIELD_APPLICATION_ID"]
+          CUSTOMER_APP_ID = os.environ["CUSTOMER_APPLICATION_ID"]
+          FIELD_BUNDLE_ID = os.environ["FIELD_BUNDLE_ID"]
+          WORKFLOW = pathlib.Path(os.environ["FIELD_RELEASE_WORKFLOW"])
+          field = pathlib.Path(FIELD_DIR)
+
+          # --- 1. Every path this workflow drives is the field app's.
+          # (That the file parses as YAML is already proven: GitHub would not have
+          # started this run otherwise. No YAML library is needed here.)
+          wf_raw = WORKFLOW.read_text()
+          for wd in set(re.findall(r"^\s*working-directory:\s*(\S+)\s*$", wf_raw, re.M)):
+              if wd.startswith("${{"):
+                  continue  # expression, resolved from FIELD_APP_DIR
+              check(wd.startswith(FIELD_DIR),
+                    f"{WORKFLOW}: working-directory '{wd}' is not under {FIELD_DIR}/")
+          for path in set(re.findall(r"^\s{12}(\S+/\S*)$", wf_raw, re.M)):
+              check(path.startswith(FIELD_DIR + "/") or path.startswith(".github/"),
+                    f"{WORKFLOW}: artifact path '{path}' is not under {FIELD_DIR}/")
+
+          # --- 2. Cross-app containment, both directions.
+          # Masking FIELD_DIR first means any surviving reference to the customer
+          # app's directory name is a real one. The token is matched WITHOUT
+          # requiring a trailing slash: the defect this replaces assigned the
+          # customer app's directory to a variable with no trailing slash, which
+          # a slash-anchored pattern misses.
+          customer_path = re.compile(
+              r"(?<![\w-])" + re.escape(CUSTOMER_DIR) + r"(?![\w-])")
+          field_owned = [WORKFLOW, field / "ios/ci_scripts/ci_post_clone.sh"]
+          for p in field_owned:
+              if not p.exists():
+                  fail.append(f"missing: {p}")
+                  continue
+              masked = p.read_text().replace(FIELD_DIR, "FIELDAPP")
+              hits = [ln for ln in masked.splitlines() if customer_path.search(ln)]
+              check(not hits,
+                    f"{p} references the customer app's project directory: {hits[:3]}")
+              check(CUSTOMER_APP_ID not in p.read_text() or p == WORKFLOW,
+                    f"{p} references the customer application id {CUSTOMER_APP_ID}")
+
+          customer_owned = [
+              pathlib.Path(".github/workflows/" + CUSTOMER_DIR + "-release.yml"),
+              pathlib.Path(CUSTOMER_DIR) / "ios/ci_scripts/ci_post_clone.sh",
+          ]
+          for p in customer_owned:
+              if p.exists():
+                  check(FIELD_DIR not in p.read_text(),
+                        f"{p} (customer app) references {FIELD_DIR}; the two release "
+                        f"paths must stay disjoint")
+
+          # --- 3. Application / bundle identity is what we claim it is.
+          gradle = (field / "android/app/build.gradle.kts").read_text()
+          m = re.search(r'applicationId\s*=\s*"([^"]+)"', gradle)
+          check(m is not None, "android/app/build.gradle.kts: no applicationId found")
+          if m:
+              check(m.group(1) == FIELD_APP_ID,
+                    f"applicationId is {m.group(1)}, expected {FIELD_APP_ID}")
+          check(FIELD_APP_ID != CUSTOMER_APP_ID,
+                "the field and customer application ids must differ")
+
+          pbx = (field / "ios/Runner.xcodeproj/project.pbxproj").read_text()
+          ids = set(re.findall(r"PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);", pbx))
+          app_ids = {i for i in ids if not i.endswith("RunnerTests")}
+          check(app_ids == {FIELD_BUNDLE_ID},
+                f"iOS PRODUCT_BUNDLE_IDENTIFIER set is {sorted(app_ids)}, "
+                f"expected {{{FIELD_BUNDLE_ID}}}")
+
+          # --- 4. The brand file exists and is neither orphaned nor incomplete.
+          brand_path = field / os.environ["FIELD_BRAND_FILE"]
+          check(brand_path.exists(),
+                f"{brand_path} is missing; without it release builds silently fall "
+                f"back to Flutter's default theme")
+          if brand_path.exists():
+              brand = json.loads(brand_path.read_text())
+              declared = {k for k in brand if not k.startswith("_")}
+              check(all(isinstance(v, str) for k, v in brand.items()),
+                    f"{brand_path}: every value must be a string (dart-define takes strings)")
+              secretish = re.compile(r"(DSN|SECRET|TOKEN|PASSWORD|KEY)$")
+              leaky = [k for k in declared if secretish.search(k) and brand[k]]
+              check(not leaky,
+                    f"{brand_path} holds what looks like secret material: {leaky}. "
+                    f"Secrets are injected from CI secrets, never committed.")
+
+              read_keys = set()
+              for dart in field.joinpath("lib").rglob("*.dart"):
+                  read_keys |= set(re.findall(
+                      r"String\.fromEnvironment\(\s*'([A-Z0-9_]+)'", dart.read_text()))
+              # Injected per build from a CI secret or the build environment, so
+              # deliberately absent from the committed brand file.
+              CI_INJECTED = {"SENTRY_DSN", "APP_VERSION"}
+              orphaned = declared - read_keys
+              check(not orphaned,
+                    f"{brand_path} declares keys nothing in {FIELD_DIR}/lib reads: "
+                    f"{sorted(orphaned)}")
+              missing = {k for k in read_keys if k.startswith("BRAND_")} - declared - CI_INJECTED
+              check(not missing,
+                    f"{FIELD_DIR}/lib reads brand keys absent from {brand_path}: "
+                    f"{sorted(missing)} - those builds would use the in-code default")
+
+          # --- 5. The Flutter pin has a single source that actually parses.
+          meta = (field / ".metadata").read_text()
+          rev = re.search(r'^  revision: "([0-9a-f]+)"', meta, re.M)
+          check(rev is not None,
+                f"{field}/.metadata: no Flutter revision found; the post-clone hook "
+                f"derives its pin from it")
+
+          # --- 6. RELEASE.md documents only things that exist.
+          doc_path = field / "docs/RELEASE.md"
+          docs = doc_path.read_text()
+          for ref in set(re.findall(r"\.github/workflows/[A-Za-z0-9._-]+\.yml", docs)):
+              check(pathlib.Path(ref).exists(),
+                    f"{doc_path} documents {ref}, which does not exist")
+          def git_ignored(path):
+              # Signing/FCM material is materialized by CI and deliberately
+              # gitignored, so "documented but absent from a checkout" is correct
+              # for exactly those paths and a defect for any other.
+              return subprocess.run(["git", "check-ignore", "-q", str(path)]).returncode == 0
+
+          for ref in set(re.findall(r"`((?:ios|android|tool|lib)/[A-Za-z0-9._/-]+)`", docs)):
+              target = field / ref
+              check(target.exists() or git_ignored(target),
+                    f"{doc_path} documents {target}, which does not exist and is not "
+                    f"a gitignored, CI-materialized path")
+
+          # Every secret this workflow reads must be documented, and every
+          # secret-looking token documented in a RELEASE.md table must be one the
+          # pipeline actually reads. This is the parity that was missing: the doc
+          # described a workflow and secret names that did not exist.
+          wf_text = WORKFLOW.read_text()
+          used_secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", wf_text))
+          script_text = (field / "ios/ci_scripts/ci_post_clone.sh").read_text()
+          pipeline_tokens = used_secrets | set(re.findall(r"[A-Z][A-Z0-9_]{5,}", wf_text)) \
+                                         | set(re.findall(r"[A-Z][A-Z0-9_]{5,}", script_text))
+          documented = set(re.findall(r"\|\s*`([A-Z][A-Z0-9_]{5,})`\s*\|", docs))
+          undocumented = used_secrets - documented
+          check(not undocumented,
+                f"{doc_path} does not document the secrets this workflow reads: "
+                f"{sorted(undocumented)}")
+          phantom = documented - pipeline_tokens
+          check(not phantom,
+                f"{doc_path} documents names no pipeline file reads: {sorted(phantom)}")
+
+          if fail:
+              for f in fail:
+                  print(f"::error::{f}")
+              sys.exit(1)
+          print("Preflight passed: config, identity, cross-app containment and docs "
+                "all agree with the pipeline.")
+          PY
+
+      - name: Shell-syntax check the Xcode Cloud hook
+        run: sh -n ${{ env.FIELD_APP_DIR }}/ios/ci_scripts/ci_post_clone.sh
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ github.event.inputs.flutter_version || env.FIELD_FLUTTER_VERSION }}
+          channel: ${{ env.FIELD_FLUTTER_CHANNEL }}
+          cache: true
+
+      # The pin is declared once in this file's env block; .metadata is the
+      # project's own record of the SDK it was generated against, and the Xcode
+      # Cloud hook derives its pin from it. Proving the two agree is what keeps
+      # "single-sourced" true instead of merely intended - a Flutter bump that
+      # updates one and not the other fails here, on the pull request.
+      - name: Flutter pin agrees with .metadata
+        working-directory: ${{ env.FIELD_APP_DIR }}
+        run: |
+          set -euo pipefail
+          declared="$(awk -F'"' '/^  revision: /{print $2; exit}' .metadata)"
+          installed="$(flutter --version --machine | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkRevision"])')"
+          echo "field_mobile/.metadata revision: $declared"
+          echo "installed Flutter revision:      $installed"
+          if [ "$declared" = "$installed" ]; then
+            echo "Flutter pin is single-sourced and consistent."
+          elif [ "${FIELD_ALLOW_FLUTTER_REVISION_DRIFT}" = "1" ]; then
+            echo "::warning::Flutter revision drift accepted via FIELD_ALLOW_FLUTTER_REVISION_DRIFT."
+          else
+            echo "::error::Flutter pin drift. The workflow installs $installed but"
+            echo "::error::field_mobile/.metadata (which the Xcode Cloud hook pins to)"
+            echo "::error::records $declared. Update both, or set the repository"
+            echo "::error::variable FIELD_ALLOW_FLUTTER_REVISION_DRIFT=1 during a bump."
+            exit 1
+          fi
+
+      # A tag must describe the artifact it produces. flutter.versionName /
+      # versionCode come from field_mobile/pubspec.yaml, so that file is the
+      # version source of truth and the tag has to agree with it.
+      - name: Tag agrees with the pubspec version
+        if: startsWith(github.ref, 'refs/tags/field-mobile-v')
+        working-directory: ${{ env.FIELD_APP_DIR }}
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#field-mobile-v}"
+          pubspec_version="$(awk '/^version:/{split($2, v, "+"); print v[1]; exit}' pubspec.yaml)"
+          echo "tag: $tag_version   pubspec: $pubspec_version"
+          if [ "$tag_version" != "$pubspec_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pubspec.yaml version $pubspec_version."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Signed Android build. Never runs on a pull request.
+  # ---------------------------------------------------------------------------
+  android-release:
+    name: Android signed release
+    needs: preflight
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: field_mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert a clean checkout with no pre-existing signing material
+        run: |
+          set -euo pipefail
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "::error::The checkout is not clean; a release must build from a pristine tree."
+            echo "$dirty"; exit 1
+          fi
+          for leftover in android/key.properties android/app/release.jks android/app/google-services.json; do
+            if [ -e "$leftover" ]; then
+              echo "::error::$leftover exists before the build; refusing to reuse stale signing material."
+              exit 1
+            fi
+          done
+          echo "Clean checkout at $(git rev-parse HEAD)."
+
+      # Fail before anything is built, naming the exact missing secret. A missing
+      # key must never degrade into an unsigned or debug-signed artifact - the
+      # Gradle config falls back to the debug key when key.properties is absent,
+      # which is right for a local `flutter run --release` and catastrophic for a
+      # build that looks shippable. Only presence is tested; no value is printed.
+      - name: Require the signing secrets
+        env:
+          FIELD_ANDROID_KEYSTORE_BASE64: ${{ secrets.FIELD_ANDROID_KEYSTORE_BASE64 }}
+          FIELD_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FIELD_ANDROID_KEYSTORE_PASSWORD }}
+          FIELD_ANDROID_KEY_ALIAS: ${{ secrets.FIELD_ANDROID_KEY_ALIAS }}
+          FIELD_ANDROID_KEY_PASSWORD: ${{ secrets.FIELD_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in FIELD_ANDROID_KEYSTORE_BASE64 FIELD_ANDROID_KEYSTORE_PASSWORD \
+                      FIELD_ANDROID_KEY_ALIAS FIELD_ANDROID_KEY_PASSWORD; do
+            eval "value=\${$name:-}"
+            if [ -z "$value" ]; then
+              echo "::error::Required repository secret '$name' is not set. Add it under"
+              echo "::error::Settings -> Secrets and variables -> Actions. See"
+              echo "::error::field_mobile/docs/RELEASE.md for how to produce its value."
+              missing=1
+            else
+              echo "secret $name: present"
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.FIELD_JAVA_DISTRIBUTION }}
+          java-version: ${{ env.FIELD_JAVA_VERSION }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ github.event.inputs.flutter_version || env.FIELD_FLUTTER_VERSION }}
+          channel: ${{ env.FIELD_FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Generated drift sources are committed; regenerating guards against a
+      # stale checkout shipping mismatched code. Names no individual plugin, so a
+      # dependency swap needs no edit here.
+      - name: Codegen
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # Reconstruct the upload keystore and key.properties from secrets. Gradle
+      # reads android/key.properties (see android/app/build.gradle.kts); the
+      # base64 decode is checked so a corrupt secret fails here, loudly, rather
+      # than as an opaque Gradle signing error.
+      - name: Restore the signing keystore
+        env:
+          FIELD_ANDROID_KEYSTORE_BASE64: ${{ secrets.FIELD_ANDROID_KEYSTORE_BASE64 }}
+          FIELD_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FIELD_ANDROID_KEYSTORE_PASSWORD }}
+          FIELD_ANDROID_KEY_ALIAS: ${{ secrets.FIELD_ANDROID_KEY_ALIAS }}
+          FIELD_ANDROID_KEY_PASSWORD: ${{ secrets.FIELD_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if ! printf '%s' "$FIELD_ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release.jks; then
+            echo "::error::FIELD_ANDROID_KEYSTORE_BASE64 is not valid base64."
+            exit 1
+          fi
+          if [ ! -s android/app/release.jks ]; then
+            echo "::error::FIELD_ANDROID_KEYSTORE_BASE64 decoded to an empty keystore."
+            exit 1
+          fi
+          if ! keytool -list -keystore android/app/release.jks \
+                 -alias "$FIELD_ANDROID_KEY_ALIAS" \
+                 -storepass:env FIELD_ANDROID_KEYSTORE_PASSWORD > /dev/null 2>&1; then
+            echo "::error::The keystore does not open with FIELD_ANDROID_KEYSTORE_PASSWORD,"
+            echo "::error::or it contains no key with the alias in FIELD_ANDROID_KEY_ALIAS."
+            exit 1
+          fi
+          cat > android/key.properties <<EOF
+          storePassword=$FIELD_ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$FIELD_ANDROID_KEY_PASSWORD
+          keyAlias=$FIELD_ANDROID_KEY_ALIAS
+          storeFile=release.jks
+          EOF
+          echo "Keystore restored and verified to open (no value printed)."
+
+      # FCM is operator-gated. With the secret set, google-services.json is
+      # dropped into android/app/ so the google-services Gradle plugin activates
+      # (see android/app/build.gradle.kts) and push works. Without it the build
+      # succeeds with push disabled (NoopPushSource).
+      - name: Materialize google-services.json (optional)
+        env:
+          FIELD_ANDROID_GOOGLE_SERVICES_JSON_B64: ${{ secrets.FIELD_ANDROID_GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${FIELD_ANDROID_GOOGLE_SERVICES_JSON_B64:-}" ]; then
+            printf '%s' "$FIELD_ANDROID_GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
+            python3 -c "import json,sys; json.load(open('android/app/google-services.json'))" || {
+              echo "::error::FIELD_ANDROID_GOOGLE_SERVICES_JSON_B64 did not decode to valid JSON."; exit 1; }
+            echo "google-services.json materialized - FCM enabled."
+          else
+            echo "FIELD_ANDROID_GOOGLE_SERVICES_JSON_B64 not set - building with push disabled."
+          fi
+
+      - name: Require the brand file
+        run: |
+          set -euo pipefail
+          if [ ! -f "$FIELD_BRAND_FILE" ]; then
+            echo "::error::$FIELD_APP_DIR/$FIELD_BRAND_FILE is missing. Without it the"
+            echo "::error::build silently uses Flutter's default theme instead of the"
+            echo "::error::brand palette, so this fails rather than shipping."
+            exit 1
+          fi
+          python3 -c "import json;json.load(open('$FIELD_BRAND_FILE'))"
+          echo "Brand file present and valid: $FIELD_APP_DIR/$FIELD_BRAND_FILE"
+
+      # Brand values come from the committed brand file; the Sentry DSN is
+      # injected from a secret. A later --dart-define overrides the same key from
+      # --dart-define-from-file, so an explicit API base URL still wins.
+      - name: Build the signed ${{ github.event.inputs.track || 'appbundle' }}
+        env:
+          FIELD_SENTRY_DSN: ${{ secrets.FIELD_SENTRY_DSN }}
+          API_BASE_URL_OVERRIDE: ${{ github.event.inputs.api_base_url || vars.FIELD_API_BASE_URL || '' }}
+        run: |
+          set -euo pipefail
+          TRACK="${{ github.event.inputs.track || 'appbundle' }}"
+          set -- --dart-define-from-file="$FIELD_BRAND_FILE"
+          if [ -n "${API_BASE_URL_OVERRIDE:-}" ]; then
+            echo "API base URL overridden to $API_BASE_URL_OVERRIDE"
+            set -- "$@" --dart-define=API_BASE_URL="$API_BASE_URL_OVERRIDE"
+          fi
+          if [ -n "${FIELD_SENTRY_DSN:-}" ]; then
+            echo "Sentry DSN supplied (value not printed) - crash reporting enabled."
+            set -- "$@" --dart-define=SENTRY_DSN="$FIELD_SENTRY_DSN"
+          else
+            echo "FIELD_SENTRY_DSN not set - crash reporting disabled in this build."
+          fi
+          flutter build "$TRACK" --release "$@"
+
+      # The check this replaces only asserted that a file existed - it would have
+      # passed a debug-signed artifact, which is exactly the failure it was named
+      # for. This inspects the artifact's actual signing certificate and requires
+      # it to be the certificate in the keystore restored from secrets, and not
+      # the Android debug certificate. Fingerprints are public material and are
+      # printed; passwords are passed through the environment and never echoed.
+      - name: Verify the artifact's signature and application id
+        env:
+          FIELD_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FIELD_ANDROID_KEYSTORE_PASSWORD }}
+          FIELD_ANDROID_KEY_ALIAS: ${{ secrets.FIELD_ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          [ -n "$SDK" ] || { echo "::error::No Android SDK on this runner."; exit 1; }
+          BT="$SDK/build-tools/$FIELD_ANDROID_BUILD_TOOLS_VERSION"
+          if [ ! -x "$BT/apksigner" ]; then
+            echo "Pinned build-tools $FIELD_ANDROID_BUILD_TOOLS_VERSION absent; installing it."
+            yes 2>/dev/null | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+              "build-tools;$FIELD_ANDROID_BUILD_TOOLS_VERSION" > /dev/null || true
+          fi
+          [ -x "$BT/apksigner" ] || {
+            echo "::error::build-tools $FIELD_ANDROID_BUILD_TOOLS_VERSION unavailable."
+            echo "::error::Override the repository variable FIELD_ANDROID_BUILD_TOOLS_VERSION."
+            exit 1; }
+
+          # `sort` buffers the whole listing, so `find` cannot take a SIGPIPE
+          # from `head` and trip pipefail.
+          ART="$(find build/app/outputs \( -name '*.aab' -o -name '*-release.apk' \) | sort | head -1)"
+          [ -n "$ART" ] || { echo "::error::No release artifact was produced."; exit 1; }
+          echo "Artifact: $ART"
+
+          norm() { tr -d ':' | tr 'A-Z' 'a-z'; }
+          EXPECTED="$(keytool -list -v -keystore android/app/release.jks \
+                        -alias "$FIELD_ANDROID_KEY_ALIAS" \
+                        -storepass:env FIELD_ANDROID_KEYSTORE_PASSWORD \
+                      | awk '/SHA256:/ {print $2; exit}' | norm)"
+          [ -n "$EXPECTED" ] || { echo "::error::Could not read the upload key fingerprint."; exit 1; }
+
+          case "$ART" in
+            *.aab)
+              # An .aab carries a JAR (v1) signature, which keytool reads directly.
+              CERT="$(keytool -printcert -jarfile "$ART")"
+              ACTUAL="$(printf '%s' "$CERT" | awk '/SHA256:/ {print $2; exit}' | norm)"
+              SUBJECT="$(printf '%s' "$CERT" | awk -F'Owner: ' '/^Owner:/ {print $2; exit}')"
+              ;;
+            *.apk)
+              # APKs may be v2/v3-only signed, which keytool cannot read; apksigner can.
+              CERT="$("$BT/apksigner" verify --print-certs "$ART")"
+              ACTUAL="$(printf '%s' "$CERT" | awk '/certificate SHA-256 digest:/ {print $NF; exit}' | norm)"
+              SUBJECT="$(printf '%s' "$CERT" | awk -F'certificate DN: ' '/certificate DN:/ {print $2; exit}')"
+              "$BT/apksigner" verify --verbose "$ART"
+              ;;
+            *) echo "::error::Unrecognized artifact type: $ART"; exit 1 ;;
+          esac
+
+          echo "signing certificate subject: ${SUBJECT:-<unreadable>}"
+          echo "signing certificate SHA-256: ${ACTUAL:-<unreadable>}"
+          echo "upload key       SHA-256:    $EXPECTED"
+
+          [ -n "$ACTUAL" ] || { echo "::error::The artifact carries no readable signature."; exit 1; }
+          case "$SUBJECT" in
+            *"CN=Android Debug"*)
+              echo "::error::The artifact is DEBUG-SIGNED. Gradle fell back to the debug"
+              echo "::error::key, which means key.properties was not read. Refusing it."
+              exit 1 ;;
+          esac
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::The artifact is not signed by the upload key from"
+            echo "::error::FIELD_ANDROID_KEYSTORE_BASE64. Refusing it."
+            exit 1
+          fi
+
+          # The cheap cross-app assertion: prove this pipeline produced the FIELD
+          # app. A signed artifact carrying the customer application id would mean
+          # the two pipelines had crossed.
+          case "$ART" in
+            *.apk)
+              PKG="$("$BT/aapt2" dump badging "$ART" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
+              echo "application id: $PKG"
+              [ "$PKG" = "$FIELD_APPLICATION_ID" ] || {
+                echo "::error::Built application id '$PKG', expected '$FIELD_APPLICATION_ID'."; exit 1; }
+              [ "$PKG" != "$CUSTOMER_APPLICATION_ID" ] || {
+                echo "::error::This pipeline built the customer app."; exit 1; }
+              ;;
+            *.aab)
+              # A bundle's manifest is protobuf; rather than pull in bundletool,
+              # assert over its printable strings. Substring presence/absence is
+              # enough to catch a crossed pipeline, which is what this guards.
+              MANIFEST="${RUNNER_TEMP:-/tmp}/field-manifest.pb"
+              unzip -p "$ART" base/manifest/AndroidManifest.xml > "$MANIFEST"
+              STRINGS="$(tr -c '[:print:]' '\n' < "$MANIFEST")"
+              printf '%s' "$STRINGS" | grep -qF "$FIELD_APPLICATION_ID" || {
+                echo "::error::The bundle manifest does not carry $FIELD_APPLICATION_ID."; exit 1; }
+              if printf '%s' "$STRINGS" | grep -qF "$CUSTOMER_APPLICATION_ID"; then
+                echo "::error::The bundle manifest carries the customer application id."
+                exit 1
+              fi
+              echo "application id: $FIELD_APPLICATION_ID (asserted in the bundle manifest)"
+              ;;
+          esac
+          echo "Signature and identity verified."
+
+      # A checksum travels with the artifact so a downloader can prove they have
+      # the bytes this run produced.
+      - name: Checksum the artifact
+        run: |
+          set -euo pipefail
+          find build/app/outputs \( -name '*.aab' -o -name '*-release.apk' \) -print0 \
+            | xargs -0 -r sha256sum | tee build/app/outputs/SHA256SUMS.txt
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotmac-field-android-release
+          path: |
+            field_mobile/build/app/outputs/bundle/release/*.aab
+            field_mobile/build/app/outputs/flutter-apk/*-release.apk
+            field_mobile/build/app/outputs/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Clean up signing material
+        if: always()
+        run: rm -f android/app/release.jks android/key.properties android/app/google-services.json
+
+  # ---------------------------------------------------------------------------
+  # iOS proof. Release archives ship through Xcode Cloud -> TestFlight, which
+  # owns Apple signing; publication is out of scope here. What this job does is
+  # execute the REAL Xcode Cloud hook on a macOS runner with no signing identity,
+  # so the script that Xcode Cloud will run is exercised on every change to it -
+  # which is how the "builds the wrong app" defect stayed invisible.
+  # ---------------------------------------------------------------------------
+  ios-build:
+    name: iOS build (no codesign) via the Xcode Cloud hook
+    needs: preflight
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert a clean checkout
+        run: |
+          set -euo pipefail
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "::error::The checkout is not clean."; echo "$dirty"; exit 1
+          fi
+
+      - name: Set up Flutter
+        id: flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ github.event.inputs.flutter_version || env.FIELD_FLUTTER_VERSION }}
+          channel: ${{ env.FIELD_FLUTTER_CHANNEL }}
+          cache: true
+
+      # FLUTTER_ROOT tells the hook to reuse this pinned SDK instead of cloning
+      # one, which is the only difference from an Xcode Cloud run. Everything
+      # else - project directory, brand file, codegen, the no-codesign build and
+      # the bundle-id assertion - is the same code path.
+      - name: Run the Xcode Cloud post-clone hook
+        env:
+          CI_PRIMARY_REPOSITORY_PATH: ${{ github.workspace }}
+          FLUTTER_ROOT: ${{ steps.flutter.outputs['CACHE-PATH'] || env.FLUTTER_ROOT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLUTTER_ROOT:-}" ] || [ ! -x "${FLUTTER_ROOT}/bin/flutter" ]; then
+            FLUTTER_ROOT="$(dirname "$(dirname "$(command -v flutter)")")"
+            export FLUTTER_ROOT
+          fi
+          echo "Reusing the pinned SDK at $FLUTTER_ROOT"
+          ./${{ env.FIELD_APP_DIR }}/ios/ci_scripts/ci_post_clone.sh
+
+      - name: Assert the built app is the field app
+        working-directory: ${{ env.FIELD_APP_DIR }}
+        run: |
+          set -euo pipefail
+          PLIST=build/ios/iphoneos/Runner.app/Info.plist
+          [ -f "$PLIST" ] || { echo "::error::No Runner.app was produced at $PLIST."; exit 1; }
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
+          echo "built bundle id: $BUNDLE_ID (expected $FIELD_BUNDLE_ID)"
+          [ "$BUNDLE_ID" = "$FIELD_BUNDLE_ID" ] || {
+            echo "::error::This hook built '$BUNDLE_ID', not the field app."; exit 1; }
