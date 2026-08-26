@@ -19,7 +19,7 @@ import '../helpers/fake_http.dart';
 import '../helpers/secure_store.dart';
 
 /// What a wiped device must look like, whichever trigger did the wiping.
-typedef WipeAftermath = ({
+typedef _Aftermath = ({
   bool scopeDirectoryGone,
   bool databaseKeyGone,
   bool evidenceKeyGone,
@@ -28,14 +28,14 @@ typedef WipeAftermath = ({
   bool legacyPlaintextGone,
 });
 
-typedef SessionEnding = ({
+typedef _SessionEnding = ({
   WipeTrigger trigger,
   Future<void> Function(TestDevice device, SessionLifecycle session) run,
 });
 
 /// A signed-in technician with unsent evidence, drafts and legacy plaintext on
 /// the handset — everything a wipe has to take with it.
-typedef SignedIn = ({
+typedef _SignedIn = ({
   TestDevice device,
   _RecordingWipe wipe,
   SessionLifecycle session,
@@ -59,7 +59,7 @@ void main() {
     sub: subject,
   );
 
-  Future<WipeAftermath> aftermath(
+  Future<_Aftermath> aftermath(
     TestDevice device,
     DataScope scope,
     String oldToken,
@@ -84,7 +84,7 @@ void main() {
     scopeKey: store.scopeKey,
   );
 
-  Future<SignedIn> signIn(String subject) async {
+  Future<_SignedIn> signIn(String subject) async {
     final device = newTestDevice();
     final accessToken = tokenFor(subject);
     await device.tokenStore.save(
@@ -128,7 +128,7 @@ void main() {
   }
 
   test('logout, revocation and account switch share one wipe', () async {
-    final endings = <SessionEnding>[
+    final endings = <_SessionEnding>[
       (
         trigger: WipeTrigger.explicitLogout,
         run: (device, session) => session.signOut(),
@@ -151,7 +151,7 @@ void main() {
       ),
     ];
 
-    final outcomes = <WipeTrigger, WipeAftermath>{};
+    final outcomes = <WipeTrigger, _Aftermath>{};
     final implementations = <Type>{};
 
     for (final ending in endings) {
