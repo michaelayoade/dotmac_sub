@@ -520,6 +520,9 @@ class AuthController extends StateNotifier<AuthState> {
     // still unwinding can read or write that account's partition.
     _cache.useScope(MobileDataScope.anonymous);
     state = AuthState.signedOut;
-    unawaited(Sentry.configureScope((scope) => scope.setUser(null)));
+    // Fire-and-forget: configureScope returns a FutureOr, so it has to be
+    // lifted into a real Future before it can be left unawaited. The teardown
+    // must not block on the crash-reporter's scope update.
+    unawaited(Future.sync(() => Sentry.configureScope((s) => s.setUser(null))));
   }
 }
