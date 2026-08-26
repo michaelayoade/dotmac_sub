@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 from bisect import bisect_left
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -111,6 +112,40 @@ MAX_ROUTE_RANGE_OPTIONS_PER_BLOCK = 512
 PUBLIC_IP_PRIORITY_PREFIXES = ("160.", "102.")
 POOL_IPV4_SELECTOR_PREFIX = "pool:"
 UNSPECIFIED_IPV4 = ipaddress.IPv4Address(0)
+
+
+@dataclass(frozen=True, slots=True)
+class IPv4SelectorTarget:
+    """Resolved subscription-form IPAM selector target."""
+
+    selector: str
+    pool: IpPool
+    network: ipaddress.IPv4Network
+    block: IpBlock | None
+
+
+@dataclass(frozen=True, slots=True)
+class AvailableIPv4SelectorResult:
+    """Typed result for the subscription-form available IPv4 endpoint."""
+
+    selector: str
+    pool_id: str
+    block_id: str
+    cidr: str
+    available_count: int
+    addresses: tuple[str, ...]
+    has_more: bool
+
+    def as_response_payload(self) -> dict[str, object]:
+        return {
+            "selector": self.selector,
+            "pool_id": self.pool_id,
+            "block_id": self.block_id,
+            "cidr": self.cidr,
+            "available_count": self.available_count,
+            "addresses": list(self.addresses),
+            "has_more": self.has_more,
+        }
 
 
 def _format_offer_price_summary(
@@ -1525,6 +1560,145 @@ def _resolve_pool_ipv4_selector(
     return pool, cast(ipaddress.IPv4Network, selected_network)
 
 
+def _resolve_ipv4_selector_target(db: Session, selector: str) -> IPv4SelectorTarget:
+    normalized_selector = str(selector or "").strip()
+    if not normalized_selector:
+        raise ValueError("IPv4 block is required.")
+    if normalized_selector.startswith(POOL_IPV4_SELECTOR_PREFIX):
+        pool, network = _resolve_pool_ipv4_selector(db, normalized_selector)
+        return IPv4SelectorTarget(
+            selector=normalized_selector,
+            pool=pool,
+            network=network,
+            block=None,
+        )
+
+    try:
+        block_uuid = UUID(normalized_selector)
+    except ValueError as exc:
+        raise ValueError("Invalid IPv4 block selected.") from exc
+    block = db.get(IpBlock, block_uuid)
+    if not block or not block.is_active:
+        raise ValueError("Selected IPv4 block is not active.")
+    block_pool = cast(IpPool | None, db.get(IpPool, block.pool_id))
+    if (
+        not block_pool
+        or not block_pool.is_active
+        or block_pool.ip_version != IPVersion.ipv4
+    ):
+        raise ValueError("Selected IPv4 block is not active.")
+    try:
+        parsed_network = ipaddress.ip_network(str(block.cidr), strict=False)
+    except ValueError as exc:
+        raise ValueError("Invalid IPv4 block selected.") from exc
+    if parsed_network.version != 4:
+        raise ValueError("Selected IPv4 block is not IPv4.")
+    return IPv4SelectorTarget(
+        selector=normalized_selector,
+        pool=block_pool,
+        network=cast(ipaddress.IPv4Network, parsed_network),
+        block=block,
+    )
+
+
+def _is_ipv4_available_in_network(
+    db: Session,
+    *,
+    ip_text: str,
+    network: ipaddress.IPv4Network,
+    pool: IpPool,
+) -> bool:
+    try:
+        ip_obj = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return False
+    if ip_obj.version != 4 or ip_obj not in network:
+        return False
+    if (
+        not _pool_allows_network_broadcast(pool)
+        and network.prefixlen < 31
+        and ip_obj in {network.network_address, network.broadcast_address}
+    ):
+        return False
+    row = (
+        db.query(IPv4Address, IPAssignment)
+        .outerjoin(
+            IPAssignment,
+            and_(
+                IPAssignment.ipv4_address_id == IPv4Address.id,
+                IPAssignment.is_active.is_(True),
+            ),
+        )
+        .filter(IPv4Address.pool_id == pool.id)
+        .filter(IPv4Address.address == ip_text)
+        .first()
+    )
+    if row is None:
+        return True
+    address, assignment = row
+    return assignment is None and not bool(address.is_reserved)
+
+
+def _available_ipv4_selector_result(
+    db: Session,
+    *,
+    selector: str,
+    query: str = "",
+    limit: int = 1000,
+) -> AvailableIPv4SelectorResult:
+    """Return available IPv4 addresses for one subscription-form block selector."""
+    if limit < 1:
+        limit = 1
+
+    target = _resolve_ipv4_selector_target(db, selector)
+
+    needle = str(query or "").strip()
+    if needle:
+        try:
+            exact_ip = ipaddress.ip_address(needle)
+        except ValueError:
+            exact_ip = None
+        if exact_ip and exact_ip.version == 4:
+            available_ips = (
+                [needle]
+                if _is_ipv4_available_in_network(
+                    db,
+                    ip_text=needle,
+                    network=target.network,
+                    pool=target.pool,
+                )
+                else []
+            )
+        else:
+            available_ips = [
+                ip
+                for ip in _available_ipv4_strings_for_network(
+                    db,
+                    network=target.network,
+                    pool_id=target.pool.id,
+                    pool=target.pool,
+                )
+                if ip.startswith(needle)
+            ]
+    else:
+        available_ips = _available_ipv4_strings_for_network(
+            db,
+            network=target.network,
+            pool_id=target.pool.id,
+            pool=target.pool,
+        )
+    limited_ips = available_ips[:limit]
+    return AvailableIPv4SelectorResult(
+        selector=target.selector,
+        pool_id=str(target.pool.id),
+        block_id=str(target.block.id) if target.block else "",
+        cidr=str(target.network),
+        available_count=len(available_ips),
+        addresses=tuple(limited_ips),
+        has_more=len(available_ips) > len(limited_ips),
+    )
+
+
 def available_ipv4_addresses_for_selector(
     db: Session,
     *,
@@ -1533,58 +1707,13 @@ def available_ipv4_addresses_for_selector(
     limit: int = 1000,
 ) -> dict[str, object]:
     """Return available IPv4 addresses for one subscription-form block selector."""
-    selector = str(selector or "").strip()
-    if not selector:
-        raise ValueError("IPv4 block is required.")
-    if limit < 1:
-        limit = 1
 
-    block: IpBlock | None = None
-    if selector.startswith(POOL_IPV4_SELECTOR_PREFIX):
-        pool, network = _resolve_pool_ipv4_selector(db, selector)
-    else:
-        try:
-            block_uuid = UUID(selector)
-        except ValueError as exc:
-            raise ValueError("Invalid IPv4 block selected.") from exc
-        block = db.get(IpBlock, block_uuid)
-        if not block or not block.is_active:
-            raise ValueError("Selected IPv4 block is not active.")
-        block_pool = cast(IpPool | None, db.get(IpPool, block.pool_id))
-        if (
-            not block_pool
-            or not block_pool.is_active
-            or block_pool.ip_version != IPVersion.ipv4
-        ):
-            raise ValueError("Selected IPv4 block is not active.")
-        pool = block_pool
-        try:
-            parsed_network = ipaddress.ip_network(str(block.cidr), strict=False)
-        except ValueError as exc:
-            raise ValueError("Invalid IPv4 block selected.") from exc
-        if parsed_network.version != 4:
-            raise ValueError("Selected IPv4 block is not IPv4.")
-        network = cast(ipaddress.IPv4Network, parsed_network)
-
-    available_ips = _available_ipv4_strings_for_network(
+    return _available_ipv4_selector_result(
         db,
-        network=network,
-        pool_id=pool.id,
-        pool=pool,
-    )
-    needle = str(query or "").strip()
-    if needle:
-        available_ips = [ip for ip in available_ips if ip.startswith(needle)]
-    limited_ips = available_ips[:limit]
-    return {
-        "selector": selector,
-        "pool_id": str(pool.id),
-        "block_id": str(block.id) if block else "",
-        "cidr": str(network),
-        "available_count": len(available_ips),
-        "addresses": limited_ips,
-        "has_more": len(available_ips) > len(limited_ips),
-    }
+        selector=selector,
+        query=query,
+        limit=limit,
+    ).as_response_payload()
 
 
 def _resolve_ipv4_for_selector(
@@ -2241,7 +2370,7 @@ def _additional_route_has_ipam_conflict(
             allocation_type = str(address.allocation_type or "").strip().lower()
             if allocation_type == "management":
                 return True
-            if not bool(address.is_reserved) and not allocation_type:
+            if not bool(address.is_reserved):
                 continue
             try:
                 ip_obj = ipaddress.ip_address(str(address.address))
@@ -2653,10 +2782,11 @@ def _used_ipam_address_ints(db: Session) -> list[int]:
     )
     used: set[int] = set()
     for address, assignment in rows:
+        allocation_type = str(address.allocation_type or "").strip().lower()
         if (
             assignment is None
             and not bool(address.is_reserved)
-            and not str(address.allocation_type or "").strip()
+            and allocation_type != "management"
             and address.ont_unit_id is None
         ):
             continue
