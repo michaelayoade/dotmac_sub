@@ -137,7 +137,7 @@ closed before SalesOrder money can be overwritten.
 | Work-order command and ProjectTask binding | `operations.work_order_commands` |
 | ServiceOrder transitions and provisioning consequence | `operations.service_order_lifecycle` |
 | Subscription/access transition | `access.subscription_lifecycle` |
-| CX readiness, attention, attention resolution, and acceptance evidence | `customer.experience_handoff` |
+| CX readiness, attention, and acceptance evidence | `customer.experience_handoff` |
 | Aggregate drift report | `customer.lifecycle_audit` |
 | Idempotent projection repair | `sales.lifecycle_reconciliation` |
 
@@ -386,10 +386,7 @@ configuration. Changing one requires a migration/versioned contract and tests.
    when funding, implementation, provisioning, and Subscription evidence all
    agree. CX staff acceptance is separately actor/time/reason evidenced; its
    committed `customer_experience.accepted` output asks `sales.orders` to
-   fulfil the SalesOrder. A CX staff user may mark a pending or ready handoff
-   `needs_attention`; resolving attention rechecks the same readiness evidence
-   before returning the handoff to `ready`, after which acceptance remains a
-   separate staff decision. The CX owner does not write sales state inline.
+   fulfil the SalesOrder. The CX owner does not write sales state inline.
 10. Support Tickets and ticket-origin WorkOrders stay attached to the same
    Subscriber/Party history but do not rewrite sales attribution.
 

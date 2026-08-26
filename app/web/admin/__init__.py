@@ -35,7 +35,6 @@ from app.web.admin.catalog_settings import legacy_add_ons_router
 from app.web.admin.catalog_settings import router as catalog_settings_router
 from app.web.admin.configuration import router as configuration_router
 from app.web.admin.crm_referrals import router as crm_referrals_router
-from app.web.admin.customer_experience import router as customer_experience_router
 from app.web.admin.customer_retention import router as customer_retention_router
 from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
@@ -193,7 +192,6 @@ def admin_nas_legacy_path_redirect(path: str):
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(customer_retention_router)
-router.include_router(customer_experience_router)
 router.include_router(help_center_router)
 router.include_router(meta_connection_router)
 router.include_router(surveys_router)

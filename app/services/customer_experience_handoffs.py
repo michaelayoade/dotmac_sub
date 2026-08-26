@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import SubscriptionStatus
 from app.models.customer_experience import (
     CustomerExperienceHandoff,
     CustomerExperienceHandoffEvent,
@@ -22,41 +21,6 @@ from app.models.vendor_routes import InstallationProjectStatus
 from app.services.events import EventType, emit_event
 
 POLICY_VERSION = 1
-
-
-@dataclass(frozen=True)
-class CustomerExperienceHandoffQueueItem:
-    id: UUID
-    subscriber_id: UUID
-    subscription_id: UUID
-    sales_order_id: UUID
-    project_id: UUID
-    installation_project_id: UUID
-    service_order_id: UUID
-    status: str
-    policy_version: int
-    readiness_evidence: dict
-    ready_at: datetime | None
-    accepted_at: datetime | None
-    accepted_by_actor_type: str | None
-    accepted_by_actor_id: str | None
-    attention_reason: str | None
-    created_at: datetime
-    updated_at: datetime
-    customer_display_name: str | None
-    customer_email: str | None
-    customer_phone: str | None
-    sales_order_number: str | None
-    sales_order_status: str | None
-    sales_order_payment_status: str | None
-    project_name: str | None
-    project_type: str | None
-    project_status: str | None
-    service_order_status: str | None
-    subscription_status: str | None
-    offer_name: str | None
-    ready_age_seconds: int | None
-    next_action: str
 
 
 class CustomerExperienceHandoffError(ValueError):
@@ -147,90 +111,6 @@ def _readiness(service_order: ServiceOrder) -> dict[str, object]:
         if key not in {"policy_version", "eligible"}
     )
     return evidence
-
-
-def _ready_age_seconds(handoff: CustomerExperienceHandoff) -> int | None:
-    if handoff.ready_at is None:
-        return None
-    ready_at = handoff.ready_at
-    if ready_at.tzinfo is None:
-        ready_at = ready_at.replace(tzinfo=UTC)
-    return max(0, int((datetime.now(UTC) - ready_at).total_seconds()))
-
-
-def _next_action(handoff: CustomerExperienceHandoff) -> str:
-    if handoff.status == CustomerExperienceHandoffStatus.ready.value:
-        return "accept_or_needs_attention"
-    if handoff.status == CustomerExperienceHandoffStatus.needs_attention.value:
-        return "resolve_attention"
-    if handoff.status == CustomerExperienceHandoffStatus.pending.value:
-        return "wait_for_readiness"
-    return "none"
-
-
-def _value(value: object) -> str | None:
-    resolved = getattr(value, "value", value)
-    return str(resolved or "") or None
-
-
-def _queue_item(
-    handoff: CustomerExperienceHandoff,
-) -> CustomerExperienceHandoffQueueItem:
-    subscriber = handoff.subscriber
-    subscription = handoff.subscription
-    sales_order = handoff.sales_order
-    project = handoff.project
-    service_order = handoff.service_order
-    offer = subscription.offer if subscription is not None else None
-    return CustomerExperienceHandoffQueueItem(
-        id=handoff.id,
-        subscriber_id=handoff.subscriber_id,
-        subscription_id=handoff.subscription_id,
-        sales_order_id=handoff.sales_order_id,
-        project_id=handoff.project_id,
-        installation_project_id=handoff.installation_project_id,
-        service_order_id=handoff.service_order_id,
-        status=handoff.status,
-        policy_version=handoff.policy_version,
-        readiness_evidence=handoff.readiness_evidence,
-        ready_at=handoff.ready_at,
-        accepted_at=handoff.accepted_at,
-        accepted_by_actor_type=handoff.accepted_by_actor_type,
-        accepted_by_actor_id=handoff.accepted_by_actor_id,
-        attention_reason=handoff.attention_reason,
-        created_at=handoff.created_at,
-        updated_at=handoff.updated_at,
-        customer_display_name=(
-            getattr(subscriber, "display_name", None)
-            or getattr(subscriber, "full_name", None)
-        ),
-        customer_email=getattr(subscriber, "email", None),
-        customer_phone=getattr(subscriber, "phone", None),
-        sales_order_number=getattr(sales_order, "order_number", None),
-        sales_order_status=_value(getattr(sales_order, "status", None)),
-        sales_order_payment_status=_value(getattr(sales_order, "payment_status", None)),
-        project_name=getattr(project, "name", None),
-        project_type=getattr(project, "project_type", None),
-        project_status=_value(getattr(project, "status", None)),
-        service_order_status=_value(getattr(service_order, "status", None)),
-        subscription_status=_value(getattr(subscription, "status", None)),
-        offer_name=getattr(offer, "name", None),
-        ready_age_seconds=_ready_age_seconds(handoff),
-        next_action=_next_action(handoff),
-    )
-
-
-def _locked_handoff(db: Session, handoff_id: UUID) -> CustomerExperienceHandoff:
-    handoff = db.scalars(
-        select(CustomerExperienceHandoff)
-        .where(CustomerExperienceHandoff.id == handoff_id)
-        .with_for_update()
-    ).one_or_none()
-    if handoff is None:
-        raise CustomerExperienceHandoffError(
-            "handoff_not_found", "Handoff not found", kind="not_found"
-        )
-    return handoff
 
 
 def ensure_ready_for_service_order(
@@ -336,7 +216,15 @@ def accept_handoff(
         raise CustomerExperienceHandoffError(
             "actor_required", "Handoff actor is required", kind="invalid"
         )
-    handoff = _locked_handoff(db, handoff_id)
+    handoff = db.scalars(
+        select(CustomerExperienceHandoff)
+        .where(CustomerExperienceHandoff.id == handoff_id)
+        .with_for_update()
+    ).one_or_none()
+    if handoff is None:
+        raise CustomerExperienceHandoffError(
+            "handoff_not_found", "Handoff not found", kind="not_found"
+        )
     if handoff.status == CustomerExperienceHandoffStatus.accepted.value:
         return handoff
     if handoff.status != CustomerExperienceHandoffStatus.ready.value:
@@ -383,7 +271,15 @@ def mark_needs_attention(
         raise CustomerExperienceHandoffError(
             "reason_required", "Attention reason is required", kind="invalid"
         )
-    handoff = _locked_handoff(db, handoff_id)
+    handoff = db.scalars(
+        select(CustomerExperienceHandoff)
+        .where(CustomerExperienceHandoff.id == handoff_id)
+        .with_for_update()
+    ).one_or_none()
+    if handoff is None:
+        raise CustomerExperienceHandoffError(
+            "handoff_not_found", "Handoff not found", kind="not_found"
+        )
     if handoff.status == CustomerExperienceHandoffStatus.needs_attention.value:
         if handoff.attention_reason == normalized_reason:
             return handoff
@@ -417,69 +313,6 @@ def mark_needs_attention(
     return handoff
 
 
-def resolve_attention(
-    db: Session,
-    *,
-    handoff_id: UUID,
-    actor_type: str,
-    actor_id: str,
-    reason: str,
-    commit: bool = True,
-) -> CustomerExperienceHandoff:
-    actor = str(actor_id or "").strip()
-    normalized_reason = str(reason or "").strip()
-    if not actor:
-        raise CustomerExperienceHandoffError(
-            "actor_required", "Handoff actor is required", kind="invalid"
-        )
-    if not normalized_reason:
-        raise CustomerExperienceHandoffError(
-            "reason_required", "Resolution reason is required", kind="invalid"
-        )
-    handoff = _locked_handoff(db, handoff_id)
-    if handoff.status != CustomerExperienceHandoffStatus.needs_attention.value:
-        raise CustomerExperienceHandoffError(
-            "handoff_not_blocked",
-            "Only a handoff needing attention can be resolved",
-        )
-    order = db.scalars(
-        select(ServiceOrder)
-        .where(ServiceOrder.id == handoff.service_order_id)
-        .with_for_update()
-    ).one_or_none()
-    if order is None:
-        raise CustomerExperienceHandoffError(
-            "service_order_not_found", "Service order not found", kind="not_found"
-        )
-    evidence = _readiness(order)
-    handoff.readiness_evidence = evidence
-    if not evidence["eligible"]:
-        raise CustomerExperienceHandoffError(
-            "handoff_readiness_unresolved",
-            "The handoff still lacks complete readiness evidence",
-        )
-    previous = handoff.status
-    handoff.status = CustomerExperienceHandoffStatus.ready.value
-    handoff.attention_reason = None
-    if handoff.ready_at is None:
-        handoff.ready_at = datetime.now(UTC)
-    _event(
-        db,
-        handoff=handoff,
-        event_type=EventType.customer_experience_ready,
-        previous=previous,
-        target=handoff.status,
-        actor_type=str(actor_type or "staff_user"),
-        actor_id=actor,
-        reason=normalized_reason,
-    )
-    db.flush()
-    if commit:
-        db.commit()
-        db.refresh(handoff)
-    return handoff
-
-
 def list_handoffs(
     db: Session, *, status: str | None = None, limit: int = 100, offset: int = 0
 ) -> list[CustomerExperienceHandoff]:
@@ -499,47 +332,6 @@ def list_handoffs(
             .limit(limit)
         ).all()
     )
-
-
-def list_handoff_queue(
-    db: Session, *, status: str | None = None, limit: int = 100, offset: int = 0
-) -> list[CustomerExperienceHandoffQueueItem]:
-    query = select(CustomerExperienceHandoff).options(
-        selectinload(CustomerExperienceHandoff.subscriber),
-        selectinload(CustomerExperienceHandoff.subscription).selectinload(
-            Subscription.offer
-        ),
-        selectinload(CustomerExperienceHandoff.sales_order),
-        selectinload(CustomerExperienceHandoff.project),
-        selectinload(CustomerExperienceHandoff.service_order),
-    )
-    if status:
-        try:
-            normalized = CustomerExperienceHandoffStatus(status).value
-        except ValueError as exc:
-            raise CustomerExperienceHandoffError(
-                "invalid_status", "Invalid handoff status", kind="invalid"
-            ) from exc
-        query = query.where(CustomerExperienceHandoff.status == normalized)
-    handoffs = db.scalars(
-        query.order_by(CustomerExperienceHandoff.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    ).all()
-    return [_queue_item(handoff) for handoff in handoffs]
-
-
-def count_handoff_queue(db: Session) -> dict[str, int]:
-    counts = {status.value: 0 for status in CustomerExperienceHandoffStatus}
-    rows = db.execute(
-        select(CustomerExperienceHandoff.status, func.count())
-        .select_from(CustomerExperienceHandoff)
-        .group_by(CustomerExperienceHandoff.status)
-    ).all()
-    for status, count in rows:
-        counts[str(status)] = int(count or 0)
-    counts["all"] = sum(counts.values())
-    return counts
 
 
 # --- receipted lifecycle-output consumption --------------------------------
@@ -656,7 +448,7 @@ def consume_cx_acceptance_due(
 
     definition = OwnerCommandDefinition(
         owner="customer.experience_handoff",
-        concern=("CX acceptance, needs-attention, and attention-resolution lifecycle"),
+        concern="CX acceptance and needs-attention lifecycle",
         name="consume_cx_acceptance_due",
     )
 
