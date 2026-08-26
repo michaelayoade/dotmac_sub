@@ -41,7 +41,6 @@ from app.services import (
     team_inbox_maintenance,
 )
 from app.services.ai.client import AIResponse
-from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import installations
 from app.services.integrations.connectors.whatsapp_runtime import WHATSAPP_PROVIDER_META
 from app.services.integrations.runtime import ValidationResult
@@ -720,7 +719,7 @@ def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkey
         scope="ai:intake-policy-draft",
         reason="test composable clarification before handoff",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1827,7 +1826,7 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
         scope="ai:intake-policy-draft",
         reason="test composable human handoff",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1952,7 +1951,7 @@ def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
         scope="ai:intake-policy-draft",
         reason="test preview safety",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -2015,7 +2014,7 @@ def test_activation_rejects_invalid_composable_rule_action(db_session):
         scope="ai:intake-policy-draft",
         reason="test invalid composable rule",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -2070,7 +2069,7 @@ def test_draft_policy_persists_langgraph_engine_mode(db_session):
         reason="test langgraph mode persistence",
     )
 
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
