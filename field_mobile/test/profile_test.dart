@@ -8,19 +8,20 @@ import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/offline/connectivity.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
+import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/execution/execution_controller.dart';
 import 'package:dotmac_field/features/jobs/jobs_providers.dart';
 import 'package:dotmac_field/features/profile/profile_screen.dart';
 import 'package:dotmac_field/features/profile/vendor_profile_provider.dart';
 import 'package:drift/drift.dart' hide Column;
-import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 OutboxEntry _entry(
   int seq,
@@ -52,14 +53,16 @@ void main() {
     );
   }
 
+  late SecureFieldStore store;
   late AppDatabase db;
   late SyncService sync;
 
   setUp(() async {
-    db = AppDatabase(NativeDatabase.memory());
+    store = await openTestStore();
+    db = store.database;
     final adapter = FakeHttpAdapter();
-    final store = InMemoryTokenStore();
-    await store.save(
+    final tokens = InMemoryTokenStore();
+    await tokens.save(
       accessToken: fakeJwt(
         expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
       ),
@@ -72,10 +75,11 @@ void main() {
       db: db,
       api: ApiClient(
         baseUrl: 'https://test.local',
-        tokenStore: store,
+        tokenStore: tokens,
         dio: dio,
       ),
       connectivity: FakeConnectivity(online: false),
+      evidence: store.evidence,
       delay: (_) async {},
     );
   });
@@ -170,6 +174,7 @@ void main() {
           .into(db.outboxEntries)
           .insert(
             OutboxEntriesCompanion.insert(
+              scopeKey: store.scopeKey,
               clientRef: 'c0',
               kind: 'transition',
               payloadJson: jsonEncode({'work_order_id': 'wo'}),
@@ -201,6 +206,7 @@ void main() {
           .into(db.outboxEntries)
           .insert(
             OutboxEntriesCompanion.insert(
+              scopeKey: store.scopeKey,
               clientRef: 'c1',
               kind: 'transition',
               payloadJson: jsonEncode({'work_order_id': 'wo'}),

@@ -78,10 +78,15 @@ class MapAssetsRepository {
   }
 
   Future<List<MapAsset>> _readCachedAssets(List<String> types) async {
-    final db = _ref.read(syncServiceProvider).db;
-    final rows = await (db.select(
-      db.cachedMapAssets,
-    )..where((row) => row.assetType.isIn(types))).get();
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
+    final rows =
+        await (db.select(db.cachedMapAssets)..where(
+              (row) =>
+                  row.scopeKey.equals(sync.scopeKey) &
+                  row.assetType.isIn(types),
+            ))
+            .get();
     rows.sort((a, b) {
       final typeOrder = types
           .indexOf(a.assetType)
@@ -107,10 +112,15 @@ class MapAssetsRepository {
   }
 
   Future<bool> _cacheNeedsRefresh(List<String> types) async {
-    final db = _ref.read(syncServiceProvider).db;
-    final cursors = await (db.select(
-      db.cachedMapAssetSyncCursors,
-    )..where((row) => row.assetType.isIn(types))).get();
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
+    final cursors =
+        await (db.select(db.cachedMapAssetSyncCursors)..where(
+              (row) =>
+                  row.scopeKey.equals(sync.scopeKey) &
+                  row.assetType.isIn(types),
+            ))
+            .get();
     if (cursors.isEmpty) return true;
     final cursorByType = {
       for (final cursor in cursors) cursor.assetType: cursor,
@@ -148,19 +158,26 @@ class MapAssetsRepository {
   }
 
   Future<DateTime?> _readCursor(String type) async {
-    final db = _ref.read(syncServiceProvider).db;
-    final row = await (db.select(
-      db.cachedMapAssetSyncCursors,
-    )..where((row) => row.assetType.equals(type))).getSingleOrNull();
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
+    final row =
+        await (db.select(db.cachedMapAssetSyncCursors)..where(
+              (row) =>
+                  row.scopeKey.equals(sync.scopeKey) &
+                  row.assetType.equals(type),
+            ))
+            .getSingleOrNull();
     return row?.syncedAt;
   }
 
   Future<void> _writeCursor(String type, DateTime serverTime) async {
-    final db = _ref.read(syncServiceProvider).db;
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
     await db
         .into(db.cachedMapAssetSyncCursors)
         .insert(
           CachedMapAssetSyncCursorsCompanion.insert(
+            scopeKey: sync.scopeKey,
             assetType: type,
             syncedAt: serverTime,
           ),
@@ -172,20 +189,26 @@ class MapAssetsRepository {
     String type,
     List<MapAsset> assets,
   ) async {
-    final db = _ref.read(syncServiceProvider).db;
-    await (db.delete(
-      db.cachedMapAssets,
-    )..where((row) => row.assetType.equals(type))).go();
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
+    await (db.delete(db.cachedMapAssets)..where(
+          (row) =>
+              row.scopeKey.equals(sync.scopeKey) & row.assetType.equals(type),
+        ))
+        .go();
     await _upsertCachedAssets(assets);
   }
 
   Future<void> _deleteCachedAssets(List<_DeletedMapAsset> deleted) async {
     if (deleted.isEmpty) return;
-    final db = _ref.read(syncServiceProvider).db;
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
     for (final asset in deleted) {
       await (db.delete(db.cachedMapAssets)..where(
             (row) =>
-                row.assetType.equals(asset.type) & row.assetId.equals(asset.id),
+                row.scopeKey.equals(sync.scopeKey) &
+                row.assetType.equals(asset.type) &
+                row.assetId.equals(asset.id),
           ))
           .go();
     }
@@ -193,13 +216,15 @@ class MapAssetsRepository {
 
   Future<void> _upsertCachedAssets(List<MapAsset> assets) async {
     if (assets.isEmpty) return;
-    final db = _ref.read(syncServiceProvider).db;
+    final sync = _ref.read(syncServiceProvider);
+    final db = sync.db;
     final now = DateTime.now().toUtc();
     await db.batch((batch) {
       for (final asset in assets) {
         batch.insert(
           db.cachedMapAssets,
           CachedMapAssetsCompanion.insert(
+            scopeKey: sync.scopeKey,
             assetType: asset.type,
             assetId: asset.id,
             title: asset.title,

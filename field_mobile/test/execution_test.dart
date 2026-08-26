@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -9,15 +8,16 @@ import 'package:dotmac_field/core/location/location_source.dart';
 import 'package:dotmac_field/core/offline/connectivity.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
+import 'package:dotmac_field/core/secure/secure_field_store.dart';
 import 'package:dotmac_field/features/execution/completion_state.dart';
 import 'package:dotmac_field/features/execution/execution_controller.dart';
 import 'package:dotmac_field/features/jobs/job_models.dart';
-import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/open.dart';
 
 import 'helpers/fake_http.dart';
+import 'helpers/secure_store.dart';
 
 void main() {
   if (Platform.isLinux) {
@@ -27,6 +27,7 @@ void main() {
     );
   }
 
+  late SecureFieldStore store;
   late AppDatabase db;
   late SyncService sync;
   late FakeConnectivity connectivity;
@@ -34,23 +35,25 @@ void main() {
   late ProviderContainer container;
 
   setUp(() async {
-    db = AppDatabase(NativeDatabase.memory());
+    store = await openTestStore();
+    db = store.database;
     connectivity = FakeConnectivity(
       online: false,
     ); // keep entries queued for inspection
     location = FakeLocation((latitude: 6.43, longitude: 3.42));
     final adapter = FakeHttpAdapter();
-    final store = InMemoryTokenStore();
+    final tokens = InMemoryTokenStore();
     final dio = Dio(BaseOptions(baseUrl: 'https://test.local'));
     dio.httpClientAdapter = adapter;
     sync = SyncService(
       db: db,
       api: ApiClient(
         baseUrl: 'https://test.local',
-        tokenStore: store,
+        tokenStore: tokens,
         dio: dio,
       ),
       connectivity: connectivity,
+      evidence: store.evidence,
       delay: (_) async {},
     );
     container = ProviderContainer(
@@ -67,13 +70,13 @@ void main() {
     await db.close();
   });
 
+  // Queued payloads are envelopes bound to the scope, so the assertions read
+  // them back the same way the sync service does before it sends one.
   Future<List<Map<String, dynamic>>> queued(String kind) async {
     final rows = await db.select(db.outboxEntries).get();
     return rows
         .where((row) => row.kind == kind)
-        .map(
-          (row) => (jsonDecode(row.payloadJson) as Map).cast<String, dynamic>(),
-        )
+        .map((row) => readQueuedPayload(store, row.clientRef, row.payloadJson))
         .toList();
   }
 
@@ -167,6 +170,7 @@ void main() {
         db: db,
         api: sync.api,
         connectivity: connectivity,
+        evidence: store.evidence,
       );
       sync = failingSync;
       container.dispose();
@@ -337,6 +341,7 @@ class _FlushFailingSyncService extends SyncService {
     required super.db,
     required super.api,
     required super.connectivity,
+    required super.evidence,
   });
 
   @override
