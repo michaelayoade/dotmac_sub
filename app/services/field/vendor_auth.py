@@ -17,7 +17,21 @@ from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.services import staff_party_authentication
 from app.services.auth_dependencies import require_user_auth
+from app.services.auth_flow import decode_access_token
 from app.services.common import coerce_uuid
+from app.services.domain_errors import DomainError
+
+VENDOR_ACCESS_MESSAGE = "Vendor access required"
+
+
+class VendorAdmissionRequiredError(DomainError):
+    """The principal behind an issued access token is not a vendor operator."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="vendor_auth.access_required",
+            message=VENDOR_ACCESS_MESSAGE,
+        )
 
 
 class VendorLoginEligibilityStatus(StrEnum):
@@ -141,6 +155,70 @@ def vendor_context(db: Session, auth: dict) -> dict:
         "native_vendor_id": str(native_vendor.id) if native_vendor else None,
         "native_vendor": native_vendor,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class VendorTokenAdmission:
+    """Which vendor an already-issued access token is admitted to operate for."""
+
+    system_user_id: UUID
+    vendor_user_id: UUID
+    vendor_id: UUID
+    native_vendor_id: UUID | None
+
+
+def resolve_vendor_admission_for_access_token(
+    db: Session,
+    *,
+    access_token: str,
+) -> VendorTokenAdmission:
+    """Decide whether an issued access token may act as a vendor operator.
+
+    Login, MFA verification and refresh all mint a general principal token
+    through ``app.services.auth_flow`` — that owner knows nothing about vendor
+    membership. Every vendor transport must therefore re-check the token it was
+    just handed, or a non-vendor staff principal who authenticates through a
+    vendor endpoint receives a working one. ``app/api/vendor_auth.py`` calls
+    this. The browser adapter still carries its own private copy of the same
+    composition (``app/web/vendor_auth_flow._require_access_token_vendor``),
+    written before this function existed; it should adopt this one so the
+    decision has a single implementation as well as a single owner.
+
+    Raises ``VendorAdmissionRequiredError`` when the token's principal is not an
+    active member of an active vendor. The caller decides the transport
+    consequence — refusing the response, and discarding the session it minted.
+    """
+
+    payload = decode_access_token(db, access_token)
+    principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
+    principal_type = str(payload.get("principal_type") or "")
+    if not principal_id or principal_type != "system_user":
+        raise VendorAdmissionRequiredError()
+    try:
+        context = vendor_context(
+            db,
+            {
+                "principal_id": principal_id,
+                "person_id": principal_id,
+                "principal_type": principal_type,
+                "session_id": str(payload.get("session_id") or ""),
+                "roles": [],
+                "scopes": [],
+            },
+        )
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            raise VendorAdmissionRequiredError() from exc
+        raise
+    native_vendor_id = context.get("native_vendor_id")
+    return VendorTokenAdmission(
+        system_user_id=coerce_uuid(principal_id),
+        vendor_user_id=coerce_uuid(str(context["vendor_user_id"])),
+        vendor_id=coerce_uuid(str(context["vendor_id"])),
+        native_vendor_id=(
+            coerce_uuid(str(native_vendor_id)) if native_vendor_id else None
+        ),
+    )
 
 
 def require_field_vendor_token(
