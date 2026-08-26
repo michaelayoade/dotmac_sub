@@ -82,8 +82,8 @@ class ApiClient {
     this.onSessionExpired,
     this.onImpersonationExpired,
     this.onCacheState,
-  }) : _storage = storage,
-       _fence = fence ?? SessionFence() {
+  })  : _storage = storage,
+        _fence = fence ?? SessionFence() {
     _dio = Dio(
       BaseOptions(
         baseUrl: Env.apiRoot,
