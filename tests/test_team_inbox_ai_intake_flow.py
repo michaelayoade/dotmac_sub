@@ -36,6 +36,7 @@ from app.models.team_inbox import (
 from app.services import (
     ai_conversation_intake,
     ai_intake,
+    ai_intake_conversation_engine,
     team_inbox_channel_receive,
     team_inbox_maintenance,
 )
@@ -97,6 +98,65 @@ class _Gateway:
             ),
             {"endpoint": "primary", "fallback_used": False},
         )
+
+
+def test_identifier_prompt_accepts_any_approved_identifier():
+    state = ai_intake_conversation_engine.ConversationalState(
+        conversation_id=str(uuid4()),
+        session_id=str(uuid4()),
+        policy_version_id=str(uuid4()),
+        channel=InboxChannelType.whatsapp.value,
+    )
+    policy = {
+        "permitted_identifiers": (
+            "registered_phone",
+            "registered_email",
+            "portal_id",
+        )
+    }
+
+    requested = ai_intake_conversation_engine._next_identifier_to_request(
+        state, policy
+    )
+
+    assert requested == ai_intake_conversation_engine.CUSTOMER_IDENTIFIER_REQUEST
+    assert ai_intake_conversation_engine._identifier_question(requested) == (
+        "Please send the registered phone number, registered email, or "
+        "Portal ID on the account."
+    )
+
+    state.already_requested_fields = (requested,)
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        is None
+    )
+
+    state.already_requested_fields = ()
+    state.registered_email = "customer@example.test"
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+        is None
+    )
+
+
+def test_identifier_prompt_preserves_single_identifier_policy():
+    state = ai_intake_conversation_engine.ConversationalState(
+        conversation_id=str(uuid4()),
+        session_id=str(uuid4()),
+        policy_version_id=str(uuid4()),
+        channel=InboxChannelType.whatsapp.value,
+    )
+    policy = {"permitted_identifiers": ("portal_id",)}
+
+    requested = ai_intake_conversation_engine._next_identifier_to_request(
+        state, policy
+    )
+
+    assert requested == "portal_id"
+    assert (
+        ai_intake_conversation_engine._identifier_question(requested)
+        == "Please send your Portal ID or account number so I can identify the service."
+    )
 
 
 def _team(db_session, name: str) -> ServiceTeam:
