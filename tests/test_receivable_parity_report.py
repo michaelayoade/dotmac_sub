@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 
 from app.models.billing import Invoice, InvoiceDueDateBasis, InvoiceLine, InvoiceStatus
 from app.models.billing_receivable_projection import BillingReceivableProjection
+from app.models.catalog import BillingCycle
 from app.models.subscription_billing_treatment import (
     BillingTreatmentReason,
     BillingTreatmentStatus,
@@ -204,14 +205,14 @@ def test_receivable_amount_parity_is_stated_as_an_observation(
     assert "not a competing derivation" in verdict.detail
 
 
-def test_a_complimentary_subscription_blocks_cadence_parity(
+def test_a_complimentary_subscription_blocks_unadopted_contract_parity(
     db_session, subscriber, subscription
 ):
-    """The a2 pin cannot express Sub's complimentary treatment.
+    """The a3 contract is composed but has no admitted runtime parity mapping.
 
     The correct answer is a counted refusal carrying the pin coordinates —
     never `matched` because nothing contradicted it, and never a locally
-    invented mapping onto a contract Sub does not install.
+    invented mapping before the runtime contract is admitted.
     """
     db_session.add(
         SubscriptionBillingArrangement(
@@ -220,12 +221,20 @@ def test_a_complimentary_subscription_blocks_cadence_parity(
             authorized_offer_id=subscription.offer_id,
             treatment=SubscriptionBillingTreatment.complimentary,
             reason_code=BillingTreatmentReason.internal_service,
+            reason="Internal service approved for parity coverage",
             starts_at=datetime(2026, 6, 1, tzinfo=UTC),
-            ends_at=None,
+            ends_at=datetime(2026, 9, 1, tzinfo=UTC),
             maximum_recurring_amount=Decimal("50000.00"),
             approval_policy_max_days=180,
+            billing_cycle=BillingCycle.monthly,
+            currency="NGN",
             status=BillingTreatmentStatus.active,
+            approved_by="pytest:receivable-parity",
+            approved_at=datetime(2026, 6, 1, tzinfo=UTC),
+            command_id=uuid4(),
+            correlation_id=uuid4(),
             idempotency_key_sha256="0" * 64,
+            command_fingerprint="1" * 64,
         )
     )
     _seed_invoice(db_session, subscriber=subscriber, subscription=subscription)
@@ -241,11 +250,11 @@ def test_a_complimentary_subscription_blocks_cadence_parity(
 
     assert verdict.outcome is ParityOutcome.NOT_EXPRESSIBLE
     assert verdict.reason is (
-        NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_UNPINNED
+        NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_NOT_ADOPTED
     )
     assert (
         report.not_expressible_reasons[
-            NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_UNPINNED.value
+            NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_NOT_ADOPTED.value
         ]
         == 1
     )

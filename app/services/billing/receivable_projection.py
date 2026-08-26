@@ -104,7 +104,7 @@ from app.services.billing.receivable_cohort import (
     EXCLUDED_INVOICE_STATUSES,
     PROJECTION_POLICY_VERSION,
     STANDING_BLOCKERS,
-    UNPINNED_BILLING_TREATMENTS,
+    UNADOPTED_BILLING_TREATMENTS,
     CohortClassification,
     ReceivableCohortWindow,
     ReceivableLane,
@@ -521,7 +521,7 @@ def _derive_position(
     treatment = _billing_treatment(
         db, subscription_id=subscription.id, moment=issued_at
     )
-    expressible = treatment not in UNPINNED_BILLING_TREATMENTS
+    expressible = treatment not in UNADOPTED_BILLING_TREATMENTS
 
     total = _money(invoice.total)
     outstanding = _money(invoice.balance_due)
@@ -619,7 +619,7 @@ def _derive_position(
     line_digest = _id_digest([line.id for line in lines])
     allocation_digest = _id_digest([item.id for item in allocations])
 
-    watermark = _newest(
+    source_observed_at = _newest(
         invoice.updated_at,
         *[line.updated_at for line in lines],
         *[item.created_at for item in allocations],
@@ -658,7 +658,7 @@ def _derive_position(
     source_fingerprint = digest_payload(
         {
             "input": input_fingerprint,
-            "source_observed_at": watermark.isoformat(),
+            "source_observed_at": source_observed_at.isoformat(),
         }
     )
 
@@ -673,7 +673,7 @@ def _derive_position(
             contract_version.source_version if contract_version else None
         ),
         obligation_id=obligation.id if obligation else None,
-        source_observed_at=watermark,
+        source_observed_at=source_observed_at,
         source_fingerprint=source_fingerprint,
         input_row_fingerprint=input_fingerprint,
         invoice_line_ids_sha256=line_digest,

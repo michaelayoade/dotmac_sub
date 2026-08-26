@@ -154,11 +154,12 @@ Neither implies the other:
 
 Recording a data cohort **does not** advance a module one step along
 `ADOPTION_PROGRESSION`, and nothing in the projection package writes to the
-manifest in `app/shadow/`. The link runs one way and is deliberate: the data
-cohort *reads* this manifest's pins, so a parity blocker naming
-`dotmac-subscriptions 0.1.0a2` cannot drift away from the manifest that records
-that pin. `test_the_standing_blocker_carries_real_pin_coordinates` fails the
-build if the two ever disagree.
+manifest in `app/shadow/`. Both declarations read the immutable Subscriptions
+release coordinates from `app/module_release_contracts.py`, so production code
+does not import the shadow package. The a3 treatment contract is composed but
+has no admitted runtime reader or mapping yet.
+`test_the_standing_blocker_carries_real_pin_coordinates` fails the build if the
+recorded blocker and adoption manifest ever disagree.
 
 The data cohort also runs against **live Sub**, not inside the shadow stack:
 it observes incumbent invoices and writes a rebuildable projection beside them.

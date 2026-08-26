@@ -44,9 +44,10 @@ rows are compared.
 
 Neither implies the other. Recording a data cohort does not advance a module
 one step along `ADOPTION_PROGRESSION`, and nothing here writes to that
-manifest. The link runs one way: the data cohort *reads* the module cohort's
-pins, so a parity blocker naming `dotmac-subscriptions 0.1.0a2` cannot drift
-away from the manifest that records that pin.
+manifest. Both declarations read the immutable Subscriptions release
+coordinates from `app/module_release_contracts.py`, so production code does
+not import the shadow package and the blocker cannot drift from the adoption
+pin.
 
 ## 2a. Product projection and module input are deliberately distinct
 
@@ -262,16 +263,18 @@ Sub carries its own authoritative non-standard billing treatment
 (`subscription_billing_arrangements`, owned by
 `financial.subscription_billing_treatments`). The pinned Subscriptions contract
 — `dotmac-subscriptions`, version and revision read live from
-`app/shadow/cohort.py` — has no counterpart for it; the billing-treatment
-contract arrived in a later release this repository does not pin.
+`app/module_release_contracts.py` — supplies the corresponding contract, but
+this additive schema-composition phase admits no application import, runtime
+reader, backfill, or mapping to that contract.
 
-Synthesising a local mapping onto a contract Sub does not install would make
-Sub a second writer of a contract it cannot read. So such positions are counted
+Synthesising a mapping before the runtime contract is admitted would make Sub
+a second interpreter of data it does not read. So such positions are counted
 `not_expressible` on the cadence dimension, with the pin coordinates attached
 to the blocker recorded on the run row — never `matched` because nothing
 contradicted them.
 
-Blocker code: `subscriptions-pin-lacks-billing-treatment-contract`.
+Blocker code:
+`subscriptions-billing-treatment-contract-not-runtime-adopted`.
 
 ### 8.3 Due-date authority gate
 

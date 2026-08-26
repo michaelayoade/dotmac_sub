@@ -18,9 +18,9 @@ The report is *recorded* — if the operator asks for it — by
 "we cannot compare this" into either of the first two is how a parity claim
 comes to cover less than it appears to:
 
-* a complimentary or sponsored subscription has no expression in the pinned
-  Subscriptions contract, so its cadence verdict is `NOT_EXPRESSIBLE` with the
-  pin coordinates attached — never `MATCHED` because nothing contradicted it;
+* the Subscriptions a3 treatment contract is schema-composed but not admitted
+  to the application runtime, so a complimentary or sponsored cadence verdict
+  is `NOT_EXPRESSIBLE` with the release coordinates attached;
 * a position with no ADR 0007 obligation has no counterparty, so the
   obligations dimension is `NOT_EXPRESSIBLE` rather than a divergence blamed on
   a row that was never written;
@@ -181,10 +181,10 @@ def _cadence(
     if not row.billing_treatment_expressible:
         return _blocked(
             ParityDimension.CADENCE,
-            NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_UNPINNED,
+            NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_NOT_ADOPTED,
             (
-                f"treatment {row.observed_billing_treatment!r} has no expression "
-                "in the pinned Subscriptions contract"
+                f"treatment {row.observed_billing_treatment!r} is not mapped to "
+                "the schema-composed Subscriptions runtime contract"
             ),
         )
     if version is None:

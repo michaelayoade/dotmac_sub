@@ -27,13 +27,24 @@ from decimal import Decimal
 from threading import Barrier
 
 import pytest
-from sqlalchemy import inspect, select, text
+from sqlalchemy import delete, inspect, select, text
 from sqlalchemy.exc import DatabaseError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.billing import Invoice, InvoiceDueDateBasis, InvoiceLine, InvoiceStatus
 from app.models.billing_receivable_projection import BillingReceivableProjection
-from app.models.catalog import BillingMode, Subscription
+from app.models.catalog import (
+    AccessType,
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    OfferVersion,
+    PriceBasis,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
+)
+from app.models.subscriber import Reseller, Subscriber
 from app.services.billing.receivable_cohort import ReceivableCohortWindow
 from app.services.billing.receivable_projection import (
     ProjectionMode,
@@ -110,6 +121,97 @@ def seeded_invoice(db_session, subscriber, subscription):
     )
     db_session.commit()
     return invoice
+
+
+def _seed_committed_invoice(
+    session_factory: sessionmaker[Session],
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Create worker-visible source rows outside the fixture savepoint.
+
+    The shared ``db_session`` fixture intentionally holds data inside an outer
+    transaction. Independent concurrency workers cannot see those rows, so a
+    concurrency proof must own and commit its own uniquely named source data.
+    """
+    suffix = uuid.uuid4().hex[:12]
+    with session_factory() as setup:
+        reseller = Reseller(
+            name=f"Receivable Projection {suffix}",
+            code=f"receivable-projection-{suffix}",
+            is_active=True,
+        )
+        account = Subscriber(
+            first_name="Receivable",
+            last_name="Projection",
+            email=f"receivable-projection-{suffix}@example.test",
+            reseller=reseller,
+            billing_mode=BillingMode.postpaid,
+        )
+        offer = CatalogOffer(
+            name=f"Receivable Projection {suffix}",
+            code=f"RP-{suffix}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            billing_cycle=BillingCycle.monthly,
+            billing_mode=BillingMode.postpaid,
+        )
+        offer_version = OfferVersion(
+            offer=offer,
+            version_number=1,
+            name=f"Receivable Projection {suffix} v1",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            billing_cycle=BillingCycle.monthly,
+        )
+        subscription = Subscription(
+            subscriber=account,
+            offer=offer,
+            offer_version=offer_version,
+            status=SubscriptionStatus.active,
+            billing_mode=BillingMode.postpaid,
+            billing_cycle=BillingCycle.monthly,
+            start_at=WINDOW_START,
+            next_billing_at=WINDOW_END,
+        )
+        setup.add_all([reseller, account, offer, offer_version, subscription])
+        setup.flush()
+        invoice = Invoice(
+            account_id=account.id,
+            status=InvoiceStatus.issued,
+            currency="NGN",
+            subtotal=Decimal("25000.00"),
+            tax_total=Decimal("0.00"),
+            total=Decimal("25000.00"),
+            balance_due=Decimal("25000.00"),
+            billing_period_start=WINDOW_START,
+            billing_period_end=WINDOW_END,
+            issued_at=ISSUED,
+            due_at=ISSUED + timedelta(days=14),
+            due_date_basis=InvoiceDueDateBasis.contract_terms,
+            due_date_basis_ref=f"subscription:{subscription.id}",
+            due_date_policy_version="billing-payment-terms-v1",
+            created_at=datetime(2026, 7, 5, tzinfo=UTC),
+            updated_at=datetime(2026, 7, 5, tzinfo=UTC),
+            is_active=True,
+        )
+        setup.add(invoice)
+        setup.flush()
+        setup.add(
+            InvoiceLine(
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+                description="Standard Internet",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("25000.00"),
+                amount=Decimal("25000.00"),
+                is_active=True,
+                created_at=datetime(2026, 7, 5, tzinfo=UTC),
+                updated_at=datetime(2026, 7, 5, tzinfo=UTC),
+            )
+        )
+        setup.commit()
+        return invoice.id, subscription.id
 
 
 # ── The migration actually installed the structural objects ─────────────────
@@ -216,6 +318,7 @@ def test_the_trigger_guard_still_bites(db_session, seeded_invoice):
     reconcile_receivable_projection(db_session, _command())
     db_session.commit()
     row = db_session.execute(select(BillingReceivableProjection)).scalars().one()
+    previous_version = row.projection_version
 
     db_session.execute(
         text(
@@ -228,14 +331,14 @@ def test_the_trigger_guard_still_bites(db_session, seeded_invoice):
     )
     db_session.commit()
     refreshed = db_session.execute(select(BillingReceivableProjection)).scalars().one()
-    assert refreshed.projection_version == row.projection_version + 1
+    assert refreshed.projection_version == previous_version + 1
 
 
 # ── Concurrency ─────────────────────────────────────────────────────────────
 
 
 def test_concurrent_passes_project_one_row_and_advance_the_version_once(
-    engine, db_session, seeded_invoice
+    engine,
 ):
     """Two workers, one natural key.
 
@@ -244,6 +347,7 @@ def test_concurrent_passes_project_one_row_and_advance_the_version_once(
     version is greater than anything already stored.
     """
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    invoice_id, subscription_id = _seed_committed_invoice(session_factory)
     barrier = Barrier(2)
 
     def run() -> int:
@@ -252,14 +356,41 @@ def test_concurrent_passes_project_one_row_and_advance_the_version_once(
             result = reconcile_receivable_projection(worker, _command())
             return result.inserted_count
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        inserted = [
-            future.result(timeout=60) for future in [pool.submit(run), pool.submit(run)]
-        ]
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            inserted = [
+                future.result(timeout=60)
+                for future in [pool.submit(run), pool.submit(run)]
+            ]
 
-    rows = db_session.execute(select(BillingReceivableProjection)).scalars().all()
-    assert len(rows) == 1, "the natural key must arbitrate concurrent passes"
-    assert sum(inserted) == 1, "exactly one pass may claim the insert"
+        with session_factory() as check:
+            rows = (
+                check.execute(
+                    select(BillingReceivableProjection).where(
+                        BillingReceivableProjection.invoice_id == invoice_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert len(rows) == 1, "the natural key must arbitrate concurrent passes"
+        assert sum(inserted) == 1, "exactly one pass may claim the insert"
+    finally:
+        # These rows were committed outside the fixture transaction so workers
+        # could observe them. Remove the cohort inputs before later tests run.
+        with session_factory.begin() as cleanup:
+            cleanup.execute(
+                delete(BillingReceivableProjection).where(
+                    BillingReceivableProjection.invoice_id == invoice_id
+                )
+            )
+            cleanup.execute(
+                delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id)
+            )
+            cleanup.execute(delete(Invoice).where(Invoice.id == invoice_id))
+            cleanup.execute(
+                delete(Subscription).where(Subscription.id == subscription_id)
+            )
 
 
 def test_the_sequence_is_monotonic_across_sessions(engine):
@@ -284,6 +415,7 @@ def test_a_repair_pass_converges_and_writes_no_duplicate(db_session, seeded_invo
     reconcile_receivable_projection(db_session, _command())
     db_session.commit()
     first = db_session.execute(select(BillingReceivableProjection)).scalars().one()
+    first_version = first.projection_version
 
     seeded_invoice.balance_due = Decimal("5000.00")
     seeded_invoice.status = InvoiceStatus.partially_paid
@@ -296,7 +428,7 @@ def test_a_repair_pass_converges_and_writes_no_duplicate(db_session, seeded_invo
 
     assert result.updated_count == 1
     assert len(rows) == 1
-    assert rows[0].projection_version > first.projection_version
+    assert rows[0].projection_version > first_version
     assert rows[0].observed_outstanding_amount == Decimal("5000.0000")
 
 

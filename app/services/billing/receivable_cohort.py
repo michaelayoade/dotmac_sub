@@ -23,9 +23,9 @@ They are related but neither implies the other:
 
 Recording a data cohort does not move a module one step along
 `ADOPTION_PROGRESSION`, and nothing in this package writes to that manifest.
-The link runs one way and is deliberate: this module *reads* the module
-cohort's pins so that a parity blocker naming `dotmac-subscriptions 0.1.0a2`
-cannot drift away from the manifest that actually records that pin.
+Both declarations read the immutable Subscriptions release coordinates from
+`app.module_release_contracts`, so this production module does not import the
+shadow package and the recorded blocker cannot drift from the adoption pin.
 
 ## The anchor is the incumbent invoice
 
@@ -95,12 +95,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Final
 
-from app.shadow.cohort import SHADOW_COHORT
+from app.module_release_contracts import SUBSCRIPTIONS_RELEASE
 
 #: Bumped whenever the membership rule, the declared vocabularies, or the
 #: sealed payload change shape. Two runs carrying the same
 #: `definition_version` and the same window applied the same rule.
-COHORT_DEFINITION_VERSION: Final[str] = "2026-08-25.1"
+COHORT_DEFINITION_VERSION: Final[str] = "2026-08-25.2"
 
 #: Version of the projection *policy* — the mapping from incumbent rows onto
 #: `BillingReceivableProjection` fields. Carried on every projected row so a
@@ -193,10 +193,12 @@ class NotExpressibleReason(StrEnum):
     same reason within a release.
     """
 
-    #: Sub's authoritative `subscription_billing_arrangements` record has no
-    #: expression in the pinned Subscriptions contract. See
+    #: The pinned Subscriptions release supplies a billing-treatment contract,
+    #: but Sub has not admitted a runtime reader or parity mapping for it. See
     #: `SUBSCRIPTION_TREATMENT_BLOCKER`.
-    SUBSCRIPTION_BILLING_TREATMENT_UNPINNED = "subscription_billing_treatment_unpinned"
+    SUBSCRIPTION_BILLING_TREATMENT_NOT_ADOPTED = (
+        "subscription_billing_treatment_not_adopted"
+    )
     #: No ADR 0007 obligation covers this subscription and period, so there is
     #: no counterparty to compare against. Expected while the ADR 0007 phases
     #: remain pre-cutover; recorded rather than assumed.
@@ -235,49 +237,33 @@ class ParityBlocker:
     pinned_revision: str
 
 
-def _pinned(module: str) -> tuple[str, str, str]:
-    """Read one module's pin coordinates from the module-adoption manifest.
-
-    Read rather than restated. A blocker that names a version maintained in two
-    places is a version that will eventually be wrong in one of them.
-    """
-    for entry in SHADOW_COHORT.modules:
-        if entry.module == module:
-            return (entry.package, entry.contract_version, entry.source_revision)
-    raise KeyError(
-        f"{module!r} is not declared in the module-adoption cohort; a parity "
-        "blocker cannot name a pin that no manifest records"
-    )
-
-
-_SUBS_PACKAGE, _SUBS_VERSION, _SUBS_REVISION = _pinned("subscriptions")
-
 #: Sub carries its own authoritative non-standard billing treatment
 #: (`subscription_billing_arrangements`: complimentary and sponsored). The
-#: pinned Subscriptions contract has no counterpart for it — the
-#: billing-treatment contract arrived in a later release this repository does
-#: not pin.
+#: pinned Subscriptions a3 release supplies the corresponding contract, but
+#: this additive schema-composition phase deliberately admits no application
+#: import, runtime reader, backfill, or mapping to that contract.
 #:
 #: The correct handling is to REFUSE the comparison and count it. Synthesising
-#: a local mapping onto a contract Sub does not install would make Sub a second
-#: writer of a contract it cannot read, which is the precise failure the
+#: a mapping before the runtime contract is admitted would make Sub a second
+#: interpreter of data it does not read, which is the precise failure the
 #: source-of-truth standard exists to prevent. So a complimentary or sponsored
 #: position is counted `not_expressible` on cadence — never `matched`, and
 #: never quietly `diverged` either.
 SUBSCRIPTION_TREATMENT_BLOCKER: Final[ParityBlocker] = ParityBlocker(
-    code="subscriptions-pin-lacks-billing-treatment-contract",
+    code="subscriptions-billing-treatment-contract-not-runtime-adopted",
     dimension=ParityDimension.CADENCE,
-    reason=NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_UNPINNED,
+    reason=NotExpressibleReason.SUBSCRIPTION_BILLING_TREATMENT_NOT_ADOPTED,
     statement=(
         "Cadence and treatment parity cannot be claimed for complimentary or "
         "sponsored subscriptions. Sub's authoritative "
-        "subscription_billing_arrangements record has no expression in the "
-        "pinned Subscriptions contract, and synthesising one locally would "
-        "make Sub a second writer of a contract it does not pin."
+        "subscription_billing_arrangements record has not been mapped to the "
+        "schema-composed Subscriptions a3 contract, and synthesising a runtime "
+        "mapping before that contract is admitted would create a second "
+        "interpretation."
     ),
-    pinned_package=_SUBS_PACKAGE,
-    pinned_version=_SUBS_VERSION,
-    pinned_revision=_SUBS_REVISION,
+    pinned_package=SUBSCRIPTIONS_RELEASE.package,
+    pinned_version=SUBSCRIPTIONS_RELEASE.version,
+    pinned_revision=SUBSCRIPTIONS_RELEASE.revision,
 )
 
 #: Blockers that stand for the cohort as a whole, independent of any row.
@@ -299,8 +285,11 @@ DECLARED_INVOICE_STATUSES: Final[tuple[str, ...]] = (
 EXCLUDED_INVOICE_STATUSES: Final[tuple[str, ...]] = ("draft", "void")
 
 #: Treatments carried by `subscription_billing_arrangements` that make the
-#: cadence dimension inexpressible against the current pin.
-UNPINNED_BILLING_TREATMENTS: Final[tuple[str, ...]] = ("complimentary", "sponsored")
+#: cadence dimension inexpressible until the runtime contract is admitted.
+UNADOPTED_BILLING_TREATMENTS: Final[tuple[str, ...]] = (
+    "complimentary",
+    "sponsored",
+)
 
 _MODE_LANES: Final[dict[str, ReceivableLane]] = {
     "postpaid": ReceivableLane.POSTPAID_RECEIVABLE,
@@ -401,7 +390,7 @@ def definition_payload(window: ReceivableCohortWindow) -> dict[str, object]:
         "anchor": "invoices",
         "declared_invoice_statuses": sorted(DECLARED_INVOICE_STATUSES),
         "excluded_invoice_statuses": sorted(EXCLUDED_INVOICE_STATUSES),
-        "unpinned_billing_treatments": sorted(UNPINNED_BILLING_TREATMENTS),
+        "unadopted_billing_treatments": sorted(UNADOPTED_BILLING_TREATMENTS),
         "lanes": sorted(item.value for item in ReceivableLane),
         "classifications": sorted(item.value for item in CohortClassification),
         "parity_dimensions": sorted(item.value for item in ParityDimension),
@@ -456,7 +445,7 @@ __all__ = [
     "PROJECTION_POLICY_VERSION",
     "STANDING_BLOCKERS",
     "SUBSCRIPTION_TREATMENT_BLOCKER",
-    "UNPINNED_BILLING_TREATMENTS",
+    "UNADOPTED_BILLING_TREATMENTS",
     "CohortClassification",
     "CohortWindowError",
     "NotExpressibleReason",

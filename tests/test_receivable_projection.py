@@ -98,9 +98,13 @@ def _invoice(
         billing_period_end=datetime(2026, 8, 1, tzinfo=UTC),
         issued_at=issued_at,
         due_at=(issued_at + timedelta(days=14)) if issued_at else None,
-        due_date_basis=InvoiceDueDateBasis.contract_terms,
-        due_date_basis_ref=f"subscription:{subscription.id}",
-        due_date_policy_version="billing-payment-terms-v1",
+        due_date_basis=(
+            InvoiceDueDateBasis.contract_terms
+            if issued_at
+            else InvoiceDueDateBasis.unknown_unverified
+        ),
+        due_date_basis_ref=f"subscription:{subscription.id}" if issued_at else None,
+        due_date_policy_version="billing-payment-terms-v1" if issued_at else None,
         created_at=datetime(2026, 7, 5, tzinfo=UTC),
         updated_at=datetime(2026, 7, 5, tzinfo=UTC),
         is_active=True,
@@ -273,6 +277,7 @@ def test_a_dry_run_reports_the_same_counts_the_apply_would(
     db_session.commit()
 
     dry = reconcile_receivable_projection(db_session, _command())
+    db_session.rollback()
     applied = reconcile_receivable_projection(
         db_session, _command(mode=ProjectionMode.APPLY)
     )
@@ -364,11 +369,13 @@ def test_an_equal_watermark_with_a_different_fingerprint_fails_closed(
     reconcile_receivable_projection(db_session, _command(mode=ProjectionMode.APPLY))
 
     # Change a projected value while leaving every watermark input untouched.
-    invoice.status = InvoiceStatus.overdue
     db_session.execute(
         Invoice.__table__.update()
         .where(Invoice.__table__.c.id == invoice.id)
-        .values(updated_at=datetime(2026, 7, 5, tzinfo=UTC))
+        .values(
+            status=InvoiceStatus.overdue.value,
+            updated_at=datetime(2026, 7, 5, tzinfo=UTC),
+        )
     )
     db_session.commit()
 
