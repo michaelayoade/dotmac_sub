@@ -173,7 +173,7 @@ Three layers, each catching what the one below cannot:
    excluded.source_observed_at > billing_receivable_projections.source_observed_at`,
    closing the window between the plan's read and its write.
 3. **Schema** — `trg_billing_receivable_projections_monotonic` (migration
-   `558_receivable_observation_projection`, after
+   `558_receivable_projection`, after
    `557_outbox_relay_prereq`) is a
    `BEFORE UPDATE` trigger that refuses any update which does not strictly
    advance `projection_version`, or which moves `source_observed_at` backwards.

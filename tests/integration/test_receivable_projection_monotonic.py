@@ -32,7 +32,10 @@ from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.billing import Invoice, InvoiceDueDateBasis, InvoiceLine, InvoiceStatus
-from app.models.billing_receivable_projection import BillingReceivableProjection
+from app.models.billing_receivable_projection import (
+    BillingReceivableProjection,
+    ReceivableProjectionRun,
+)
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -44,6 +47,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.event_store import EventStore
 from app.models.subscriber import Reseller, Subscriber
 from app.services.billing.receivable_cohort import ReceivableCohortWindow
 from app.services.billing.receivable_projection import (
@@ -75,7 +79,7 @@ def _command(**overrides) -> ReconcileReceivableProjectionCommand:
         ),
         "window": _window(),
         "code_version": "pytest-pg",
-        "database_schema_version": "558_receivable_observation_projection",
+        "database_schema_version": "558_receivable_projection",
         "mode": ProjectionMode.APPLY,
     }
     base.update(overrides)
@@ -125,7 +129,7 @@ def seeded_invoice(db_session, subscriber, subscription):
 
 def _seed_committed_invoice(
     session_factory: sessionmaker[Session],
-) -> tuple[uuid.UUID, uuid.UUID]:
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
     """Create worker-visible source rows outside the fixture savepoint.
 
     The shared ``db_session`` fixture intentionally holds data inside an outer
@@ -211,7 +215,14 @@ def _seed_committed_invoice(
             )
         )
         setup.commit()
-        return invoice.id, subscription.id
+        return (
+            invoice.id,
+            subscription.id,
+            offer_version.id,
+            offer.id,
+            account.id,
+            reseller.id,
+        )
 
 
 # ── The migration actually installed the structural objects ─────────────────
@@ -347,25 +358,38 @@ def test_concurrent_passes_project_one_row_and_advance_the_version_once(
     version is greater than anything already stored.
     """
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    invoice_id, subscription_id = _seed_committed_invoice(session_factory)
+    (
+        invoice_id,
+        subscription_id,
+        offer_version_id,
+        offer_id,
+        account_id,
+        reseller_id,
+    ) = _seed_committed_invoice(session_factory)
     barrier = Barrier(2)
 
-    def run() -> int:
+    def run():
         with session_factory() as worker:
             barrier.wait(timeout=15)
-            result = reconcile_receivable_projection(worker, _command())
-            return result.inserted_count
+            return reconcile_receivable_projection(worker, _command())
 
+    results = []
+    failures: list[Exception] = []
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            inserted = [
-                future.result(timeout=60)
-                for future in [pool.submit(run), pool.submit(run)]
-            ]
+            futures = [pool.submit(run), pool.submit(run)]
+            for future in futures:
+                try:
+                    results.append(future.result(timeout=60))
+                except Exception as exc:  # preserve cleanup after a partial success
+                    failures.append(exc)
 
-        with session_factory() as check:
+        if failures:
+            raise failures[0]
+
+        with session_factory() as verifier:
             rows = (
-                check.execute(
+                verifier.execute(
                     select(BillingReceivableProjection).where(
                         BillingReceivableProjection.invoice_id == invoice_id
                     )
@@ -374,16 +398,31 @@ def test_concurrent_passes_project_one_row_and_advance_the_version_once(
                 .all()
             )
         assert len(rows) == 1, "the natural key must arbitrate concurrent passes"
-        assert sum(inserted) == 1, "exactly one pass may claim the insert"
+        assert sum(result.inserted_count for result in results) == 1, (
+            "exactly one pass may claim the insert"
+        )
     finally:
-        # These rows were committed outside the fixture transaction so workers
-        # could observe them. Remove the cohort inputs before later tests run.
-        with session_factory.begin() as cleanup:
+        run_ids = [result.run_id for result in results if result.run_id is not None]
+        with session_factory() as cleanup:
+            if run_ids:
+                cleanup.execute(
+                    delete(EventStore).where(
+                        EventStore.payload["aggregate_id"]
+                        .as_string()
+                        .in_([str(run_id) for run_id in run_ids])
+                    )
+                )
             cleanup.execute(
                 delete(BillingReceivableProjection).where(
                     BillingReceivableProjection.invoice_id == invoice_id
                 )
             )
+            if run_ids:
+                cleanup.execute(
+                    delete(ReceivableProjectionRun).where(
+                        ReceivableProjectionRun.id.in_(run_ids)
+                    )
+                )
             cleanup.execute(
                 delete(InvoiceLine).where(InvoiceLine.invoice_id == invoice_id)
             )
@@ -391,6 +430,13 @@ def test_concurrent_passes_project_one_row_and_advance_the_version_once(
             cleanup.execute(
                 delete(Subscription).where(Subscription.id == subscription_id)
             )
+            cleanup.execute(
+                delete(OfferVersion).where(OfferVersion.id == offer_version_id)
+            )
+            cleanup.execute(delete(CatalogOffer).where(CatalogOffer.id == offer_id))
+            cleanup.execute(delete(Subscriber).where(Subscriber.id == account_id))
+            cleanup.execute(delete(Reseller).where(Reseller.id == reseller_id))
+            cleanup.commit()
 
 
 def test_the_sequence_is_monotonic_across_sessions(engine):

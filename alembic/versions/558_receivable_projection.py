@@ -1,6 +1,6 @@
 """Receivable projection, its run evidence, and the structural monotonic guard.
 
-Revision ID: 558_receivable_observation_projection
+Revision ID: 558_receivable_projection
 Revises: 557_outbox_relay_prereq
 Create Date: 2026-08-25
 
@@ -44,7 +44,7 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "558_receivable_observation_projection"
+revision: str = "558_receivable_projection"
 down_revision: str | None = "557_outbox_relay_prereq"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

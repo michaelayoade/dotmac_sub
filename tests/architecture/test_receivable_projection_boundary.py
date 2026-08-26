@@ -27,7 +27,7 @@ COHORT = ROOT / "app/services/billing/receivable_cohort.py"
 OWNER = ROOT / "app/services/billing/receivable_projection.py"
 PARITY = ROOT / "app/services/billing/receivable_parity.py"
 MODELS = ROOT / "app/models/billing_receivable_projection.py"
-MIGRATION = ROOT / "alembic/versions/558_receivable_observation_projection.py"
+MIGRATION = ROOT / "alembic/versions/558_receivable_projection.py"
 CLI = ROOT / "scripts/billing/receivable_projection.py"
 
 SLICE_MODULES = (COHORT, OWNER, PARITY, MODELS, CLI)
