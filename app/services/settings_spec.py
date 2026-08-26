@@ -1931,6 +1931,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="vendor_purchase_invoice_erp_tax_profile",
+        env_var="VENDOR_PURCHASE_INVOICE_ERP_TAX_PROFILE",
+        value_type=SettingValueType.string,
+        default=None,
+        label="ERP tax profile applied to vendor purchase invoices created from POs",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="default_payment_method_type",
         env_var="BILLING_DEFAULT_PAYMENT_METHOD_TYPE",
         value_type=SettingValueType.string,

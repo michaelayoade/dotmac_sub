@@ -1182,11 +1182,13 @@ SERVICES: tuple[SOTService, ...] = (
             "vendor purchase-invoice read and action projections",
             "vendor purchase-invoice mutation coordination",
             "purchase-invoice submission eligibility and financial preview",
+            "project-completion purchase-invoice origination",
             "vendor-facing payables-status observation projection",
         ),
         depends_on=(
             "auth.permission_gate",
             "control.settings_spec",
+            "events.owner_outputs",
             "integration.dotmac_erp_payables_adapter",
             "operations.vendor_project_lifecycle",
             "operations.vendor_purchase_invoice_records",
@@ -1230,6 +1232,17 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical vendor purchase-invoice records",
                         "canonical installation-project lifecycle state",
                         "purchase-invoice mutation protocol",
+                    ),
+                ),
+                ConcernContract(
+                    name="project-completion purchase-invoice origination",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "canonical installation-project lifecycle state",
+                        "canonical vendor purchase-invoice records",
+                        "purchase-invoice currency policy",
+                        "purchase-invoice ERP tax-profile policy",
+                        "vendor project completion receipt protocol",
                     ),
                 ),
                 ConcernContract(
@@ -1277,6 +1290,15 @@ SERVICES: tuple[SOTService, ...] = (
                     source="billing.default_currency unless the command supplies one",
                 ),
                 AuthorityInput(
+                    name="purchase-invoice ERP tax-profile policy",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing.vendor_purchase_invoice_erp_tax_profile, the "
+                        "ERP tax profile reference used for PO-backed AP invoices"
+                    ),
+                ),
+                AuthorityInput(
                     name="purchase-invoice mutation protocol",
                     owner="operations.vendor_purchase_invoices",
                     kind=AuthorityKind.CONTROL_INPUT,
@@ -1292,6 +1314,15 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "validated ERP status, total, paid, balance, source "
                         "timestamp, observation timestamp, and refresh error"
+                    ),
+                ),
+                AuthorityInput(
+                    name="vendor project completion receipt protocol",
+                    owner="events.owner_outputs",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "OwnerOutputReceipt keyed by operations.vendor_purchase_invoices "
+                        "and vendor_project.completed event id"
                     ),
                 ),
                 AuthorityInput(
@@ -1316,8 +1347,9 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 idempotency=(
                     "Creation replays to the active project/vendor invoice; signed "
-                    "submission uses confirmation jti evidence and review requires "
-                    "the exact source status."
+                    "submission uses confirmation jti evidence; project-completion "
+                    "consumption is receipted by event id; review requires the exact "
+                    "source status."
                 ),
                 retries=(
                     "Policy rejections are terminal. Database or object-transport "
@@ -1388,6 +1420,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_phase5_vendor_purchase_invoices.py",
                 "tests/test_vendor_payment_visibility.py",
                 "tests/test_vendor_submission_proposals.py",
+                "tests/architecture/test_materials_lifecycle_chain_boundary.py",
                 "tests/architecture/test_vendor_purchase_invoice_boundary.py",
             ),
         ),
