@@ -1,6 +1,6 @@
 """Add bounded-candidate indexes for the Upcoming Charges worklist.
 
-Revision ID: 559_upcoming_charges_query_indexes
+Revision ID: 559_upcoming_charges_indexes
 Revises: 558_receivable_projection
 Create Date: 2026-08-26
 
@@ -15,7 +15,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "559_upcoming_charges_query_indexes"
+revision: str = "559_upcoming_charges_indexes"
 down_revision: str | None = "558_receivable_projection"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

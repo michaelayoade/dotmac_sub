@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OWNER = ROOT / "app/services/billing/reporting.py"
 PRESENTER = ROOT / "app/services/web_reports_extended.py"
 ROUTE = ROOT / "app/web/admin/reports.py"
-MIGRATION = ROOT / "alembic/versions/559_upcoming_charges_query_indexes.py"
+MIGRATION = ROOT / "alembic/versions/559_upcoming_charges_indexes.py"
 
 
 def _function_source(path: Path, name: str) -> str:
