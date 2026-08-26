@@ -153,14 +153,23 @@ def _plain_text_reply(payload: InboxReplyPayload) -> str:
     return html.unescape(" ".join(text.split())).strip()
 
 
-def _operator_whatsapp_reply_bypasses_customer_policy(
+def _whatsapp_inbox_reply_bypasses_customer_policy(
     *,
     channel: NotificationChannel,
     payload: InboxReplyPayload,
 ) -> bool:
+    metadata = dict(payload.metadata or {})
+    sender_type = str(metadata.get("sender_type") or "").strip().lower()
+    author_type = str(metadata.get("author_type") or "").strip().lower()
+    automation_kind = str(metadata.get("automation_kind") or "").strip().lower()
     return (
         channel == NotificationChannel.whatsapp
-        and payload.sent_by_person_id is not None
+        and (
+            payload.sent_by_person_id is not None
+            or sender_type == "ai"
+            or author_type == "ai"
+            or automation_kind == "ai_intake"
+        )
     )
 
 
@@ -196,7 +205,7 @@ def _queue_outbox_reply(
     linked_subscriber_id = conversation.subscriber_id
     if linked_subscriber_id is not None:
         intent_metadata["linked_subscriber_id"] = str(linked_subscriber_id)
-    use_operational_audience = _operator_whatsapp_reply_bypasses_customer_policy(
+    use_operational_audience = _whatsapp_inbox_reply_bypasses_customer_policy(
         channel=channel,
         payload=payload,
     )
