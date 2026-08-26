@@ -5,7 +5,7 @@ Two tables:
 * ``field_erp_sync_events`` — the OUTBOX. Field-service money-path actions
   (expense claims, material requests, purchase orders, purchase invoices)
   enqueue a row here with a stable ``idempotency_key``; a background worker
-  posts each pending row to ERP's existing ``/sync/crm/*`` API and records the
+  posts each pending row to ERP's neutral ``/sync/sub/*`` API and records the
   terminal outcome. The idempotency key is stored and sent, so re-delivery of a
   row ERP already saw is safe.
 

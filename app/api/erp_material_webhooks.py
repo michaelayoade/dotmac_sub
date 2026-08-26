@@ -101,7 +101,7 @@ async def receive_erp_material_status(
                     reason="Observe ERP material request status",
                     idempotency_key=delivery_id,
                 ),
-                request_id=payload.omni_id,
+                request_id=payload.source_request_id,
                 provider_request_id=payload.request_number or payload.request_id,
                 provider_status=payload.new_status,
                 observed_at=payload.updated_at or datetime.now(UTC),
