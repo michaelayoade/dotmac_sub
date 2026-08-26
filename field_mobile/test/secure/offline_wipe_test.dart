@@ -243,21 +243,29 @@ void main() {
     final store = context.session.store!;
 
     // A photo write and a draft write are both suspended mid-flight.
-    final photo = store.evidence.write(
-      'late.evidence',
-      utf8.encode('captured a heartbeat before logout'),
-      purpose: 'photo',
-      reference: 'ref-late',
+    // Attach the permitted-error handler before logout can win the race. If
+    // the raw futures are left unobserved until after signOut(), a fast runner
+    // reports StoreDiscarded as an unhandled test error even though settle()
+    // accepts that exact outcome a line later.
+    final photo = settle(
+      store.evidence.write(
+        'late.evidence',
+        utf8.encode('captured a heartbeat before logout'),
+        purpose: 'photo',
+        reference: 'ref-late',
+      ),
     );
-    final draft = draftsIn(store).save(
-      id: 'expense_request:new',
-      type: 'expense_request',
-      payload: {'note': 'typed a heartbeat before logout'},
+    final draft = settle(
+      draftsIn(store).save(
+        id: 'expense_request:new',
+        type: 'expense_request',
+        payload: {'note': 'typed a heartbeat before logout'},
+      ),
     );
 
     await context.session.signOut();
-    await settle(photo);
-    await settle(draft);
+    await photo;
+    await draft;
 
     // Whatever those writers were doing, anything they try next is refused.
     await expectLater(
