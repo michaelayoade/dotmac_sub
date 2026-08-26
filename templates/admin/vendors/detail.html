@@ -262,10 +262,11 @@
         </div>
 
         {% if portfolio.has_previous or portfolio.has_next %}
+        {% set project_status_query = '&project_status=' ~ (project_status | urlencode) if project_status else '' %}
         <nav class="flex items-center justify-between border-t border-slate-200 pt-4 text-sm dark:border-slate-700" aria-label="Vendor portfolio pagination">
-            {% if portfolio.has_previous %}<a class="font-semibold text-cyan-700 dark:text-cyan-400" href="?project_search={{ project_search | urlencode }}&project_status={{ project_status }}&project_page={{ project_page - 1 }}&project_per_page={{ project_per_page }}#delivery-portfolio">Previous</a>{% else %}<span></span>{% endif %}
+            {% if portfolio.has_previous %}<a class="font-semibold text-cyan-700 dark:text-cyan-400" href="?project_search={{ project_search | urlencode }}{{ project_status_query }}&project_page={{ project_page - 1 }}&project_per_page={{ project_per_page }}#delivery-portfolio">Previous</a>{% else %}<span></span>{% endif %}
             <span class="text-slate-500">Page {{ project_page }} of {{ project_pages }} · {{ portfolio.total }} project{{ '' if portfolio.total == 1 else 's' }}</span>
-            {% if portfolio.has_next %}<a class="font-semibold text-cyan-700 dark:text-cyan-400" href="?project_search={{ project_search | urlencode }}&project_status={{ project_status }}&project_page={{ project_page + 1 }}&project_per_page={{ project_per_page }}#delivery-portfolio">Next</a>{% endif %}
+            {% if portfolio.has_next %}<a class="font-semibold text-cyan-700 dark:text-cyan-400" href="?project_search={{ project_search | urlencode }}{{ project_status_query }}&project_page={{ project_page + 1 }}&project_per_page={{ project_per_page }}#delivery-portfolio">Next</a>{% endif %}
         </nav>
         {% endif %}
     </section>

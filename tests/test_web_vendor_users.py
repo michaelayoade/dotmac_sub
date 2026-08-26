@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -29,6 +30,13 @@ def _client(db_session) -> TestClient:
             if dependency.call is not None and dependency.call is not get_db:
                 app.dependency_overrides[dependency.call] = lambda: None
     return TestClient(app, raise_server_exceptions=False)
+
+
+def test_vendor_detail_pagination_omits_empty_project_status_query():
+    source = Path("templates/admin/vendors/detail.html").read_text()
+
+    assert "project_status_query" in source
+    assert "&project_status={{ project_status }}&project_page" not in source
 
 
 def test_add_portal_user_with_unused_email_succeeds(db_session):
