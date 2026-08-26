@@ -20,6 +20,7 @@ from app.schemas.vendor_portal import (
     VendorMaterialReleaseItemCreate,
     VendorQuoteCreate,
     VendorQuoteLineCreate,
+    VendorQuoteLineUpdate,
     VendorRouteRevisionCreate,
 )
 from app.schemas.vendor_purchase_invoice import (
@@ -46,9 +47,11 @@ from app.services.vendor_portal_operations import (
     AddVendorQuoteLineCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
+    DeleteVendorQuoteLineCommand,
     RequestVendorAdvanceCommand,
     RequestVendorMaterialReleaseCommand,
     SubmitVendorRouteRevisionCommand,
+    UpdateVendorQuoteLineCommand,
     vendor_portal_operations,
 )
 from app.services.vendor_purchase_invoices import (
@@ -410,7 +413,7 @@ def vendor_create_closure_proposal(
 def vendor_create_quote(
     request: Request,
     project_id: str,
-    vat_rate_percent: Decimal = Form(default=Decimal("0")),
+    vat_rate_percent: Decimal = Form(default=Decimal("7.5")),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
@@ -687,6 +690,93 @@ def vendor_add_quote_line(
             request, db, auth=auth, project_id=project_id, exc=http_error
         )
     return _redirect(project_id, "Quote line added")
+
+
+@router.post("/projects/{project_id}/quotes/{quote_id}/lines/{line_id}/update")
+def vendor_update_quote_line(
+    request: Request,
+    project_id: str,
+    quote_id: str,
+    line_id: str,
+    description: str = Form(...),
+    quantity: Decimal = Form(...),
+    unit_price: Decimal = Form(...),
+    item_type: str | None = Form(default=None),
+    auth: dict = Depends(require_vendor_web_auth),
+    db: Session = Depends(get_db),
+):
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_quote_line_update",
+        )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.update_quote_line(
+                db,
+                UpdateVendorQuoteLineCommand(
+                    context=command_context,
+                    quote_id=quote_id,
+                    line_id=line_id,
+                    payload=VendorQuoteLineUpdate(
+                        item_type=item_type,
+                        description=description,
+                        quantity=quantity,
+                        unit_price=unit_price,
+                    ),
+                    vendor_id=vendor_id,
+                ),
+            )
+        )
+    except (HTTPException, ValidationError) as exc:
+        http_error = (
+            exc
+            if isinstance(exc, HTTPException)
+            else HTTPException(status_code=422, detail="Enter a valid quote line.")
+        )
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=http_error
+        )
+    return _redirect(project_id, "Quote line updated")
+
+
+@router.post("/projects/{project_id}/quotes/{quote_id}/lines/{line_id}/delete")
+def vendor_delete_quote_line(
+    request: Request,
+    project_id: str,
+    quote_id: str,
+    line_id: str,
+    auth: dict = Depends(require_vendor_web_auth),
+    db: Session = Depends(get_db),
+):
+    try:
+        context = _context(auth, db, vendor_capabilities.QUOTE_WRITE)
+        vendor_id = str(context["native_vendor_id"])
+        command_context = _command_context(
+            auth,
+            vendor_id=vendor_id,
+            reason="vendor_quote_line_deletion",
+        )
+        db_session_adapter.release_read_transaction(db)
+        _submission_call(
+            lambda: vendor_portal_operations.delete_quote_line(
+                db,
+                DeleteVendorQuoteLineCommand(
+                    context=command_context,
+                    quote_id=quote_id,
+                    line_id=line_id,
+                    vendor_id=vendor_id,
+                ),
+            )
+        )
+    except HTTPException as exc:
+        return _project_action_error_response(
+            request, db, auth=auth, project_id=project_id, exc=exc
+        )
+    return _redirect(project_id, "Quote line removed")
 
 
 @router.post("/projects/{project_id}/quotes/{quote_id}/submit")
