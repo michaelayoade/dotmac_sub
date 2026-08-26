@@ -24,6 +24,8 @@ import '../helpers/secure_store.dart';
 /// in ONE database to prove the column alone is enough. If both mechanisms had
 /// to hold for isolation to work, only one of them would really be tested.
 void main() {
+  useHostSqlite3();
+
   late Directory documents;
   late AppDatabase shared;
 
