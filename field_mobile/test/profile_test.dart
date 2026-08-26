@@ -23,12 +23,17 @@ import 'package:sqlite3/open.dart';
 import 'helpers/fake_http.dart';
 import 'helpers/secure_store.dart';
 
+/// Rows built for rendering only, never inserted, so any scope will do — the
+/// screen reads them straight from the provider override.
+const _renderScope = 'scope-under-test';
+
 OutboxEntry _entry(
   int seq,
   String ref, {
   String status = 'pending',
   String? error,
 }) => OutboxEntry(
+  scopeKey: _renderScope,
   seq: seq,
   clientRef: ref,
   kind: 'transition',

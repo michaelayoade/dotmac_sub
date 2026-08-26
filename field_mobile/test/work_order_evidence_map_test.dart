@@ -160,7 +160,7 @@ void main() {
       return (200, _response('WO-1', reportChar: 'a'));
     });
     await repo().fetch('WO-1');
-    await store.save(
+    await tokens.save(
       accessToken: fakeJwt(
         expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
         sub: 'person-2',
