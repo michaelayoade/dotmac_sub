@@ -111,6 +111,11 @@ from app.models.billing_contract import (  # noqa: F401
     ObligationState,
     RateBasis,
 )
+from app.models.billing_receivable_projection import (  # noqa: F401
+    BillingReceivableProjection,
+    ReceivableProjectionRun,
+    ReceivableProjectionRunKind,
+)
 from app.models.billing_shadow_verification import (  # noqa: F401
     BillingCutoverVerificationRun,
     BillingShadowDeliveryEvidence,

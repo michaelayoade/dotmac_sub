@@ -20,6 +20,7 @@ from app.migration_bindings import (
     ASSEMBLY_MODULE_PLANES,
     ASSEMBLY_PREREQUISITE_BINDINGS,
 )
+from app.module_release_contracts import SUBSCRIPTIONS_RELEASE
 from app.shadow.cohort import SUBSCRIPTIONS_REVISION
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -82,6 +83,9 @@ def test_tagged_subscriptions_and_required_kernel_are_exact_pins() -> None:
 
 def test_subscriptions_a3_adoption_carries_immutable_release_oracles() -> None:
     assert SUBSCRIPTIONS_REVISION == SUBSCRIPTIONS_PEELED_COMMIT
+    assert SUBSCRIPTIONS_RELEASE.package == "dotmac-subscriptions"
+    assert SUBSCRIPTIONS_RELEASE.version == subscriptions_module.version
+    assert SUBSCRIPTIONS_RELEASE.revision == SUBSCRIPTIONS_PEELED_COMMIT
     evidence = ADOPTION_LEDGER.read_text(encoding="utf-8")
     assert "dotmac-subscriptions-v0.1.0a3" in evidence
     assert SUBSCRIPTIONS_PEELED_COMMIT in evidence
