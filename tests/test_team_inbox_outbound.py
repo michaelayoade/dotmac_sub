@@ -1470,6 +1470,52 @@ def test_linked_disabled_subscriber_reply_is_suppressed(db_session):
     assert db_session.query(InboxMessage).count() == 0
 
 
+def test_linked_whatsapp_operator_reply_bypasses_customer_policy(db_session):
+    subscriber = Subscriber(
+        first_name="Linked",
+        last_name="WhatsApp",
+        email="linked-whatsapp@example.com",
+        phone="+2348035550114",
+        status=SubscriberStatus.active,
+        is_active=True,
+        metadata_={"sms_updates": False},
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    conversation = _whatsapp_conversation(db_session)
+    conversation.subscriber_id = subscriber.id
+    _open_whatsapp_window(db_session, conversation)
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking this.</p>",
+            sent_by_person_id=uuid4(),
+        ),
+        now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
+    )
+
+    notification = db_session.query(Notification).one()
+    intent = db_session.query(CommunicationIntentRecord).one()
+    message = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
+        .one()
+    )
+    assert result.kind == "queued"
+    assert intent.subscriber_id is None
+    assert intent.metadata_["audience_type"] == "operational"
+    assert intent.metadata_["audience_id"] == str(conversation.id)
+    assert intent.metadata_["linked_subscriber_id"] == str(subscriber.id)
+    assert notification.subscriber_id is None
+    assert notification.audience_type == "operational"
+    assert notification.audience_id == conversation.id
+    assert notification.recipient == "+2348035550114"
+    assert message.metadata_["linked_subscriber_id"] == str(subscriber.id)
+
+
 def test_send_inbox_reply_uses_team_metadata_activity_sender(db_session, monkeypatch):
     # Team identity no longer derives delivery behavior. A team needing a
     # distinct sender declares the outbound activity via operator metadata,
