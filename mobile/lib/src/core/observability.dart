@@ -94,8 +94,14 @@ class Log {
 
   static final List<_RedactionRule> _rules = [
     // `Authorization: Bearer …` / a bare `Bearer …`, in any casing.
+    //
+    // The scheme has to be consumed explicitly. A plain `\S+` after the colon
+    // eats only the word "Bearer" and leaves the credential itself sitting in
+    // the log line — which is exactly how this rule first shipped, and what
+    // the regression assertions in session_security_test.dart now pin down.
     _RedactionRule(
-        RegExp(r'(authorization\s*[:=]\s*)\S+', caseSensitive: false),
+        RegExp(r'''(authorization\s*[:=]\s*)["']?(?:bearer\s+)?[^\s,;}"']+''',
+            caseSensitive: false),
         (m) => '${m[1]}[redacted]'),
     _RedactionRule(RegExp(r'\bBearer\s+\S+', caseSensitive: false),
         (_) => 'Bearer [redacted]'),
