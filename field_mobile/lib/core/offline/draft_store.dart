@@ -79,9 +79,9 @@ class DraftStore {
     final database = db;
     final scope = scopeKey;
     if (database == null || scope == null) return;
-    await (database.delete(database.draftEntries)..where(
-          (entry) => entry.scopeKey.equals(scope) & entry.id.equals(id),
-        ))
+    await (database.delete(
+          database.draftEntries,
+        )..where((entry) => entry.scopeKey.equals(scope) & entry.id.equals(id)))
         .go();
   }
 

@@ -207,10 +207,11 @@ void main() {
       shared.allTables.toSet(),
       reason: 'a table with no declared class has no wipe or migration policy',
     );
-    expect(
-      outbound.map((table) => table.actualTableName).toSet(),
-      {'outbox_entries', 'pending_photos', 'draft_entries'},
-    );
+    expect(outbound.map((table) => table.actualTableName).toSet(), {
+      'outbox_entries',
+      'pending_photos',
+      'draft_entries',
+    });
   });
 
   test('every table carries the scope column', () {

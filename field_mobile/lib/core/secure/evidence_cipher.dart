@@ -60,10 +60,7 @@ class EvidenceCipher {
       List<int>.generate(_nonceLength, (_) => _random.nextInt(256)),
     );
     final cipher = GCMBlockCipher(AESEngine())
-      ..init(
-        true,
-        AEADParameters(_key, _tagBits, nonce, _aad(context)),
-      );
+      ..init(true, AEADParameters(_key, _tagBits, nonce, _aad(context)));
     // PointyCastle appends the tag to the ciphertext; we store it in the
     // header so the layout is fixed-offset and a truncated file is detectable
     // before any decryption work happens.
@@ -96,14 +93,9 @@ class EvidenceCipher {
     final tag = bytes.sublist(5 + _nonceLength, _headerLength);
     final body = bytes.sublist(_headerLength);
     final cipher = GCMBlockCipher(AESEngine())
-      ..init(
-        false,
-        AEADParameters(_key, _tagBits, nonce, _aad(context)),
-      );
+      ..init(false, AEADParameters(_key, _tagBits, nonce, _aad(context)));
     try {
-      return cipher.process(
-        Uint8List.fromList(<int>[...body, ...tag]),
-      );
+      return cipher.process(Uint8List.fromList(<int>[...body, ...tag]));
     } on Object {
       throw const EvidenceCipherFailure('envelope failed authentication');
     }

@@ -861,14 +861,8 @@ class CachedScheduleEntry extends DataClass
   }
 
   @override
-  int get hashCode => Object.hash(
-    scopeKey,
-    referenceId,
-    type,
-    startAt,
-    endAt,
-    title,
-  );
+  int get hashCode =>
+      Object.hash(scopeKey, referenceId, type, startAt, endAt, title);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
