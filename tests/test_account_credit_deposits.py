@@ -43,6 +43,7 @@ from app.models.integration_platform import (
     IntegrationInbox,
     IntegrationInstallation,
 )
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate, PaymentSyncRead
 from app.services.account_credit_deposits import (
@@ -265,6 +266,120 @@ def test_submitted_direct_transfer_remains_blocking_after_nominal_expiry(
 
     assert active is not None
     assert active.phase is ActiveDepositPhase.under_review
+
+
+def test_paid_terminal_proof_drift_does_not_block_new_deposit(
+    db_session, subscriber
+):
+    intent = _intent(db_session, subscriber, _provider(db_session))
+    reference = "TRF-PAID-DRIFT"
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("2000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        external_id=reference,
+        paid_at=datetime.now(UTC),
+    )
+    db_session.add(payment)
+    db_session.flush()
+    proof = PaymentProof(
+        account_id=subscriber.id,
+        submitted_by=subscriber.id,
+        amount=Decimal("2000.00"),
+        verified_amount=Decimal("2000.00"),
+        currency="NGN",
+        reference=reference,
+        paid_at=datetime.now(UTC),
+        file_path="uploads/payment_proofs/paid-drift.png",
+        status=PaymentProofStatus.verified,
+        payment_id=payment.id,
+    )
+    db_session.add(proof)
+    db_session.flush()
+    intent.provider_type = DIRECT_TRANSFER_PROVIDER
+    intent.provider_id = None
+    intent.reference = reference
+    intent.status = TopupIntentStatus.submitted.value
+    intent.expires_at = datetime.now(UTC) - timedelta(days=1)
+    intent.metadata_ = {
+        **dict(intent.metadata_ or {}),
+        "payment_flow": "account_topup",
+        "payment_proof_id": str(proof.id),
+    }
+    db_session.commit()
+
+    assert (
+        AccountCreditDeposits.active_request(db_session, account_id=subscriber.id)
+        is None
+    )
+
+    preview = AccountCreditDeposits.preview(
+        db_session,
+        account_id=subscriber.id,
+        amount="2000.00",
+        currency="NGN",
+        minimum="1000.00",
+        maximum="500000.00",
+    )
+
+    assert preview.requested_deposit == Decimal("2000.00")
+
+
+def test_verified_proof_without_succeeded_payment_still_blocks_deposit(
+    db_session, subscriber
+):
+    intent = _intent(db_session, subscriber, _provider(db_session))
+    reference = "TRF-UNSETTLED-DRIFT"
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("2000.00"),
+        currency="NGN",
+        status=PaymentStatus.reversed,
+        external_id=reference,
+        paid_at=datetime.now(UTC),
+    )
+    db_session.add(payment)
+    db_session.flush()
+    proof = PaymentProof(
+        account_id=subscriber.id,
+        submitted_by=subscriber.id,
+        amount=Decimal("2000.00"),
+        verified_amount=Decimal("2000.00"),
+        currency="NGN",
+        reference=reference,
+        paid_at=datetime.now(UTC),
+        file_path="uploads/payment_proofs/unsettled-drift.png",
+        status=PaymentProofStatus.verified,
+        payment_id=payment.id,
+    )
+    db_session.add(proof)
+    db_session.flush()
+    intent.provider_type = DIRECT_TRANSFER_PROVIDER
+    intent.provider_id = None
+    intent.reference = reference
+    intent.status = TopupIntentStatus.submitted.value
+    intent.metadata_ = {
+        **dict(intent.metadata_ or {}),
+        "payment_flow": "account_topup",
+        "payment_proof_id": str(proof.id),
+    }
+    db_session.commit()
+
+    active = AccountCreditDeposits.active_request(db_session, account_id=subscriber.id)
+
+    assert active is not None
+    assert active.phase is ActiveDepositPhase.under_review
+    with pytest.raises(DepositEligibilityError) as exc:
+        AccountCreditDeposits.preview(
+            db_session,
+            account_id=subscriber.id,
+            amount="2000.00",
+            currency="NGN",
+            minimum="1000.00",
+            maximum="500000.00",
+        )
+    assert exc.value.code == "deposit_intent_already_pending"
 
 
 def test_terminal_gateway_failure_allows_new_deposit_preview(db_session, subscriber):

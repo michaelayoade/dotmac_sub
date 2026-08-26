@@ -78,11 +78,16 @@ observation and expiry times plus a closed phase/action pair:
 - a pending direct transfer is `awaiting_receipt` / `upload_receipt`;
 - another pending provider request is
   `awaiting_provider_confirmation` / `wait_for_provider`; and
-- a submitted direct-transfer receipt is `under_review` / `wait_for_review`.
+- a submitted direct-transfer receipt with no terminal proof projection is
+  `under_review` / `wait_for_review`.
 
 Expired and terminal requests are not active blockers. Customer adapters render
 this result and disable a replacement deposit while it is active; they do not
-filter `TopupIntent.status` or infer the next action independently.
+filter `TopupIntent.status` or infer the next action independently. A legacy
+submitted direct-transfer intent whose exact linked proof is already verified
+against a current succeeded payment is repair drift, not an active customer
+request, so the active-request owner does not block a replacement deposit while
+`financial.topup_intent_proof_reconciliation` remains the repair owner.
 
 The owner-generated preview is mandatory before checkout starts. For the exact
 requested amount it reports:

@@ -342,8 +342,26 @@ def _pending_incompatible_intent(
         if lifecycle.blocks_another_attempt and (
             intent.purpose == PURPOSE or flow == "account_topup"
         ):
+            if _is_completable_terminal_proof_drift(db, intent):
+                continue
             return intent
     return None
+
+
+def _is_completable_terminal_proof_drift(db: Session, intent: TopupIntent) -> bool:
+    """Return whether an old submitted transfer is already repairably paid."""
+
+    from app.services import topup_intent_proof_reconciliation
+
+    candidate = topup_intent_proof_reconciliation.terminal_proof_drift_for_intent(
+        db,
+        intent,
+    )
+    return (
+        candidate is not None
+        and candidate.action
+        is topup_intent_proof_reconciliation.TopupIntentProofRepairAction.complete
+    )
 
 
 def _rejected_proof_reason(db: Session, intent: TopupIntent) -> str | None:
