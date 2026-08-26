@@ -18239,6 +18239,48 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/vendor/auth/login": {
+   "params": [],
+   "request": "c72afbe92b93",
+   "responses": {
+    "200": "216a2032e1dc",
+    "401": "3ad691f81154",
+    "403": "1f8988becd33",
+    "422": "a11c9d9b2af8",
+    "429": "94ee1082dcf9"
+   }
+  },
+  "POST /api/v1/vendor/auth/logout": {
+   "params": [],
+   "request": "6be51466488a",
+   "responses": {
+    "200": "1c08bf81b48a",
+    "404": "9523a0d991e3",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/vendor/auth/mfa": {
+   "params": [],
+   "request": "bd92271ed1e6",
+   "responses": {
+    "200": "0808ecba5470",
+    "401": "d9b79917028c",
+    "403": "1f8988becd33",
+    "404": "497921479c5a",
+    "422": "a11c9d9b2af8",
+    "429": "1a170828a0d7"
+   }
+  },
+  "POST /api/v1/vendor/auth/refresh": {
+   "params": [],
+   "request": "90c7b5605b06",
+   "responses": {
+    "200": "0808ecba5470",
+    "401": "deccacd2458e",
+    "403": "1f8988becd33",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/vendor/fiber/cable-registrations": {
    "params": [
     "header:authorization",
@@ -20320,8 +20362,13 @@
   "VendorCapabilityUpdate": "1530a7cc897f",
   "VendorJobEvidenceRead": "2d66a85061b0",
   "VendorJobPlanSummaryRead": "907e36fa7375",
+  "VendorLoginRequest": "9101b219587e",
+  "VendorLoginResponse": "fcdd341250ca",
+  "VendorLogoutRequest": "7f1e82d3194d",
+  "VendorLogoutResponse": "ece30e092155",
   "VendorMaterialReleaseCreate": "fc371c7f8878",
   "VendorMaterialReleaseItemCreate": "265a29450d05",
+  "VendorMfaVerifyRequest": "58d14b18dd94",
   "VendorPurchaseInvoiceCreate": "19fbbc4e1285",
   "VendorPurchaseInvoiceLineCreate": "2587fe7016e4",
   "VendorPurchaseInvoiceLineRead": "e57b8e825f4f",
@@ -20332,6 +20379,7 @@
   "VendorQuoteCreate": "0b74cb0747ce",
   "VendorQuoteLineCreate": "050f15cee6ec",
   "VendorQuoteLineUpdate": "d9d1913e8bd3",
+  "VendorRefreshRequest": "5f21c5f36419",
   "VendorReview": "74e7731221a0",
   "VendorRouteRevisionCreate": "c47a23ac2e0a",
   "VendorSpliceCreate": "812732d6c5b1",
@@ -20343,6 +20391,7 @@
   "VendorStrandDamageCreate": "e488839369cb",
   "VendorStrandDamageResponse": "967987a89305",
   "VendorSubmissionConfirm": "02e3d0612139",
+  "VendorTokenResponse": "b345819c7461",
   "VerifyEmailRequest": "aedd7a91b07e",
   "VerifyEmailResponse": "1fae1392036c",
   "VlanCreate": "2b694eb08046",

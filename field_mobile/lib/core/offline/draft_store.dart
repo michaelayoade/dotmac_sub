@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../secure/evidence_cipher.dart';
+import '../secure/evidence_files.dart';
 import 'database.dart';
 
 const materialRequestDraftId = 'material_request:new';
@@ -20,19 +22,31 @@ class SavedDraft {
   final DateTime updatedAt;
 }
 
+/// Drafts hold whatever the technician has typed but not yet submitted, which
+/// is customer data the server has never seen. The payload column therefore
+/// holds an AES-GCM envelope bound to the scope, not readable JSON, and every
+/// query is scoped as well as encrypted.
+///
+/// A store with no database, cipher or scope is inert: it reads nothing and
+/// writes nothing, which is what an unauthenticated launch gets.
 class DraftStore {
-  const DraftStore(this.db);
+  const DraftStore({this.db, this.cipher, this.scopeKey});
 
   final AppDatabase? db;
+  final EvidenceCipher? cipher;
+  final String? scopeKey;
 
   Future<Map<String, dynamic>?> load(String id) async {
     final database = db;
-    if (database == null) return null;
-    final row = await (database.select(
-      database.draftEntries,
-    )..where((entry) => entry.id.equals(id))).getSingleOrNull();
+    final scope = scopeKey;
+    if (database == null || scope == null) return null;
+    final row =
+        await (database.select(database.draftEntries)..where(
+              (entry) => entry.scopeKey.equals(scope) & entry.id.equals(id),
+            ))
+            .getSingleOrNull();
     if (row == null) return null;
-    return (jsonDecode(row.payloadJson) as Map).cast<String, dynamic>();
+    return _decode(row.id, row.payloadJson);
   }
 
   Future<void> save({
@@ -41,15 +55,21 @@ class DraftStore {
     required Map<String, dynamic> payload,
   }) async {
     final database = db;
-    if (database == null) return;
+    final envelope = cipher;
+    final scope = scopeKey;
+    if (database == null || envelope == null || scope == null) return;
     final now = DateTime.now().toUtc();
     await database
         .into(database.draftEntries)
         .insertOnConflictUpdate(
           DraftEntriesCompanion.insert(
+            scopeKey: scope,
             id: id,
             type: type,
-            payloadJson: jsonEncode(payload),
+            payloadJson: envelope.sealText(
+              jsonEncode(payload),
+              context: evidenceContext(scope, 'draft', id),
+            ),
             updatedAt: now,
           ),
         );
@@ -57,36 +77,56 @@ class DraftStore {
 
   Future<void> delete(String id) async {
     final database = db;
-    if (database == null) return;
+    final scope = scopeKey;
+    if (database == null || scope == null) return;
     await (database.delete(
-      database.draftEntries,
-    )..where((entry) => entry.id.equals(id))).go();
+          database.draftEntries,
+        )..where((entry) => entry.scopeKey.equals(scope) & entry.id.equals(id)))
+        .go();
   }
 
   Future<List<SavedDraft>> list(String type) async {
     final database = db;
-    if (database == null) return const [];
+    final scope = scopeKey;
+    if (database == null || scope == null) return const [];
     final rows =
         await (database.select(database.draftEntries)
-              ..where((entry) => entry.type.equals(type))
+              ..where(
+                (entry) =>
+                    entry.scopeKey.equals(scope) & entry.type.equals(type),
+              )
               ..orderBy([(entry) => OrderingTerm.desc(entry.updatedAt)]))
             .get();
-    return rows
-        .map(
-          (row) => SavedDraft(
-            id: row.id,
-            payload: (jsonDecode(row.payloadJson) as Map)
-                .cast<String, dynamic>(),
-            updatedAt: row.updatedAt,
-          ),
-        )
-        .toList();
+    final drafts = <SavedDraft>[];
+    for (final row in rows) {
+      final payload = _decode(row.id, row.payloadJson);
+      // An envelope that will not open belongs to a key we no longer hold. It
+      // is skipped rather than surfaced: a draft we cannot read is not a draft.
+      if (payload == null) continue;
+      drafts.add(
+        SavedDraft(id: row.id, payload: payload, updatedAt: row.updatedAt),
+      );
+    }
+    return drafts;
+  }
+
+  Map<String, dynamic>? _decode(String id, String envelope) {
+    final opener = cipher;
+    final scope = scopeKey;
+    if (opener == null || scope == null) return null;
+    try {
+      final json = opener.openText(
+        envelope,
+        context: evidenceContext(scope, 'draft', id),
+      );
+      return (jsonDecode(json) as Map).cast<String, dynamic>();
+    } on Object {
+      return null;
+    }
   }
 }
 
-final draftStoreProvider = Provider<DraftStore>(
-  (ref) => const DraftStore(null),
-);
+final draftStoreProvider = Provider<DraftStore>((ref) => const DraftStore());
 
 final materialRequestDraftsProvider = FutureProvider<List<SavedDraft>>(
   (ref) => ref.watch(draftStoreProvider).list('material_request'),

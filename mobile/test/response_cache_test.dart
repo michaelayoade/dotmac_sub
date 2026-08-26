@@ -1,7 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:dotmac_portal/src/core/data_scope.dart';
 import 'package:dotmac_portal/src/core/response_cache.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Returns canned responses (or throws) per request so the interceptor's
@@ -32,15 +35,49 @@ ResponseBody _json(String body, int status) => ResponseBody.fromString(
     );
 
 void main() {
+  // The cache is encrypted now, and its key lives in flutter_secure_storage.
+  // Mock the channel rather than stubbing the cipher, so these tests exercise
+  // real AES-GCM sealing/opening end to end.
+  const storageChannel =
+      MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+
   late Directory tmp;
   late ResponseCache cache;
+  late Map<String, String> secureStore;
 
   setUp(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    secureStore = {};
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(storageChannel, (call) async {
+      final args = (call.arguments as Map?) ?? const {};
+      final key = args['key'] as String?;
+      switch (call.method) {
+        case 'read':
+          return secureStore[key];
+        case 'write':
+          secureStore[key!] = args['value'] as String;
+          return null;
+        case 'delete':
+          secureStore.remove(key);
+          return null;
+        case 'deleteAll':
+          secureStore.clear();
+          return null;
+        case 'containsKey':
+          return secureStore.containsKey(key);
+        case 'readAll':
+          return Map<String, String>.from(secureStore);
+      }
+      return null;
+    });
     tmp = await Directory.systemTemp.createTemp('api_cache_test');
     cache = ResponseCache(directory: tmp);
   });
 
   tearDown(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(storageChannel, null);
     if (await tmp.exists()) await tmp.delete(recursive: true);
   });
 
@@ -62,6 +99,33 @@ void main() {
       await cache.write('GET /me/x', {'a': 'b'});
       await cache.clear();
       expect(await cache.read('GET /me/x'), isNull);
+    });
+
+    test('nothing readable is written to disk in the clear', () async {
+      await cache.write('GET /me/profile', {'email': 'ada@example.com'});
+
+      final bodies = tmp
+          .listSync(recursive: true)
+          .whereType<File>()
+          .map((f) => f.readAsStringSync(encoding: latin1))
+          .toList();
+      expect(bodies, isNotEmpty, reason: 'the entry must actually be on disk');
+      for (final body in bodies) {
+        expect(body, isNot(contains('ada@example.com')),
+            reason: 'cached customer data must be sealed, not plain JSON');
+        expect(body, isNot(contains('email')));
+      }
+    });
+
+    test('entries live under the scope directory, not the cache root',
+        () async {
+      cache
+          .useScope(const MobileDataScope(tenant: 't', principal: 'account-a'));
+      await cache.write('GET /me/x', {'a': 'b'});
+
+      expect(tmp.listSync().whereType<File>(), isEmpty,
+          reason: 'the scope partition must be a directory level of its own');
+      expect(tmp.listSync().whereType<Directory>(), isNotEmpty);
     });
   });
 

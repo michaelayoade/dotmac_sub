@@ -123,6 +123,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # The field app commits drift's generated code, so a schema change that
+      # nobody regenerates passes analyze and test while the committed .g.dart
+      # describes the OLD schema. Regenerate here and fail on drift: the diff
+      # this prints IS the change that should have been committed. Deliberately
+      # only on this job -- the customer app has no code generators, so running
+      # build_runner there would buy nothing and cost a minute.
+      - name: Regenerate committed code and fail on drift
+        run: |
+          dart run build_runner build --delete-conflicting-outputs
+          git diff --exit-code -- .
+
       - name: Verify formatting (changed files)
         run: |
           if [ -n "${{ github.event.pull_request.base.sha }}" ]; then

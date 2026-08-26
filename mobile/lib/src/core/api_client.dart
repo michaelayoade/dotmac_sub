@@ -6,7 +6,52 @@ import 'package:sentry/sentry.dart' show SentryLevel;
 import '../config/env.dart';
 import 'observability.dart';
 import 'response_cache.dart';
+import 'session_fence.dart';
 import 'token_storage.dart';
+
+/// What came back from an attempt to refresh the access token.
+///
+/// The distinction between [rejected] and [unavailable] is the whole point:
+/// before it existed, *any* failure of `/auth/refresh` — including a dropped
+/// connection or a 502 from an overloaded gateway — signed the user out. A
+/// server that cannot answer is not a server that says no.
+enum _RefreshOutcome {
+  /// The server issued new credentials and they were persisted.
+  renewed,
+
+  /// The server answered authoritatively that this session is over (4xx), or
+  /// there was no refresh token to try with. The session is gone.
+  rejected,
+
+  /// We could not get an answer: timeout, dropped connection, 5xx. The session
+  /// is untouched and the caller must not sign the user out.
+  unavailable,
+
+  /// The refresh completed but belonged to a session that has since ended (a
+  /// sign-out raced it). The result was discarded and nothing was written.
+  stale,
+}
+
+/// URL path prefixes whose next segment is a secret and must never leave the
+/// device inside a crash-report breadcrumb.
+///
+/// `DELETE /me/push-tokens/{token}` carries the device's FCM registration
+/// token in the path (that is the server contract, unchanged here), and the
+/// breadcrumb interceptor below ships the path to the crash reporter verbatim.
+/// An FCM token addresses that device for push, so it does not belong in
+/// third-party telemetry.
+const _secretPathPrefixes = ['/me/push-tokens/'];
+
+/// Replace the secret-bearing segment of [path] with a placeholder, leaving
+/// every other path untouched (breadcrumbs stay useful).
+String redactSensitivePath(String path) {
+  for (final prefix in _secretPathPrefixes) {
+    if (path.startsWith(prefix) && path.length > prefix.length) {
+      return '$prefix<redacted>';
+    }
+  }
+  return path;
+}
 
 /// Thin wrapper around Dio configured for the DotMac API.
 ///
@@ -15,14 +60,30 @@ import 'token_storage.dart';
 ///  * on a 401, transparently refresh the token via `/auth/refresh` and
 ///    replay the original request once,
 ///  * notify the app when the session can no longer be recovered.
+///
+/// Two invariants worth stating explicitly, because they are what the tests in
+/// `session_security_test.dart` pin down:
+///
+///  * **Concurrent 401s cause exactly one refresh.** Every screen fires its own
+///    GET on load; when the access token expires they all 401 within a few
+///    milliseconds of each other. Without coalescing, each one posts its own
+///    `/auth/refresh` with the *same* refresh token — a refresh storm against a
+///    backend that rotates refresh tokens, where all but one attempt is
+///    guaranteed to fail and take the session down with it.
+///  * **A refresh can never outlive its session.** The generation the refresh
+///    started under is checked again before anything is written, and the write
+///    itself is fenced in [TokenStorage]. A sign-out that races an in-flight
+///    refresh cannot be undone by it.
 class ApiClient {
   ApiClient({
     required TokenStorage storage,
+    SessionFence? fence,
     this.cache,
     this.onSessionExpired,
     this.onImpersonationExpired,
     this.onCacheState,
-  }) : _storage = storage {
+  })  : _storage = storage,
+        _fence = fence ?? SessionFence() {
     _dio = Dio(
       BaseOptions(
         baseUrl: Env.apiRoot,
@@ -47,10 +108,7 @@ class ApiClient {
     );
 
     _dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: _onRequest,
-        onResponse: _onResponse,
-      ),
+      InterceptorsWrapper(onRequest: _onRequest, onResponse: _onResponse),
     );
 
     // Stale-while-revalidate fallback: serve the last good GET body when a
@@ -58,24 +116,29 @@ class ApiClient {
     // auth interceptor so a post-refresh replay that times out — now rejected as
     // a DioException — also gets served from cache. No-op when no cache wired.
     if (cache != null) {
-      _dio.interceptors
-          .add(CacheInterceptor(cache!, onCacheState: onCacheState));
+      _dio.interceptors.add(
+        CacheInterceptor(cache!, onCacheState: onCacheState, fence: _fence),
+      );
     }
 
     // Breadcrumb every call (method + path + status only — never headers/body,
     // which carry the bearer token and passwords) so crashes have an API trail.
+    // Paths go through [redactSensitivePath] first: a couple of endpoints put
+    // a secret in the URL itself (the FCM device token on
+    // DELETE /me/push-tokens/{token}), and a breadcrumb leaves the device.
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
           Log.breadcrumb(
-            '${options.method} ${options.path}',
+            '${options.method} ${redactSensitivePath(options.path)}',
             category: 'http',
           );
           handler.next(options);
         },
         onResponse: (response, handler) {
+          final path = redactSensitivePath(response.requestOptions.path);
           Log.breadcrumb(
-            '${response.statusCode} ${response.requestOptions.path}',
+            '${response.statusCode} $path',
             category: 'http',
             level: (response.statusCode ?? 0) >= 400
                 ? SentryLevel.warning
@@ -84,8 +147,9 @@ class ApiClient {
           handler.next(response);
         },
         onError: (err, handler) {
+          final path = redactSensitivePath(err.requestOptions.path);
           Log.breadcrumb(
-            '${err.type.name} ${err.requestOptions.path}',
+            '${err.type.name} $path',
             category: 'http',
             level: SentryLevel.error,
           );
@@ -96,11 +160,13 @@ class ApiClient {
   }
 
   final TokenStorage _storage;
+  final SessionFence _fence;
 
   /// Optional on-disk response cache for stale-while-revalidate fallback.
   final ResponseCache? cache;
 
-  /// Invoked when refresh fails and the user must re-authenticate.
+  /// Invoked when the session was *authoritatively* ended — the server said no,
+  /// not "the server could not be reached". Wired to the session wipe.
   final void Function()? onSessionExpired;
 
   /// Invoked when a request made under reseller "view as" gets a 401 — the
@@ -124,7 +190,7 @@ class ApiClient {
   String? impersonationToken;
 
   // Single-flight guard so concurrent 401s share one refresh round-trip.
-  Future<bool>? _refreshing;
+  Future<_RefreshOutcome>? _refreshing;
 
   // Cached after first read; stable for the app's lifetime.
   String? _cachedDeviceId;
@@ -147,6 +213,13 @@ class ApiClient {
         }
       }
     }
+    // Stamp the session this request belongs to. Anything that comes back
+    // carrying a generation (or a data scope) that is no longer current is a
+    // straggler from a session that has ended and must not write anything —
+    // see CacheInterceptor._stillCurrent and TokenStorage.renewSession.
+    options.extra['sessionGeneration'] = _fence.current;
+    final scope = cache?.scope;
+    if (scope != null) options.extra['scopeSegment'] = scope.segment;
     // Stable per-install id so the backend keeps one session per device
     // (login/refresh replace this device's prior session). Sent on all calls.
     options.headers['X-Device-Id'] = await _deviceId();
@@ -176,21 +249,35 @@ class ApiClient {
         !isAuthRetry &&
         !skipAuth &&
         !wasImpersonated) {
-      final refreshed = await _refreshToken();
-      if (refreshed) {
-        try {
-          final replay = await _replay(response.requestOptions);
-          return handler.resolve(replay);
-        } on DioException catch (e) {
-          // Refresh succeeded but the replay itself failed — typically a
-          // timeout or connection reset under server load, not an auth
-          // problem. Surface THAT error so the UI shows a retryable network
-          // state; falling through would deliver the stale original 401 and
-          // mislabel the failure as "(401)".
-          return handler.reject(e);
-        }
-      } else {
-        onSessionExpired?.call();
+      final outcome = await _refreshToken();
+      switch (outcome) {
+        case _RefreshOutcome.renewed:
+          try {
+            final replay = await _replay(response.requestOptions);
+            // A brand-new access token rejected on its first use is the server
+            // telling us this session is over (revoked elsewhere, account
+            // disabled). That IS authoritative — expire it.
+            if (replay.statusCode == 401) onSessionExpired?.call();
+            return handler.resolve(replay);
+          } on DioException catch (e) {
+            // Refresh succeeded but the replay itself failed — typically a
+            // timeout or connection reset under server load, not an auth
+            // problem. Surface THAT error so the UI shows a retryable network
+            // state; falling through would deliver the stale original 401 and
+            // mislabel the failure as "(401)".
+            return handler.reject(e);
+          }
+        case _RefreshOutcome.rejected:
+          onSessionExpired?.call();
+        case _RefreshOutcome.unavailable:
+          // The network, not the server, said no. Deliver the 401 to the
+          // caller and leave the session exactly as it was — a signal blip or
+          // a gateway hiccup must never sign anyone out.
+          Log.breadcrumb('refresh unavailable; session kept', category: 'auth');
+        case _RefreshOutcome.stale:
+          // The session ended while the refresh was in flight. Nothing to do:
+          // the wipe that ended it has already run.
+          break;
       }
     }
     handler.next(response);
@@ -201,34 +288,88 @@ class ApiClient {
     return _dio.fetch(options);
   }
 
-  Future<bool> _refreshToken() {
-    // Coalesce concurrent refreshes.
+  /// Coalesce concurrent refreshes onto one round-trip. Every waiter resolves
+  /// on the same outcome, so N simultaneous 401s produce exactly one
+  /// `/auth/refresh` and N replays.
+  Future<_RefreshOutcome> _refreshToken() {
     return _refreshing ??= _doRefresh().whenComplete(() => _refreshing = null);
   }
 
-  Future<bool> _doRefresh() async {
-    final refresh = await _storage.readRefreshToken();
-    if (refresh == null) return false;
+  Future<_RefreshOutcome> _doRefresh() async {
+    final bundle = await _storage.readBundle();
+    final refresh = bundle?.refreshToken;
+    if (bundle == null || refresh == null) {
+      // No credential record, or one with nothing to recover with. There is no
+      // network answer that could change this, so it is authoritative.
+      return _RefreshOutcome.rejected;
+    }
+    final generation = bundle.generation;
+    // Fast path: the in-memory fence already knows this session is over.
+    if (_fence.isOpen && !_fence.holds(generation)) {
+      return _RefreshOutcome.stale;
+    }
+    // Whether the fence was actually guarding this refresh when it started. If
+    // it was, a fence that is CLOSED when we come back means a sign-out ran
+    // while we were waiting — which a plain `isOpen` check would miss.
+    final fenced = _fence.isOpen;
+
     try {
       final res = await _dio.post(
         '/auth/refresh',
         data: {'refresh_token': refresh},
         options: Options(extra: {'skipAuth': true}),
       );
-      if (res.statusCode == 200 && res.data is Map) {
+      final status = res.statusCode ?? 0;
+      if (status == 200 && res.data is Map) {
         final data = res.data as Map;
         final access = data['access_token'] as String?;
-        if (access != null) {
-          await _storage.save(
+        if (access != null && access.isNotEmpty) {
+          // Re-check after the round trip: this is where a sign-out that ran
+          // while we were waiting gets caught.
+          if (fenced && !_fence.holds(generation)) {
+            Log.breadcrumb(
+              'refresh result discarded: session ended in flight',
+              category: 'auth',
+            );
+            return _RefreshOutcome.stale;
+          }
+          // The durable check. Even with no fence (a rebuilt client), storage
+          // refuses a write whose generation is not the stored one — and after
+          // a wipe there is no stored record at all.
+          final persisted = await _storage.renewSession(
+            generation: generation,
             accessToken: access,
-            refreshToken: data['refresh_token'] as String? ?? refresh,
+            refreshToken: data['refresh_token'] as String?,
           );
-          return true;
+          return persisted ? _RefreshOutcome.renewed : _RefreshOutcome.stale;
         }
       }
-    } catch (_) {
-      // ignore; treated as unrecoverable below
+      // A 4xx from /auth/refresh is the server refusing this session.
+      if (status >= 400 && status < 500) return _RefreshOutcome.rejected;
+      // Anything else (a 2xx we cannot parse) is not a refusal either.
+      return _RefreshOutcome.unavailable;
+    } on DioException catch (e) {
+      return _isTransportFailure(e)
+          ? _RefreshOutcome.unavailable
+          : _RefreshOutcome.rejected;
     }
-    return false;
+  }
+
+  /// Could-not-get-an-answer, as opposed to an answer of "no".
+  ///
+  /// Deliberately written as "everything except a real response", rather than
+  /// as an exhaustive list of the transport failure kinds. The list would be
+  /// the more explicit shape, but it fails in the wrong direction: a dio
+  /// release that adds a failure kind would either break the build or, worse,
+  /// land in a `default` that reads it as an authoritative refusal and signs
+  /// the user out. Anything unrecognised must mean "we could not ask".
+  ///
+  /// `validateStatus` lets every 4xx through as a response, so a thrown
+  /// `badResponse` is a 5xx — a server fault, not an auth answer.
+  bool _isTransportFailure(DioException e) {
+    if (e.type == DioExceptionType.badResponse) {
+      return (e.response?.statusCode ?? 500) >= 500;
+    }
+    return true;
   }
 }

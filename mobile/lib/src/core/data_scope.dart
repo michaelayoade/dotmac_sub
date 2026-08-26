@@ -1,0 +1,77 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:pointycastle/export.dart' show SHA256Digest;
+
+/// The identity that a piece of locally-persisted data belongs to.
+///
+/// Everything this app writes to the device — cached response bodies today,
+/// anything else tomorrow — belongs to exactly one *scope*: a (tenant,
+/// principal) pair. The scope is not a filter applied on read; it is baked into
+/// the storage path, into the entry name, and into the AEAD associated data of
+/// the encrypted body. Two different accounts therefore cannot *address* each
+/// other's entries at all, and a file physically moved between scope
+/// directories fails its tag check instead of decrypting.
+///
+/// [tenant] is the deployment the data came from (the API base URL — this is a
+/// white-label app and one install only ever talks to one deployment, but the
+/// field keeps a future multi-deployment build honest). [principal] is the
+/// signed-in account, or the *impersonated* account while a reseller is in
+/// "view as customer" mode: a view-as session is a different principal reading
+/// different data and must never share a cache partition with the reseller's
+/// own.
+class MobileDataScope {
+  const MobileDataScope({required this.tenant, required this.principal});
+
+  final String tenant;
+  final String principal;
+
+  /// No signed-in identity yet: cold start before `/auth/me` resolves, or a
+  /// legacy install migrated from the pre-bundle key layout (which never
+  /// recorded who the tokens belonged to). Data written under this scope is
+  /// addressable only by this scope, so it can never be confused with a
+  /// resolved account's data.
+  static const anonymous = MobileDataScope(tenant: '', principal: '');
+
+  bool get isResolved => principal.isNotEmpty;
+
+  /// Stable, non-reversing directory/name token for this scope. A digest rather
+  /// than the raw ids so an account id or a deployment host never appears in a
+  /// filesystem path (paths leak into crash reports and `adb` listings).
+  ///
+  /// The fields are joined with a NUL, written as an escape so this file stays
+  /// plain text. NUL rather than a printable separator because it cannot occur
+  /// in either field, so no pair of (tenant, principal) values can be made to
+  /// hash to another pair's digest by moving the boundary.
+  String get segment => _digest('$tenant\u0000$principal');
+
+  /// Scope-bound name for one cache key. Deriving the name from the scope *and*
+  /// the key is what makes cross-account addressing structurally impossible:
+  /// account B computing the name for the same request gets a different file.
+  String tagFor(String key) => _digest('$segment\u0000$key');
+
+  static String _digest(String value) {
+    final out = SHA256Digest().process(Uint8List.fromList(utf8.encode(value)));
+    final hex = StringBuffer();
+    // 16 bytes (128 bits) is far more than enough to separate the handful of
+    // identities that ever share one device, and keeps paths short.
+    for (var i = 0; i < 16; i++) {
+      hex.write(out[i].toRadixString(16).padLeft(2, '0'));
+    }
+    return hex.toString();
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is MobileDataScope &&
+      other.tenant == tenant &&
+      other.principal == principal;
+
+  @override
+  int get hashCode => Object.hash(tenant, principal);
+
+  /// Deliberately prints the digest, never the account id: scopes end up in
+  /// breadcrumbs and a breadcrumb must not carry an identity.
+  @override
+  String toString() => 'MobileDataScope(${segment.substring(0, 8)})';
+}

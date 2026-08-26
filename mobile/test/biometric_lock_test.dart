@@ -125,7 +125,7 @@ void main() {
     test('survives a token clear (session-expiry) but disable removes it',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a', refreshToken: 'r');
+      await ts.beginSession(accessToken: 'a', refreshToken: 'r');
       await ts.setBiometricEnabled(true);
 
       await ts.clear();
@@ -152,7 +152,7 @@ void main() {
     test('token + opted-in + biometrics available -> locked on launch',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       final c =
           build(ts, _FakeBiometric(available: true), _FakeAuthRepository(ts));
@@ -165,7 +165,7 @@ void main() {
 
     test('token + not opted-in -> authenticated, not locked', () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       final c = build(ts, _FakeBiometric(), _FakeAuthRepository(ts));
       await c.read(authControllerProvider.notifier).bootstrap();
 
@@ -177,7 +177,7 @@ void main() {
     test('opted-in but biometrics unavailable -> not locked (no trap)',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       final c =
           build(ts, _FakeBiometric(available: false), _FakeAuthRepository(ts));
@@ -188,7 +188,7 @@ void main() {
 
     test('unlock success clears the lock; failure keeps it', () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
 
       final failBio = _FakeBiometric(willAuthenticate: false);
@@ -207,7 +207,7 @@ void main() {
 
     test('lockOnResume re-locks an authenticated, unlocked session', () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       final c = build(ts, _FakeBiometric(), _FakeAuthRepository(ts));
       final n = c.read(authControllerProvider.notifier);
@@ -221,7 +221,7 @@ void main() {
 
     test('lockOnResume is a no-op when not opted-in', () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       final c = build(ts, _FakeBiometric(), _FakeAuthRepository(ts));
       final n = c.read(authControllerProvider.notifier);
       await n.bootstrap();
@@ -233,7 +233,7 @@ void main() {
     test('logout clears the biometric opt-in and any stashed location',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       final repo = _FakeAuthRepository(ts);
       final c = build(ts, _FakeBiometric(), repo);
@@ -252,7 +252,7 @@ void main() {
     test('bootstrap resolving /auth/me after an unlock must not re-lock',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       // Cached profile so bootstrap renders the optimistic locked session
       // while /auth/me is still in flight.
@@ -282,7 +282,7 @@ void main() {
     test('bootstrap does not resurrect a session signed out mid-flight',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       await ts.saveProfile(jsonEncode(
           Me(id: '1', firstName: 'A', lastName: 'B', email: 'a@b.c').toJson()));
@@ -308,7 +308,7 @@ void main() {
     test('promptActive is true only while the unlock prompt is in flight',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       final bio = _GatedBiometric();
       final c = build(ts, bio, _FakeAuthRepository(ts));
@@ -331,7 +331,7 @@ void main() {
     test('lockOnResume locks synchronously when armed (no content flash)',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       final c = build(ts, _FakeBiometric(), _FakeAuthRepository(ts));
       final n = c.read(authControllerProvider.notifier);
@@ -348,7 +348,7 @@ void main() {
     test('lockOnResume rolls back when biometrics became unavailable',
         () async {
       final ts = TokenStorage();
-      await ts.save(accessToken: 'a');
+      await ts.beginSession(accessToken: 'a');
       await ts.setBiometricEnabled(true);
       final bio = _FakeBiometric();
       final c = build(ts, bio, _FakeAuthRepository(ts));

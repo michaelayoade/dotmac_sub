@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
 
 import '../api/api_client.dart';
+import '../secure/evidence_files.dart';
 import 'connectivity.dart';
 import 'database.dart';
 
@@ -64,11 +65,19 @@ class OutboxRouting {
   }
 }
 
+/// Flushes the offline queues. Scope-bound: every read and write names the
+/// scope, and every payload it stores or reads back is an envelope, so a queue
+/// belonging to a principal who is no longer signed in cannot be flushed —
+/// there is nothing for it to select and nothing it could open.
+///
+/// Flush ordering, retry policy and conflict handling are unchanged by the move
+/// to encrypted storage; only the persistence beneath them is.
 class SyncService {
   SyncService({
     required this.db,
     required this.api,
     required this.connectivity,
+    required this.evidence,
     DelayFn? delay,
     this.throttle = const Duration(seconds: 1),
   }) : _delay = delay ?? Future.delayed {
@@ -88,8 +97,11 @@ class SyncService {
   final AppDatabase db;
   final ApiClient api;
   final ConnectivitySource connectivity;
+  final EvidenceFiles evidence;
   final Duration throttle;
   final DelayFn _delay;
+
+  String get scopeKey => evidence.scopeKey;
 
   // After this many failed attempts a 5xx/network entry is parked as a
   // conflict so it can't block the FIFO queue indefinitely.
@@ -122,6 +134,7 @@ class SyncService {
         batch.insert(
           db.cachedJobs,
           CachedJobsCompanion.insert(
+            scopeKey: scopeKey,
             id: item['id'] as String,
             title: item['title'] as String,
             status: item['status'] as String,
@@ -148,7 +161,8 @@ class SyncService {
 
   /// Cached job-list rows (optionally filtered by status), newest schedule first.
   Future<List<CachedJob>> readCachedJobs({String? status}) async {
-    final query = db.select(db.cachedJobs);
+    final query = db.select(db.cachedJobs)
+      ..where((row) => row.scopeKey.equals(scopeKey));
     if (status != null) {
       query.where((row) => row.status.equals(status));
     }
@@ -157,15 +171,18 @@ class SyncService {
   }
 
   Future<void> cacheJobDetail(String jobId, Map<String, dynamic> detail) async {
-    await (db.update(db.cachedJobs)..where((row) => row.id.equals(jobId)))
+    await (db.update(
+          db.cachedJobs,
+        )..where((row) => row.scopeKey.equals(scopeKey) & row.id.equals(jobId)))
         .write(CachedJobsCompanion(detailJson: Value(jsonEncode(detail))));
   }
 
   /// Cached job-detail JSON, or null if not cached.
   Future<Map<String, dynamic>?> readCachedDetail(String jobId) async {
-    final row = await (db.select(
-      db.cachedJobs,
-    )..where((r) => r.id.equals(jobId))).getSingleOrNull();
+    final row =
+        await (db.select(db.cachedJobs)
+              ..where((r) => r.scopeKey.equals(scopeKey) & r.id.equals(jobId)))
+            .getSingleOrNull();
     if (row?.detailJson == null) return null;
     return (jsonDecode(row!.detailJson!) as Map).cast<String, dynamic>();
   }
@@ -181,12 +198,15 @@ class SyncService {
   /// than upsert) ensures entries dropped server-side don't linger offline.
   Future<void> cacheSchedule(List<Map> items) async {
     await db.transaction(() async {
-      await db.delete(db.cachedScheduleEntries).go();
+      await (db.delete(
+        db.cachedScheduleEntries,
+      )..where((row) => row.scopeKey.equals(scopeKey))).go();
       await db.batch((batch) {
         for (final item in items) {
           batch.insert(
             db.cachedScheduleEntries,
             CachedScheduleEntriesCompanion.insert(
+              scopeKey: scopeKey,
               referenceId: item['reference_id'] as String,
               type: item['type'] as String,
               startAt: DateTime.parse(item['start_at'] as String),
@@ -207,6 +227,7 @@ class SyncService {
   /// Cached schedule entries, earliest first.
   Future<List<CachedScheduleEntry>> readCachedSchedule() async {
     final query = db.select(db.cachedScheduleEntries)
+      ..where((row) => row.scopeKey.equals(scopeKey))
       ..orderBy([(row) => OrderingTerm.asc(row.startAt)]);
     return query.get();
   }
@@ -222,9 +243,10 @@ class SyncService {
         .into(db.outboxEntries)
         .insert(
           OutboxEntriesCompanion.insert(
+            scopeKey: scopeKey,
             clientRef: clientRef,
             kind: kind,
-            payloadJson: jsonEncode(payload),
+            payloadJson: _sealPayload(clientRef, payload),
             createdAt: DateTime.now().toUtc(),
           ),
           mode: InsertMode.insertOrIgnore, // retried enqueues are no-ops
@@ -233,13 +255,37 @@ class SyncService {
 
   Future<List<OutboxEntry>> pending() =>
       (db.select(db.outboxEntries)
-            ..where((row) => row.status.equals('pending'))
+            ..where(
+              (row) =>
+                  row.scopeKey.equals(scopeKey) & row.status.equals('pending'),
+            )
             ..orderBy([(row) => OrderingTerm.asc(row.seq)]))
           .get();
 
-  Future<OutboxEntry?> outboxEntry(String clientRef) => (db.select(
-    db.outboxEntries,
-  )..where((row) => row.clientRef.equals(clientRef))).getSingleOrNull();
+  Future<OutboxEntry?> outboxEntry(String clientRef) =>
+      (db.select(db.outboxEntries)..where(
+            (row) =>
+                row.scopeKey.equals(scopeKey) & row.clientRef.equals(clientRef),
+          ))
+          .getSingleOrNull();
+
+  /// Queued mutations carry the customer's own words and readings, so the
+  /// payload column holds an envelope bound to this scope and this client ref.
+  /// Nothing else can open it, which is also what stops a queue left behind by
+  /// a previous account from ever being replayed.
+  String _sealPayload(String clientRef, Map<String, dynamic> payload) =>
+      evidence.cipher.sealText(
+        jsonEncode(payload),
+        context: evidence.contextFor('outbox', clientRef),
+      );
+
+  Map<String, dynamic> _openPayload(OutboxEntry entry) {
+    final json = evidence.cipher.openText(
+      entry.payloadJson,
+      context: evidence.contextFor('outbox', entry.clientRef),
+    );
+    return (jsonDecode(json) as Map).cast<String, dynamic>();
+  }
 
   Future<List<OfflineRequestHistoryEntry>> offlineRequestHistory(
     String kind,
@@ -247,7 +293,10 @@ class SyncService {
     final rows =
         await (db.select(db.outboxEntries)
               ..where(
-                (row) => row.kind.equals(kind) & row.status.isNotValue('sent'),
+                (row) =>
+                    row.scopeKey.equals(scopeKey) &
+                    row.kind.equals(kind) &
+                    row.status.isNotValue('sent'),
               )
               ..orderBy([(row) => OrderingTerm.desc(row.createdAt)]))
             .get();
@@ -257,7 +306,7 @@ class SyncService {
           clientRef: row.clientRef,
           kind: row.kind,
           status: row.status,
-          payload: (jsonDecode(row.payloadJson) as Map).cast<String, dynamic>(),
+          payload: _openPayload(row),
           createdAt: row.createdAt,
           lastError: row.lastError,
         ),
@@ -265,26 +314,29 @@ class SyncService {
   }
 
   Future<List<PendingPhoto>> pendingPhotosForJob(String workOrderId) =>
-      (db.select(
-        db.pendingPhotos,
-      )..where((row) => row.workOrderId.equals(workOrderId))).get();
+      (db.select(db.pendingPhotos)..where(
+            (row) =>
+                row.scopeKey.equals(scopeKey) &
+                row.workOrderId.equals(workOrderId),
+          ))
+          .get();
 
   Future<void> removePendingPhoto(String clientRef) async {
-    final row = await (db.select(
-      db.pendingPhotos,
-    )..where((photo) => photo.clientRef.equals(clientRef))).getSingleOrNull();
+    final row =
+        await (db.select(db.pendingPhotos)..where(
+              (photo) =>
+                  photo.scopeKey.equals(scopeKey) &
+                  photo.clientRef.equals(clientRef),
+            ))
+            .getSingleOrNull();
     if (row == null || row.uploaded) return;
-    final file = File(row.localPath);
-    if (file.existsSync()) {
-      try {
-        file.deleteSync();
-      } on FileSystemException {
-        // Cache-file cleanup is best effort.
-      }
-    }
-    await (db.delete(
-      db.pendingPhotos,
-    )..where((photo) => photo.clientRef.equals(clientRef))).go();
+    await evidence.delete(File(row.localPath));
+    await (db.delete(db.pendingPhotos)..where(
+          (photo) =>
+              photo.scopeKey.equals(scopeKey) &
+              photo.clientRef.equals(clientRef),
+        ))
+        .go();
   }
 
   Future<bool> get isOnline => connectivity.isOnline;
@@ -298,8 +350,16 @@ class SyncService {
     var sent = 0;
     try {
       for (final entry in await pending()) {
-        final payload = (jsonDecode(entry.payloadJson) as Map)
-            .cast<String, dynamic>();
+        final Map<String, dynamic> payload;
+        try {
+          payload = _openPayload(entry);
+        } on Object {
+          // The envelope will not open, so this entry belongs to key material
+          // this device no longer holds. It can never be sent; park it for
+          // review rather than blocking the FIFO queue behind it forever.
+          await _mark(entry, 'conflict', error: 'Unreadable queued mutation');
+          continue;
+        }
         if (entry.kind == 'material_request' ||
             entry.kind == 'expense_request') {
           payload['client_ref'] = entry.clientRef;
@@ -374,7 +434,10 @@ class SyncService {
     try {
       final rows =
           await (db.select(db.pendingPhotos)..where(
-                (row) => row.uploaded.equals(false) & row.failed.equals(false),
+                (row) =>
+                    row.scopeKey.equals(scopeKey) &
+                    row.uploaded.equals(false) &
+                    row.failed.equals(false),
               ))
               .get();
       for (final photo in rows) {
@@ -388,9 +451,27 @@ class SyncService {
           );
           continue;
         }
+        final Uint8List image;
+        try {
+          image = await evidence.read(
+            file,
+            purpose: 'photo',
+            reference: photo.clientRef,
+          );
+        } on Object {
+          // An envelope we cannot open is evidence we can never upload. Mark it
+          // terminally failed so it surfaces for review instead of retrying.
+          await _markPhoto(
+            photo.clientRef,
+            uploaded: false,
+            failed: true,
+            error: 'Unreadable local evidence',
+          );
+          continue;
+        }
         final form = FormData.fromMap({
           'file': MultipartFile.fromBytes(
-            await file.readAsBytes(),
+            image,
             filename: 'photo.jpg',
             contentType: DioMediaType('image', 'jpeg'),
           ),
@@ -405,11 +486,7 @@ class SyncService {
         try {
           await api.dio.post('/api/v1/field/attachments', data: form);
           await _markPhoto(photo.clientRef, uploaded: true);
-          try {
-            file.deleteSync();
-          } on FileSystemException {
-            // Cleanup is best-effort; the row is already marked uploaded.
-          }
+          await evidence.delete(file);
           uploaded++;
         } on DioException catch (error) {
           final status = error.response?.statusCode;
@@ -448,15 +525,17 @@ class SyncService {
     bool failed = false,
     String? error,
   }) async {
-    await (db.update(
-      db.pendingPhotos,
-    )..where((row) => row.clientRef.equals(clientRef))).write(
-      PendingPhotosCompanion(
-        uploaded: Value(uploaded),
-        failed: Value(failed),
-        lastError: Value(error),
-      ),
-    );
+    await (db.update(db.pendingPhotos)..where(
+          (row) =>
+              row.scopeKey.equals(scopeKey) & row.clientRef.equals(clientRef),
+        ))
+        .write(
+          PendingPhotosCompanion(
+            uploaded: Value(uploaded),
+            failed: Value(failed),
+            lastError: Value(error),
+          ),
+        );
   }
 
   String _detail(DioException error) {
@@ -473,25 +552,27 @@ class SyncService {
   }
 
   Future<void> _mark(OutboxEntry entry, String status, {String? error}) async {
-    await (db.update(
-      db.outboxEntries,
-    )..where((row) => row.seq.equals(entry.seq))).write(
-      OutboxEntriesCompanion(
-        status: Value(status),
-        lastError: Value(error),
-        attempts: Value(entry.attempts + 1),
-      ),
-    );
+    await (db.update(db.outboxEntries)..where(
+          (row) => row.scopeKey.equals(scopeKey) & row.seq.equals(entry.seq),
+        ))
+        .write(
+          OutboxEntriesCompanion(
+            status: Value(status),
+            lastError: Value(error),
+            attempts: Value(entry.attempts + 1),
+          ),
+        );
   }
 
   Future<void> _bumpAttempts(OutboxEntry entry, String error) async {
-    await (db.update(
-      db.outboxEntries,
-    )..where((row) => row.seq.equals(entry.seq))).write(
-      OutboxEntriesCompanion(
-        attempts: Value(entry.attempts + 1),
-        lastError: Value(error),
-      ),
-    );
+    await (db.update(db.outboxEntries)..where(
+          (row) => row.scopeKey.equals(scopeKey) & row.seq.equals(entry.seq),
+        ))
+        .write(
+          OutboxEntriesCompanion(
+            attempts: Value(entry.attempts + 1),
+            lastError: Value(error),
+          ),
+        );
   }
 }

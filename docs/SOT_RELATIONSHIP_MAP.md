@@ -5339,6 +5339,32 @@ principal resolution for authentication. Four consumers delegate to it:
 Vendor **access eligibility** remains owned by the vendor module; only identity
 resolution moved.
 
+### Vendor authentication has two transports and no second authority
+
+`app/services/auth_flow.py` mints every vendor token; `app/services/field/
+vendor_auth.py` decides every vendor admission. Two adapters carry those same
+two decisions to two clients, and neither wraps the other:
+
+| transport | adapter | delivery |
+|---|---|---|
+| browser | `app/web/vendor_auth.py` -> `app/web/vendor_auth_flow.py` | Jinja pages, session cookies, 303 redirects |
+| field app (JSON) | `app/api/vendor_auth.py` | `/api/v1/vendor/auth/{login,mfa,refresh,logout}` |
+
+Admission is decided twice on the JSON path: `resolve_vendor_login_eligibility`
+before credentials are verified, and
+`resolve_vendor_admission_for_access_token` on the token the auth owner just
+minted — the owner knows nothing about vendor membership, so login, MFA
+verification and refresh each re-check it. A refused admission discards the
+session that was minted for it through the owner's own `logout` command.
+
+The JSON transport was **missing entirely** until 2026-08-26: `field_mobile`
+posted to `/api/v1/vendor/auth/login` while Sub mounted only the unprefixed
+HTML `/vendor/auth/login`, so vendor login, MFA and refresh all answered 404.
+The repair added the second adapter rather than aliasing an HTML form handler
+onto a JSON path; `tests/test_vendor_auth_api_contract.py` pins the client's
+path strings against the mount table so the two halves cannot drift apart
+silently again.
+
 **The canonical primitive** is `resolve_staff_principal_by_party(db, party_id,
 asserted_system_user_id)`. Query direction is the contract: it starts at the
 Party and finds the principal. `system_user_id` is compared as the Sub-owned
