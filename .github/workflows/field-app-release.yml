@@ -133,8 +133,12 @@ jobs:
           # started this run otherwise. No YAML library is needed here.)
           wf_raw = WORKFLOW.read_text()
           for wd in set(re.findall(r"^\s*working-directory:\s*(\S+)\s*$", wf_raw, re.M)):
-              if wd.startswith("${{"):
-                  continue  # expression, resolved from FIELD_APP_DIR
+              # Assembled so this line does not itself contain an expression
+              # opener: GitHub evaluates expressions anywhere in the file,
+              # including inside a run block, and a literal opener here would
+              # make the whole workflow unparseable.
+              if wd.startswith("$" + "{{"):
+                  continue  # an expression, resolved from FIELD_APP_DIR
               check(wd.startswith(FIELD_DIR),
                     f"{WORKFLOW}: working-directory '{wd}' is not under {FIELD_DIR}/")
           for path in set(re.findall(r"^\s{12}(\S+/\S*)$", wf_raw, re.M)):
@@ -652,7 +656,7 @@ jobs:
       - name: Run the Xcode Cloud post-clone hook
         env:
           CI_PRIMARY_REPOSITORY_PATH: ${{ github.workspace }}
-          FLUTTER_ROOT: ${{ steps.flutter.outputs['CACHE-PATH'] || env.FLUTTER_ROOT }}
+          FLUTTER_ROOT: ${{ steps.flutter.outputs['cache-path'] || env.FLUTTER_ROOT }}
         run: |
           set -euo pipefail
           if [ -z "${FLUTTER_ROOT:-}" ] || [ ! -x "${FLUTTER_ROOT}/bin/flutter" ]; then
