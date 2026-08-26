@@ -75,6 +75,28 @@ jobs:
             docker exec e2e-db pg_isready -U postgres >/dev/null 2>&1 && break
             sleep 2
           done
+          # Exhausting the loop above used to fall through with exit 0. A
+          # database that never came up was then reported by the NEXT step as
+          # an opaque "database connection or role operation failed", naming
+          # migrations for a fault that was service startup. Readiness is a
+          # precondition of this step, so prove it here and fail loudly.
+          if ! docker exec e2e-db pg_isready -U postgres >/dev/null 2>&1; then
+            echo "::error::e2e-db did not become ready within 60s"
+            docker inspect --format='status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' e2e-db || true
+            docker logs e2e-db || true
+            exit 1
+          fi
+          # Redis had no readiness check at all, which is the same defect in
+          # its most complete form: an unproven precondition.
+          for i in $(seq 1 30); do
+            docker exec e2e-redis redis-cli ping >/dev/null 2>&1 && break
+            sleep 2
+          done
+          if ! docker exec e2e-redis redis-cli ping >/dev/null 2>&1; then
+            echo "::error::e2e-redis did not become ready within 60s"
+            docker logs e2e-redis || true
+            exit 1
+          fi
 
       - name: Migrate + seed
         run: |
