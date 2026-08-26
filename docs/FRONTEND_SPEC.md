@@ -714,9 +714,20 @@ Dashboard implementation notes:
     "total_pages": int,
     "search": str | None,
     "customer_type": str | None,        # filter: "person" | "organization" | None
+    "billing_mode": str | None,         # "prepaid" | "postpaid" | "non_billable"
     "active_page": "customers",
 }
 ```
+
+The Billing filter is owned by `ui.customer_list_projection`. Prepaid and
+postpaid consume `financial.billing_profile`, including its collectible-service
+precedence and mixed-mode fail-closed behavior. Non-billable means every
+collectible service is currently charge-suppressed by an effective
+complimentary/sponsored treatment or is a genuinely zero-priced recurring
+catalog product. Missing price evidence, `Subscriber.billing_enabled`, and plan
+name text (including names containing "Non Billing") do not classify the
+customer. An account with both paid and free services remains in its canonical
+prepaid/postpaid cohort.
 
 #### `GET /admin/customers/{type}/{id}` (Person Detail)
 **Template:** `admin/customers/detail.html`
