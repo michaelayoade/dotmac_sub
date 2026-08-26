@@ -69,7 +69,7 @@ def _command(**overrides) -> ReconcileReceivableProjectionCommand:
         "context": _context(),
         "window": _window(),
         "code_version": "pytest-code",
-        "database_schema_version": "558_receivable_observation_projection",
+        "database_schema_version": "558_receivable_projection",
     }
     base.update(overrides)
     return ReconcileReceivableProjectionCommand(**base)

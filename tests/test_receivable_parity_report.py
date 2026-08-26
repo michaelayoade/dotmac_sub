@@ -106,7 +106,7 @@ def _project(db) -> None:
             context=_context(),
             window=_window(),
             code_version="pytest-code",
-            database_schema_version="558_receivable_observation_projection",
+            database_schema_version="558_receivable_projection",
             mode=ProjectionMode.APPLY,
         ),
     )
@@ -118,7 +118,7 @@ def _report(db):
         window=_window(),
         context=_context(),
         code_version="pytest-code",
-        database_schema_version="558_receivable_observation_projection",
+        database_schema_version="558_receivable_projection",
     )
 
 
