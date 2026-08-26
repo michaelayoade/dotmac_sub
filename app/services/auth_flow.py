@@ -256,11 +256,16 @@ def _refresh_cookie_name(db: Session | None) -> str:
     )
 
 
-def _wants_refresh_in_body(request: Request | None) -> bool:
+def wants_refresh_in_body(request: Request | None) -> bool:
     """Native clients (mobile) can't read the httpOnly refresh cookie, so they
     opt into receiving the refresh token in the JSON body via this header and
     persist it in the platform secure store instead. Browser clients omit the
-    header and keep the safer httpOnly-cookie behaviour."""
+    header and keep the safer httpOnly-cookie behaviour.
+
+    Public because it is ONE policy for the whole JSON API: the vendor
+    authentication adapter (``app/api/vendor_auth.py``) has to answer the same
+    question for the same field client, and a second copy of the header name
+    would drift."""
     if request is None:
         return False
     return request.headers.get("x-auth-refresh-in-body", "").strip().lower() in {
@@ -1142,7 +1147,7 @@ class AuthFlow(ListResponseMixin):
         provider: str | None,
     ):
         result = AuthFlow.login(db, username, password, request, provider)
-        if result.get("refresh_token") and not _wants_refresh_in_body(request):
+        if result.get("refresh_token") and not wants_refresh_in_body(request):
             return AuthFlow._response_with_refresh_cookie(
                 db, result, LoginResponse, status.HTTP_200_OK
             )
@@ -1647,7 +1652,7 @@ class AuthFlow(ListResponseMixin):
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):
         result = AuthFlow.mfa_verify(db, mfa_token, code, request)
-        if _wants_refresh_in_body(request):
+        if wants_refresh_in_body(request):
             return result
         return AuthFlow._response_with_refresh_cookie(
             db, result, TokenResponse, status.HTTP_200_OK
@@ -1730,7 +1735,7 @@ class AuthFlow(ListResponseMixin):
         if not resolved:
             raise HTTPException(status_code=401, detail="Missing refresh token")
         result = AuthFlow.refresh(db, resolved, request)
-        if _wants_refresh_in_body(request):
+        if wants_refresh_in_body(request):
             return result
         return AuthFlow._response_with_refresh_cookie(
             db, result, TokenResponse, status.HTTP_200_OK
