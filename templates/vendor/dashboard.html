@@ -3,7 +3,14 @@
 {% block vendor_content %}
 <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
   <div><p class="text-sm font-semibold text-cyan-700 dark:text-cyan-400">FIELD DELIVERY</p><h1 class="text-2xl font-bold text-slate-950 dark:text-white">Installation projects</h1></div>
-  <div class="flex gap-3 text-sm"><span class="rounded-md bg-white px-3 py-2 shadow-sm dark:bg-slate-900"><strong>{{ my_projects|length }}</strong> active</span><span class="rounded-md bg-white px-3 py-2 shadow-sm dark:bg-slate-900"><strong>{{ available_projects|length }}</strong> open bids</span></div>
+  <div class="flex flex-wrap items-center gap-3 text-sm">
+    <form method="get" action="/vendor" class="flex min-w-[18rem] max-w-full items-center gap-2">
+      <label for="vendor-project-search" class="sr-only">Search projects</label>
+      <input id="vendor-project-search" name="search" type="search" value="{{ search or '' }}" placeholder="Search projects" class="min-h-10 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-800 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500">
+      <button type="submit" class="min-h-10 rounded-md bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-500/40">Search</button>
+    </form>
+    <span class="rounded-md bg-white px-3 py-2 shadow-sm dark:bg-slate-900"><strong>{{ my_projects|length }}</strong> active</span><span class="rounded-md bg-white px-3 py-2 shadow-sm dark:bg-slate-900"><strong>{{ available_projects|length }}</strong> open bids</span>
+  </div>
 </div>
 <section class="mb-8">
   <h2 class="mb-3 text-sm font-bold uppercase text-slate-500">My work</h2>

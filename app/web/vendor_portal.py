@@ -6,7 +6,16 @@ from decimal import Decimal
 from typing import TypeVar, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -313,21 +322,34 @@ def _as_built_payload(
 @router.get("", response_class=HTMLResponse)
 def vendor_dashboard(
     request: Request,
+    search: str | None = Query(default=None, max_length=120),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
     vendor_id = str(context["native_vendor_id"])
+    search_term = (search or "").strip()
     return templates.TemplateResponse(
         "vendor/dashboard.html",
         {
             "request": request,
             "vendor": context["native_vendor"],
+            "search": search_term,
             "available_projects": vendor_portal_operations.list_projects(
-                db, vendor_id, available=True, limit=50, offset=0
+                db,
+                vendor_id,
+                available=True,
+                limit=50,
+                offset=0,
+                search=search_term,
             ),
             "my_projects": vendor_portal_operations.list_projects(
-                db, vendor_id, available=False, limit=100, offset=0
+                db,
+                vendor_id,
+                available=False,
+                limit=100,
+                offset=0,
+                search=search_term,
             ),
         },
     )

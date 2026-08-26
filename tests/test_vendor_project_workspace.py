@@ -117,6 +117,41 @@ def test_configure_procurement_accepts_browser_naive_bidding_close_time(db_sessi
     assert installation.bidding_close_at is not None
 
 
+def test_vendor_project_list_filters_by_project_search(db_session):
+    installation, vendor, _user = _chain(db_session)
+    installation.project.name = "Alpha estate deployment"
+    installation.project.code = "ALP-100"
+    other_project = Project(name="Beta tower build", code="BET-200")
+    db_session.add(other_project)
+    db_session.flush()
+    other_installation = InstallationProject(
+        project_id=other_project.id,
+        assigned_vendor_id=vendor.id,
+    )
+    db_session.add(other_installation)
+    db_session.commit()
+
+    name_matches = vendor_portal_operations.list_projects(
+        db_session,
+        str(vendor.id),
+        available=False,
+        limit=50,
+        offset=0,
+        search="alpha",
+    )
+    code_matches = vendor_portal_operations.list_projects(
+        db_session,
+        str(vendor.id),
+        available=False,
+        limit=50,
+        offset=0,
+        search="BET-200",
+    )
+
+    assert [row["id"] for row in name_matches] == [installation.id]
+    assert [row["id"] for row in code_matches] == [other_installation.id]
+
+
 def test_a_vendor_cannot_quote_a_project_assigned_to_another_vendor(db_session):
     """The marketplace listing hid other vendors' projects, but the command
     never enforced it: any vendor holding a project id could open a quote on
