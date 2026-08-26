@@ -268,9 +268,7 @@ def test_submitted_direct_transfer_remains_blocking_after_nominal_expiry(
     assert active.phase is ActiveDepositPhase.under_review
 
 
-def test_paid_terminal_proof_drift_does_not_block_new_deposit(
-    db_session, subscriber
-):
+def test_paid_terminal_proof_drift_does_not_block_new_deposit(db_session, subscriber):
     intent = _intent(db_session, subscriber, _provider(db_session))
     reference = "TRF-PAID-DRIFT"
     payment = Payment(

@@ -115,9 +115,7 @@ def test_identifier_prompt_accepts_any_approved_identifier():
         )
     }
 
-    requested = ai_intake_conversation_engine._next_identifier_to_request(
-        state, policy
-    )
+    requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
 
     assert requested == ai_intake_conversation_engine.CUSTOMER_IDENTIFIER_REQUEST
     assert ai_intake_conversation_engine._identifier_question(requested) == (
@@ -127,15 +125,13 @@ def test_identifier_prompt_accepts_any_approved_identifier():
 
     state.already_requested_fields = (requested,)
     assert (
-        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
-        is None
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
     )
 
     state.already_requested_fields = ()
     state.registered_email = "customer@example.test"
     assert (
-        ai_intake_conversation_engine._next_identifier_to_request(state, policy)
-        is None
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
     )
 
 
@@ -148,9 +144,7 @@ def test_identifier_prompt_preserves_single_identifier_policy():
     )
     policy = {"permitted_identifiers": ("portal_id",)}
 
-    requested = ai_intake_conversation_engine._next_identifier_to_request(
-        state, policy
-    )
+    requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
 
     assert requested == "portal_id"
     assert (

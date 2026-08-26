@@ -364,9 +364,7 @@ def test_get_topup_page_allows_deposit_when_stale_submitted_receipt_was_paid(
         expires_at=datetime.now(UTC) - timedelta(days=1),
     )
     intent = (
-        db_session.query(TopupIntent)
-        .filter_by(reference="TRF-ACTIVE-SUBMITTED")
-        .one()
+        db_session.query(TopupIntent).filter_by(reference="TRF-ACTIVE-SUBMITTED").one()
     )
     intent.reference = reference
     intent.metadata_ = {

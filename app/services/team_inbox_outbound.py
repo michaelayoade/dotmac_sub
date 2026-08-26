@@ -162,14 +162,11 @@ def _whatsapp_inbox_reply_bypasses_customer_policy(
     sender_type = str(metadata.get("sender_type") or "").strip().lower()
     author_type = str(metadata.get("author_type") or "").strip().lower()
     automation_kind = str(metadata.get("automation_kind") or "").strip().lower()
-    return (
-        channel == NotificationChannel.whatsapp
-        and (
-            payload.sent_by_person_id is not None
-            or sender_type == "ai"
-            or author_type == "ai"
-            or automation_kind == "ai_intake"
-        )
+    return channel == NotificationChannel.whatsapp and (
+        payload.sent_by_person_id is not None
+        or sender_type == "ai"
+        or author_type == "ai"
+        or automation_kind == "ai_intake"
     )
 
 
@@ -216,9 +213,7 @@ def _queue_outbox_reply(
         if linked_subscriber_id is not None
         else "operational"
     )
-    intent_subscriber_id = (
-        None if use_operational_audience else linked_subscriber_id
-    )
+    intent_subscriber_id = None if use_operational_audience else linked_subscriber_id
     result = submit(
         db,
         CommunicationIntent(
