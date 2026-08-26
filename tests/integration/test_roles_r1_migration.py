@@ -133,7 +133,7 @@ def _restore_deployed_527_roles_shape(url: URL) -> None:
 def test_fresh_head_has_exact_kernel_role_expand_contract(
     migrated_database: URL,
 ) -> None:
-    _alembic("head")
+    _alembic("heads")
 
     _assert_candidate_contract(migrated_database)
 

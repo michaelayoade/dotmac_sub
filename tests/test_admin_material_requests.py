@@ -278,7 +278,7 @@ def test_material_request_delivery_projection_exposes_retry_state(db_session):
             entity_type="field_material_request",
             entity_id=created.id,
             idempotency_key=f"test-material-{created.id}",
-            payload={"omni_id": str(created.id)},
+            payload={"source_request_id": str(created.id)},
             status=FieldErpSyncStatus.pending.value,
             attempts=2,
             last_error="ERP temporarily unavailable",

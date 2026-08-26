@@ -5,8 +5,9 @@ plan; amended the same day for slice S2 (dependency pinned — see "S2 acceptanc
 claim") and slice S3 (composition declared in `app/composition.py` — see "S3
 acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13,
 to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
-`dotmac-kernel==0.1.0a90` on 2026-08-22, and to `dotmac-kernel==0.1.0a91` the
-same day — see "Pin history". Supersedes the
+`dotmac-kernel==0.1.0a90` on 2026-08-22, to `dotmac-kernel==0.1.0a91` the same
+day, and to `dotmac-kernel==0.1.0a94` on 2026-08-25 — see "Pin history".
+Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
 authorized by this document alone.
@@ -88,6 +89,151 @@ or authorise deployment. Because Sub deploys migrations before the new image,
 this GUC behavior must be present in the deployed predecessor before a later
 schema release can enable RLS safely.
 
+**2026-08-25 — `idempotency_ledger.v1` storage provider, no runtime
+cutover.** Migration 556 supplies the kernel's tenant and platform at-most-once
+table contract from Sub's own lineage and binds that effect to the Sub
+revision. The tenant table has a non-null tenant FK, the exact
+`(tenant_id, scope, key)` concurrency key, and ENABLE + FORCE RLS over
+`app_current_tenant_id()`; the platform peer has no tenant column or RLS, is
+reachable by `platform_api`/`app_admin`, and is fully revoked from `app_user` at
+table and column levels. The migration closes by running the pinned kernel's
+live verifier, and PostgreSQL tests break each structural observable and prove
+two-tenant visibility as `app_user`.
+
+This is a provider boundary, not an owner transfer. Sub's `IdempotencyKey`,
+`TaskExecution` and `idempotent_task` paths remain the only active local
+mechanisms; no row is backfilled, no application runtime imports
+`dotmac_kernel.idempotency`, and a two-directional 32-path inventory refuses a
+new legacy reference or an unrecorded retirement. The effect supplies the
+database prerequisite now consumed by shadow-composed Subscriptions, while
+kernel a94 remains its exact supply contract. No money-domain writer, reader,
+route, job, webhook or authority moves in this amendment.
+
+**2026-08-25 — `outbox_relay.v1` storage provider, no dispatcher or runtime
+cutover.** Migration 557 ports ERP's production-used provider at immutable
+commit `dc10b24af22b1452b9954d4c33ff87a5916a4afe` into Sub's lineage after 556.
+It creates separate tenant and platform module-event ledgers and four hardened
+SECURITY DEFINER claim/settle functions. The tenant ledger has a tenant FK,
+tenant index, ENABLE + FORCE RLS and an effective two-tenant `app_user` canary;
+the platform ledger has no tenant column or RLS and is fully unreachable by
+`app_user`. Both dispatcher roles are LOGIN, NOBYPASSRLS and NOSUPERUSER, have
+schema usage and EXECUTE only on their own plane's function pair, and hold no
+direct table or column privilege.
+
+Cluster-role creation is deliberately outside Alembic in the explicitly
+elevated `scripts/bootstrap_outbox_dispatcher_roles.py`; the migration verifies
+both identities before any DDL and fails closed if bootstrap was omitted. This
+is still storage only. No module dispatcher process is configured, and Sub's
+`event_store`, owner-output, notification, network-operation and field-ERP
+outboxes retain every current writer, worker and delivery authority. Billing
+and Collections now consume the effect in their tenant-only shadow composition,
+but cannot move authority until their backfill, parity and sealed cutover gates
+pass.
+
+The two provider revisions intentionally add four kernel-identical names to
+Sub's lineage-head collision inventory: `idempotency_records`,
+`platform_idempotency_records`, `outbox_events`, and
+`platform_outbox_events`. Each is classified STAMP because Sub hosts and
+verifies the kernel contract; none represents a second business authority. The
+executable current-head ratchet consequently contains fourteen names.
+
+**2026-08-25 — `dotmac-subscriptions==0.1.0a3` tenant storage composed,
+shadow only.** Sub exact-pins the tagged Subscriptions a3 artifacts recorded in
+the Poetry lock and its required `dotmac-kernel==0.1.0a94`. The annotated
+Subscriptions tag
+`dotmac-subscriptions-v0.1.0a3` peels to
+`ad6c5824086f6f550447caeabe820e860cdfe23c`. Starter release-record commit
+`d6044d2dbfdf4692f4f88da7f308c7f106b01181` records that publication and
+removes the declared-unpublished baseline; the kernel a94 tag peels to
+`9e717eb88603f6ef61bded23b2aa468fe4533a95`. `alembic.ini` declares the
+installed `dotmac_subscriptions.migrations:versions` resource before Alembic
+builds its `ScriptDirectory`, beside Sub's own lineage and the existing
+Service Orders resource. `app/migration_bindings.py` declares exactly one
+`ModulePlaneSelection` for Subscriptions: `subscriptions` / `TENANT`. The
+lineage consumes only
+the effects Sub already supplies through 545, 546 and 556; the separately
+bound relay provider does not turn delivery on.
+
+Fresh and 556-predecessor disposable-PostgreSQL canaries build
+`su_0001_subscriptions`, `su_0002_offer_pricing`, then
+`su_0003_billing_treatments`; they prove every selected tenant table exists
+with ENABLE + FORCE RLS, prove every platform table is absent, exercise
+two-tenant visibility as `app_user`, and preserve a seeded
+provider-ledger row across composition. This is schema and verification
+preparation only: no `app/` module imports `dotmac_subscriptions`, no route,
+job, webhook, reader, writer, backfill or dual-write is added, and
+`commercial_provider="none"` remains unchanged.
+
+This composition does not claim or bypass the authoritative Vendor-first
+order. Vendor CP remains Subscriptions cutover 1 on the platform plane; Sub is
+cutover 2 on the tenant plane and remains behind its own complete parity,
+backfill and sealed authority gate. Tagged a3 supplies the billing-treatment
+contract needed by the next parity phase, but schema composition alone cannot
+support a full subscription cutover. The Billing
+and Collections a1 tenant schemas described below now compose against the relay
+provider, but that later storage preparation moves none of the three commercial
+authorities.
+
+**2026-08-25 — `dotmac-billing==0.1.0a1` and
+`dotmac-collections==0.1.0a1` tenant storage composed, shadow only.** Both
+dual-plane packages are exact-pinned in Sub's project and Poetry dependency
+inputs and in the checked-in lock. `alembic.ini` declares their installed
+migration resources, producing independent `bi_0001_billing` and
+`cl_0001_collections` heads. `app/migration_bindings.py` explicitly selects
+only `ModulePlane.TENANT` for each module: the tenant table catalogues are
+installed under `mod_billing` and `mod_coll`, while both platform catalogues
+remain absent.
+
+The fresh and relay-provider-predecessor PostgreSQL canaries prove the exact
+selected catalogues, ENABLE + FORCE RLS, effective two-tenant visibility as
+`app_user`, preservation of a seeded module-event row, and repeat-upgrade
+stability. This is migration and isolation evidence only. No `app/` code imports
+either module, `commercial_provider="none"` remains unchanged, and no route,
+job, webhook, dispatcher, runtime reader, runtime writer, backfill or dual-write
+was added. Sub's local invoice, credit, payment, refund, settlement, allocation,
+reversal, collection-policy, case and consequence-request owners therefore
+remain authoritative.
+
+Shadow composition does not change the ordered authority programme:
+
+- **Billing and Subscriptions remain Vendor-first.** Vendor CP must complete
+  each platform-plane authority cutover before Sub may seal the corresponding
+  tenant-plane cutover. Schema presence in Sub is not first-live proof.
+- **Collections remains Sub-first.** Sub is the qualifying source and must
+  complete the first tenant-plane authority cutover before Vendor CP may move
+  the Collections platform plane.
+
+For every boundary, authority remains blocked until a typed, complete backfill
+has no unresolved or ambiguous cohort; shadow comparison is total and parity is
+accepted; the writer switch is sealed at a named watermark with an explicit
+rollback premise; and the former Sub writers, jobs, fallbacks and repair paths
+are retired under sensitivity-proven ratchets. Billing additionally seals its
+coupled invoice/settlement/allocation boundary; Collections additionally waits
+for exact authoritative Billing-input parity before any policy cohort moves.
+Subscriptions retains its separate a3 billing-treatment and recurrence gates.
+
+**2026-08-25 — `dotmac-payments==0.1.0a1` tenant storage composed,
+shadow only.** The tagged tenant-only package is exact-pinned in Sub's
+dependency and lock inputs. Annotated tag `dotmac-payments-v0.1.0a1` peels to
+`04b9771320b865b66d1322660fc6d3590605c973`. Sub declares the installed
+`dotmac_payments.migrations:versions` resource in `alembic.ini`, where Alembic
+can discover it before building the revision map, and records
+`pm_0001_payment_intents` as an independent head. The lineage owns exactly the
+three tenant tables in `mod_payments` and consumes the effects Sub supplies
+through 545 (`tenant_scope_catalog.v1`) and 546
+(`module_database_roles.v1`). It is atomic tenant-only and therefore has no
+`ModulePlaneSelection`.
+
+This is schema and shadow preparation only. `app/composition.py` still declares
+`commercial_provider="none"`; no application service imports
+`dotmac_payments`, no route or worker delegates to it, and Sub's existing
+payment-intent, confirmation, proof and provider-consequence writers remain
+authoritative. The PostgreSQL canary seeds a real operator row before proving
+unset and wrong-tenant reads return nothing, refuses a wrong-tenant write as
+`app_user`, and reruns `upgrade heads` as a no-op. Backfill, complete
+correlation comparison and a separately sealed authority switch remain
+required before adoption may be claimed.
+
 **2026-08-14 — minimized production-shape lineage rehearsal.** The executable
 revision-0001 ratchet can now consume a typed, aggregate-only evidence bundle
 instead of a production database restore. The source exporter is repeatable-
@@ -106,6 +252,29 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-08-25 — `0.1.0a91` → `0.1.0a94`.** Forced by the exact tagged-and-locked
+`dotmac-subscriptions==0.1.0a3` dependency, whose package metadata requires
+`dotmac-kernel >=0.1.0a94`. Kernel a94 is an exact supply pin for the module's
+tagged contract; it does not add a new Sub runtime import or transfer a
+business owner. The annotated tag `dotmac-kernel-v0.1.0a94` peels to
+`9e717eb88603f6ef61bded23b2aa468fe4533a95`.
+
+The exact Poetry 2.4.1 lock records kernel wheel SHA256
+`281481d06ec25b3ed968d40c01171116a89bb984c674a5f3cc46e74717743715`
+and sdist SHA256
+`491abcf903d0a37b950c288b2eea60fd398acf4c16c1c2100eb6eab9c5f1ba2d`.
+The same lock records Subscriptions a3 wheel SHA256
+`01fd4a2260a09e26a45cd105c474e1c90dd7f0aee23bd470790701c1677ac53d`
+and sdist SHA256
+`b6a2111cb4d80ce2916d833190d048c9eaf50cd6ea6f3246077e8eb7340adcd4`.
+No unrelated locked package moved.
+
+a92 admits long product-host revision identifiers in prerequisite bindings;
+a93 reserves the additional hosting lineages; a94 adds the declared commerce
+vocabularies and owners needed by the exact-pinned module. Sub consumes those
+changes through migration composition only. The guarded runtime import graph,
+middleware and route-prefix assertions remain unchanged.
 
 **2026-08-22 — `0.1.0a90` → `0.1.0a91`.** Forced by composition, not chosen.
 `dotmac-service-orders 0.1.0a1` declares `dotmac-kernel >=0.1.0a91`, so
@@ -507,13 +676,13 @@ modules (including any `dotmac_kernel._*` and `display`) are forbidden outright.
 | `dotmac_kernel.features` | adapt | S3 | `FeatureManifest`/`NavItem` as declaration metadata only. `mount_features` is app-factory machinery and stays forbidden (no remount) |
 | `dotmac_kernel.providers` / `.providers.provisioning` | adapt | S4 | `ProvisioningProvider` protocol/result types behind a thin adapter over the existing `access.radius_projection` owner. The adapter gets no owner row; vendor/OLT/ONT semantics stay product-owned |
 | `dotmac_kernel.messaging` (+ `.envelope`, `.models`, `.outbox`, `.platform`, `.platform_relay`, `.platform_worker`, `.relay`, `.worker`) | defer-db | S7+ | Defines `outbox_events` / `platform_outbox_events` and relay workers; inbox processing delegates to the idempotency owner below. Never added beside `events.store` and `integration.*` during pure-contract phases; semantics may be used as conformance criteria only |
-| `dotmac_kernel.idempotency` (+ `.idempotency_models`, messaging `.inbox`) | defer-db | S7+ | Kernel `0.1.0a33` (ADR-0014) makes at-most-once execution one owner in `idempotency_records` / `platform_idempotency_records`. The tenant FK can reference Sub's admitted operator tenant, but that does not resolve ownership: Sub's `IdempotencyKey` (`idempotency_keys`, `(scope, key)`) and `TaskExecution` remain the owners until a dedicated cutover retires them |
+| `dotmac_kernel.idempotency` (+ `.idempotency_models`, messaging `.inbox`) | storage-provider composed; runtime defer-db | S7+ | Migration 556 hosts and verifies `idempotency_ledger.v1` for composed modules without importing the runtime. Kernel `0.1.0a33` (ADR-0014) makes at-most-once execution one owner in `idempotency_records` / `platform_idempotency_records`, but supplying those tables does not transfer Sub authority: `IdempotencyKey` (`idempotency_keys`, `(scope, key)`), `TaskExecution` and `idempotent_task` remain active until an operation-by-operation cutover retires them; the 32-path legacy-reference ratchet may only shrink in that reviewed retirement slice |
 | `dotmac_kernel.consent` / `.consent_models` | defer-db | S7+ | Kernel `communication_suppressions` now collides with Sub's same-named table and mature communication-eligibility owner. This is an extraction candidate, not permission to mount a second writer; disposition must preserve Sub parity and retire the local path explicitly |
 | `dotmac_kernel.delivery` / `.delivery_models` / `.delivery_providers` / `.channel_policy` | defer-db | S7+ | Delivery adds `communication_deliveries` and a provider/consent decision path. No table collides today, but Sub's notification/outbox/delivery owners must be adapted and retired coherently before adoption; a protocol alone does not transfer authority |
 | `dotmac_kernel.entitlements` | defer-db | S8 | `tenant_entitlement_grants` table. Only after the operator-tenant bridge (S7) and capability catalogue (S3) are proven. Commercial product/module availability only — never subscriber financial-access, service-readiness, or RBAC |
 | `dotmac_kernel.licensing` | defer-db | S8 | The verifier itself is DB-free, but adoption is gated on entitlements persistence and the S7 ADR; a Sub-owned WS8 receiver comes after both |
 | `dotmac_kernel.db` | defer-db | S7 | Importing constructs the SQLAlchemy engine from `DATABASE_URL`. `app/db.py` remains Sub's session/transaction authority; any kernel engine use requires the S7 ADR |
-| `dotmac_kernel.migrations` | defer-db | S7 | Kernel Alembic revisions `0001`–`0023`. They are not added to Sub's `alembic.ini` (`script_location = alembic`, no `version_locations`). The released-a42 canary executes inherited revision 0021's body transactionally and leaves Sub's version table unchanged; composition still needs the S7 ADR and all current and transient collision dispositions |
+| `dotmac_kernel.migrations` | defer-db | S7 | The kernel Alembic lineage is not added to Sub's `alembic.ini`; only Sub's own versions and explicitly composed module package resources are present. The released-a42 canary executes inherited revision 0021's body transactionally and leaves Sub's version table unchanged; kernel-lineage composition still needs the S7 ADR and all current and transient collision dispositions |
 | `dotmac_kernel.audit` | defer-db | deferred | `AuditEvent` model collides with Sub's (`audit_events` table). Sub's writers stay `record_audit_event` + `AuditEvents.stage` (pinned by `tests/architecture/test_audit_writer_surfaces.py`); kernel audit adapts behind them after parity, never as a second writer |
 | `dotmac_kernel.settings_models` / `.settings_resolver` / `.settings_cache` / `.settings_crypto` / `.setting_scopes` / `.setting_value_types` / `.secret_sources` | adapt (consumed) | settings cutover | Sub declares product specs and retains product storage/transaction owners while the kernel supplies typed vocabulary, resolution, cache, crypto, and held-secret contracts. `DomainSetting` and `DomainSettingHistory` collide with Sub tables; app code may import only `SettingDomain` from `settings_models`, and migration composition remains closed |
 | `dotmac_kernel.settings_admin` / `.setting_domains` | defer-db | deferred | Not imported by Sub. Admin/write authority remains in Sub services until a typed owner cutover removes the existing path; module availability alone is not a reason to add a second writer |
@@ -546,11 +715,13 @@ version of this paragraph asserted: `app/composition.py` (S3),
 and the settings cutover all import from this list.
 
 - `dotmac_kernel.assembly`
+- `dotmac_kernel.cache`
 - `dotmac_kernel.capabilities`
 - `dotmac_kernel.features`
 - `dotmac_kernel.machine_auth`
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
+- `dotmac_kernel.planes`
 - `dotmac_kernel.prerequisites`
 - `dotmac_kernel.profiles`
 - `dotmac_kernel.providers`
@@ -564,13 +735,25 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_resolver`
 
 `dotmac_kernel.prerequisites` is admitted for the composition **vocabulary**:
-the effect names `TENANT_SCOPE_CATALOG_V1` and `MODULE_DATABASE_ROLES_V1`, the
-`PrerequisiteBinding` type, and `install_prerequisite_bindings`. Composing a
+the effect names `TENANT_SCOPE_CATALOG_V1`, `MODULE_DATABASE_ROLES_V1`,
+`IDEMPOTENCY_LEDGER_V1` and `OUTBOX_RELAY_V1`, the `PrerequisiteBinding` type, and
+`install_prerequisite_bindings`. Composing a
 module means answering which Sub revision supplies each effect the module
 requires, and the answer has to be keyed by something. Keying it by the
 kernel's own `PrerequisiteSpec.name` rather than a string literal means a
 kernel rename becomes an import error in this repository instead of a binding
 that silently answers nothing.
+
+`dotmac_kernel.planes` is likewise narrowed to the two application-safe
+composition value types `ModulePlane` and `ModulePlaneSelection` under `app/`.
+Only Alembic may additionally import `install_module_plane_selections`, because
+installing the declaration is migration entry-point work rather than runtime
+business behavior. The architecture guard exercises both directions.
+
+`dotmac_kernel.cache` is admitted for **`TenantScope` only**. The Collections
+shadow report needs the typed tenant scope carried by the module's public
+receivable observation. `PlatformScope`, cache-key construction and every
+other cache surface remain refused; this is not a platform-plane adoption.
 
 **Amended 2026-08-23, composing `dotmac-service-orders`.** This clause
 previously read "effect NAMES only, and only in `app/migration_bindings.py`".
@@ -583,12 +766,20 @@ second file are what composition costs.
 Nothing else in that module is admitted: `require_prerequisites` — the function
 that PROVES an effect against the live catalog — stays where it is, called by
 the module's own migration inside its own lineage. Sub reads the vocabulary; it
-does not run the check.
+does not run the check from application code.
+
+**Amended 2026-08-25, Sub-hosted idempotency and outbox prerequisites.** A product-owned
+provider revision is also allowed to close by calling
+`dotmac_kernel.migrations.verify.require_prerequisites` against the effect it
+just created. That is an Alembic-only, exact-name admission: the architecture
+guard still refuses the verifier under `app/`, refuses a bare verifier-module
+import, and refuses every verifier name except `require_prerequisites` under
+`alembic/`. Migration 556 is the first and only caller.
 
 That last sentence was prose only until this amendment. `dotmac_kernel.prerequisites`
 was on the allowlist with no restricted-name entry, so `require_prerequisites`
 would have imported cleanly into `app/` and the guard would have stayed green.
-It now has a `RESTRICTED_MODULE_NAMES` entry naming exactly the four admitted
+It now has a `RESTRICTED_MODULE_NAMES` entry naming exactly the six admitted
 names, with the denial exercised in the negative control. `alembic/` was
 likewise unmonitored rather than exempt — the `app/`-scoped scan never read
 `env.py` — and is now scanned by its own test.
@@ -807,10 +998,12 @@ Hosted overlaps and non-competing names worth recording: kernel `tenants`,
 0024's `external_identity_bindings` (a81) joins that non-colliding list — Sub
 has no table or model of that name, and `dotmac_kernel.external_identity`
 stays off the `app/` allowlist. The first two are
-intentionally hosted through the admitted kernel models; a40 renamed the inbox
-tables to `idempotency_records` / `platform_idempotency_records`, which likewise
-do not collide. `communication_deliveries` and `feature_flag_overrides` are also
-non-colliding today. Sub's `sessions`, `integration_inbox`, `inbox_*`
+intentionally hosted through the admitted kernel models. Kernel a40 renamed the
+inbox tables to `idempotency_records` / `platform_idempotency_records`; those
+names do not collide with a Sub model and migration 554 now deliberately hosts
+them as the inert `idempotency_ledger.v1` provider. `communication_deliveries`
+and `feature_flag_overrides` are also non-colliding today. Sub's `sessions`,
+`integration_inbox`, `inbox_*`
 team-inbox tables, and `service_entitlements` are different names with
 different owners.
 
@@ -1070,6 +1263,61 @@ Adding `dotmac-kernel==0.1.0a8` as a dependency, by itself:
 The guard proving the import half of this claim is
 `tests/architecture/test_kernel_import_boundary.py`, including a
 negative-control test that fails the checker on a synthetic forbidden import.
+
+## Collections postpaid eligibility shadow reader (2026-08-25)
+
+`app.services.collections_module_shadow` is the first runtime import from a
+composed commercial distribution. Its surface is deliberately one public,
+pure value object: `dotmac_collections.ReceivableObservationV1`. The adapter
+maps authoritative Sub invoice, settlement, due-provenance and invoice-line
+facts, then compares the value object's pure fail-closed blocker with the
+incumbent postpaid candidate rule. The CLI opens one repeatable-read, read-only
+snapshot and emits aggregate, PII-free JSON; `--report-only` makes explicit
+that a survey need not fail on mismatches. Even without that flag, the exit is
+only an operational mismatch check: the output has no sealed cohort identity,
+source revision, evaluation instant or evidence digest and is not cutover
+evidence.
+
+This is an observer, not a module reader or writer. It does not call
+`CollectionCaseService`, write a Collections table, reserve idempotency, emit
+an outbox event, create a case, run a consequence, add a route or schedule a
+job. `commercial_provider="none"` remains selected and Sub's existing invoice,
+dunning and financial-access services remain authoritative. Billing and
+Subscriptions runtime APIs remain unimported, so this Collections-first slice
+does not bypass their separate Vendor-first ordering.
+
+The adapter supplies `source_version=1` only because the released a1 value
+object requires a positive version. That number is a report-local contract
+marker, not a durable monotonic version and may never be passed to the module's
+stateful case service. Runtime-reader adoption is blocked until Sub has one
+durable version spanning every receivable-changing invoice, allocation,
+payment, refund, credit and opening-funding fact.
+
+The comparison is total over every active invoice and intentionally exposes a
+known fail-closed gap: incumbent dunning admits an invoice already marked
+`overdue` when due-date provenance is NULL, while the module blocks an
+unverified due date. It also preserves the incumbent's raw Python-truthiness
+hold check, which treats the JSON string `"false"` as held after the normalized
+SQL classifier admits it; that inverse mismatch is reported rather than
+silently normalized.
+
+Binary decision parity is not sufficient temporal evidence. The report now
+aggregates the exact incumbent/module blocker pair at the evaluation instant
+and at an explicit `--observe-at` instant from the same database snapshot, then
+emits aggregate parity-transition counts. For example, an issued invoice with a
+future due time but NULL provenance is `receivable_not_due` /
+`due_date_unverified` initially; at the due instant the incumbent becomes
+actionable while the module remains blocked. That invoice is reported as a
+latent temporal mismatch even though both decisions were blocked initially.
+Naive instants and an observation before evaluation fail closed; equal instants
+are valid and deterministic. JSON retains no identifiers, amounts, or absolute
+timestamps and carries only the non-identifying observation horizon in seconds.
+
+A cutover requires zero current and temporal mismatches across an approved
+horizon on a named, sealed, representative cohort, exact authoritative
+Billing-observation parity, a durable reader version, policy/case/consequence
+parity and a separately approved authority switch with writer/job/fallback
+retirement. This slice satisfies none of those gates.
 
 ## Explicitly out of scope for this ledger
 

@@ -337,3 +337,75 @@ def test_ci_retains_pre_merge_and_promotion_postgresql_gate() -> None:
     assert "poetry run alembic upgrade head" not in workflow
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert "python -m scripts.ci.migrated_test_database" in makefile
+
+
+def test_fresh_test_databases_bootstrap_dispatcher_roles_before_alembic_only() -> None:
+    """Fresh test clusters need roles; ordinary and production migrations do not."""
+
+    bootstrap = "scripts/bootstrap_outbox_dispatcher_roles.py"
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    e2e_workflow = (ROOT / ".github/workflows/e2e.yml").read_text(encoding="utf-8")
+    e2e_gate = (ROOT / ".github/workflows/e2e-gate.yml").read_text(encoding="utf-8")
+
+    helper = makefile[
+        makefile.index("bootstrap-test-database-roles:") : makefile.index(
+            "test-integration:"
+        )
+    ]
+    assert 'BOOTSTRAP_DATABASE_URL="$${TEST_DATABASE_URL}"' in helper
+    assert bootstrap in helper
+    assert helper.index("parse_test_database_target") < helper.index(bootstrap)
+    assert "postgresql://" not in helper
+
+    integration = makefile[
+        makefile.index("test-integration:") : makefile.index("INTEGRATION_SHARD ?=")
+    ]
+    shard = makefile[
+        makefile.index("test-integration-shard:") : makefile.index("test-architecture:")
+    ]
+    for recipe in (integration, shard):
+        assert recipe.index("bootstrap-test-database-roles") < recipe.index(
+            "scripts.ci.migrated_test_database"
+        )
+
+    ci_migration = ci_workflow[
+        ci_workflow.index(
+            "- name: Run migrations and application health check"
+        ) : ci_workflow.index("- name: Cleanup")
+    ]
+    nightly_migration = e2e_workflow[
+        e2e_workflow.index("- name: Migrate + seed") : e2e_workflow.index(
+            "- name: Start application"
+        )
+    ]
+    gate_migration = e2e_gate[
+        e2e_gate.index(
+            "- name: Migrate + seed + start app from this PR's code"
+        ) : e2e_gate.index("- name: Run Playwright suite")
+    ]
+    for workflow_step in (ci_migration, nightly_migration, gate_migration):
+        assert 'BOOTSTRAP_DATABASE_URL="$DATABASE_URL"' in workflow_step
+        assert workflow_step.index(bootstrap) < workflow_step.index(
+            "alembic upgrade heads"
+        )
+        assert "BOOTSTRAP_DATABASE_URL=postgresql" not in workflow_step
+        assert 'echo "$BOOTSTRAP_DATABASE_URL"' not in workflow_step
+
+    assert "POSTGRES_DB: dotmac_sub_test" in ci_workflow
+    assert "POSTGRES_DB=dotmac_sub_ci" in ci_workflow
+    assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_workflow
+    assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_gate
+
+    production_sources = (
+        (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8"),
+        (ROOT / ".github/workflows/production-deploy.yml").read_text(encoding="utf-8"),
+    )
+    assert all(bootstrap not in source for source in production_sources)
+    for start, end in (
+        ("migrate:", "new-migration:"),
+        ("docker-migrate:", "# ─── Host-build fallback guard"),
+        ("prod-migrate:", "# ─── GHCR deploy"),
+    ):
+        production_recipe = makefile[makefile.index(start) : makefile.index(end)]
+        assert bootstrap not in production_recipe

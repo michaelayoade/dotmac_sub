@@ -1120,6 +1120,49 @@ trio = ["trio (>=0.30)"]
 wmi = ["wmi (>=1.5.1) ; platform_system == \"Windows\""]
 
 [[package]]
+name = "dotmac-billing"
+version = "0.1.0a1"
+description = "DotMac dual-plane operational receivables owner"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_billing-0.1.0a1-py3-none-any.whl", hash = "sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b"},
+    {file = "dotmac_billing-0.1.0a1.tar.gz", hash = "sha256:c0ff6e1257a00ba09e62b832e471cffe3945504d1c2ad59a799baae77c0d0eef"},
+]
+
+[package.dependencies]
+alembic = ">=1.13"
+dotmac-kernel = ">=0.1.0a89"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
+name = "dotmac-collections"
+version = "0.1.0a1"
+description = "DotMac dual-plane collections policy and case owner"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_collections-0.1.0a1-py3-none-any.whl", hash = "sha256:f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b"},
+    {file = "dotmac_collections-0.1.0a1.tar.gz", hash = "sha256:f3f298fbf7fa5ef05e5fa52369ac5d151a42b065d6be1eb81b644358be561aa1"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a89"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-integration-client"
 version = "0.2.0"
 description = "Canonical HTTP transport for Dotmac inter-service integration edges: policy-driven retry with jitter, Retry-After, reachability circuit, idempotency keys, request-id propagation, and metrics hooks."
@@ -1140,14 +1183,14 @@ resolved_reference = "a4fe55f4ed704c556c4d1e3cc728ec4ef0dd8042"
 
 [[package]]
 name = "dotmac-kernel"
-version = "0.1.0a91"
+version = "0.1.0a94"
 description = "DotMac platform kernel — multi-tenant FastAPI foundation (config, RLS db, identity/tenancy models, security, platform auth, middleware, settings, features registry, audit)"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main", "dev"]
 files = [
-    {file = "dotmac_kernel-0.1.0a91-py3-none-any.whl", hash = "sha256:870ffa4d8ff40f8ef768dc9271e0ab3e530daf7500ee681a025c896b9315bae3"},
-    {file = "dotmac_kernel-0.1.0a91.tar.gz", hash = "sha256:127d36fb677b8fbab9b8a0b252766e455c60d07a0e8b91b2d9e8533ef46c0759"},
+    {file = "dotmac_kernel-0.1.0a94-py3-none-any.whl", hash = "sha256:281481d06ec25b3ed968d40c01171116a89bb984c674a5f3cc46e74717743715"},
+    {file = "dotmac_kernel-0.1.0a94.tar.gz", hash = "sha256:491abcf903d0a37b950c288b2eea60fd398acf4c16c1c2100eb6eab9c5f1ba2d"},
 ]
 
 [package.dependencies]
@@ -1170,6 +1213,27 @@ url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 reference = "forgejo"
 
 [[package]]
+name = "dotmac-payments"
+version = "0.1.0a1"
+description = "Payment intent and confirmation correlation"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_payments-0.1.0a1-py3-none-any.whl", hash = "sha256:4b26d1c237e1b1f2c089d56b67a941c1e57e1f3aa2ccd7e1cfe066bf2482da6e"},
+    {file = "dotmac_payments-0.1.0a1.tar.gz", hash = "sha256:b2c368abb9f4e301b9194fee10de9aaf228900ce05d5624fbac62c360f74ed0e"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a91"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-service-orders"
 version = "0.1.0a1"
 description = "Service-delivery orders and activation-readiness decisions"
@@ -1183,6 +1247,27 @@ files = [
 
 [package.dependencies]
 dotmac-kernel = ">=0.1.0a91"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
+name = "dotmac-subscriptions"
+version = "0.1.0a3"
+description = "DotMac dual-plane recurring commercial contracts and occurrences"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_subscriptions-0.1.0a3-py3-none-any.whl", hash = "sha256:01fd4a2260a09e26a45cd105c474e1c90dd7f0aee23bd470790701c1677ac53d"},
+    {file = "dotmac_subscriptions-0.1.0a3.tar.gz", hash = "sha256:b6a2111cb4d80ce2916d833190d048c9eaf50cd6ea6f3246077e8eb7340adcd4"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a94"
 sqlalchemy = ">=2.0,<3.0"
 
 [package.source]
@@ -6059,4 +6144,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "f4ffa91612c6a1cd9a119fc0ceb1462eae90062aca936127fe910affe6551213"
+content-hash = "d431068c44e44026a13f378b581ba08acc67d8c47aa8d94a656d14da7259f178"

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.migrated_test_database import install_migration_graph_environment
 from scripts.testing.host_test_policy import (
     HostTestPolicyError,
     enforce_pytest_host_policy,
@@ -48,6 +49,13 @@ os.environ["DATABASE_URL"] = (
     "postgresql+psycopg://postgres:postgres@127.0.0.1:9/dotmac_sub_test"
     "?connect_timeout=1"
 )
+# Alembic graph inspection happens in a fresh pytest process after the
+# migration-preparation command exits.  Composed revisions resolve their
+# assembly-owned prerequisite edges and persistence-plane selection while the
+# graph is loaded, so direct ``ScriptDirectory`` callers need the same typed
+# declarations that ``alembic/env.py`` installs for an upgrade.  These values
+# contain import pointers only (never credentials).
+install_migration_graph_environment()
 # Likewise the radacct importer: .env carries real FreeRADIUS DB credentials
 # and the code has fallbacks; blank both so import_radius_accounting no-ops
 # unless a test explicitly points it at a fixture database.

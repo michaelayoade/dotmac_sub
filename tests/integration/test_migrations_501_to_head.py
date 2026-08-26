@@ -17,6 +17,7 @@ from sqlalchemy.engine import URL, Engine, make_url
 
 from alembic import command
 from app import config as app_config
+from scripts.ci.migrated_test_database import effective_heads
 
 REVISION_500 = "500_reconcile_staff_notification_inbox"
 REVISION_501 = "501_retire_allowance_throttle_rate"
@@ -159,9 +160,8 @@ def test_postgres_drops_the_obsolete_column_and_keeps_501_resolvable(
     # which every later migration would falsify. See
     # tests/architecture/test_migration_chain_assertions.py.
     script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
     _head_containing(script, REVISION_501)
-    expected_heads = set(heads)
+    expected_heads = set(effective_heads(script))
     assert _revision_rows(database_url) == expected_heads
     assert not _column_exists(database_url)
 
