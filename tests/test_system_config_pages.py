@@ -240,6 +240,7 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
             "payment_period": "Monthly",  # normaliser lower-cases
             "payment_due_days": "72",
             "minimum_balance": "10.50",
+            "upcoming_charges_prepaid_amount_bands": "0-10000,10000-",
         },
     )
 

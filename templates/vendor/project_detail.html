@@ -94,9 +94,9 @@
       </form>
       {% else %}
       {% set quote_vat_rate = quote.vat_rate_percent or 0 %}
-      {% set quote_subtotal = quote.subtotal|default(0, true) %}
-      {% set quote_tax_total = quote.tax_total|default(0, true) %}
-      {% set quote_total = quote.total|default(0, true) %}
+      {% set quote_subtotal = quote.subtotal|default(0, true)|float %}
+      {% set quote_tax_total = quote.tax_total|default(0, true)|float %}
+      {% set quote_total = quote.total|default(0, true)|float %}
       <div class="mb-4 rounded-md border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -134,8 +134,8 @@
             </div>
           </form>
           <div class="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-            <p class="font-semibold tabular-nums text-slate-900 dark:text-white">Line amount: {{ quote.currency }} {{ "{:,.2f}".format(line.amount) }}</p>
-            <form method="post" action="/vendor/projects/{{ project.id }}/quotes/{{ quote.id }}/lines/{{ line.id }}/delete" onsubmit="return confirm('Remove this quote line item?');">
+            <p class="font-semibold tabular-nums text-slate-900 dark:text-white">Line amount: {{ quote.currency }} {{ "{:,.2f}".format(line.amount|float) }}</p>
+            <form method="post" action="/vendor/projects/{{ project.id }}/quotes/{{ quote.id }}/lines/{{ line.id }}/delete" data-confirm="Remove this quote line item?" data-confirm-label="Remove">
               {% include "components/forms/csrf_input.html" %}
               <button class="rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-950/30">Remove</button>
             </form>
@@ -144,9 +144,9 @@
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">
               <p class="break-words font-semibold text-slate-900 dark:text-white">{{ line.description }}</p>
-              <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ line.quantity }} x {{ quote.currency }} {{ "{:,.2f}".format(line.unit_price) }}</p>
+              <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ line.quantity }} x {{ quote.currency }} {{ "{:,.2f}".format(line.unit_price|float) }}</p>
             </div>
-            <p class="font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(line.amount) }}</p>
+            <p class="font-bold tabular-nums text-slate-900 dark:text-white">{{ quote.currency }} {{ "{:,.2f}".format(line.amount|float) }}</p>
           </div>
           {% endif %}
         </article>

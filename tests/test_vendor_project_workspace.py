@@ -76,6 +76,11 @@ def _chain(db_session):
 
 
 def _create_quote_command(installation, vendor_id, user_id):
+    project_id = (
+        installation.id
+        if isinstance(installation, InstallationProject)
+        else installation
+    )
     return CreateVendorQuoteCommand(
         context=_context(
             actor=str(user_id),
@@ -83,7 +88,7 @@ def _create_quote_command(installation, vendor_id, user_id):
             reason="test quote creation",
         ),
         payload=VendorQuoteCreate(
-            project_id=installation.id,
+            project_id=project_id,
             currency="NGN",
             vat_rate_percent=Decimal("7.5"),
         ),
@@ -429,6 +434,7 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
     installation, vendor, user = _chain(db_session)
     vendor_id = str(vendor.id)
     user_id = str(user.id)
+    project_id = installation.id
     command = CreateVendorQuoteCommand(
         context=_context(
             actor=user_id,
@@ -436,7 +442,7 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
             reason="test quote creation",
         ),
         payload=VendorQuoteCreate(
-            project_id=installation.id,
+            project_id=project_id,
             currency="NGN",
             vat_rate_percent=Decimal("7.5"),
         ),
@@ -479,13 +485,14 @@ def test_typed_quote_commands_commit_rows_and_event_evidence(db_session):
 
 def test_quote_line_edits_recalculate_vat_totals(db_session):
     installation, vendor, user = _chain(db_session)
+    installation_id = installation.id
     vendor_id = str(vendor.id)
     user_id = str(user.id)
     db_session.commit()
     db_session_adapter.release_read_transaction(db_session)
     quote = vendor_portal_operations.create_quote(
         db_session,
-        _create_quote_command(installation, vendor_id, user_id),
+        _create_quote_command(installation_id, vendor_id, user_id),
     )
     quote = vendor_portal_operations.add_quote_line(
         db_session,
@@ -505,6 +512,7 @@ def test_quote_line_edits_recalculate_vat_totals(db_session):
         ),
     )
     line_id = str(quote["line_items"][0].id)
+    db_session_adapter.release_read_transaction(db_session)
 
     quote = vendor_portal_operations.update_quote_line(
         db_session,
@@ -529,6 +537,7 @@ def test_quote_line_edits_recalculate_vat_totals(db_session):
     assert quote["tax_total"] == Decimal("2250.00")
     assert quote["total"] == Decimal("32250.00")
     assert quote["line_items"][0].description == "Updated installation labor"
+    db_session_adapter.release_read_transaction(db_session)
 
     quote = vendor_portal_operations.delete_quote_line(
         db_session,

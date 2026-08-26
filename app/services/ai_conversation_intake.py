@@ -1116,7 +1116,9 @@ def preview_policy_version(
         raise ValueError("AI intake preview mode is invalid")
     channel = command.channel_type or policy.channel_type
     version_metadata = (
-        dict(version.metadata_ or {}) if isinstance(version.metadata_, Mapping) else {}
+        dict(version.metadata_ or {})
+        if version is not None and isinstance(version.metadata_, Mapping)
+        else {}
     )
     raw_conversation_policy = version_metadata.get("conversation_policy")
     conversation_policy = (
@@ -1476,7 +1478,9 @@ def _sync_active_policy_to_legacy_config(
         else {}
     )
     version_metadata = (
-        dict(version.metadata_ or {}) if isinstance(version.metadata_, Mapping) else {}
+        dict(version.metadata_ or {})
+        if version is not None and isinstance(version.metadata_, Mapping)
+        else {}
     )
     mappings: list[AiIntakeDepartmentMapping] = []
     for raw in version.intent_team_mappings or []:
@@ -1760,14 +1764,26 @@ def has_human_takeover(db: Session, conversation: InboxConversation) -> bool:
     )
     if active_assignment is not None:
         return True
+    sent_by_person_id = func.lower(
+        func.coalesce(InboxMessage.metadata_["sent_by_person_id"].as_string(), "")
+    )
+    sender_type = func.lower(
+        func.coalesce(InboxMessage.metadata_["sender_type"].as_string(), "")
+    )
+    author_type = func.lower(
+        func.coalesce(InboxMessage.metadata_["author_type"].as_string(), "")
+    )
+    automation_kind = func.lower(
+        func.coalesce(InboxMessage.metadata_["automation_kind"].as_string(), "")
+    )
     human_reply = (
         db.query(InboxMessage.id)
         .filter(InboxMessage.conversation_id == conversation.id)
         .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
-        .filter(
-            func.coalesce(InboxMessage.metadata_["sent_by_person_id"].as_string(), "")
-            != ""
-        )
+        .filter(sent_by_person_id.notin_(("", "null", "none")))
+        .filter(sender_type != "ai")
+        .filter(author_type != "ai")
+        .filter(automation_kind != "ai_intake")
         .first()
     )
     return human_reply is not None
@@ -1901,6 +1917,19 @@ def ensure_policy_version_from_legacy_config(
             metadata.get("data_cleanup_enabled") or False
         ),
     }
+    runtime_metadata = {
+        key: metadata[key]
+        for key in (
+            "conversational_engine_enabled",
+            "conversation_engine_mode",
+            "conversation_policy",
+            "conversation_templates",
+            "channel_overrides",
+            "tools",
+            "permitted_identifiers",
+        )
+        if key in metadata
+    }
     version_signature = {
         "instructions": config.instructions or "",
         "welcome_message": welcome_message,
@@ -1952,6 +1981,7 @@ def ensure_policy_version_from_legacy_config(
                 "compatibility_signature": version_signature,
                 "provider_scope_observed": provider,
                 "account_scope_observed": account_scope,
+                **runtime_metadata,
             },
         )
         if last_version is not None:
@@ -2359,6 +2389,9 @@ def _process_one_session(
     )
     outcome = ai_intake.classify_message(db, request)
     metadata.update(ai_intake.route_metadata(outcome))
+    if outcome.status == AiIntakeStatus.awaiting_follow_up:
+        metadata.setdefault("ai_intake_engine_action", "continue_classifier")
+        metadata.setdefault("ai_intake_engine_reason", "legacy_classifier_path")
     inbound.metadata_ = metadata
     conversation_metadata = dict(conversation.metadata_ or {})
     conversation_metadata["ai_intake"] = ai_intake.conversation_state(request, outcome)
@@ -2384,6 +2417,15 @@ def _process_one_session(
     session_metadata["last_generation_attempt_id"] = str(generation.id)
     session.metadata_ = session_metadata
     if has_human_takeover(db, conversation):
+        logger.info(
+            "ai intake stopped by human takeover",
+            extra={
+                "event": "ai_intake_human_takeover_detected",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+            },
+        )
         complete_session(session, state="stopped_human_takeover")
         mark_conversation_ai_metadata(conversation, session=session, active=False)
         return True
@@ -2391,7 +2433,26 @@ def _process_one_session(
     engine_handoff_state: ai_intake_conversation_engine.ConversationalState | None = (
         None
     )
-    if ai_intake_conversation_engine.conversational_engine_enabled(version):
+    version_metadata = (
+        dict(version.metadata_ or {})
+        if version is not None and isinstance(version.metadata_, Mapping)
+        else {}
+    )
+    engine_enabled = bool(version_metadata.get("conversational_engine_enabled"))
+    if "conversational_engine_enabled" not in version_metadata:
+        legacy_config = (
+            db.get(AiIntakeConfig, session.legacy_config_id)
+            if session.legacy_config_id is not None
+            else None
+        )
+        legacy_metadata = (
+            dict(legacy_config.metadata_ or {})
+            if legacy_config is not None
+            and isinstance(legacy_config.metadata_, Mapping)
+            else {}
+        )
+        engine_enabled = bool(legacy_metadata.get("conversational_engine_enabled"))
+    if engine_enabled:
         engine_name = "composable_v1"
         if ai_intake_graph.langgraph_engine_enabled(version):
             requested_engine_name = ai_intake_graph.LANGGRAPH_ENGINE_MODE
@@ -2521,18 +2582,34 @@ def _process_one_session(
             complete_session(session, state="failed")
             mark_conversation_ai_metadata(conversation, session=session, active=False)
             return True
+    follow_up_question = (
+        outcome.classification.follow_up_question
+        if outcome.classification is not None
+        else None
+    )
+    if (
+        follow_up_question is None
+        and outcome.classification is not None
+        and outcome.classification.requires_follow_up
+    ):
+        follow_up_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
+        metadata["ai_intake_follow_up_question"] = follow_up_question
+        inbound.metadata_ = metadata
     if (
         not engine_forced_handoff
-        and outcome.status is AiIntakeStatus.awaiting_follow_up
+        and outcome.status == AiIntakeStatus.awaiting_follow_up
         and outcome.config_id is not None
         and outcome.classification is not None
-        and outcome.classification.follow_up_question is not None
+        and follow_up_question is not None
     ):
+        metadata.setdefault("ai_intake_engine_action", "continue_classifier")
+        metadata.setdefault("ai_intake_engine_reason", "legacy_classifier_path")
+        inbound.metadata_ = metadata
         delivery = team_inbox_outbound.send_ai_intake_follow_up(
             db,
             conversation=conversation,
             payload=team_inbox_outbound.AiIntakeFollowUpPayload(
-                question=outcome.classification.follow_up_question,
+                question=follow_up_question,
                 inbound_message_id=inbound.id,
                 config_id=outcome.config_id,
                 follow_up_count=outcome.follow_up_count,
@@ -2541,6 +2618,21 @@ def _process_one_session(
                 policy_version_id=session.policy_version_id,
                 display_name=session.display_name,
             ),
+        )
+        logger.info(
+            "ai intake follow-up delivery resolved",
+            extra={
+                "event": "ai_intake_follow_up_delivery_resolved",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+                "delivery_kind": delivery.kind,
+                "delivery_reason": delivery.reason,
+                "outbound_message_id": delivery.message_id,
+                "notification_id": str(delivery.notification_id)
+                if delivery.notification_id is not None
+                else None,
+            },
         )
         generation.outbound_message_id = (
             UUID(delivery.message_id) if delivery.message_id else None

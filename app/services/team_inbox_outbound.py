@@ -837,7 +837,11 @@ def send_ai_intake_follow_up(
 ) -> InboxReplyResult:
     """Queue one approved intake clarification through the channel owner."""
 
-    if payload.question not in APPROVED_FOLLOW_UP_QUESTIONS:
+    question = " ".join(str(payload.question or "").split())
+    approved_questions = {
+        " ".join(item.split()) for item in APPROVED_FOLLOW_UP_QUESTIONS
+    }
+    if question not in approved_questions:
         return InboxReplyResult(
             kind="invalid_body",
             conversation_id=str(conversation.id),
@@ -856,8 +860,8 @@ def send_ai_intake_follow_up(
         db,
         conversation=conversation,
         payload=InboxReplyPayload(
-            body_html=payload.question,
-            body_text=payload.question,
+            body_html=question,
+            body_text=question,
             metadata={
                 "sender_type": "ai",
                 "author_type": "ai",

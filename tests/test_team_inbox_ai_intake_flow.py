@@ -41,6 +41,7 @@ from app.services import (
     team_inbox_maintenance,
 )
 from app.services.ai.client import AIResponse
+from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import installations
 from app.services.integrations.connectors.whatsapp_runtime import WHATSAPP_PROVIDER_META
 from app.services.integrations.runtime import ValidationResult
@@ -779,6 +780,7 @@ def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkey
         category="general_enquiry",
     )
     monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+    db_session_adapter.release_read_transaction(db_session)
 
     received = team_inbox_channel_receive.receive_inbound_channel(
         db_session,
