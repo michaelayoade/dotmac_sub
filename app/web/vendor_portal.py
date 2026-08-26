@@ -6,7 +6,16 @@ from decimal import Decimal
 from typing import TypeVar, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -67,6 +76,8 @@ from app.web.vendor_auth_flow import require_vendor_web_auth
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendor", tags=["web-vendor-portal"])
 ResultT = TypeVar("ResultT")
+_MY_PROJECTS_PAGE_SIZE = 25
+_AVAILABLE_PROJECTS_PAGE_SIZE = 12
 
 
 def _submission_http_error(exc: DomainError) -> HTTPException:
@@ -159,6 +170,32 @@ def _context(auth: dict, db: Session, capability: str | None = None) -> dict:
 def _redirect(project_id: str, message: str | None = None) -> RedirectResponse:
     suffix = f"?message={message}" if message else ""
     return RedirectResponse(f"/vendor/projects/{project_id}{suffix}", status_code=303)
+
+
+def _project_page(
+    db: Session,
+    *,
+    vendor_id: str,
+    available: bool,
+    page: int,
+    page_size: int,
+) -> dict[str, object]:
+    normalized_page = max(1, page)
+    rows = vendor_portal_operations.list_projects(
+        db,
+        vendor_id,
+        available=available,
+        limit=page_size + 1,
+        offset=(normalized_page - 1) * page_size,
+    )
+    return {
+        "items": rows[:page_size],
+        "page": normalized_page,
+        "has_previous": normalized_page > 1,
+        "has_next": len(rows) > page_size,
+        "previous_page": normalized_page - 1,
+        "next_page": normalized_page + 1,
+    }
 
 
 def _project_detail_response(
@@ -313,22 +350,36 @@ def _as_built_payload(
 @router.get("", response_class=HTMLResponse)
 def vendor_dashboard(
     request: Request,
+    my_page: int = Query(default=1, ge=1),
+    available_page: int = Query(default=1, ge=1),
     auth: dict = Depends(require_vendor_web_auth),
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
     vendor_id = str(context["native_vendor_id"])
+    my_projects_page = _project_page(
+        db,
+        vendor_id=vendor_id,
+        available=False,
+        page=my_page,
+        page_size=_MY_PROJECTS_PAGE_SIZE,
+    )
+    available_projects_page = _project_page(
+        db,
+        vendor_id=vendor_id,
+        available=True,
+        page=available_page,
+        page_size=_AVAILABLE_PROJECTS_PAGE_SIZE,
+    )
     return templates.TemplateResponse(
         "vendor/dashboard.html",
         {
             "request": request,
             "vendor": context["native_vendor"],
-            "available_projects": vendor_portal_operations.list_projects(
-                db, vendor_id, available=True, limit=50, offset=0
-            ),
-            "my_projects": vendor_portal_operations.list_projects(
-                db, vendor_id, available=False, limit=100, offset=0
-            ),
+            "available_projects": available_projects_page["items"],
+            "available_projects_page": available_projects_page,
+            "my_projects": my_projects_page["items"],
+            "my_projects_page": my_projects_page,
         },
     )
 
