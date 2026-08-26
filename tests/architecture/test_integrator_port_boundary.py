@@ -83,12 +83,21 @@ def test_the_normalizer_touches_no_session_and_no_network():
 def test_product_port_descriptor_is_read_only_and_cannot_accept_provider_routing():
     from app.services.integrations.product_port_descriptor import (
         product_port_descriptor,
+        product_port_descriptor_v3,
+        settlement_product_port_descriptor_v3,
     )
 
     assert list(inspect.signature(product_port_descriptor).parameters) == [
         "db",
         "destination_binding_id",
     ]
+    assert list(inspect.signature(product_port_descriptor_v3).parameters) == [
+        "db",
+        "destination_binding_id",
+    ]
+    assert list(
+        inspect.signature(settlement_product_port_descriptor_v3).parameters
+    ) == ["db", "destination_binding_id"]
     source = _source(DESCRIPTOR)
     for pattern in ("db.add(", "db.delete(", "db.execute(", "db.commit("):
         assert pattern not in source
@@ -367,11 +376,14 @@ def test_the_descriptor_and_the_receiver_are_served_by_the_same_router():
                 routes[node.name] = router.id
 
     descriptor_router = routes.get("read_product_port_descriptor")
+    descriptor_v3_router = routes.get("read_product_port_descriptor_v3")
     receiver_router = routes.get("receive_integrator_observation")
 
     assert descriptor_router == "router"
+    assert descriptor_v3_router == "router"
     assert receiver_router == "router"
     assert descriptor_router == receiver_router
+    assert descriptor_v3_router == receiver_router
 
 
 def test_the_advertised_delivery_path_is_built_from_the_mounted_prefixes():

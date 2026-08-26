@@ -15,6 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.integrator_capability_contract import CapabilityContractDocument
+
 PRODUCT_OBSERVATION_SCHEMA_VERSION = "dotmac.io/product-observation/v1"
 PRODUCT_PORT_DESCRIPTOR_SCHEMA_VERSION = "dotmac.io/product-port-descriptor/v2"
 SETTLEMENT_CAPABILITY = "payments.settlement.observation.v1"
@@ -157,4 +159,28 @@ class SettlementProductPortDescriptorV2(BaseModel):
         "configured_disabled", "enabled", "quarantined", "retired"
     ]
     source_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SettlementProductPortDescriptorV3(BaseModel):
+    """Sub's settlement contract declaration and generic observation wire."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["dotmac.io/product-port-descriptor/v3"]
+    wire_schema_version: Literal["dotmac.io/product-observation/v1"]
+    application: Literal["sub"]
+    owner_module: str = Field(min_length=1, max_length=160)
+    capability_id: Literal["payments.settlement.observation.v1"]
+    capability_summary: str = Field(min_length=1, max_length=500)
+    contract_version: Literal[1]
+    destination_binding_id: UUID
+    delivery_path: str = Field(pattern=r"^/")
+    mirror_path: str = Field(pattern=r"^/")
+    destination_scope: IntegratorDestinationScope
+    activation_state: Literal[
+        "configured_disabled", "enabled", "quarantined", "retired"
+    ]
+    source_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    capability_contract: CapabilityContractDocument
     descriptor_digest: str = Field(pattern=r"^[0-9a-f]{64}$")

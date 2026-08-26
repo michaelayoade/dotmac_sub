@@ -61,6 +61,7 @@ from app.schemas.integrator_observation import (
     IntegratorObservationEnvelope,
     IntegratorObservationReceipt,
     ProductPortDescriptorV1,
+    ProductPortDescriptorV3,
 )
 from app.schemas.integrator_settlement_observation import (
     IntegratorSettlementEnvelope,
@@ -68,6 +69,7 @@ from app.schemas.integrator_settlement_observation import (
     IntegratorSettlementMirrorReport,
     IntegratorSettlementReceipt,
     SettlementProductPortDescriptorV2,
+    SettlementProductPortDescriptorV3,
 )
 from app.services import payment_webhook_commands as settlement_commands
 from app.services import (
@@ -210,6 +212,27 @@ def read_settlement_product_port_descriptor(
 
     try:
         return descriptors.settlement_product_port_descriptor(db, capability_binding_id)
+    except descriptors.ProductPortDescriptorError as exc:
+        raise HTTPException(
+            status_code=404, detail="Integrator settlement binding not found"
+        ) from exc
+
+
+@router.get(
+    "/payment-settlements/{capability_binding_id}/descriptor/v3",
+    response_model=SettlementProductPortDescriptorV3,
+)
+def read_settlement_product_port_descriptor_v3(
+    capability_binding_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(_require_descriptor_auth),
+) -> descriptors.ProductPortDescriptorV3:
+    """Publish finance's payload declaration beside its established wire."""
+
+    try:
+        return descriptors.settlement_product_port_descriptor_v3(
+            db, capability_binding_id
+        )
     except descriptors.ProductPortDescriptorError as exc:
         raise HTTPException(
             status_code=404, detail="Integrator settlement binding not found"
@@ -377,6 +400,25 @@ def read_product_port_descriptor(
 
     try:
         return descriptors.product_port_descriptor(db, capability_binding_id)
+    except descriptors.ProductPortDescriptorError as exc:
+        raise HTTPException(
+            status_code=404, detail="Integrator observation binding not found"
+        ) from exc
+
+
+@router.get(
+    "/{capability_binding_id}/descriptor/v3",
+    response_model=ProductPortDescriptorV3,
+)
+def read_product_port_descriptor_v3(
+    capability_binding_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(_require_descriptor_auth),
+) -> descriptors.ProductPortDescriptorV3:
+    """Publish communications' payload declaration beside its established wire."""
+
+    try:
+        return descriptors.product_port_descriptor_v3(db, capability_binding_id)
     except descriptors.ProductPortDescriptorError as exc:
         raise HTTPException(
             status_code=404, detail="Integrator observation binding not found"
