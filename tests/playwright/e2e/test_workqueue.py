@@ -130,9 +130,7 @@ class TestNativeAgentWorkqueue:
         expect(admin_page.get_by_label("Audience")).to_be_visible()
         expect(admin_page.get_by_label("Service team")).to_be_visible()
         expect(admin_page.get_by_role("link", name="Open Inbox")).to_be_visible()
-        section_nav = admin_page.get_by_role(
-            "navigation", name="Workqueue sections"
-        )
+        section_nav = admin_page.get_by_role("navigation", name="Workqueue sections")
         expect(section_nav).to_be_visible()
         tickets_link = section_nav.get_by_role("link", name="Tickets")
         tickets_link.click()

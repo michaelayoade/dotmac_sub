@@ -1006,8 +1006,8 @@ def test_sales_orders_table_uses_compact_disclosed_layout():
     assert "min-w-[1250px]" not in template
     assert "Customer & Agent" in template
     assert "'Financials'" in template
-    assert '>Action</th>' not in template
-    assert '>View</a>' not in template
+    assert ">Action</th>" not in template
+    assert ">View</a>" not in template
     assert "colspan=6)" not in template
     assert 'data-order-no-results><td colspan="5"' in template
     assert "data-compact-order-row" in template

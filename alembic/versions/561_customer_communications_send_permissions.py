@@ -1,7 +1,7 @@
 """Add narrow customer communication send permissions.
 
-Revision ID: 557_customer_communications_send_permissions
-Revises: 556_idempotency_ledger_prereq
+Revision ID: 561_customer_communications_send_permissions
+Revises: 560_oidc_mobile_federation
 Create Date: 2026-08-27
 """
 
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "557_customer_communications_send_permissions"
-down_revision: str | None = "556_idempotency_ledger_prereq"
+revision: str = "561_customer_communications_send_permissions"
+down_revision: str | None = "560_oidc_mobile_federation"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

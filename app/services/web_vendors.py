@@ -8,16 +8,12 @@ need is assembled here and handed to the route as a plain dict.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.auth import AuthProvider, UserCredential
-from app.models.field_vendor import VENDOR_USER_ROLES, FieldVendor, FieldVendorUser
-from app.models.system_user import SystemUser
+from app.models.field_vendor import VENDOR_USER_ROLES
 from app.models.vendor_routes import InstallationProjectStatus, Vendor
 from app.services import credential_recovery, vendor_admin, vendor_user_provisioning
 from app.services.common import coerce_uuid
@@ -45,21 +41,6 @@ def _active_filter(value: str | None) -> bool | None:
     return None
 
 
-class VendorPortalAccessState(StrEnum):
-    active = "active"
-    no_users = "no_users"
-    disabled = "disabled"
-    no_profile = "no_profile"
-
-
-@dataclass(frozen=True, slots=True)
-class VendorPortalAccessSummary:
-    state: VendorPortalAccessState
-    label: str
-    badge_tone: str
-    active_user_count: int
-
-
 @dataclass(frozen=True, slots=True)
 class VendorListRow:
     id: UUID
@@ -69,85 +50,13 @@ class VendorListRow:
     contact_email: str | None
     service_area: str | None
     is_active: bool
-    portal_access: VendorPortalAccessSummary
-
-
-def _portal_access_summary(
-    field_vendor: FieldVendor | None,
-    *,
-    active_user_count: int,
-) -> VendorPortalAccessSummary:
-    if field_vendor is None:
-        return VendorPortalAccessSummary(
-            state=VendorPortalAccessState.no_profile,
-            label="No portal profile",
-            badge_tone="inactive",
-            active_user_count=0,
-        )
-    if not field_vendor.is_active:
-        return VendorPortalAccessSummary(
-            state=VendorPortalAccessState.disabled,
-            label="Disabled",
-            badge_tone="inactive",
-            active_user_count=0,
-        )
-    if active_user_count <= 0:
-        return VendorPortalAccessSummary(
-            state=VendorPortalAccessState.no_users,
-            label="No users",
-            badge_tone="warning",
-            active_user_count=0,
-        )
-    user_word = "user" if active_user_count == 1 else "users"
-    return VendorPortalAccessSummary(
-        state=VendorPortalAccessState.active,
-        label=f"Yes - {active_user_count} {user_word}",
-        badge_tone="success",
-        active_user_count=active_user_count,
-    )
-
-
-def _active_portal_user_counts(
-    db: Session,
-    field_vendor_ids: list[UUID],
-) -> dict[UUID, int]:
-    if not field_vendor_ids:
-        return {}
-    rows = (
-        db.query(
-            FieldVendorUser.vendor_id,
-            func.count(func.distinct(FieldVendorUser.id)),
-        )
-        .join(SystemUser, SystemUser.id == FieldVendorUser.system_user_id)
-        .join(UserCredential, UserCredential.system_user_id == SystemUser.id)
-        .filter(FieldVendorUser.vendor_id.in_(field_vendor_ids))
-        .filter(FieldVendorUser.is_active.is_(True))
-        .filter(SystemUser.is_active.is_(True))
-        .filter(UserCredential.provider == AuthProvider.local)
-        .filter(UserCredential.is_active.is_(True))
-        .group_by(FieldVendorUser.vendor_id)
-        .all()
-    )
-    return {vendor_id: int(count) for vendor_id, count in rows}
+    portal_access: vendor_admin.VendorPortalAccessSummary
 
 
 def _vendor_list_rows(db: Session, vendors: list[Vendor]) -> list[VendorListRow]:
-    vendor_ids = [str(vendor.id) for vendor in vendors]
-    field_vendors = (
-        db.query(FieldVendor).filter(FieldVendor.crm_vendor_id.in_(vendor_ids)).all()
-        if vendor_ids
-        else []
-    )
-    field_vendor_by_native_id = {
-        field_vendor.crm_vendor_id: field_vendor for field_vendor in field_vendors
-    }
-    user_counts = _active_portal_user_counts(
-        db, [field_vendor.id for field_vendor in field_vendors]
-    )
+    portal_access = vendor_admin.portal_access_summaries(db, vendors)
     rows: list[VendorListRow] = []
     for vendor in vendors:
-        field_vendor = field_vendor_by_native_id.get(str(vendor.id))
-        active_user_count = user_counts.get(field_vendor.id, 0) if field_vendor else 0
         rows.append(
             VendorListRow(
                 id=vendor.id,
@@ -157,10 +66,7 @@ def _vendor_list_rows(db: Session, vendors: list[Vendor]) -> list[VendorListRow]
                 contact_email=vendor.contact_email,
                 service_area=vendor.service_area,
                 is_active=vendor.is_active,
-                portal_access=_portal_access_summary(
-                    field_vendor,
-                    active_user_count=active_user_count,
-                ),
+                portal_access=portal_access[vendor.id],
             )
         )
     return rows

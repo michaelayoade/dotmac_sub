@@ -19,12 +19,14 @@ from app.services.file_storage import (
     StreamResult,
     file_uploads,
 )
+from app.services.object_storage import ObjectStorageError
 
 REMOTE_MEDIA_PROVIDERS = frozenset(
     {
         "facebook",
         "instagram",
         "meta",
+        "meta_social",
         "whatsapp",
     }
 )
@@ -144,7 +146,7 @@ def _stage_inline_attachment_content(
             data=data,
             uploaded_by=None,
         )
-    except FileValidationError as exc:
+    except (FileValidationError, ObjectStorageError) as exc:
         raw["download_error"] = str(exc)
         return None
 
