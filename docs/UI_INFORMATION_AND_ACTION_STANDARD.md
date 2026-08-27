@@ -407,6 +407,9 @@ implementation.
   attempt, and `communications.team_inbox_projection` owns the staff recipient
   presentation. The route and templates are adapters.
 - The reply composer exposes optional CC and BCC only for email conversations.
+  The control uses a native disclosure so its visibility and operation do not
+  depend on a particular browser JavaScript cache. Authenticated Inbox workspace
+  and conversation HTML is private and non-cacheable.
   Invalid, ambiguous, or over-limit recipient input blocks the send; non-email
   channels reject copy recipients.
 - Each email message in the permission-scoped staff thread renders all

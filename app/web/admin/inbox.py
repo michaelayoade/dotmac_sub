@@ -86,6 +86,11 @@ router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 settings_router = APIRouter(prefix="/crm/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
 logger = logging.getLogger(__name__)
+INBOX_HTML_RESPONSE_HEADERS: dict[str, str] = {
+    "Cache-Control": "private, no-store, no-cache, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 ReplyPresentationOutcome = Literal[
     "queued", "scheduled", "sent", "retried", "failed", "replayed", "error"
 ]
@@ -447,8 +452,16 @@ def team_inbox_queue(
             }
         )
     if is_list_fragment_request:
-        return templates.TemplateResponse("admin/inbox/_sidebar.html", context)
-    return templates.TemplateResponse("admin/inbox/index.html", context)
+        return templates.TemplateResponse(
+            "admin/inbox/_sidebar.html",
+            context,
+            headers=INBOX_HTML_RESPONSE_HEADERS,
+        )
+    return templates.TemplateResponse(
+        "admin/inbox/index.html",
+        context,
+        headers=INBOX_HTML_RESPONSE_HEADERS,
+    )
 
 
 @router.get(
@@ -1060,7 +1073,11 @@ def team_inbox_detail(
             "queue_return_url": _inbox_queue_return_url(request),
         }
         context.update(view)
-        return templates.TemplateResponse("admin/inbox/_conversation.html", context)
+        return templates.TemplateResponse(
+            "admin/inbox/_conversation.html",
+            context,
+            headers=INBOX_HTML_RESPONSE_HEADERS,
+        )
     return RedirectResponse(url=f"/admin/inbox?c={conversation_id}", status_code=303)
 
 

@@ -286,7 +286,12 @@ The admin CRM-replication controls use these existing owners:
   internal intent metadata. SMTP places CC in the MIME header, never emits a BCC
   header, and sends the primary, CC and BCC addresses in the envelope. The
   permission-scoped staff projection shows From, To, CC and BCC for each email
-  message; customer-facing rendering never exposes BCC.
+  message; customer-facing rendering never exposes BCC. The staff reply control
+  is a native browser disclosure, and the workspace and conversation fragment
+  responses are private and non-cacheable so an older browser response or script
+  cannot selectively remove the current action. Conversation-fragment request
+  URLs carry the deployed presentation revision so browsers with a pre-fix
+  cached fragment must request the current markup after deployment.
 - Fiber-website inquiries are inbound-only. The projection and outbound owner
   explicitly reject replies until a reviewed reply transport and prospect
   destination policy are approved.
