@@ -25,6 +25,7 @@ from app.services import (
     communication_attachments,
     communication_eligibility,
     team_inbox_media,
+    team_inbox_receive,
     team_inbox_reply_window,
 )
 from app.services import email as email_service
@@ -698,6 +699,20 @@ def _deliver_notification_queue_stats(
                         db, notification
                     )
                 )
+                inbox_thread_headers = (
+                    team_inbox_receive.EmailThreadHeaders.from_metadata(
+                        delivery_metadata.get("email_thread")
+                    )
+                )
+                transport_headers = (
+                    email_service.EmailTransportHeaders(
+                        message_id=inbox_thread_headers.message_id,
+                        in_reply_to=inbox_thread_headers.in_reply_to,
+                        references=inbox_thread_headers.references,
+                    )
+                    if inbox_thread_headers is not None
+                    else None
+                )
                 success = email_service.send_email(
                     db=db,
                     to_email=notification.recipient,
@@ -709,6 +724,7 @@ def _deliver_notification_queue_stats(
                     activity=activity,
                     notification_id=str(notification.id),
                     sensitive_content=ephemeral_delivery,
+                    headers=transport_headers,
                     cc_addresses=(
                         [
                             str(value)
@@ -1283,7 +1299,10 @@ def deliver_inbound_smtp_health_probe(
         ),
         track=False,
         activity="observability_smtp_probe",
-        headers={"Message-ID": message_id, "X-Dotmac-Probe": marker},
+        headers=email_service.EmailTransportHeaders(
+            message_id=message_id,
+            x_dotmac_probe=marker,
+        ),
     )
 
 
