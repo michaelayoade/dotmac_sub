@@ -20,8 +20,16 @@ from sqlalchemy.orm import Session
 
 from app.models.auth import AuthenticationBinding, AuthProvider, UserCredential
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.services.credential_party_binding import (
+    CredentialPartyBinding,
+    CredentialPrincipalKind,
+    bind_credential_party,
+)
 from app.services.operator_tenant import OPERATOR_TENANT_ID, provision_operator_tenant
+from app.services.owner_commands import CommandContext
 from tests.staff_identity_fixtures import add_bound_staff_user
+
+CREDENTIAL_BINDING_SCOPE = "party:credential_authentication_projection"
 
 ISSUER = "https://idp.test.invalid/realms/field"
 CLIENT_ID = "dotmac-field-mobile"
@@ -193,17 +201,32 @@ def configure_federation(
 
 
 def install_oidc_binding(
-    db: Session, *, binding_key: str = BINDING_KEY, is_active: bool = True
+    db: Session, *, binding_key: str = BINDING_KEY
 ) -> AuthenticationBinding:
+    """Install the verifier binding an operator installs first.
+
+    It is always ACTIVE. A binding is deactivated later, by
+    ``deactivate_binding`` — that is the real operator sequence, and it is the
+    only one the canonical projection writer will accept: a technician cannot
+    be provisioned against a verifier that is already switched off.
+    """
+
     binding = AuthenticationBinding(
         binding_key=binding_key,
         mechanism_code="oidc",
         name="Field mobile OIDC",
-        is_active=is_active,
+        is_active=True,
     )
     db.add(binding)
     db.flush()
     return binding
+
+
+def deactivate_binding(db: Session, binding: AuthenticationBinding) -> None:
+    """Switch an installed verifier off, the way an operator retires one."""
+
+    binding.is_active = False
+    db.flush()
 
 
 def bind_field_technician(
@@ -214,8 +237,23 @@ def bind_field_technician(
     is_active: bool = True,
     staff_active: bool = True,
 ):
-    """One operator-installed subject binding: credential -> party -> staff."""
+    """One operator-installed subject binding: credential -> party -> staff.
 
+    Provisioned THROUGH the canonical writer
+    (``credential_party_binding.bind_credential_party``), never by handing the
+    database an already-projected row. The projection columns are exactly what
+    an operator cannot write by hand in production, so a fixture that wrote
+    them itself would let every test below pass over a path no operator could
+    execute — which is precisely what happened: the writer refused this
+    provisioning outright and ~35 green tests said nothing.
+
+    The command commits, and ``execute_owner_command`` requires a
+    transaction-free session at entry, so the unprojected rows are committed
+    first. That is the operator sequence too: rows exist, then a reviewed
+    command projects them.
+    """
+
+    provision_operator_tenant(db)
     user, person = add_bound_staff_user(
         db, email=f"tech-{uuid4().hex}@example.test", is_active=staff_active
     )
@@ -224,13 +262,34 @@ def bind_field_technician(
         provider=AuthProvider.sso,
         username=subject,
         is_active=is_active,
-        party_id=person.id,
-        authentication_binding_id=binding.id,
-        tenant_id=OPERATOR_TENANT_ID,
-        party_bound_at=user.party_bound_at,
-        party_binding_source="test-fixture",
-        party_binding_reason="Reviewed OIDC subject binding fixture",
     )
     db.add(credential)
     db.flush()
+    # Read every identifier BEFORE the commit. A commit expires these objects,
+    # and a lazy refresh afterwards would open the caller transaction the owner
+    # command refuses to run inside.
+    credential_id = credential.id
+    user_id = user.id
+    person_id = person.id
+    binding_id = binding.id
+    db.commit()
+
+    bind_credential_party(
+        db,
+        CredentialPartyBinding(
+            context=CommandContext.system(
+                actor="test:oidc-operator",
+                scope=CREDENTIAL_BINDING_SCOPE,
+                reason="reviewed OIDC subject binding fixture",
+            ),
+            credential_id=credential_id,
+            expected_principal_kind=CredentialPrincipalKind.system_user,
+            expected_principal_id=user_id,
+            party_id=person_id,
+            authentication_binding_id=binding_id,
+            tenant_id=OPERATOR_TENANT_ID,
+            binding_source="test-fixture",
+            binding_reason="Reviewed OIDC subject binding fixture",
+        ),
+    )
     return user, person, credential

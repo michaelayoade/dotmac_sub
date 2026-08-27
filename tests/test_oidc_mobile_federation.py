@@ -37,6 +37,7 @@ from tests.oidc_mobile_fixtures import (
     assertion_claims,
     bind_field_technician,
     configure_federation,
+    deactivate_binding,
     install_oidc_binding,
 )
 
@@ -182,6 +183,9 @@ def test_starting_a_ceremony_creates_no_user_and_no_session(db_session, transpor
     users_before = db_session.query(SystemUser).count()
     sessions_before = db_session.query(AuthSession).count()
     credentials_before = db_session.query(UserCredential).count()
+    # A read opens a transaction, and an owner command requires a
+    # transaction-free session at entry.
+    db_session.commit()
 
     _start(db_session)
 
@@ -568,6 +572,7 @@ def test_an_unbound_subject_is_refused_and_provisions_nothing(
     users_before = db_session.query(SystemUser).count()
     parties_before = db_session.query(Party).count()
     credentials_before = db_session.query(UserCredential).count()
+    db_session.commit()
 
     started = _start(db_session)
     token = signing_key.sign(assertion_claims(started.nonce, subject="stranger"))
@@ -585,8 +590,13 @@ def test_a_deactivated_client_cannot_authenticate(db_session, signing_key, trans
     """Deactivating the installed verifier disables federated sign-in."""
 
     configure_federation(db_session)
-    binding = install_oidc_binding(db_session, is_active=False)
+    binding = install_oidc_binding(db_session)
     bind_field_technician(db_session, binding)
+    # Bound while the verifier was live, then retired — the operator sequence.
+    # A technician cannot be provisioned against an already-dead binding: the
+    # canonical writer refuses that, so a fixture that produced it would be
+    # describing a state no operator can reach.
+    deactivate_binding(db_session, binding)
     db_session.commit()
 
     started = _start(db_session)

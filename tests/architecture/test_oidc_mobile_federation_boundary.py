@@ -20,6 +20,15 @@ JWKS = PROJECT_ROOT / "app" / "services" / "oidc_mobile_jwks.py"
 ADAPTER = PROJECT_ROOT / "app" / "api" / "oidc_mobile.py"
 SCHEMAS = PROJECT_ROOT / "app" / "schemas" / "oidc_mobile.py"
 MODEL = PROJECT_ROOT / "app" / "models" / "oidc_mobile.py"
+FIXTURES = PROJECT_ROOT / "tests" / "oidc_mobile_fixtures.py"
+PROJECTION_COLUMNS = {
+    "party_id",
+    "authentication_binding_id",
+    "tenant_id",
+    "party_bound_at",
+    "party_binding_source",
+    "party_binding_reason",
+}
 
 
 def _source(path: Path) -> str:
@@ -251,3 +260,37 @@ def test_the_owner_is_registered_with_a_complete_typed_contract() -> None:
     )
 
     assert set(owner.owns) == {CEREMONY_CONCERN, ADMISSION_CONCERN}
+
+
+def test_the_fixture_provisions_through_the_canonical_writer() -> None:
+    """A fixture that projects the credential itself proves nothing.
+
+    This is the shape that hid the merge blocker: the fixture constructed an
+    already-projected `UserCredential`, so ~35 tests exercised a row an
+    operator could never produce — the canonical writer refused that exact
+    provisioning, and the suite could not see it.
+
+    The guard is narrow on purpose: the fixture may build an UNPROJECTED
+    credential (that is what an operator has before the reviewed command
+    runs); what it may not do is fill in a projection column, because those
+    six belong to `party.credential_authentication_projection` alone.
+    """
+
+    source = _source(FIXTURES)
+    tree = ast.parse(source)
+    assert "bind_credential_party(" in source, (
+        "tests/oidc_mobile_fixtures.py must provision through "
+        "app.services.credential_party_binding, not around it"
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id == "UserCredential"):
+            continue
+        written = {keyword.arg for keyword in node.keywords if keyword.arg is not None}
+        assert not written & PROJECTION_COLUMNS, (
+            "the fixture writes projection columns "
+            f"{sorted(written & PROJECTION_COLUMNS)} directly; the canonical "
+            "writer owns them, and a hand-built projection is a row no "
+            "operator command can produce"
+        )
