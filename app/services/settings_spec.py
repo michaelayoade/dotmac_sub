@@ -73,6 +73,22 @@ class SettingSpec(ListResponseMixin):
     default: object | None
     label: str | None = None
     required: bool = False
+    #: Whether a LESS-SPECIFIC scope may answer this key. Resolution normally
+    #: walks operator-tenant row -> platform row -> default; ``inherits=False``
+    #: stops that walk at the target scope, so only the tenant's own row or the
+    #: registered default can answer.
+    #:
+    #: Declare ``inherits=False`` for a value that IDENTIFIES something owned by
+    #: one scope — an issuer, a client id, a redirect URI. Inheritance is right
+    #: for a policy knob ("how long is a session"), because a deployment-wide
+    #: answer is a sensible answer. It is wrong for an identifier, because a
+    #: deployment-wide answer names the WRONG THING confidently: a tenant whose
+    #: OIDC client id row is missing would silently federate against another
+    #: scope's client rather than refusing. Fleet standard: starter ADR-0012.
+    #:
+    #: Translated to the kernel spec verbatim (``settings_kernel_bridge``); the
+    #: kernel resolver is what actually shortens the chain.
+    inherits: bool = True
     allowed: set[str] | None = None
     min_value: int | None = None
     max_value: int | None = None
