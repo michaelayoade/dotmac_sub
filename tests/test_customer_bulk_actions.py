@@ -127,9 +127,11 @@ def test_customer_send_email_action_opens_template_modal_for_email_channel():
 
     assert "mailto:" not in table_template
     assert "customer-send-message" in table_template
+    assert "can_send_customer_messages" in table_template
     assert "channel: 'email'" in table_template
     assert "const { id, type, channel } = e.detail;" in page_template
     assert "this.resetSendMessageForm(channel);" in page_template
+    assert "can_send_customer_messages" in detail_template
     assert "@click.prevent.stop=\"openSendMessageModal('email')\"" in detail_template
     assert "detailUrl" in detail_template
     assert "closeSendMessageModal" in detail_template

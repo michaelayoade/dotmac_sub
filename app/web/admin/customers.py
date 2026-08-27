@@ -227,6 +227,12 @@ def _subscription_action_permission_context(
     auth = getattr(getattr(request, "state", None), "auth", None) or {}
     can_write_catalog = bool(auth) and has_permission(auth, db, "catalog:write")
     return {
+        "can_send_customer_messages": bool(auth)
+        and has_permission(
+            auth,
+            db,
+            web_customer_bulk_actions_service.CUSTOMER_MESSAGE_SEND_PERMISSION,
+        ),
         "can_activate_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:activate")),
         "can_suspend_subscriptions": can_write_catalog
@@ -3029,7 +3035,14 @@ def bulk_update_customers(
 
 
 @router.post(
-    "/bulk/send-message", dependencies=[Depends(require_permission("customer:write"))]
+    "/bulk/send-message",
+    dependencies=[
+        Depends(
+            require_permission(
+                web_customer_bulk_actions_service.CUSTOMER_MESSAGE_SEND_PERMISSION
+            )
+        )
+    ],
 )
 def bulk_send_customer_message(
     request: Request,
