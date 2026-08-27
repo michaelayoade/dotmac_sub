@@ -997,7 +997,24 @@ Hosted overlaps and non-competing names worth recording: kernel `tenants`,
 `tenant_entitlement_grants` do not collide with a Sub model. Kernel revision
 0024's `external_identity_bindings` (a81) joins that non-colliding list — Sub
 has no table or model of that name, and `dotmac_kernel.external_identity`
-stays off the `app/` allowlist. The first two are
+stays off the `app/` allowlist.
+
+That exclusion was TESTED rather than theoretical when field-mobile OIDC
+federation landed (`docs/designs/OIDC_MOBILE_FEDERATION.md`). The obvious
+implementation calls `dotmac_kernel.external_identity.finalize_external_login`,
+and it is the wrong one here for two independent reasons, either of which
+alone would settle it. First, that function resolves a kernel `Party` through
+a kernel `ExternalIdentityBinding` — both are kernel identity, which this
+ledger prohibits and which Sub does not host: adopting it would mean either a
+second identity table or a second Party authority. Second, Sub already has the
+shape: ADR-0019's `AuthenticationBinding` names the installed verifier, and
+`user_credentials.authentication_binding_id` is the credential against it, so
+the external subject is a credential rather than a new record type. The
+federation owner therefore reproduces the kernel function's SEMANTICS —
+`SELECT … FOR UPDATE` on the binding, re-check under the lock, no
+just-in-time provisioning, no match-by-email, refuse rather than distinguish —
+against Sub's own rows, and delegates identity resolution to
+`party.staff_authentication_reader`. No kernel identity import was added. The first two are
 intentionally hosted through the admitted kernel models. Kernel a40 renamed the
 inbox tables to `idempotency_records` / `platform_idempotency_records`; those
 names do not collide with a Sub model and migration 554 now deliberately hosts
