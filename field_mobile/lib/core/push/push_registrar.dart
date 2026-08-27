@@ -36,7 +36,11 @@ class PushRegistrar {
   void start() {
     unawaited(registerToken());
     ref.listen<AuthState>(authControllerProvider, (previous, next) {
-      if (next is Authenticated && previous is! Authenticated) {
+      // A session restored offline is authenticated but has reached nothing, so
+      // registration would fail. Fire when the session first becomes reachable,
+      // which includes the offline → online transition.
+      final wasOnline = previous is Authenticated && !previous.isOffline;
+      if (next is Authenticated && !next.isOffline && !wasOnline) {
         unawaited(registerToken());
       }
     });
