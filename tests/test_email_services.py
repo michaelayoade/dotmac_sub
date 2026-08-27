@@ -246,15 +246,22 @@ def test_send_email_preserves_operational_headers(db_session, monkeypatch):
         body_text="Probe",
         track=False,
         activity="observability_smtp_probe",
-        headers={
-            "Message-ID": "<probe-1@example.com>",
-            "X-Dotmac-Probe": "team_inbox_smtp_e2e",
-        },
+        headers=email_service.EmailTransportHeaders(
+            message_id="<probe-1@example.com>",
+            in_reply_to="<customer-1@example.com>",
+            references=(
+                "<customer-root@example.com>",
+                "<customer-1@example.com>",
+            ),
+            x_dotmac_probe="team_inbox_smtp_e2e",
+        ),
     )
 
     assert result is True
     message = fake_smtp.messages[0][2]
     assert "Message-ID: <probe-1@example.com>" in message
+    assert "In-Reply-To: <customer-1@example.com>" in message
+    assert "References: <customer-root@example.com> <customer-1@example.com>" in message
     assert "X-Dotmac-Probe: team_inbox_smtp_e2e" in message
 
 

@@ -8,6 +8,7 @@ from app.models.notification import (
     NotificationChannel,
     NotificationStatus,
 )
+from app.services import email as email_service
 from app.services.branding_config import get_brand
 from app.services.communication_attachments import CommunicationAttachmentError
 from app.tasks.notifications import (
@@ -66,10 +67,10 @@ def test_inbound_smtp_probe_uses_delivery_gate_and_fixed_payload(
     )
     assert captured["activity"] == "observability_smtp_probe"
     assert captured["track"] is False
-    assert captured["headers"] == {
-        "Message-ID": "<probe-1@sub.local>",
-        "X-Dotmac-Probe": "team_inbox_smtp_e2e",
-    }
+    assert captured["headers"] == email_service.EmailTransportHeaders(
+        message_id="<probe-1@sub.local>",
+        x_dotmac_probe="team_inbox_smtp_e2e",
+    )
 
 
 def test_inbound_smtp_probe_respects_all_scope_suppression(db_session, monkeypatch):
