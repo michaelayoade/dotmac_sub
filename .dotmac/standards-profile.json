@@ -159,7 +159,7 @@
         "path": "tests/test_team_inbox_meta_social_webhook.py",
         "symbol": "<module>",
         "category": "provider_credential",
-        "fingerprint": "3cf2c007dd6ae16d0208ac31a351adda0ac668b93e06bac8da90739f7b91aec7"
+        "fingerprint": "5ddde819afc16ba6f60a2b07948c29dafee78a7a47439a2b78a796cc9f3b8ceb"
       },
       {
         "path": "tests/test_team_inbox_smtp_runtime.py",

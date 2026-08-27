@@ -120,7 +120,7 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_meta_oauth.py` | `test_provider_rejection_records_only_sanitized_evidence` | `outbound_transport` | `d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582` |
 | `tests/test_nextcloud_talk_staff_notifications.py` | `<module>` | `delivery_retry` | `2ad03d19e91abbbd467037d4672ba61b4433b2533ead11b04955f1873b6017af` |
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |
-| `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `3cf2c007dd6ae16d0208ac31a351adda0ac668b93e06bac8da90739f7b91aec7` |
+| `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `5ddde819afc16ba6f60a2b07948c29dafee78a7a47439a2b78a796cc9f3b8ceb` |
 | `tests/test_team_inbox_smtp_runtime.py` | `test_readiness_uses_smtp_noop` | `outbound_transport` | `4e19294b80d017343f252be4e1284480dc628225f164bb616e894b80a5c9f9c4` |
 | `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `4c2d111b3d7cf8106ad94a8250c80cb921adaeea0cc82159b3670f49d3ec6991` |
 
