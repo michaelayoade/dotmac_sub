@@ -63,14 +63,23 @@ only ever sees conforming input passes even when it is broken.
 
 ## The honest state today
 
-**Every module in the cohort is `source_only` with `authority_mode = none`.**
+**Every module has `authority_mode = none`. Subscriptions, Billing and
+Collections are `released_uncomposed`; the other 22 members are
+`source_only`.**
 
 That is the accurate reading, not an unfinished draft:
 
-- No cohort package is published, so none has a digest-pinned release identity.
-- The shadow app runs the **pinned Sub baseline image**, which contains none of
-  the cohort packages, and the stack mounts no host paths — so there is no
-  mechanism by which a cohort module could be executing here.
+- `dotmac-subscriptions==0.1.0a3`, `dotmac-billing==0.1.0a1` and
+  `dotmac-collections==0.1.0a1` are published. Their `ReleaseIdentity` values
+  pin the exact wheel SHA256 values in Sub's checked-in Poetry lock, and their
+  source revisions are the peeled annotated Starter release tags recorded in
+  `docs/PLATFORM_ADOPTION_LEDGER.md`.
+- The Thin Shadow app still runs the **pinned Sub baseline image**, which
+  contains none of the cohort packages, and the stack mounts no host paths — so
+  none of the published wheels is installed or executing in this environment.
+- Publication is not composition. Calling these releases `source_only` would
+  erase real publication evidence; calling them `installed_shadow` would claim
+  a runtime the pinned image cannot contain.
 
 `ModuleEntry` refuses each step that runs ahead of its evidence, so these states
 can only move when the evidence does.
@@ -136,8 +145,9 @@ Two different things in this repository are called a cohort, and conflating them
 would misread both.
 
 **This document's cohort is a module-adoption cohort** — twenty-five packages
-and how far each has actually travelled. Every entry is `source_only` with
-`authority_mode = none`, and `ModuleEntry` refuses each step that runs ahead of
+and how far each has actually travelled. The three released commercial owners
+are `released_uncomposed`; the other 22 entries are `source_only`; every entry
+has `authority_mode = none`. `ModuleEntry` refuses each step that runs ahead of
 its evidence.
 
 **`receivable-shadow-01` is a data cohort** — which *rows* across

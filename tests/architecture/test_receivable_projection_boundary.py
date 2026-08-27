@@ -374,13 +374,13 @@ def test_the_standing_blocker_carries_real_pin_coordinates() -> None:
 
 
 def test_the_data_cohort_does_not_claim_module_adoption() -> None:
-    """Recording a data cohort must not advance a module's adoption state."""
+    """A data cohort must not advance modules beyond their publication state."""
     from app.shadow.cohort import SHADOW_COHORT
     from app.shadow.vocabulary import AdoptionState, AuthorityMode
 
     for module in ("subscriptions", "billing", "collections"):
         entry = next(item for item in SHADOW_COHORT.modules if item.module == module)
-        assert entry.adoption_state is AdoptionState.SOURCE_ONLY
+        assert entry.adoption_state is AdoptionState.RELEASED_UNCOMPOSED
         assert entry.authority_mode is AuthorityMode.NONE
 
 

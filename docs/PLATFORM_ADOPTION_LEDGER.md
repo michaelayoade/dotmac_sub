@@ -184,6 +184,19 @@ only `ModulePlane.TENANT` for each module: the tenant table catalogues are
 installed under `mod_billing` and `mod_coll`, while both platform catalogues
 remain absent.
 
+The annotated release tags are immutable source oracles:
+`dotmac-billing-v0.1.0a1` peels to
+`92a1626b16d7e068f92536d8cfcb2ef9b6f270c2`, and
+`dotmac-collections-v0.1.0a1` peels to
+`6ecf518a6985b8bf4b163eccb3de2fef171ecccc`. The checked-in lock pins the
+corresponding wheels by SHA256:
+`ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b`
+for Billing and
+`f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b`
+for Collections. These release coordinates advance the Thin Shadow adoption
+manifest only to `released_uncomposed`: its pinned baseline image still
+contains neither wheel.
+
 The fresh and relay-provider-predecessor PostgreSQL canaries prove the exact
 selected catalogues, ENABLE + FORCE RLS, effective two-tenant visibility as
 `app_user`, preservation of a seeded module-event row, and repeat-upgrade

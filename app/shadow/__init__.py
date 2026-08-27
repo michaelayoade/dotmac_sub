@@ -33,8 +33,9 @@ Each step demands the evidence of the one below: a state past `source_only`
 requires a digest-pinned release identity, `compared` and beyond require a
 satisfied comparison gate carrying its reconciliation hash, and shadow authority
 requires that no blocking prerequisite stands and that some Sub writer is named
-as displaced. Today every module sits at `source_only` — see `cohort` for why
-that is the accurate reading and not an unfinished draft.
+as displaced. Today Subscriptions, Billing and Collections are
+`released_uncomposed`; every other member remains `source_only`. See `cohort`
+for the immutable release and Thin Shadow image evidence behind that boundary.
 """
 
 from __future__ import annotations
