@@ -519,6 +519,10 @@ class TestSeedBillingNotificationSettings:
                         "topup_reconciliation_stale_minutes",
                         "topup_reconciliation_max_age_days",
                         "topup_reconciliation_batch_size",
+                        "topup_reconciliation_pending_retry_minutes",
+                        "topup_reconciliation_terminal_retry_hours",
+                        "topup_reconciliation_processing_retry_minutes",
+                        "topup_reconciliation_unavailable_retry_minutes",
                         "gateway_topup_intent_ttl_minutes",
                         "ar_aging_bucket_days",
                         "billing_health_scan_min_ratio",
@@ -543,6 +547,10 @@ class TestSeedBillingNotificationSettings:
         assert settings["topup_reconciliation_stale_minutes"] == "15"
         assert settings["topup_reconciliation_max_age_days"] == "7"
         assert settings["topup_reconciliation_batch_size"] == "50"
+        assert settings["topup_reconciliation_pending_retry_minutes"] == "30"
+        assert settings["topup_reconciliation_terminal_retry_hours"] == "24"
+        assert settings["topup_reconciliation_processing_retry_minutes"] == "30"
+        assert settings["topup_reconciliation_unavailable_retry_minutes"] == "60"
         assert settings["gateway_topup_intent_ttl_minutes"] == "30"
         assert settings["ar_aging_bucket_days"] == "30,60,90"
         assert settings["billing_health_scan_min_ratio"] == "0.5"

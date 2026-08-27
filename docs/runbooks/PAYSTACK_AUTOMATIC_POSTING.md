@@ -12,10 +12,15 @@ invoice, subscription, or access state.
 - `financial.payment_webhooks` owns signed webhook ingress and dispatches the
   normalized observation to the canonical settlement owners.
 - `financial.payment_reconciliation` owns the bounded scheduled fallback and its
-  reconcilable-intent backlog projection.
+  reconcilable-intent backlog projection. Its candidate policy uses a
+  pending-first lane and a terminal late-success recovery lane; terminal rows
+  may consume only leftover batch capacity after their retry cooldown is due.
 - `financial.topup_intents` owns lifecycle transitions and the shared
-  customer/admin blocker and retry projection. Provider adapters only normalize
-  observations and never mutate intent state.
+  customer/admin blocker and retry projection, including typed gateway
+  observation progress (`gateway_last_observed_at`, `gateway_last_outcome`,
+  `gateway_last_reason_code`, `gateway_next_reconcile_at`, and
+  `gateway_observation_count`). Provider adapters only normalize observations
+  and never mutate intent state.
 - `financial.account_credit_deposits` owns account-credit deposit settlement.
   The requested deposit is the authorized customer credit; the provider gross
   and fee remain explicit settlement facts.
@@ -47,6 +52,14 @@ Reconciliation continues within its bounded maximum-age policy, and authoritativ
 late success can complete those states. Provider transaction identity and existing
 payment/event idempotency constraints ensure webhook and reconciliation replay
 settle exactly once.
+
+The scheduled fallback must not use one oldest-first queue for both pending
+customer payments and terminal late-success audit. Pending unresolved gateway
+intents are checked first once they are stale. Terminal failed, abandoned, and
+expired intents are checked only when `gateway_next_reconcile_at` is due, using
+the configured terminal retry interval. Non-success observations update the typed
+progress fields while preserving the existing `metadata.gateway_verification`
+evidence for compatibility.
 
 The production Paystack webhook URL is:
 
@@ -96,6 +109,7 @@ Do not use a fabricated signature or replay a captured production payload.
    - the reconciliation runner has a recent heartbeat and result;
    - the result has no rejected candidates;
    - no eligible pending intents remain;
+   - terminal recovery work is either due and bounded or cooling down;
    - no intents are stranded outside the automatic reconciliation window.
 5. Verify the canonical payment records preserve the provider gross and fee,
    while account credit equals the authorized deposit amount.
