@@ -460,6 +460,67 @@ def test_a_ceremony_cannot_be_replayed(db_session, signing_key, transport):
     assert _refusal(exc) == "ceremony_already_used"
 
 
+def test_a_failure_at_session_issuance_leaves_the_ceremony_burned(
+    db_session, signing_key, transport, monkeypatch
+):
+    """Break the second transaction and see what the first one left behind.
+
+    Admission and issuance are two commits in that order. The claim that falls
+    out — if minting fails the ceremony is still burned, so the failure mode is
+    "log in again" and never "the assertion is still redeemable" — is a claim
+    about what SURVIVES a failure, and only a failure can show it. Asserting
+    the ordering statically would pass just as happily if the burn were rolled
+    back together with the mint.
+
+    So the failure is injected where it actually matters: inside the one
+    issuance owner, after the admission command has committed.
+    """
+
+    from app.models.auth import Session as AuthSession
+    from app.services import auth_flow as auth_flow_service
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    bind_field_technician(db_session, binding)
+    db_session.commit()
+
+    started = _start(db_session)
+    token = signing_key.sign(assertion_claims(started.nonce))
+
+    def _issuance_fails(*_args, **_kwargs):
+        raise RuntimeError("session store unavailable")
+
+    monkeypatch.setattr(
+        auth_flow_service.AuthFlow,
+        "_issue_tokens",
+        staticmethod(_issuance_fails),
+    )
+
+    with pytest.raises(RuntimeError):
+        _exchange(db_session, started.ceremony_id, token)
+
+    db_session.rollback()
+    db_session.expire_all()
+    row = db_session.get(OidcMobileCeremony, started.ceremony_id)
+    assert row is not None
+    assert row.consumed_at is not None
+    assert row.outcome == OidcCeremonyOutcome.completed.value
+    # Nothing was half-issued: the burn is what committed, not a session.
+    assert db_session.query(AuthSession).count() == 0
+    db_session.commit()
+
+    # The device cannot retry with the assertion it already spent.
+    with pytest.raises(federation.OidcFederationRefused) as exc:
+        _exchange(db_session, started.ceremony_id, token)
+    assert _refusal(exc) == "ceremony_already_used"
+
+    # And the intended failure mode really is available: run a fresh ceremony.
+    monkeypatch.undo()
+    fresh = _start(db_session)
+    fresh_token = signing_key.sign(assertion_claims(fresh.nonce))
+    assert _exchange(db_session, fresh.ceremony_id, fresh_token).access_token
+
+
 def test_a_refused_exchange_still_burns_the_ceremony(
     db_session, signing_key, transport
 ):
