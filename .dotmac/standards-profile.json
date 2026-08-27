@@ -117,13 +117,13 @@
         "path": "tests/test_email_services.py",
         "symbol": "test_send_email_auth_failure_logs",
         "category": "outbound_transport",
-        "fingerprint": "6d46d2e8739c255f200a739f274b929df281df518e52790fa9f80ce34c01d803"
+        "fingerprint": "e21f75d7c74d8996bad3d29f4876bcce708c336102a88f3bd2474350f929b10e"
       },
       {
         "path": "tests/test_email_services.py",
         "symbol": "test_smtp_connection_auth_failure_logs",
         "category": "outbound_transport",
-        "fingerprint": "6d46d2e8739c255f200a739f274b929df281df518e52790fa9f80ce34c01d803"
+        "fingerprint": "e21f75d7c74d8996bad3d29f4876bcce708c336102a88f3bd2474350f929b10e"
       },
       {
         "path": "tests/test_genieacs_services.py",
@@ -159,7 +159,7 @@
         "path": "tests/test_team_inbox_meta_social_webhook.py",
         "symbol": "<module>",
         "category": "provider_credential",
-        "fingerprint": "3cf2c007dd6ae16d0208ac31a351adda0ac668b93e06bac8da90739f7b91aec7"
+        "fingerprint": "5ddde819afc16ba6f60a2b07948c29dafee78a7a47439a2b78a796cc9f3b8ceb"
       },
       {
         "path": "tests/test_team_inbox_smtp_runtime.py",

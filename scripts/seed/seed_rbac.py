@@ -71,6 +71,10 @@ DEFAULT_PERMISSIONS = [
     ("system:write", "Manage system administration resources"),
     ("notification:read", "View notification templates, queue, and history"),
     ("notification:write", "Manage notification templates and delivery"),
+    (
+        "communications:customer:send",
+        "Send customer notifications to selected customer scopes",
+    ),
     ("system:db_admin", "Perform restricted database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
@@ -236,6 +240,10 @@ DEFAULT_PERMISSIONS = [
     ("network:radius:write", "Manage RADIUS configuration"),
     ("monitoring:read", "View monitoring dashboards and alerts"),
     ("monitoring:write", "Manage monitoring rules and alert states"),
+    (
+        "monitoring:outage_notify:send",
+        "Send outage notifications to affected customers",
+    ),
     ("usage:read", "View subscriber usage and metering records"),
     ("usage:write", "Manage usage and metering records"),
     # Operations - Work Orders
@@ -461,6 +469,7 @@ ROLE_PERMISSIONS = {
         "network:radius:write",
         "monitoring:read",
         "monitoring:write",
+        "monitoring:outage_notify:send",
         "provisioning:read",
         "provisioning:write",
         "customer:read",

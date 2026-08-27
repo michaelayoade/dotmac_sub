@@ -299,7 +299,11 @@
                             <div class="flex-1 min-w-0">
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Email</p>
                                 {% if customer.email %}
+                                {% if can_send_customer_messages %}
                                 <button type="button" @click.prevent.stop="openSendMessageModal('email')" class="block truncate text-left text-sm font-medium text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ customer.email }}</button>
+                                {% else %}
+                                <p class="truncate text-sm font-medium text-slate-900 dark:text-white">{{ customer.email }}</p>
+                                {% endif %}
                                 {% else %}
                                 <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
                                 {% endif %}
@@ -2665,6 +2669,7 @@
     </div>
 </div>
 
+{% if can_send_customer_messages %}
 <!-- Send Message Modal -->
 <div x-show="sendMessageModal"
      x-transition.opacity
@@ -2775,6 +2780,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 </div>
 

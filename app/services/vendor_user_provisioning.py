@@ -279,20 +279,18 @@ def _project_local_credential(
             ),
         )
         return True
-    expected = (
+    expected_identity = (
         party_id,
         binding.id,
         operator_tenant_id(),
-        "vendor-user-provisioning",
     )
-    complete_identity = (
+    current_identity = (
         credential.party_id,
         credential.authentication_binding_id,
         credential.tenant_id,
-        credential.party_binding_source,
     )
     if (
-        complete_identity != expected
+        current_identity != expected_identity
         or credential.party_bound_at is None
         or not credential.party_binding_reason
     ):

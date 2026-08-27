@@ -2640,7 +2640,11 @@ DOMAIN = DomainSOT(
                         name="conversation reply target",
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Active unresolved conversation, channel, participant, subject, and team sender context.",
+                        source=(
+                            "Active unresolved conversation, channel, participant, "
+                            "subject, team sender context, and exact prior email "
+                            "Message-ID chronology."
+                        ),
                     ),
                     AuthorityInput(
                         name="communication intent lifecycle",
@@ -2664,7 +2668,9 @@ DOMAIN = DomainSOT(
                 "to the web transport, which schedules an after-response task on the "
                 "dedicated notifications_immediate queue. The periodic delivery runner "
                 "stays on notifications as the durable recovery sweep; each worker locks "
-                "and claims the exact eligible row before provider delivery."
+                "and claims the exact eligible row before provider delivery. Email "
+                "intents persist the thread-owner-derived Message-ID, In-Reply-To and "
+                "bounded References values; every retry serializes the same identity."
             ),
         ),
         SOTService(

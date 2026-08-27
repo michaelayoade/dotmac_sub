@@ -10,6 +10,7 @@ See docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md §5, slice 4.
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,8 +20,14 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationStatus,
     InboxMediaAsset,
+    InboxMessage,
 )
-from app.services import team_inbox_commands, team_inbox_media, team_inbox_projection
+from app.services import (
+    team_inbox_commands,
+    team_inbox_media,
+    team_inbox_projection,
+    team_inbox_read,
+)
 from app.services.object_storage import StreamResult
 
 CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
@@ -44,10 +51,11 @@ def _stub_object_storage(monkeypatch):
 
     def _fake_stage_upload(**kwargs):
         return SimpleNamespace(
-            id="stored-file-1",
+            id=uuid4(),
             original_filename=kwargs["original_filename"],
             content_type=kwargs["content_type"],
             file_size=len(kwargs["data"]),
+            checksum="checksum",
             storage_key_or_relative_path=(
                 f"attachments/inbox_conversation/{kwargs['entity_id']}/"
                 f"{kwargs['original_filename']}"
@@ -160,6 +168,86 @@ def test_audio_and_video_uploads_are_allowed(
     asset = db_session.get(InboxMediaAsset, staged[0])
     assert asset.mime_type == content_type
     assert asset.asset_type == asset_type
+
+
+def test_inbound_email_attachment_bytes_are_stored_and_scrubbed(db_session):
+    conversation_id = _conversation_id(db_session)
+    payload = b"hello attachment"
+    message = InboxMessage(
+        conversation_id=conversation_id,
+        channel_type="email",
+        direction="inbound",
+        body="See attachment",
+        metadata_={
+            "attachments": [
+                {
+                    "type": "file",
+                    "file_name": "notes.txt",
+                    "mime_type": "text/plain",
+                    "file_size": len(payload),
+                    "content_base64": base64.b64encode(payload).decode("ascii"),
+                }
+            ]
+        },
+    )
+    db_session.add(message)
+    db_session.flush()
+
+    assets = team_inbox_media.promote_message_attachments(db_session, message=message)
+
+    assert len(assets) == 1
+    asset = assets[0]
+    assert asset.download_status == "stored"
+    assert asset.file_name == "notes.txt"
+    assert asset.file_size == len(payload)
+    assert asset.metadata_["stored_file_id"]
+    assert "content_base64" not in asset.metadata_
+    assert "content_base64" not in message.metadata_["attachments"][0]
+    assert team_inbox_media.asset_content_available(asset) is True
+
+
+def test_metadata_only_email_asset_is_not_presented_as_downloadable(db_session):
+    conversation_id = _conversation_id(db_session)
+    asset = InboxMediaAsset(
+        conversation_id=conversation_id,
+        channel_type="email",
+        direction="inbound",
+        asset_type="file",
+        file_name="missing.pdf",
+        mime_type="application/pdf",
+        download_status="metadata_only",
+    )
+    db_session.add(asset)
+    db_session.flush()
+
+    attachment = team_inbox_read._asset_attachment(asset)
+
+    assert team_inbox_media.asset_content_available(asset) is False
+    assert attachment.url is None
+    assert attachment.content_available is False
+
+
+def test_whatsapp_provider_media_stays_downloadable_without_local_file(db_session):
+    conversation_id = _conversation_id(db_session)
+    asset = InboxMediaAsset(
+        conversation_id=conversation_id,
+        channel_type="whatsapp",
+        direction="inbound",
+        provider="whatsapp",
+        provider_media_id="provider-media-1",
+        asset_type="image",
+        file_name="photo.jpg",
+        mime_type="image/jpeg",
+        download_status="metadata_only",
+    )
+    db_session.add(asset)
+    db_session.flush()
+
+    attachment = team_inbox_read._asset_attachment(asset)
+
+    assert team_inbox_media.asset_content_available(asset) is True
+    assert attachment.url == team_inbox_media.media_content_url(asset.id)
+    assert attachment.content_available is True
 
 
 def test_transient_stage_lock_is_a_retryable_owner_error(db_session, monkeypatch):

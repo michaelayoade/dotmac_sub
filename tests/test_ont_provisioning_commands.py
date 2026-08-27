@@ -113,6 +113,39 @@ def test_authorization_command_stages_operation_and_typed_dispatch(db_session):
     }
 
 
+def test_authorization_command_accepts_hex_stored_huawei_serial(db_session):
+    olt = OLTDevice(name="Huawei Hex Serial OLT", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+    ont = _assigned_ont(
+        db_session,
+        olt,
+        fsp="0/2/9",
+        serial="4857544329AFD380",
+    )
+
+    result = request_ont_authorization(
+        db_session,
+        RequestAssignedOntAuthorization.from_transport(
+            context=CommandContext.system(
+                actor="network-admin",
+                scope="network:ont:authorize",
+                reason="test Huawei hex serial admission",
+            ),
+            ont_id=ont.id,
+            olt_id=olt.id,
+            fsp="0/2/9",
+            serial_number="HWTC29AFD380",
+            force_reauthorize=True,
+        ),
+    )
+
+    assert result.accepted is True
+    operation = db_session.get(NetworkOperation, result.operation_id)
+    assert operation is not None
+    assert operation.status == NetworkOperationStatus.pending
+
+
 def test_authorization_execution_rechecks_exact_assignment_before_device_write(
     db_session,
     monkeypatch,

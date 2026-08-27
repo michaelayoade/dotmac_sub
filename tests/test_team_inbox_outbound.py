@@ -30,6 +30,7 @@ from app.services import (
     team_inbox_commands,
     team_inbox_media,
     team_inbox_outbound,
+    team_inbox_receive,
     team_outbound,
 )
 from app.services.domain_settings import notification_settings
@@ -179,6 +180,118 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
     assert delivery_wakeups == [((), {"args": [str(notification.id)], "retry": False})]
 
 
+def test_customer_reply_to_agent_email_reuses_the_existing_thread(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        notification_tasks.deliver_notification,
+        "apply_async",
+        lambda *args, **kwargs: None,
+    )
+    _smtp_sender(db_session, "support", from_email="support@dotmac.io")
+    _activity_sender(db_session, "support_ticket", "support")
+    team = _team(db_session, "Support", ServiceTeamType.support.value)
+    conversation = _conversation(db_session, team)
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type=InboxChannelType.email.value,
+            direction=InboxMessageDirection.inbound.value,
+            subject="Router offline",
+            body="My router is offline.",
+            external_message_id="<customer-1@example.com>",
+            from_address="customer@example.com",
+            to_addresses=["support@dotmac.io"],
+            received_at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+            metadata_={"references": "<customer-root@example.com>"},
+        )
+    )
+    db_session.commit()
+
+    queued = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking.</p>",
+            body_text="We are checking.",
+        ),
+        now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    outbound = db_session.get(InboxMessage, queued.message_id)
+    thread_headers = team_inbox_receive.EmailThreadHeaders.from_metadata(
+        outbound.metadata_["email_thread"]
+    )
+    assert thread_headers is not None
+    assert outbound.external_message_id == f"<team-inbox-{outbound.id}@sub.local>"
+    assert thread_headers.message_id == outbound.external_message_id
+    assert thread_headers.in_reply_to == "<customer-1@example.com>"
+    assert thread_headers.references == (
+        "<customer-root@example.com>",
+        "<customer-1@example.com>",
+    )
+
+    follow_up = team_inbox_receive.receive_inbound_email(
+        db_session,
+        team_inbox_receive.InboundEmailPayload(
+            from_address="customer@example.com",
+            to_addresses=["support@dotmac.io"],
+            subject="Re: Router offline",
+            body="It is still offline.",
+            message_id="<customer-2@example.com>",
+            in_reply_to=outbound.external_message_id,
+            references=(
+                "<customer-root@example.com> "
+                f"<customer-1@example.com> {outbound.external_message_id}"
+            ),
+            received_at=datetime(2026, 7, 10, 8, 10, tzinfo=UTC),
+        ),
+    )
+    db_session.commit()
+
+    assert follow_up.conversation_id == str(conversation.id)
+    assert db_session.query(InboxConversation).count() == 1
+    assert db_session.query(InboxMessage).count() == 3
+
+
+def test_manual_email_retry_reuses_the_original_rfc_message_id(db_session, monkeypatch):
+    monkeypatch.setattr(
+        notification_tasks.deliver_notification,
+        "apply_async",
+        lambda *args, **kwargs: None,
+    )
+    _smtp_sender(db_session, "support", from_email="support@dotmac.io")
+    _activity_sender(db_session, "support_ticket", "support")
+    team = _team(db_session, "Support", ServiceTeamType.support.value)
+    conversation = _conversation(db_session, team)
+    db_session.commit()
+
+    queued = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking.</p>",
+            body_text="We are checking.",
+        ),
+    )
+    failed = db_session.get(InboxMessage, queued.message_id)
+    failed_metadata = dict(failed.metadata_ or {})
+    failed_metadata["delivery_status"] = "failed"
+    failed.metadata_ = failed_metadata
+    db_session.flush()
+
+    retried = team_inbox_outbound.retry_outbound_message(
+        db_session,
+        message=failed,
+    )
+    retry_message = db_session.get(InboxMessage, retried.message_id)
+
+    assert retry_message.id != failed.id
+    assert retry_message.external_message_id == failed.external_message_id
+    assert retry_message.metadata_["email_thread"] == failed_metadata["email_thread"]
+
+
 def test_send_inbox_reply_sends_whatsapp_text(db_session, monkeypatch):
     conversation = _whatsapp_conversation(db_session)
     _open_whatsapp_window(db_session, conversation)
@@ -262,6 +375,10 @@ def test_email_notification_delivers_inbox_attachment(db_session, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["body_html"] == "<p>Document attached.</p>"
     assert calls[0]["body_text"] == "Document attached."
+    outbound = db_session.get(InboxMessage, result.message_id)
+    assert calls[0]["headers"] == email_service.EmailTransportHeaders(
+        message_id=outbound.external_message_id,
+    )
     assert len(calls[0]["attachments"]) == 1
     assert calls[0]["attachments"][0].filename == "router.pdf"
     assert calls[0]["attachments"][0].content == b"pdf-bytes"
