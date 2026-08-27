@@ -93,7 +93,9 @@ void main() {
 
     test('billing-flavoured notifications deep-link to /billing', () {
       expect(
-          notificationRoute(n(subject: 'Your invoice is ready')), '/billing');
+        notificationRoute(n(subject: 'Your invoice is ready')),
+        '/billing',
+      );
       expect(notificationRoute(n(eventType: 'service_suspended')), '/billing');
       expect(notificationRoute(n(subject: 'Payment received')), '/billing');
     });
@@ -133,9 +135,9 @@ void main() {
 
     test('routes chat-shaped push payloads to live chat', () {
       expect(
-        PushService.routeForNotificationData(
-          {'event_type': 'message.outbound'},
-        ),
+        PushService.routeForNotificationData({
+          'event_type': 'message.outbound',
+        }),
         '/support/chat',
       );
       expect(
@@ -147,7 +149,7 @@ void main() {
           const {},
           title: 'New support message',
         ),
-        '/support/chat',
+        '/dashboard/notifications',
       );
     });
 

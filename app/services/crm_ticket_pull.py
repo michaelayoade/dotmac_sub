@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketChannel, TicketComment, TicketStatus
+from app.schemas.notification import PushIntent
 from app.services.crm_client import CRMClientError
 from app.services.integrations.connectors.dotmac_crm import (
     CrmTicketObservationSource,
@@ -509,7 +510,11 @@ def sync_ticket(
                 str(subscriber_id),
                 title="Support ticket closed",
                 body="Your support ticket has been closed.",
-                data={"type": "ticket", "ticket_id": str(local_ticket.id)},
+                intent=PushIntent(
+                    intent_code="ticket.closed",
+                    subject_kind="ticket",
+                    subject_id=str(local_ticket.id),
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - notification is advisory
             logger.warning(

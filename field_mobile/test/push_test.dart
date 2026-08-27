@@ -178,6 +178,33 @@ void main() {
     );
     expect(routeForMessage({'type': 'other'}), isNull);
     expect(routeForMessage({}), isNull);
+    expect(
+      routeForMessage({
+        'contract_version': 'PushIntentV1',
+        'intent_code': 'work_order.assigned',
+        'subject_kind': 'work_order',
+        'subject_id': 'wo-v1',
+        'tenant_id': 'tenant-1',
+        'principal_id': 'person-1',
+        'issued_at': '2026-08-26T08:00:00Z',
+      }),
+      '/jobs/wo-v1',
+    );
+    expect(
+      routeForMessage({
+        'contract_version': 'PushIntentV2',
+        'intent_code': 'work_order.assigned',
+        'subject_id': 'wo-v2',
+      }),
+      isNull,
+    );
+    expect(
+      routeForMessage({
+        'type': 'work_order_assigned',
+        'work_order_id': '../reset-password?token=attacker',
+      }),
+      isNull,
+    );
   });
 }
 

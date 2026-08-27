@@ -1135,6 +1135,7 @@ def _deliver_notification_queue_stats(
                         subscriber_id=str(notification.subscriber_id),
                         title=subject,
                         body=body,
+                        intent=push_service.intent_for_notification(notification),
                         notification_id=str(notification.id),
                     )
             else:

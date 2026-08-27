@@ -314,8 +314,10 @@ def test_deliver_notification_queue_processes_push_channel(
     db_session.add(push)
     db_session.commit()
 
+    calls = []
     monkeypatch.setattr(
-        "app.tasks.notifications.push_service.send_push", lambda **_: True
+        "app.tasks.notifications.push_service.send_push",
+        lambda **kwargs: calls.append(kwargs) or True,
     )
 
     delivered = _deliver_notification_queue(db_session, batch_size=10)
@@ -323,6 +325,8 @@ def test_deliver_notification_queue_processes_push_channel(
     db_session.refresh(push)
     assert delivered == 1
     assert push.status == NotificationStatus.delivered
+    assert calls[0]["intent"].intent_code == "notification.open"
+    assert calls[0]["intent"].subject_id == str(push.id)
 
 
 def test_push_delivery_fails_closed_without_subscriber_identity(
