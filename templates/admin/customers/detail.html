@@ -1869,11 +1869,12 @@
 
     <!-- Tab Content: Network -->
     <div id="customer-network-panel"
-         x-show="activeTab === 'network'" x-cloak class="space-y-6"
+         x-show="activeTab === 'network'" x-cloak class="space-y-6">
+        <div id="customer-network-panel-content"
          {% if not network_panel_loaded %}
          hx-get="{{ detail_config.networkPanelUrl }}"
          hx-trigger="revealed"
-         hx-select="#customer-network-panel"
+         hx-select="#customer-network-panel-content"
          hx-swap="outerHTML"
          hx-indicator="#customer-network-panel-loading"
          {% endif %}>
@@ -2195,6 +2196,7 @@
 
                 {% endif %}
 
+        </div>
     </div>
 
     <!-- Tab Content: Timeline -->
@@ -3287,8 +3289,7 @@ function customerDetail(config = {}) {
             // Check URL hash for tab
             const hash = window.location.hash.slice(1);
             if (hash === 'network') {
-                this.activeTab = 'subscriptions';
-                this.serviceSubTab = 'subscriptions';
+                this.activeTab = 'network';
             } else if (hash === 'stats') {
                 this.activeTab = 'subscriptions';
                 this.serviceSubTab = 'stats';

@@ -45,6 +45,7 @@ def _create_ledger_entry(
     amount: str,
     source: LedgerSource = LedgerSource.other,
     currency: str = "NGN",
+    effective_date: datetime | None = None,
 ):
     entry = LedgerEntry(
         account_id=account_id,
@@ -53,6 +54,7 @@ def _create_ledger_entry(
         amount=Decimal(amount),
         currency=currency,
         memo="test",
+        effective_date=effective_date,
     )
     db_session.add(entry)
     db_session.commit()
@@ -318,6 +320,59 @@ def test_customer_ledger_view_is_strictly_scoped_and_entries_are_clickable(
     assert view.export_url == (
         f"/admin/billing/ledger/export.csv?customer_ref={subscriber.id}"
     )
+    assert view.page == 1
+    assert view.per_page == 10
+    assert view.total_entries == 1
+    assert view.previous_page_url is None
+    assert view.next_page_url is None
+
+
+def test_customer_ledger_view_pages_newest_activity_in_ten_entry_slices(
+    db_session, subscriber
+):
+    entries = [
+        _create_ledger_entry(
+            db_session,
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            amount=str(index),
+            source=LedgerSource.payment,
+            effective_date=datetime(2026, 1, index, tzinfo=UTC),
+        )
+        for index in range(1, 13)
+    ]
+
+    first_page = build_customer_ledger_view(
+        db_session,
+        query=CustomerLedgerQuery(account_id=subscriber.id),
+    )
+    second_page = build_customer_ledger_view(
+        db_session,
+        query=CustomerLedgerQuery(account_id=subscriber.id, page=2),
+    )
+
+    assert [entry.id for entry in first_page.entries] == [
+        entry.id for entry in reversed(entries[2:])
+    ]
+    assert [entry.id for entry in second_page.entries] == [
+        entry.id for entry in reversed(entries[:2])
+    ]
+    assert first_page.summary.credit_count == 12
+    assert second_page.summary.credit_count == 12
+    assert first_page.total_entries == 12
+    assert first_page.total_pages == 2
+    assert first_page.page_start == 1
+    assert first_page.page_end == 10
+    assert first_page.previous_page_url is None
+    assert first_page.next_page_url == (
+        f"/admin/customers/person/{subscriber.id}/billing/ledger?page=2"
+    )
+    assert second_page.page_start == 11
+    assert second_page.page_end == 12
+    assert second_page.previous_page_url == (
+        f"/admin/customers/person/{subscriber.id}/billing/ledger?page=1"
+    )
+    assert second_page.next_page_url is None
 
 
 def test_ledger_entry_detail_preserves_customer_and_source_evidence(

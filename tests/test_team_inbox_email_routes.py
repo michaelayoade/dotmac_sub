@@ -490,6 +490,10 @@ def test_ai_intake_admin_lifecycle_uses_canonical_separate_actions():
     assert '"production_collection_enabled": False' in ROUTES_MODULE
     assert 'name="generic_clarification_question"' in ROUTES_TEMPLATE
     assert 'name="customer_type_clarification_question"' in ROUTES_TEMPLATE
+    assert 'name="handoff_after_classification"' in ROUTES_TEMPLATE
+    assert '"handoff_after_classification": bool(handoff_after_classification)' in (
+        ROUTES_MODULE
+    )
     assert (
         "Used only when a welcome is appropriate; issue-first messages should be acknowledged directly."
         in ROUTES_TEMPLATE

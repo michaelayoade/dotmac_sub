@@ -377,6 +377,44 @@ def test_role_changes_take_effect_through_the_owner(db_session):
     assert caps.INVOICE_WRITE in caps.capabilities_for_role(membership.role)
 
 
+def test_profile_updates_keep_principal_and_credential_aligned(db_session):
+    vendor = _vendor(db_session)
+    membership = _provision(db_session, vendor, role="field")
+    membership_id = membership.id
+    principal_id = membership.system_user_id
+    new_email = f"updated-{uuid4().hex[:8]}@vendor.example"
+
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = provisioning.update_profile_committed(
+        db_session,
+        provisioning.UpdateVendorUserProfile(
+            membership_id=membership_id,
+            first_name="Nneka",
+            last_name="Okoro",
+            email=new_email,
+            role="owner",
+        ),
+    )
+
+    db_session.refresh(membership)
+    principal = db_session.get(SystemUser, principal_id)
+    credential = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.system_user_id == principal_id)
+        .one()
+    )
+    assert outcome.membership_id == membership_id
+    assert outcome.system_user_id == principal_id
+    assert outcome.email == new_email
+    assert outcome.role == "owner"
+    assert membership.role == "owner"
+    assert principal.first_name == "Nneka"
+    assert principal.last_name == "Okoro"
+    assert principal.display_name == "Nneka Okoro"
+    assert principal.email == new_email
+    assert credential.username == new_email
+
+
 def test_enable_login_repairs_legacy_unprojected_vendor_user(db_session):
     vendor = _vendor(db_session)
     principal = SystemUser(

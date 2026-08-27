@@ -10,6 +10,7 @@ See docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md §5, slice 4.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -336,6 +337,60 @@ def test_whatsapp_legacy_contact_requires_matching_active_customer(
     from app.services.integrations import whatsapp_capability
 
     subscriber.phone = "09037423041"
+    subscriber.is_active = True
+    db_session.commit()
+    monkeypatch.setattr(
+        whatsapp_capability,
+        "list_approved_templates",
+        lambda _db: (
+            {
+                "name": "custom_message",
+                "language": "en",
+                "status": "APPROVED",
+                "components": [],
+            },
+        ),
+    )
+
+    outcome = team_inbox_commands.start_conversation(
+        db_session,
+        channel_type="whatsapp",
+        contact_address="+2349037423041",
+        legacy_contact_subscriber_id=subscriber.id,
+        body_text="Hello",
+        whatsapp_template_name="custom_message",
+        whatsapp_template_language="en",
+    )
+
+    conversation = db_session.get(InboxConversation, outcome.conversation_id)
+    assert conversation.subscriber_id == subscriber.id
+    assert outcome.contact_status == "explicit_subscriber"
+
+
+def test_whatsapp_legacy_contact_allows_party_bound_customer(
+    db_session, subscriber, monkeypatch
+):
+    from app.models.party import (
+        Party,
+        PartyDataClassification,
+        PartyIdentityStatus,
+        PartyType,
+    )
+    from app.services.integrations import whatsapp_capability
+
+    party = Party(
+        party_type=PartyType.person.value,
+        display_name="Known Customer",
+        status=PartyIdentityStatus.active.value,
+        data_classification=PartyDataClassification.test.value,
+    )
+    db_session.add(party)
+    db_session.flush()
+    subscriber.phone = "09037423041"
+    subscriber.party_id = party.id
+    subscriber.party_bound_at = datetime.now(UTC)
+    subscriber.party_binding_source = "pytest"
+    subscriber.party_binding_reason = "Party-backed customer remains reachable"
     subscriber.is_active = True
     db_session.commit()
     monkeypatch.setattr(

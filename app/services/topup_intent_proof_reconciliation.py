@@ -9,9 +9,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Payment, PaymentStatus, TopupIntent
+from app.models.billing import Payment, PaymentProvider, PaymentStatus, TopupIntent
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.services import topup_intents
+from app.services.common import round_money, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.locking import lock_for_update
 from app.services.owner_commands import (
@@ -127,39 +128,106 @@ def inspect_terminal_proof_drift(
 
     candidates: list[TopupIntentProofDriftCandidate] = []
     for intent, proof in rows:
-        linked_proof_id = str(
-            (intent.metadata_ or {}).get("payment_proof_id") or ""
-        ).strip()
-        if linked_proof_id != str(proof.id):
+        candidate = terminal_proof_drift_for_intent(db, intent)
+        if candidate is None or candidate.proof_id != proof.id:
             continue
-        if proof.status is PaymentProofStatus.rejected:
-            action = TopupIntentProofRepairAction.cancel
-            review_reason = None
-        else:
-            payment = db.get(Payment, proof.payment_id) if proof.payment_id else None
-            if (
-                payment is not None
-                and payment.is_active
-                and payment.status is PaymentStatus.succeeded
-            ):
-                action = TopupIntentProofRepairAction.complete
-                review_reason = None
-            else:
-                action = TopupIntentProofRepairAction.requires_review
-                review_reason = "verified_proof_payment_not_currently_succeeded"
-        candidates.append(
-            TopupIntentProofDriftCandidate(
-                intent_id=intent.id,
-                proof_id=proof.id,
-                proof_status=proof.status,
-                payment_id=proof.payment_id,
-                action=action,
-                review_reason=review_reason,
-            )
-        )
+        candidates.append(candidate)
         if len(candidates) >= limit:
             break
     return tuple(candidates)
+
+
+def terminal_proof_drift_for_intent(
+    db: Session,
+    intent: TopupIntent,
+) -> TopupIntentProofDriftCandidate | None:
+    """Classify exact terminal-proof drift for one submitted transfer intent."""
+
+    if (
+        intent.status != topup_intents.TopupIntentStatus.submitted.value
+        or intent.provider_type != topup_intents.DIRECT_TRANSFER_PROVIDER
+    ):
+        return None
+    linked_proof_id = str(
+        (intent.metadata_ or {}).get("payment_proof_id") or ""
+    ).strip()
+    if not linked_proof_id:
+        return None
+    try:
+        proof_id = UUID(linked_proof_id)
+    except ValueError:
+        return None
+    proof = db.get(PaymentProof, proof_id)
+    if proof is None:
+        return None
+    if proof.account_id != intent.account_id or proof.reference != intent.reference:
+        return None
+    if proof.status not in {
+        PaymentProofStatus.verified,
+        PaymentProofStatus.rejected,
+    }:
+        return None
+    if proof.status is PaymentProofStatus.rejected:
+        return TopupIntentProofDriftCandidate(
+            intent_id=intent.id,
+            proof_id=proof.id,
+            proof_status=proof.status,
+            payment_id=proof.payment_id,
+            action=TopupIntentProofRepairAction.cancel,
+        )
+
+    payment = _current_succeeded_payment_for_intent(db, intent, proof.payment_id)
+    if payment is not None:
+        return TopupIntentProofDriftCandidate(
+            intent_id=intent.id,
+            proof_id=proof.id,
+            proof_status=proof.status,
+            payment_id=proof.payment_id,
+            action=TopupIntentProofRepairAction.complete,
+        )
+    return TopupIntentProofDriftCandidate(
+        intent_id=intent.id,
+        proof_id=proof.id,
+        proof_status=proof.status,
+        payment_id=proof.payment_id,
+        action=TopupIntentProofRepairAction.requires_review,
+        review_reason="verified_proof_payment_not_currently_succeeded",
+    )
+
+
+def _current_succeeded_payment_for_intent(
+    db: Session,
+    intent: TopupIntent,
+    payment_id: UUID | None,
+) -> Payment | None:
+    if payment_id is None:
+        return None
+    payment = db.get(Payment, payment_id)
+    if payment is None or not payment.is_active:
+        return None
+    if payment.status is not PaymentStatus.succeeded:
+        return None
+    if intent.account_id is not None and payment.account_id != intent.account_id:
+        return None
+    if (
+        intent.billing_account_id is not None
+        and payment.billing_account_id != intent.billing_account_id
+    ):
+        return None
+    if payment.currency.upper() != intent.currency.upper():
+        return None
+    if intent.provider_id is not None and payment.provider_id != intent.provider_id:
+        return None
+    if payment.provider_id is not None:
+        provider = db.get(PaymentProvider, payment.provider_id)
+        if (
+            provider is not None
+            and provider.provider_type.value != intent.provider_type
+        ):
+            return None
+    if round_money(to_decimal(payment.amount)) <= 0:
+        return None
+    return payment
 
 
 def reconcile_terminal_proof(

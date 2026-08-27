@@ -23,7 +23,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.customer_experience_handoffs",
         owns=(
             "implementation-to-customer-experience readiness decision",
-            "CX acceptance, needs-attention, and attention-resolution lifecycle",
+            "CX acceptance and needs-attention lifecycle",
             "durable CX actor, time, reason, and event evidence",
         ),
         depends_on=(
@@ -48,10 +48,7 @@ SERVICES: tuple[SOTService, ...] = (
                     canonical_writer="customer.experience_handoff",
                 ),
                 ConcernContract(
-                    name=(
-                        "CX acceptance, needs-attention, and "
-                        "attention-resolution lifecycle"
-                    ),
+                    name="CX acceptance and needs-attention lifecycle",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical CX handoff state",
@@ -116,9 +113,7 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
                         "policy version 1 readiness facts and pending, ready, "
-                        "accepted, needs-attention, and canceled state graph; "
-                        "needs-attention may return to ready only after readiness "
-                        "evidence is rechecked"
+                        "accepted, needs-attention, and canceled state graph"
                     ),
                 ),
                 AuthorityInput(
@@ -126,9 +121,8 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="auth.permission_gate",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "granular customer_experience:handoff:* permission, "
-                        "authenticated actor type/id, action, and bounded reason from "
-                        "the customer-experience adapter"
+                        "authenticated actor type/id, action, and bounded reason "
+                        "from the customer-experience adapter"
                     ),
                 ),
             ),
@@ -168,8 +162,6 @@ SERVICES: tuple[SOTService, ...] = (
                     "reason_required",
                     "attention_reason_conflict",
                     "handoff_terminal",
-                    "handoff_not_blocked",
-                    "handoff_readiness_unresolved",
                     "invalid_status",
                 ),
                 mapping_owner="customer-experience API and event adapters",
@@ -178,7 +170,6 @@ SERVICES: tuple[SOTService, ...] = (
                     "funding or readiness disagreement",
                     "conflicting handoff binding",
                     "invalid or terminal transition",
-                    "attention resolution while readiness evidence is incomplete",
                 ),
             ),
             events=EventContract(

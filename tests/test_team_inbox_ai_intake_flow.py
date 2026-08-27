@@ -36,6 +36,7 @@ from app.models.team_inbox import (
 from app.services import (
     ai_conversation_intake,
     ai_intake,
+    ai_intake_conversation_engine,
     team_inbox_channel_receive,
     team_inbox_maintenance,
 )
@@ -97,6 +98,59 @@ class _Gateway:
             ),
             {"endpoint": "primary", "fallback_used": False},
         )
+
+
+def test_identifier_prompt_accepts_any_approved_identifier():
+    state = ai_intake_conversation_engine.ConversationalState(
+        conversation_id=str(uuid4()),
+        session_id=str(uuid4()),
+        policy_version_id=str(uuid4()),
+        channel=InboxChannelType.whatsapp.value,
+    )
+    policy = {
+        "permitted_identifiers": (
+            "registered_phone",
+            "registered_email",
+            "portal_id",
+        )
+    }
+
+    requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+
+    assert requested == ai_intake_conversation_engine.CUSTOMER_IDENTIFIER_REQUEST
+    assert ai_intake_conversation_engine._identifier_question(requested) == (
+        "Please send the registered phone number, registered email, or "
+        "Portal ID on the account."
+    )
+
+    state.already_requested_fields = (requested,)
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
+    )
+
+    state.already_requested_fields = ()
+    state.registered_email = "customer@example.test"
+    assert (
+        ai_intake_conversation_engine._next_identifier_to_request(state, policy) is None
+    )
+
+
+def test_identifier_prompt_preserves_single_identifier_policy():
+    state = ai_intake_conversation_engine.ConversationalState(
+        conversation_id=str(uuid4()),
+        session_id=str(uuid4()),
+        policy_version_id=str(uuid4()),
+        channel=InboxChannelType.whatsapp.value,
+    )
+    policy = {"permitted_identifiers": ("portal_id",)}
+
+    requested = ai_intake_conversation_engine._next_identifier_to_request(state, policy)
+
+    assert requested == "portal_id"
+    assert (
+        ai_intake_conversation_engine._identifier_question(requested)
+        == "Please send your Portal ID or account number so I can identify the service."
+    )
 
 
 def _team(db_session, name: str) -> ServiceTeam:
@@ -654,6 +708,123 @@ def test_follow_up_reply_can_route_and_first_message_is_not_enqueued(
     assert second_message.metadata_["ai_intake_status"] == "classified"
     assert conversation.assignments == []
     assert _non_queue_outbound_count(db_session) == 2
+
+
+def test_composable_engine_preserves_low_confidence_follow_up(db_session, monkeypatch):
+    account_scope = f"phone-clarify-{uuid4().hex}"
+    _install_whatsapp_scope(db_session, account_scope=account_scope)
+    fallback = _team(db_session, "Composable Clarification Fallback")
+    help_desk = _team(db_session, "Composable Clarification Help Desk")
+    context = CommandContext.system(
+        actor="test",
+        scope="ai:intake-policy-draft",
+        reason="test composable clarification before handoff",
+    )
+    fallback_id = fallback.id
+    help_desk_id = help_desk.id
+    db_session.commit()
+    draft = ai_conversation_intake.create_draft_policy(
+        db_session,
+        ai_conversation_intake.AiDraftPolicyCommand(
+            context=context,
+            channel_type=InboxChannelType.whatsapp.value,
+            provider=WHATSAPP_PROVIDER_META,
+            account_scope=account_scope,
+            fallback_team_id=fallback_id,
+            welcome_message="Hello from AI intake.",
+            intent_definitions=(
+                {
+                    "key": "general_enquiry",
+                    "display_name": "General enquiry",
+                    "category": "general_enquiry",
+                    "enabled": True,
+                    "priority": 1,
+                },
+            ),
+            intent_team_mappings=(
+                {
+                    "intent": "general_enquiry",
+                    "service_team_id": str(help_desk_id),
+                    "enabled": True,
+                },
+            ),
+            escalation_rules={
+                "confidence_threshold": 0.8,
+                "allow_followup_questions": True,
+                "max_clarification_turns": 1,
+                "escalate_after_minutes": 5,
+                "exclude_campaign_attribution": True,
+            },
+            conversational_engine_enabled=True,
+            permitted_identifiers=("portal_id",),
+            tool_config={
+                "customer_lookup": {"enabled": False},
+                "subscriber_monitoring": {"enabled": False},
+            },
+            conversation_policy={
+                "max_turns": 6,
+                "handoff_after_classification": True,
+            },
+        ),
+    )
+    ai_conversation_intake.activate_policy_version(
+        db_session,
+        ai_conversation_intake.AiPolicyVersionActivateCommand(
+            context=context,
+            version_id=draft.version_id,
+        ),
+    )
+    gateway = _Gateway(
+        confidence=0.3,
+        intent="general_enquiry",
+        category="general_enquiry",
+    )
+    monkeypatch.setattr(ai_intake, "_gateway", lambda: gateway)
+    db_session_adapter.release_read_transaction(db_session)
+
+    received = team_inbox_channel_receive.receive_inbound_channel(
+        db_session,
+        team_inbox_channel_receive.InboundChannelPayload(
+            channel_type=InboxChannelType.whatsapp.value,
+            contact_address="2348012345678",
+            body="Hello",
+            external_message_id="wamid-composable-clarify",
+            external_thread_id=f"thread-{uuid4()}",
+            metadata={
+                "provider": WHATSAPP_PROVIDER_META,
+                "provider_account_scope": account_scope,
+            },
+        ),
+    )
+    _process_ai(db_session)
+
+    conversation = db_session.get(InboxConversation, received.conversation_id)
+    first_message = db_session.get(InboxMessage, received.message_id)
+    outbound = (
+        db_session.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .filter(InboxMessage.direction == "outbound")
+        .order_by(InboxMessage.created_at.asc())
+        .all()
+    )
+
+    assert conversation.primary_service_team_id is None
+    assert first_message.metadata_["ai_intake_status"] == "awaiting_follow_up"
+    assert first_message.metadata_["ai_intake_engine_action"] == "continue_classifier"
+    assert (
+        first_message.metadata_["ai_intake_engine_reason"] == "legacy_classifier_path"
+    )
+    assert first_message.metadata_["ai_intake_requires_follow_up"] is True
+    assert [message.body for message in outbound] == [
+        "Hello from AI intake.",
+        ai_intake.GENERIC_FOLLOW_UP_QUESTION,
+    ]
+    assert (
+        db_session.query(InboxConversationQueueEntry)
+        .filter(InboxConversationQueueEntry.conversation_id == conversation.id)
+        .count()
+        == 0
+    )
 
 
 def test_second_uncertain_reply_falls_back_without_another_question(
@@ -1659,7 +1830,7 @@ def test_composable_handoff_creates_private_note_and_existing_queue_entry(
         scope="ai:intake-policy-draft",
         reason="test composable human handoff",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1784,7 +1955,7 @@ def test_preview_simulation_mode_does_not_execute_live_customer_lookup(
         scope="ai:intake-policy-draft",
         reason="test preview safety",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1847,7 +2018,7 @@ def test_activation_rejects_invalid_composable_rule_action(db_session):
         scope="ai:intake-policy-draft",
         reason="test invalid composable rule",
     )
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(
@@ -1902,7 +2073,7 @@ def test_draft_policy_persists_langgraph_engine_mode(db_session):
         reason="test langgraph mode persistence",
     )
 
-    db_session_adapter.release_read_transaction(db_session)
+    db_session.commit()
     draft = ai_conversation_intake.create_draft_policy(
         db_session,
         ai_conversation_intake.AiDraftPolicyCommand(

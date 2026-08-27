@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import calendar
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy import String, and_, case, cast, func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import String, and_, case, cast, exists, false, func, or_, select
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.models.billing import (
     CreditNote,
@@ -36,6 +39,512 @@ from app.services.subscription_lifecycle_policy import mrr_countable_service_fil
 logger = logging.getLogger(__name__)
 
 DEFAULT_AR_AGING_BUCKET_DAYS = (30, 60, 90)
+DEFAULT_UPCOMING_CHARGE_BANDS = "50000-100000,100000-500000,500000-"
+
+
+class UpcomingChargeMode(StrEnum):
+    postpaid = "postpaid"
+    prepaid = "prepaid"
+
+
+class UpcomingChargeState(StrEnum):
+    all = "all"
+    upcoming = "upcoming"
+    payment_required = "payment_required"
+    needs_review = "needs_review"
+
+
+@dataclass(frozen=True, slots=True)
+class UpcomingChargeAmountBand:
+    """One configurable contracted-plan-price interval.
+
+    Lower bounds are inclusive and upper bounds are exclusive, so adjacent
+    ranges never duplicate a subscription. ``maximum`` of ``None`` is open.
+    """
+
+    key: str
+    minimum: Decimal
+    maximum: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
+class UpcomingChargesConfig:
+    postpaid_lead_days: int
+    prepaid_lead_days: int
+    prepaid_amount_bands: tuple[UpcomingChargeAmountBand, ...]
+    include_funded_prepaid_default: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UpcomingChargesQuery:
+    mode: UpcomingChargeMode
+    state: UpcomingChargeState = UpcomingChargeState.all
+    band_key: str | None = None
+    include_funded: bool | None = None
+    page: int = 1
+    per_page: int = 25
+    as_of: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UpcomingChargeRow:
+    account_id: UUID
+    is_business: bool
+    subscription_id: UUID | None
+    invoice_id: UUID | None
+    customer_name: str
+    reference: str
+    plan_name: str | None
+    billing_mode: UpcomingChargeMode
+    due_at: datetime
+    days_remaining: int
+    amount: Decimal | None
+    currency: str
+    available_funding: Decimal | None
+    amount_needed: Decimal | None
+    state: UpcomingChargeState
+    status_label: str
+    status_tone: str
+
+
+@dataclass(frozen=True, slots=True)
+class UpcomingChargesPage:
+    rows: tuple[UpcomingChargeRow, ...]
+    candidate_count: int
+    page: int
+    per_page: int
+    has_previous: bool
+    has_next: bool
+
+
+def _parse_nonnegative_decimal(raw: str, *, label: str) -> Decimal:
+    try:
+        value = Decimal(raw.strip())
+    except Exception as exc:
+        raise ValueError(f"{label} must be a non-negative amount.") from exc
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"{label} must be a non-negative amount.")
+    return value
+
+
+def parse_upcoming_charge_amount_bands(
+    value: str,
+) -> tuple[UpcomingChargeAmountBand, ...]:
+    """Parse ``min-max`` CSV ranges used by the Upcoming Charges report."""
+
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if not parts:
+        raise ValueError("Prepaid plan price bands must contain at least one range.")
+    bands: list[UpcomingChargeAmountBand] = []
+    for index, part in enumerate(parts):
+        if part.count("-") != 1:
+            raise ValueError(
+                "Prepaid plan price bands must use min-max ranges separated by commas."
+            )
+        raw_minimum, raw_maximum = (piece.strip() for piece in part.split("-", 1))
+        minimum = _parse_nonnegative_decimal(
+            raw_minimum or "0", label=f"Range {index + 1} minimum"
+        )
+        maximum = (
+            _parse_nonnegative_decimal(raw_maximum, label=f"Range {index + 1} maximum")
+            if raw_maximum
+            else None
+        )
+        if maximum is not None and maximum <= minimum:
+            raise ValueError(
+                f"Range {index + 1} maximum must be greater than its minimum."
+            )
+        bands.append(
+            UpcomingChargeAmountBand(
+                key=f"band-{index + 1}", minimum=minimum, maximum=maximum
+            )
+        )
+    ordered = sorted(bands, key=lambda band: band.minimum)
+    if ordered != bands:
+        raise ValueError("Prepaid plan price bands must be ordered from low to high.")
+    for previous, current in zip(bands, bands[1:], strict=False):
+        if previous.maximum is None:
+            raise ValueError(
+                "Only the final prepaid plan price band may be open-ended."
+            )
+        if current.minimum < previous.maximum:
+            raise ValueError("Prepaid plan price bands must not overlap.")
+    return tuple(bands)
+
+
+def _setting_int(db: Session, key: str, default: int) -> int:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(parsed, 365))
+
+
+def _aware_datetime(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def get_upcoming_charges_config(db: Session) -> UpcomingChargesConfig:
+    raw_bands = settings_spec.resolve_value(
+        db, SettingDomain.billing, "upcoming_charges_prepaid_amount_bands"
+    )
+    try:
+        bands = parse_upcoming_charge_amount_bands(
+            str(raw_bands or DEFAULT_UPCOMING_CHARGE_BANDS)
+        )
+    except ValueError:
+        logger.exception("Invalid stored Upcoming Charges price bands; using defaults")
+        bands = parse_upcoming_charge_amount_bands(DEFAULT_UPCOMING_CHARGE_BANDS)
+    raw_include_funded = settings_spec.resolve_value(
+        db,
+        SettingDomain.billing,
+        "upcoming_charges_include_funded_prepaid_default",
+    )
+    include_funded = raw_include_funded is True or str(raw_include_funded).lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return UpcomingChargesConfig(
+        postpaid_lead_days=_setting_int(db, "upcoming_charges_postpaid_lead_days", 14),
+        prepaid_lead_days=_setting_int(db, "upcoming_charges_prepaid_lead_days", 7),
+        prepaid_amount_bands=bands,
+        include_funded_prepaid_default=include_funded,
+    )
+
+
+def _financial_lock_exists(subscription_id_column):
+    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+
+    return exists(
+        select(EnforcementLock.id).where(
+            EnforcementLock.subscription_id == subscription_id_column,
+            EnforcementLock.is_active.is_(True),
+            EnforcementLock.reason.in_(
+                (EnforcementReason.prepaid, EnforcementReason.overdue)
+            ),
+        )
+    )
+
+
+def _postpaid_upcoming_charges(
+    db: Session,
+    *,
+    now: datetime,
+    lead_days: int,
+    state: UpcomingChargeState,
+    page: int,
+    per_page: int,
+) -> UpcomingChargesPage:
+    from app.models.billing import InvoiceDueDateBasis
+    from app.models.catalog import BillingMode, SubscriptionStatus
+    from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+    from app.services.invoice_classification import collectible_ar_invoice_filter
+
+    horizon = now + timedelta(days=lead_days)
+    financial_subscription = _financial_lock_exists(Subscription.id)
+    collectible_postpaid_account = exists(
+        select(Subscription.id).where(
+            Subscription.subscriber_id == Invoice.account_id,
+            Subscription.billing_mode == BillingMode.postpaid,
+            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            or_(
+                Subscription.status != SubscriptionStatus.suspended,
+                financial_subscription,
+            ),
+        )
+    )
+    account_financial_lock = exists(
+        select(Subscription.id).where(
+            Subscription.subscriber_id == Invoice.account_id,
+            Subscription.billing_mode == BillingMode.postpaid,
+            _financial_lock_exists(Subscription.id),
+        )
+    )
+    filters = [
+        Invoice.is_active.is_(True),
+        Invoice.status.in_(
+            (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+        ),
+        Invoice.balance_due > 0,
+        Invoice.due_at.is_not(None),
+        Invoice.due_at <= horizon,
+        Invoice.due_date_basis.is_not(None),
+        Invoice.due_date_basis != InvoiceDueDateBasis.unknown_unverified,
+        collectible_ar_invoice_filter(),
+        collectible_postpaid_account,
+    ]
+    if state is UpcomingChargeState.upcoming:
+        filters.append(Invoice.due_at >= now)
+    elif state is UpcomingChargeState.payment_required:
+        filters.append(or_(Invoice.due_at < now, account_financial_lock))
+    elif state is UpcomingChargeState.needs_review:
+        filters.append(false())
+
+    base = (
+        select(
+            Invoice,
+            Subscriber,
+            account_financial_lock.label("financial_lock"),
+        )
+        .join(Subscriber, Subscriber.id == Invoice.account_id)
+        .where(*filters)
+    )
+    records = db.execute(
+        base.order_by(Invoice.due_at.asc(), Invoice.id.asc())
+        .offset((page - 1) * per_page)
+        .limit(per_page + 1)
+    ).all()
+    has_next = len(records) > per_page
+    records = records[:per_page]
+    candidate_count = len(records)
+    rows: list[UpcomingChargeRow] = []
+    for invoice, subscriber, financial_lock in records:
+        if invoice.due_at is None:
+            raise RuntimeError("Upcoming charge candidate lost its verified due date")
+        due_at = _aware_datetime(invoice.due_at)
+        overdue = due_at < now
+        payment_required = overdue or bool(financial_lock)
+        rows.append(
+            UpcomingChargeRow(
+                account_id=invoice.account_id,
+                is_business=subscriber.is_business,
+                subscription_id=None,
+                invoice_id=invoice.id,
+                customer_name=subscriber.name,
+                reference=invoice.invoice_number or str(invoice.id),
+                plan_name=None,
+                billing_mode=UpcomingChargeMode.postpaid,
+                due_at=due_at,
+                days_remaining=(due_at.date() - now.date()).days,
+                amount=Decimal(invoice.balance_due),
+                currency=invoice.currency,
+                available_funding=None,
+                amount_needed=Decimal(invoice.balance_due),
+                state=(
+                    UpcomingChargeState.payment_required
+                    if payment_required
+                    else UpcomingChargeState.upcoming
+                ),
+                status_label="Payment required" if payment_required else "Upcoming",
+                status_tone="negative" if payment_required else "warning",
+            )
+        )
+    return UpcomingChargesPage(
+        rows=tuple(rows),
+        candidate_count=candidate_count,
+        page=page,
+        per_page=per_page,
+        has_previous=page > 1,
+        has_next=has_next,
+    )
+
+
+def _prepaid_upcoming_charges(
+    db: Session,
+    *,
+    now: datetime,
+    lead_days: int,
+    bands: tuple[UpcomingChargeAmountBand, ...],
+    state: UpcomingChargeState,
+    include_funded: bool,
+    page: int,
+    per_page: int,
+) -> UpcomingChargesPage:
+    from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
+    from app.models.catalog import (
+        BillingMode,
+        CatalogOffer,
+        SubscriptionStatus,
+    )
+    from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+    from app.services.customer_financial_position import prepaid_available_balances
+    from app.services.prepaid_service_renewals import resolve_prepaid_monthly_charges
+
+    horizon = now + timedelta(days=lead_days)
+    newer_entitlement = aliased(ServiceEntitlement)
+    financial_lock = _financial_lock_exists(Subscription.id)
+    recoverable_status = or_(
+        Subscription.status.in_(
+            tuple(
+                status
+                for status in COLLECTIBLE_SERVICE_STATUSES
+                if status is not SubscriptionStatus.suspended
+            )
+        ),
+        and_(Subscription.status == SubscriptionStatus.suspended, financial_lock),
+    )
+    filters = [
+        ServiceEntitlement.status == ServiceEntitlementStatus.active,
+        ServiceEntitlement.starts_at <= now,
+        ServiceEntitlement.ends_at <= horizon,
+        Subscription.billing_mode == BillingMode.prepaid,
+        recoverable_status,
+        or_(ServiceEntitlement.ends_at >= now, financial_lock),
+        ~exists(
+            select(newer_entitlement.id).where(
+                newer_entitlement.subscription_id == ServiceEntitlement.subscription_id,
+                newer_entitlement.status == ServiceEntitlementStatus.active,
+                newer_entitlement.ends_at > ServiceEntitlement.ends_at,
+            )
+        ),
+        Subscription.unit_price.is_not(None),
+        Subscription.unit_price > 0,
+    ]
+    band_filters = []
+    for band in bands:
+        predicates = [Subscription.unit_price >= band.minimum]
+        if band.maximum is not None:
+            predicates.append(Subscription.unit_price < band.maximum)
+        band_filters.append(and_(*predicates))
+    filters.append(or_(*band_filters))
+    if state is UpcomingChargeState.upcoming:
+        filters.extend((ServiceEntitlement.ends_at >= now, ~financial_lock))
+    elif state is UpcomingChargeState.payment_required:
+        filters.append(financial_lock)
+
+    base = (
+        select(
+            Subscription,
+            ServiceEntitlement.ends_at,
+            Subscriber,
+            CatalogOffer.name,
+            financial_lock.label("financial_lock"),
+        )
+        .join(Subscription, Subscription.id == ServiceEntitlement.subscription_id)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+        .where(*filters)
+    )
+    records = db.execute(
+        base.order_by(ServiceEntitlement.ends_at.asc(), Subscription.id.asc())
+        .offset((page - 1) * per_page)
+        .limit(per_page + 1)
+    ).all()
+    has_next = len(records) > per_page
+    records = records[:per_page]
+    candidate_count = len(records)
+    subscriptions = [record[0] for record in records]
+    charges = resolve_prepaid_monthly_charges(db, subscriptions, now)
+    balances = prepaid_available_balances(
+        db, (subscription.subscriber_id for subscription in subscriptions)
+    )
+    rows: list[UpcomingChargeRow] = []
+    for (
+        subscription,
+        coverage_end,
+        subscriber,
+        plan_name,
+        has_financial_lock,
+    ) in records:
+        coverage_end = _aware_datetime(coverage_end)
+        charge = charges.get(subscription.id)
+        amount = charge[0] if charge is not None else None
+        currency = charge[1] if charge is not None else "NGN"
+        funding = balances.get(subscription.subscriber_id, Decimal("0.00"))
+        funded = amount is not None and funding >= amount
+        needs_review = bool(has_financial_lock) and funded
+        if state is UpcomingChargeState.needs_review and not needs_review:
+            continue
+        if funded and not include_funded and not needs_review:
+            continue
+        amount_needed = (
+            max(Decimal("0.00"), amount - funding) if amount is not None else None
+        )
+        if charge is None:
+            row_state = UpcomingChargeState.needs_review
+            status_label, status_tone = "Needs review", "warning"
+        elif needs_review:
+            row_state = UpcomingChargeState.needs_review
+            status_label, status_tone = "Funded; needs review", "warning"
+        elif has_financial_lock:
+            row_state = UpcomingChargeState.payment_required
+            status_label, status_tone = "Payment required", "negative"
+        elif funded:
+            row_state = UpcomingChargeState.upcoming
+            status_label, status_tone = "Already funded", "success"
+        else:
+            row_state = UpcomingChargeState.upcoming
+            status_label, status_tone = "Upcoming", "warning"
+        rows.append(
+            UpcomingChargeRow(
+                account_id=subscription.subscriber_id,
+                is_business=subscriber.is_business,
+                subscription_id=subscription.id,
+                invoice_id=None,
+                customer_name=subscriber.name,
+                reference=str(subscription.id),
+                plan_name=plan_name,
+                billing_mode=UpcomingChargeMode.prepaid,
+                due_at=coverage_end,
+                days_remaining=(coverage_end.date() - now.date()).days,
+                amount=amount,
+                currency=currency,
+                available_funding=funding,
+                amount_needed=amount_needed,
+                state=row_state,
+                status_label=status_label,
+                status_tone=status_tone,
+            )
+        )
+    return UpcomingChargesPage(
+        rows=tuple(rows),
+        candidate_count=candidate_count,
+        page=page,
+        per_page=per_page,
+        has_previous=page > 1,
+        has_next=has_next,
+    )
+
+
+def get_upcoming_charges_page(
+    db: Session,
+    *,
+    query: UpcomingChargesQuery,
+) -> tuple[UpcomingChargesConfig, UpcomingChargesPage]:
+    """Return one bounded Upcoming Charges page.
+
+    Only the selected billing mode is queried. Expensive canonical prepaid
+    charge and funding owners receive at most one UI page of subscriptions.
+    """
+
+    effective_at = (
+        _aware_datetime(query.as_of) if query.as_of is not None else datetime.now(UTC)
+    )
+    page = max(1, min(query.page, 1000))
+    per_page = max(10, min(query.per_page, 50))
+    config = get_upcoming_charges_config(db)
+    if query.mode is UpcomingChargeMode.postpaid:
+        return config, _postpaid_upcoming_charges(
+            db,
+            now=effective_at,
+            lead_days=config.postpaid_lead_days,
+            state=query.state,
+            page=page,
+            per_page=per_page,
+        )
+    selected_band = next(
+        (item for item in config.prepaid_amount_bands if item.key == query.band_key),
+        None,
+    )
+    return config, _prepaid_upcoming_charges(
+        db,
+        now=effective_at,
+        lead_days=config.prepaid_lead_days,
+        bands=(selected_band,)
+        if selected_band is not None
+        else config.prepaid_amount_bands,
+        state=query.state,
+        include_funded=(
+            config.include_funded_prepaid_default
+            if query.include_funded is None
+            else query.include_funded
+        ),
+        page=page,
+        per_page=per_page,
+    )
 
 
 def _month_start(value: datetime) -> datetime:

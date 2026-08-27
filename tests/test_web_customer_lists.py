@@ -1,13 +1,18 @@
 import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from app.models.catalog import (
     AccessType,
+    BillingCycle,
     BillingMode,
     CatalogOffer,
     NasDevice,
     NasDeviceStatus,
+    OfferPrice,
     OfferStatus,
     PriceBasis,
+    PriceType,
     ServiceType,
     Subscription,
     SubscriptionStatus,
@@ -25,6 +30,12 @@ from app.models.network import (
 )
 from app.models.network_monitoring import DeviceType, NetworkDevice, PopSite
 from app.models.subscriber import Subscriber, SubscriberStatus, UserType
+from app.models.subscription_billing_treatment import (
+    BillingTreatmentReason,
+    BillingTreatmentStatus,
+    SubscriptionBillingArrangement,
+    SubscriptionBillingTreatment,
+)
 from app.services.web_customer_lists import (
     CUSTOMER_LIST_DEFINITION,
     build_customer_list_query,
@@ -59,9 +70,14 @@ def _build_context(db_session, **params):
     )
 
 
-def _make_offer(db_session):
+def _make_offer(
+    db_session,
+    *,
+    name: str | None = None,
+    recurring_amount: Decimal | None = None,
+):
     offer = CatalogOffer(
-        name=f"Customer List Offer {uuid.uuid4().hex[:8]}",
+        name=name or f"Customer List Offer {uuid.uuid4().hex[:8]}",
         service_type=ServiceType.residential,
         access_type=AccessType.fiber,
         price_basis=PriceBasis.flat,
@@ -70,6 +86,17 @@ def _make_offer(db_session):
     )
     db_session.add(offer)
     db_session.flush()
+    if recurring_amount is not None:
+        db_session.add(
+            OfferPrice(
+                offer_id=offer.id,
+                price_type=PriceType.recurring,
+                amount=recurring_amount,
+                currency="NGN",
+                is_active=True,
+            )
+        )
+        db_session.flush()
     return offer
 
 
@@ -113,12 +140,14 @@ def _make_subscription(
     ipv4_address: str | None = None,
     nas_device: NasDevice | None = None,
     login: str | None = None,
+    billing_mode: BillingMode = BillingMode.postpaid,
+    offer: CatalogOffer | None = None,
 ) -> Subscription:
     subscription = Subscription(
         subscriber_id=customer.id,
-        offer_id=_make_offer(db_session).id,
+        offer_id=(offer or _make_offer(db_session)).id,
         status=status,
-        billing_mode=BillingMode.postpaid,
+        billing_mode=billing_mode,
         ipv4_address=ipv4_address,
         provisioning_nas_device_id=nas_device.id if nas_device else None,
         login=login,
@@ -147,6 +176,37 @@ def _make_ipam_assignment(
     db_session.add(assignment)
     db_session.flush()
     return assignment
+
+
+def _make_effective_complimentary_treatment(
+    db_session,
+    subscription: Subscription,
+) -> SubscriptionBillingArrangement:
+    now = datetime.now(UTC)
+    arrangement = SubscriptionBillingArrangement(
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        authorized_offer_id=subscription.offer_id,
+        treatment=SubscriptionBillingTreatment.complimentary,
+        reason_code=BillingTreatmentReason.staff_benefit,
+        reason="Approved staff service",
+        starts_at=now - timedelta(days=1),
+        ends_at=now + timedelta(days=30),
+        approval_policy_max_days=31,
+        maximum_recurring_amount=Decimal("10000.00"),
+        billing_cycle=subscription.billing_cycle or BillingCycle.monthly,
+        currency="NGN",
+        status=BillingTreatmentStatus.active,
+        approved_by="pytest",
+        approved_at=now - timedelta(days=1),
+        command_id=uuid.uuid4(),
+        correlation_id=uuid.uuid4(),
+        idempotency_key_sha256=uuid.uuid4().hex * 2,
+        command_fingerprint=uuid.uuid4().hex * 2,
+    )
+    db_session.add(arrangement)
+    db_session.flush()
+    return arrangement
 
 
 def test_customer_list_excludes_reseller_users(db_session):
@@ -181,6 +241,135 @@ def test_customer_list_excludes_reseller_users(db_session):
     emails = {item["email"] for item in context["customers"]}
     assert customer.email in emails
     assert reseller.email not in emails
+
+
+def test_customer_billing_filter_uses_profiles_and_non_billable_authority(db_session):
+    prepaid = _make_customer(db_session, "prepaid-filter@example.com")
+    _make_subscription(
+        db_session,
+        prepaid,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        offer=_make_offer(db_session, recurring_amount=Decimal("5000.00")),
+    )
+
+    postpaid = _make_customer(db_session, "postpaid-filter@example.com")
+    _make_subscription(
+        db_session,
+        postpaid,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+        offer=_make_offer(db_session, recurring_amount=Decimal("7500.00")),
+    )
+
+    free_plan = _make_customer(db_session, "free-plan-filter@example.com")
+    _make_subscription(
+        db_session,
+        free_plan,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        offer=_make_offer(
+            db_session,
+            name=f"Unlimited 1.5 - Non Billing {uuid.uuid4().hex[:8]}",
+            recurring_amount=Decimal("0.00"),
+        ),
+    )
+
+    complimentary = _make_customer(db_session, "complimentary-filter@example.com")
+    complimentary_subscription = _make_subscription(
+        db_session,
+        complimentary,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+        offer=_make_offer(db_session, recurring_amount=Decimal("10000.00")),
+    )
+    _make_effective_complimentary_treatment(db_session, complimentary_subscription)
+    db_session.commit()
+
+    expected = {
+        "prepaid": {prepaid.email},
+        "postpaid": {postpaid.email},
+        "non_billable": {free_plan.email, complimentary.email},
+    }
+    for billing_mode, expected_emails in expected.items():
+        context = _build_context(
+            db_session,
+            search="filter@example.com",
+            status=None,
+            customer_type=None,
+            nas_id=None,
+            pop_site_id=None,
+            billing_mode=billing_mode,
+            page=1,
+            per_page=25,
+        )
+
+        assert {item["email"] for item in context["customers"]} == expected_emails
+        assert context["billing_mode"] == billing_mode
+        assert context["active_filter_count"] == 2
+
+
+def test_customer_non_billable_filter_requires_every_collectible_service_to_be_free(
+    db_session,
+):
+    mixed = _make_customer(db_session, "mixed-free-paid@example.com")
+    _make_subscription(
+        db_session,
+        mixed,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+        offer=_make_offer(db_session, recurring_amount=Decimal("0.00")),
+    )
+    _make_subscription(
+        db_session,
+        mixed,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+        offer=_make_offer(db_session, recurring_amount=Decimal("9000.00")),
+    )
+    db_session.commit()
+
+    non_billable = _build_context(
+        db_session,
+        search="mixed-free-paid",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        billing_mode="non_billable",
+        page=1,
+        per_page=25,
+    )
+    postpaid = _build_context(
+        db_session,
+        search="mixed-free-paid",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        billing_mode="postpaid",
+        page=1,
+        per_page=25,
+    )
+
+    assert non_billable["customers"] == []
+    assert {item["email"] for item in postpaid["customers"]} == {mixed.email}
+
+
+def test_customer_billing_filter_rejects_unsupported_value():
+    try:
+        build_customer_list_query(
+            search=None,
+            status=None,
+            customer_type=None,
+            nas_id=None,
+            pop_site_id=None,
+            billing_mode="invoice-later",
+        )
+    except ValueError as exc:
+        assert str(exc) == "Unsupported billing_mode filter: invoice_later"
+    else:
+        raise AssertionError("Unsupported billing filter should fail closed")
 
 
 def test_customer_list_keeps_explicitly_retained_canceled_imports(db_session):
@@ -645,6 +834,7 @@ def test_customer_list_declares_search_filter_and_sort_capabilities():
     )
     assert CUSTOMER_LIST_DEFINITION.filterable_keys == (
         "customer_type",
+        "billing_mode",
         "status",
         "nas_id",
         "pop_site_id",

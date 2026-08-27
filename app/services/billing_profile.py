@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
+from sqlalchemy import and_, exists, not_, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.catalog import BillingMode, CatalogOffer, Subscription
 from app.models.subscriber import Subscriber
@@ -207,6 +209,49 @@ def resolve_billing_profiles(
 
 def resolve_billing_profile(db: Session, account: Subscriber) -> BillingProfile:
     return resolve_billing_profiles(db, [account])[account.id]
+
+
+def effective_billing_mode_clause(mode: BillingMode) -> ColumnElement[bool]:
+    """Return the SQL form of the canonical effective billing-mode rule.
+
+    List and reporting projections need to filter before pagination. Keeping the
+    correlated predicate here prevents those callers from reinterpreting the
+    account/subscription precedence implemented by ``resolve_billing_profiles``.
+    Mixed collectible subscription modes deliberately match neither mode.
+    """
+
+    selected_mode_exists = exists(
+        select(Subscription.id)
+        .where(
+            Subscription.subscriber_id == Subscriber.id,
+            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            Subscription.billing_mode == mode,
+        )
+        .correlate(Subscriber)
+    )
+    other_mode_exists = exists(
+        select(Subscription.id)
+        .where(
+            Subscription.subscriber_id == Subscriber.id,
+            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            Subscription.billing_mode.is_not(None),
+            Subscription.billing_mode != mode,
+        )
+        .correlate(Subscriber)
+    )
+    collectible_mode_exists = exists(
+        select(Subscription.id)
+        .where(
+            Subscription.subscriber_id == Subscriber.id,
+            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+            Subscription.billing_mode.is_not(None),
+        )
+        .correlate(Subscriber)
+    )
+    return or_(
+        and_(selected_mode_exists, not_(other_mode_exists)),
+        and_(not_(collectible_mode_exists), Subscriber.billing_mode == mode),
+    )
 
 
 def plan_billing_mode_transition(

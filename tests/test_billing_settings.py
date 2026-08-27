@@ -96,6 +96,7 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
             "proforma_enabled": "false",
             "zero_total_invoices": "false",
             "invoice_caching": "true",
+            "upcoming_charges_prepaid_amount_bands": "0-10000,10000-",
         },
     )
 

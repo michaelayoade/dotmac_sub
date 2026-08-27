@@ -1617,14 +1617,31 @@ def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("reports:billing:read"))],
 )
-def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_upcoming_charges_data(db)
+def reports_upcoming_charges(
+    request: Request,
+    mode: str = "postpaid",
+    state: str = "all",
+    band: str | None = None,
+    include_funded: bool | None = None,
+    page: int = 1,
+    per_page: int = 25,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_upcoming_charges_data(
+        db,
+        mode=mode,
+        state=state,
+        band=band,
+        include_funded=include_funded,
+        page=page,
+        per_page=per_page,
+    )
     ctx = _base_context(
         request,
         db,
         "reports-upcoming-charges",
         "Upcoming Charges",
-        "Active subscriptions with upcoming billing",
+        "Customers approaching a collectible payment or prepaid renewal boundary",
     )
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/upcoming_charges.html", ctx)
