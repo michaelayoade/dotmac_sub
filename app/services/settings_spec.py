@@ -2923,6 +2923,169 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="active",
         allowed={"active", "revoked", "expired"},
     ),
+    # --- Field-mobile OIDC federation (docs/designs/OIDC_MOBILE_FEDERATION.md).
+    #
+    # Every identifier below declares `inherits=False`: a platform row must not
+    # answer "which issuer" or "which redirect URI" for the operator tenant,
+    # because a less-specific answer here names the WRONG identity rather than a
+    # weaker one.
+    #
+    # None declares `required=True`, deliberately and against the shape it
+    # looks like it wants. The kernel's `required_at` is unconditional — it
+    # fails the DEPLOYMENT's boot — and OIDC is off by default and unreachable
+    # until the Keycloak client is enabled, so an unconditional requirement
+    # would refuse to start every deployment that will never federate. The
+    # requirement is CONDITIONAL and enforced where the condition is legible:
+    # `app.services.oidc_mobile_config.require_federation_config` refuses to
+    # build a configuration with any identifier missing, and
+    # `app.main._startup_preflight` calls it whenever the control is on. Missing
+    # configuration is therefore loud at boot for a deployment that has turned
+    # the mechanism on, and silent for one that has not.
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="oidc_mobile_issuer",
+        env_var="OIDC_MOBILE_ISSUER",
+        value_type=SettingValueType.string,
+        default=None,
+        inherits=False,
+        label="Field mobile OIDC issuer",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="oidc_mobile_client_id",
+        env_var="OIDC_MOBILE_CLIENT_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        inherits=False,
+        label="Field mobile OIDC client id",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        # The permanent, fleet-owned callback. It is deliberately not derived
+        # from Sub's own hostname: the mobile artifact's identity must not
+        # depend on where Sub happens to be deployed. Compared for EXACT
+        # equality at exchange — no prefix, wildcard, trailing-slash or scheme
+        # tolerance anywhere on the path.
+        key="oidc_mobile_redirect_uri",
+        env_var="OIDC_MOBILE_REDIRECT_URI",
+        value_type=SettingValueType.string,
+        default=None,
+        inherits=False,
+        label="Field mobile OIDC redirect URI",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        # The ID token audience: the mobile application's identity, not the
+        # OAuth client id, which is why it is configured separately.
+        key="oidc_mobile_audience",
+        env_var="OIDC_MOBILE_AUDIENCE",
+        value_type=SettingValueType.string,
+        default=None,
+        inherits=False,
+        label="Field mobile OIDC audience",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        # Which installed verifier row (`authentication_bindings.binding_key`,
+        # mechanism `oidc`) this deployment federates through. Two issuers are
+        # two bindings, so this is what selects between them.
+        key="oidc_mobile_binding_key",
+        env_var="OIDC_MOBILE_BINDING_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        inherits=False,
+        label="Field mobile OIDC verifier binding key",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        # The trusted deployment identity a ceremony is bound to. Selected from
+        # configuration, never from a request body or a token claim.
+        key="oidc_mobile_deployment_id",
+        env_var="OIDC_MOBILE_DEPLOYMENT_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        inherits=False,
+        label="Field mobile OIDC deployment id",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        # Where the signing keys come from. `discovery` derives the JWKS URI
+        # from the issuer's well-known document; `static_uri` uses the URI
+        # below verbatim and contacts no discovery endpoint.
+        key="oidc_mobile_jwks_source",
+        env_var="OIDC_MOBILE_JWKS_SOURCE",
+        value_type=SettingValueType.string,
+        default="discovery",
+        allowed={"discovery", "static_uri"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="Field mobile OIDC JWKS source",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="oidc_mobile_jwks_uri",
+        env_var="OIDC_MOBILE_JWKS_URI",
+        value_type=SettingValueType.string,
+        default=None,
+        inherits=False,
+        label="Field mobile OIDC JWKS URI",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        # The bound on JWKS refresh. An unknown `kid` triggers AT MOST one
+        # refresh, and only if this many seconds have passed since the last
+        # attempt — so a flood of assertions carrying unknown key ids cannot
+        # amplify into per-request requests to the identity provider.
+        key="oidc_mobile_jwks_min_refresh_seconds",
+        env_var="OIDC_MOBILE_JWKS_MIN_REFRESH_SECONDS",
+        value_type=SettingValueType.integer,
+        default=300,
+        min_value=30,
+        max_value=86400,
+        label="Field mobile OIDC JWKS minimum refresh interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="oidc_mobile_jwks_timeout_seconds",
+        env_var="OIDC_MOBILE_JWKS_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=5,
+        min_value=1,
+        max_value=30,
+        label="Field mobile OIDC JWKS fetch timeout (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="oidc_mobile_ceremony_ttl_seconds",
+        env_var="OIDC_MOBILE_CEREMONY_TTL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=300,
+        min_value=30,
+        max_value=900,
+        label="Field mobile OIDC ceremony lifetime (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="oidc_mobile_clock_skew_seconds",
+        env_var="OIDC_MOBILE_CLOCK_SKEW_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=0,
+        max_value=300,
+        label="Field mobile OIDC accepted clock skew (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        # How old an assertion's `iat` may be. Separate from `exp`: an identity
+        # provider may issue long-lived ID tokens, and Sub still refuses one
+        # that was minted long before this ceremony's exchange.
+        key="oidc_mobile_max_assertion_age_seconds",
+        env_var="OIDC_MOBILE_MAX_ASSERTION_AGE_SECONDS",
+        value_type=SettingValueType.integer,
+        default=300,
+        min_value=30,
+        max_value=3600,
+        label="Field mobile OIDC maximum assertion age (seconds)",
+    ),
     SettingSpec(
         domain=SettingDomain.provisioning,
         key="default_service_order_status",

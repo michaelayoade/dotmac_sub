@@ -13349,6 +13349,26 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/auth/oidc/mobile/exchange": {
+   "params": [],
+   "request": "dd1d0a73c52c",
+   "responses": {
+    "200": "25b83f30c87f",
+    "401": "77e455bb5be2",
+    "422": "a11c9d9b2af8",
+    "503": "fe55b1534d07"
+   }
+  },
+  "POST /api/v1/auth/oidc/mobile/start": {
+   "params": [],
+   "request": "8e46fd2f7b77",
+   "responses": {
+    "200": "c2a65299afc4",
+    "401": "77e455bb5be2",
+    "422": "a11c9d9b2af8",
+    "503": "fe55b1534d07"
+   }
+  },
   "POST /api/v1/auth/refresh": {
    "params": [],
    "request": "725d73ae17b5",
@@ -19839,6 +19859,12 @@
   "OfferVersionPriceUpdate": "76a6a7553426",
   "OfferVersionRead": "0e8e6d32a5a2",
   "OfferVersionUpdate": "b47aa4d646f1",
+  "OidcMobileExchangeRequest": "cf1ec8732fcf",
+  "OidcMobileExchangeResponse": "801d35afc466",
+  "OidcMobileStartRequest": "e9bf9b017c67",
+  "OidcMobileStartResponse": "862b37bcc39d",
+  "OidcRefusalDetail": "a7bac503da0d",
+  "OidcRefusalResponse": "192878748b61",
   "OltAuthorizationAdmissionRead": "574983f3378e",
   "OltAuthorizationOperationResponse": "22cd268c8f06",
   "OltAuthorizeOntRequest": "9f708145d6e3",
