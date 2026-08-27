@@ -2592,16 +2592,20 @@ def _process_one_session(
             follow_up_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
         metadata["ai_intake_follow_up_question"] = follow_up_question
         inbound.metadata_ = metadata
+    engine_action = str(metadata.get("ai_intake_engine_action") or "")
     should_deliver_follow_up = (
         not engine_forced_handoff
         and str(metadata.get("ai_intake_status") or "")
         == AiIntakeStatus.awaiting_follow_up.value
         and bool(metadata.get("ai_intake_requires_follow_up"))
-        and outcome.classification is not None
-        and outcome.classification.requires_follow_up
+        and engine_action == "continue_classifier"
     )
     if should_deliver_follow_up:
-        delivery_question = " ".join(str(follow_up_question or "").split())
+        delivery_question = " ".join(
+            str(
+                metadata.get("ai_intake_follow_up_question") or follow_up_question or ""
+            ).split()
+        )
         if not delivery_question:
             delivery_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
         metadata.setdefault("ai_intake_engine_action", "continue_classifier")
