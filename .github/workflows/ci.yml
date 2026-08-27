@@ -549,11 +549,44 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # Restore ONLY from `dev`. Scheduling history is shared state: a pull
+      # request that seeded it could reshape every other run's shards, and a
+      # slow or broken branch would poison the balance for everyone. Reads are
+      # therefore taken from the trusted branch, and the matching save step
+      # below refuses to run anywhere else.
+      #
+      # A cache miss is not a failure. The selector falls back to a
+      # conservative per-file estimate and still partitions every file exactly
+      # once -- balance degrades, coverage does not.
+      - name: Restore integration-test durations from dev
+        uses: actions/cache/restore@v4
+        with:
+          path: .ci-cache/integration-test-durations.json
+          key: integration-test-durations-v2-dev-${{ github.run_id }}
+          restore-keys: |
+            integration-test-durations-v2-dev-
+
       - name: Run integration-test shard
         env:
           INTEGRATION_SHARD: ${{ matrix.shard }}
           INTEGRATION_SHARDS: 4
-        run: make test-integration-shard
+        # Kept on ONE line on purpose. `test_migrated_database_test_contract.py`
+        # and `test_validation_command_alignment.py` both assert the literal
+        # `run: make test-integration-shard`, which is how they prove CI
+        # delegates to the Makefile owner instead of inlining pytest or alembic.
+        # A folded `run: >-` block satisfies the intent and breaks the check;
+        # bending two guards I did not write to suit my line length is the
+        # wrong trade.
+        run: make test-integration-shard CI_INTEGRATION_DURATIONS_OUTPUT=".ci-cache/integration-current-${{ matrix.shard }}.json"
+
+      - name: Upload integration-test duration data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-durations-${{ matrix.shard }}
+          path: .ci-cache/integration-current-${{ matrix.shard }}.json
+          include-hidden-files: true
+          retention-days: 1
 
   integration-run:
     name: PostgreSQL Gate
@@ -570,6 +603,53 @@ jobs:
         env:
           INTEGRATION_RESULT: ${{ needs.integration-shards.result }}
         run: test "$INTEGRATION_RESULT" = "success"
+
+      # Publishing is gated on the TRUSTED BRANCH, not merely on the event
+      # type: only a green push to `dev` may rewrite the shared scheduling
+      # history. A pull request measures itself and throws the numbers away.
+      # This step is inside the existing gate job rather than a new one so it
+      # cannot run before every shard has passed.
+      - name: Checkout
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        uses: actions/checkout@v4
+
+      - name: Download integration-test duration data
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: integration-durations-*
+          path: ${{ runner.temp }}/integration-durations
+          merge-multiple: true
+
+      - name: Merge integration-test durations
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        run: >-
+          python3 scripts/ci/merge_test_durations.py
+          --input-dir "$RUNNER_TEMP/integration-durations"
+          --output .ci-cache/integration-test-durations.json
+
+      - name: Publish integration-test durations for later runs
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-cache/integration-test-durations.json
+          key: integration-test-durations-v2-dev-${{ github.run_id }}
 
   integration-test:
     name: Integration Tests (PostgreSQL)
