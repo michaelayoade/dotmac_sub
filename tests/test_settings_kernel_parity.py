@@ -93,6 +93,9 @@ def test_the_translation_preserves_every_declared_fact() -> None:
             ("max_value", spec.max_value, k.max_value),
             ("is_secret", spec.is_secret, k.is_secret),
             ("env_var", spec.env_var, k.env_var),
+            # A dropped `inherits` restores platform fallback for an identifier
+            # that declared it must not have one — a wrong answer, confidently.
+            ("inherits", spec.inherits, k.inherits),
         ):
             if mine != theirs:
                 mismatches.append(

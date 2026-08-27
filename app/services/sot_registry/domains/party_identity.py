@@ -666,7 +666,11 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "DomainSOT authentication_mechanisms declarations, with "
-                            "local owned by authorization and radius by network access"
+                            "local and oidc owned by authorization and radius by "
+                            "network access; authentication_mechanism_registry also "
+                            "declares the one mechanism-to-AuthProvider storage "
+                            "mapping (local->local, radius->radius, oidc->sso) that "
+                            "the writer and the convergence report both consume"
                         ),
                     ),
                     AuthorityInput(
@@ -703,7 +707,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "Active authentication_bindings row whose mechanism is "
-                            "declared by exactly one SOT domain and matches provider"
+                            "declared by exactly one SOT domain and whose declared "
+                            "storage provider equals the credential provider"
                         ),
                     ),
                     AuthorityInput(
@@ -781,6 +786,10 @@ DOMAIN = DomainSOT(
                         ),
                         "party.credential_authentication_projection.tenant_mismatch",
                         "party.credential_authentication_projection.mechanism_mismatch",
+                        (
+                            "party.credential_authentication_projection."
+                            "unmapped_mechanism_storage"
+                        ),
                         "party.credential_authentication_projection.partial_projection",
                         "party.credential_authentication_projection.repoint_refused",
                         "party.credential_authentication_projection.projection_collision",
@@ -794,7 +803,9 @@ DOMAIN = DomainSOT(
                     fail_closed_on=(
                         "organization Party",
                         "missing or mismatched legacy principal Party binding",
-                        "undeclared or mismatched verifier mechanism",
+                        "undeclared verifier mechanism",
+                        "verifier mechanism with no declared storage provider",
+                        "mechanism whose declared storage differs from the provider",
                         "partial or conflicting existing projection",
                         "duplicate tenant-Party-binding tuple",
                     ),

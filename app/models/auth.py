@@ -25,12 +25,24 @@ from app.db import Base
 
 
 class AuthProvider(enum.Enum):
-    # Legacy persisted provider vocabulary; compatibility-only during R1.
+    # Legacy persisted STORAGE vocabulary; compatibility-only during R1.
     # New mechanism membership is declared by its SOT owner through
-    # authentication_mechanism_registry. In particular, retaining historical
-    # ``sso`` here does not declare or implement SSO. Keep these as comments:
-    # an enum docstring becomes an OpenAPI schema description and would turn
-    # this additive persistence change into an unintended public API change.
+    # authentication_mechanism_registry, and THAT is the declared vocabulary:
+    # ``sso`` is the coarse persisted column value, ``oidc`` is the declared
+    # mechanism code carried by the credential's authentication_binding. A
+    # credential stored as ``sso`` is therefore not "SSO in general" but
+    # whatever mechanism its binding declares, exactly as ``radius`` rows are
+    # scoped by their radius_server_id. That registry also owns the one
+    # mechanism -> provider mapping (local->local, radius->radius, oidc->sso),
+    # which fails closed: an unmapped mechanism is refused rather than assumed
+    # to be stored under its own name, and there is deliberately no
+    # ``oidc`` member here for it to be stored as.
+    # ``AuthFlow.login`` still refuses
+    # ``sso``, deliberately: a federated credential has no password and must
+    # never be reachable through the password login path.
+    # Keep these as comments: an enum docstring becomes an OpenAPI schema
+    # description and would turn this additive persistence change into an
+    # unintended public API change.
     local = "local"
     sso = "sso"
     radius = "radius"
@@ -160,6 +172,27 @@ class UserCredential(Base):
             unique=True,
             postgresql_where=text("provider = 'local'"),
             sqlite_where=text("provider = 'local'"),
+        ),
+        # Migration 560. One EXTERNAL SUBJECT maps to at most one credential per
+        # installed verifier. The composite unique above says a party holds at
+        # most one credential per binding; it says nothing about two parties
+        # both claiming subject ``S`` at one issuer, which is the shape a
+        # federated login resolver would have to pick between arbitrarily.
+        # Keyed on the binding rather than an issuer string because two issuers
+        # are two bindings (see ``AuthenticationBinding``).
+        Index(
+            "ux_user_credentials_external_subject",
+            "authentication_binding_id",
+            "username",
+            unique=True,
+            postgresql_where=text(
+                "provider <> 'local' AND authentication_binding_id IS NOT NULL "
+                "AND username IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "provider <> 'local' AND authentication_binding_id IS NOT NULL "
+                "AND username IS NOT NULL"
+            ),
         ),
     )
 

@@ -520,7 +520,11 @@ AccessCredential (Subscriber's network credentials)
 ```
 UserCredential (Login credentials)
 ├── subscriber_id | system_user_id | reseller_user_id (legacy R1 login authority)
-├── provider (legacy persisted enum; sso is compatibility-only/unimplemented)
+├── provider (persisted STORAGE vocabulary: local | radius | sso)
+│   └── sso is how a federated credential is stored; the MECHANISM is the one
+│       its authentication_binding declares (oidc today). The registry-owned
+│       mapping in app/services/authentication_mechanism_registry.py is the
+│       single statement of the relationship, and it fails closed.
 ├── username, password_hash
 ├── radius_server_id (when provider='radius')
 ├── party_id → Person Party (nullable additive projection; migration 527)
@@ -533,7 +537,7 @@ UserCredential (Login credentials)
 
 AuthenticationBinding (installed verifier configuration)
 ├── binding_key + mechanism_code (immutable deployment-global identity)
-├── mechanism_code vocabulary is open and owner-declared: local, radius
+├── mechanism_code vocabulary is open and owner-declared: local, radius, oidc
 ├── name (operator-facing label), is_active
 └── no credential material and no radius_server_id coupling
 

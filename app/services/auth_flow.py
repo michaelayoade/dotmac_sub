@@ -1897,6 +1897,43 @@ class AuthFlow(ListResponseMixin):
 auth_flow = AuthFlow()
 
 
+def issue_session_tokens(
+    db: Session,
+    *,
+    principal_type: str,
+    principal_id: str,
+    request: Request,
+    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
+) -> dict[str, str]:
+    """The PUBLIC name of the one session-issuance seam.
+
+    ``AuthFlow._issue_tokens`` is and stays the only place a Sub session is
+    minted. What was missing was a name another mechanism could call without
+    reaching through a private attribute — which is how a second issuer gets
+    written: not out of ambition, but because the first one had no door.
+
+    This adds no policy of its own. Device supersession, refresh-token
+    generation and hashing, the staff Party/context re-check, and the access
+    token's claims all stay where they are; this only fixes the arguments in
+    keyword form so a later parameter insertion cannot silently rebind them.
+
+    A caller that has already AUTHENTICATED a principal by some other means
+    (password, RADIUS, a verified external assertion) calls this. A caller that
+    has not is looking for ``AuthFlow.login``.
+    """
+
+    return cast(
+        dict[str, str],
+        AuthFlow._issue_tokens(  # noqa: SLF001 - the owner's own public seam
+            db,
+            principal_type,
+            principal_id,
+            request,
+            staff_binding=staff_binding,
+        ),
+    )
+
+
 def change_password(
     db: Session,
     subscriber_id: str,

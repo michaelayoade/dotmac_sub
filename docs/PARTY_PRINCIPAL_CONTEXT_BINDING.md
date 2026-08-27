@@ -42,9 +42,30 @@ for the same Party and verifier without affecting untouched legacy rows.
 deployment-global configuration identity; changing either installs a different
 binding. PostgreSQL and the ORM both enforce that rule. Its `name` is only a
 display label. Mechanism codes are plain strings whose membership is declared by one SOT domain: authorization
-declares `local`, network access declares `radius`, and no owner declares `sso`
-because Sub implements no SSO verifier. `AuthProvider.sso` is retained only as
-a legacy persisted-enum compatibility value during R1; it grants no capability.
+declares `local` and `oidc`, and network access declares `radius`. `oidc` is
+declared because there is a verifier behind it — `auth.oidc_mobile_federation`,
+see `docs/designs/OIDC_MOBILE_FEDERATION.md`.
+
+`sso` is still declared by no owner, and that is not a gap: it is not a
+mechanism at all. Two vocabularies meet at the credential row and neither may
+be inferred from the other — `authentication_bindings.mechanism_code` is the
+open, owner-declared MECHANISM vocabulary, while `user_credentials.provider`
+(`AuthProvider`) is the coarse persisted STORAGE column. A federated credential
+is stored as `sso` and its binding declares `oidc`.
+
+`app/services/authentication_mechanism_registry.py` owns the one mapping
+between them — `local` → `local`, `radius` → `radius`, `oidc` → `sso` — and it
+is the single place that relationship is stated. It fails closed: a mechanism
+with no declared storage provider is refused, never defaulted and never passed
+through unchanged, because an identity fallback would silently admit any
+mechanism whose code happens to spell a provider value. Both consumers read
+that one declaration: the canonical writer at its provider comparison, and
+`credential_convergence_report`, which counts an unmapped or disagreeing
+mechanism as a mismatch rather than keeping a private notion of "matching".
+
+There is deliberately no `AuthProvider.oidc`. Adding one would make the storage
+enum a second closed mechanism vocabulary competing with the registry's open
+one, and a write could then name a mechanism in the storage column.
 
 The native writer locks the credential, Person Party, binding, and legacy
 principal before projecting. It requires:
@@ -52,7 +73,8 @@ principal before projecting. It requires:
 1. the explicit operator tenant;
 2. an active or quarantined Person Party;
 3. the legacy principal's reviewed Party link to agree with that Person;
-4. an active binding whose declared mechanism matches the credential provider;
+4. an active binding whose declared mechanism maps, through the registry above,
+   to exactly the credential's persisted provider;
 5. complete nonblank evidence; and
 6. no existing credential with the same tenant–Party–binding tuple.
 
