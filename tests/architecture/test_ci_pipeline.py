@@ -108,7 +108,10 @@ def test_unit_shards_partition_all_unit_test_files_once(tmp_path: Path) -> None:
 
 def test_integration_shards_partition_every_file_once() -> None:
     module = _load_module("select_integration_shard", INTEGRATION_SHARD_SCRIPT)
-    expected = set((ROOT / "tests/integration").glob("test_*.py"))
+    # Recursive: the selector used a flat glob, so the first subdirectory added
+    # under tests/integration/ would have been dropped from every shard with no
+    # error and no skip. Kept in sync with the selector's own discovery.
+    expected = set((ROOT / "tests/integration").rglob("test_*.py"))
     groups = [
         set(module.select_integration_shard(shard=shard, shards=4))
         for shard in range(1, 5)

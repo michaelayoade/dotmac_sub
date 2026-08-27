@@ -111,13 +111,19 @@ test-integration: assert-full-test-host ## Run the PostgreSQL integration gate
 
 INTEGRATION_SHARD ?= 1
 INTEGRATION_SHARDS ?= 1
+CI_INTEGRATION_DURATIONS_FILE ?= .ci-cache/integration-test-durations.json
+CI_INTEGRATION_DURATIONS_OUTPUT ?= .ci-cache/integration-current.json
 
-test-integration-shard: assert-full-test-host ## Run one deterministic PostgreSQL integration shard
+test-integration-shard: assert-full-test-host ## Run one duration-balanced PostgreSQL integration shard
 	@$(MAKE) --no-print-directory bootstrap-test-database-roles
 	poetry run python -m scripts.ci.migrated_test_database
-	@paths="$$(poetry run python -m scripts.ci.select_integration_shard --shard $(INTEGRATION_SHARD) --shards $(INTEGRATION_SHARDS))"; \
+	@paths="$$(poetry run python -m scripts.ci.select_integration_shard \
+			--shard $(INTEGRATION_SHARD) --shards $(INTEGRATION_SHARDS) \
+			--durations-file "$(CI_INTEGRATION_DURATIONS_FILE)")"; \
 		test -n "$$paths"; \
-		poetry run pytest $$paths -v --tb=short -o "addopts="
+		poetry run pytest $$paths -v --tb=short -o "addopts=" \
+			-p scripts.ci.pytest_durations \
+			--ci-durations-output="$(CI_INTEGRATION_DURATIONS_OUTPUT)"
 
 test-architecture: assert-full-test-host ## Run architecture guards with the measured four-worker default
 	poetry run pytest tests/architecture -q -n 4 --durations=50
