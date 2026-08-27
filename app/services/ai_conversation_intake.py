@@ -1764,29 +1764,34 @@ def has_human_takeover(db: Session, conversation: InboxConversation) -> bool:
     )
     if active_assignment is not None:
         return True
-    sent_by_person_id = func.lower(
-        func.coalesce(InboxMessage.metadata_["sent_by_person_id"].as_string(), "")
-    )
-    sender_type = func.lower(
-        func.coalesce(InboxMessage.metadata_["sender_type"].as_string(), "")
-    )
-    author_type = func.lower(
-        func.coalesce(InboxMessage.metadata_["author_type"].as_string(), "")
-    )
-    automation_kind = func.lower(
-        func.coalesce(InboxMessage.metadata_["automation_kind"].as_string(), "")
-    )
-    human_reply = (
-        db.query(InboxMessage.id)
+    outbound_rows = (
+        db.query(InboxMessage.metadata_)
         .filter(InboxMessage.conversation_id == conversation.id)
         .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
-        .filter(sent_by_person_id.notin_(("", "null", "none")))
-        .filter(sender_type != "ai")
-        .filter(author_type != "ai")
-        .filter(automation_kind != "ai_intake")
-        .first()
+        .all()
     )
-    return human_reply is not None
+    for (message_metadata,) in outbound_rows:
+        metadata = (
+            dict(message_metadata or {})
+            if isinstance(message_metadata, Mapping)
+            else {}
+        )
+        sent_by_person_id = (
+            str(metadata.get("sent_by_person_id") or "").strip().lower()
+        )
+        if sent_by_person_id in {"", "null", "none"}:
+            continue
+        sender_type = str(metadata.get("sender_type") or "").strip().lower()
+        author_type = str(metadata.get("author_type") or "").strip().lower()
+        automation_kind = str(metadata.get("automation_kind") or "").strip().lower()
+        if (
+            sender_type == "ai"
+            or author_type == "ai"
+            or automation_kind == "ai_intake"
+        ):
+            continue
+        return True
+    return False
 
 
 def ensure_policy_version_from_legacy_config(
