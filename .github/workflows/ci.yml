@@ -14,6 +14,12 @@ on:
   # in this file must therefore be reachable from `merge_group`.
   merge_group:
   workflow_dispatch:
+  # A complete matrix on a fixed cadence. Change classification narrows pull
+  # requests only, so without a scheduled complete run there is no periodic
+  # execution that is unconditionally whole -- and a classifier defect could sit
+  # undetected for as long as no one happened to touch a requiring path.
+  schedule:
+    - cron: "17 2 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
-      application: ${{ steps.classify.outputs.application }}
       postgresql-required: ${{ steps.classify.outputs.postgresql-required }}
     steps:
       - uses: actions/checkout@v4
@@ -50,27 +55,41 @@ jobs:
         id: classify
         env:
           EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
           BEFORE_SHA: ${{ github.event.before }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          # Classification narrows PULL REQUESTS and nothing else. Every branch
+          # tip, every queued merge, every manual invocation and the nightly
+          # cadence run the complete matrix, so the selective path can only ever
+          # shorten feedback on a proposal -- never the evidence behind a commit
+          # that lands, ships, or gets promoted.
+          #
+          # `integration/**` and `consolidate/**` pull requests are complete too.
+          # They carry a whole batch's migrations and, exactly as the migration
+          # sequence gate already argues, are the runs least safe to narrow.
+          complete=false
+          case "$EVENT_NAME" in
+            pull_request) ;;
+            *) complete=true ;;
+          esac
+          case "$HEAD_REF" in
+            integration/*|consolidate/*) complete=true ;;
+          esac
+
+          if [ "$complete" = "true" ]; then
+            echo "::notice::Complete matrix: $EVENT_NAME runs are never narrowed by classification."
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
             echo "postgresql-required=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          base="$BEFORE_SHA"
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            base="$PR_BASE_SHA"
-          elif [ "$EVENT_NAME" = "merge_group" ]; then
-            base="$MERGE_BASE_SHA"
-          fi
+          base="$PR_BASE_SHA"
 
           # No usable base: branch creation reports an all-zero "before", and a
           # tag or manual ref push may report none at all. There is nothing to
-          # diff against, so classify as application rather than guessing.
+          # diff against, so run everything rather than guessing.
           #
           # The previous fallback here was `git rev-list --max-parents=0 HEAD`,
           # which breaks when HEAD is a merge commit: under fetch-depth 2 the
@@ -79,9 +98,8 @@ jobs:
           # and the job died with "fatal: invalid refspec". That is exactly what
           # happened creating a branch whose tip was a promotion merge commit.
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            echo "No base commit to diff against; classifying as application." >&2
+            echo "No base commit to diff against; running the complete matrix." >&2
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
             echo "postgresql-required=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -97,15 +115,15 @@ jobs:
           git diff --name-only "$base" HEAD > "$RUNNER_TEMP/changed-paths"
           if [ ! -s "$RUNNER_TEMP/changed-paths" ]; then
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
           elif grep -Ev '^(docs/|.*\.md$)' "$RUNNER_TEMP/changed-paths" >/dev/null; then
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
           else
             echo "docs-only=true" >> "$GITHUB_OUTPUT"
-            echo "application=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # Fails closed on an unknown path, an unreadable file, or its own
+          # crash: a non-zero exit fails this job, and every downstream gate
+          # keys on `needs.changes.result == 'success'`.
           python -m scripts.ci.classify_postgresql_changes \
             --paths-file "$RUNNER_TEMP/changed-paths" \
             --github-output "$GITHUB_OUTPUT"
