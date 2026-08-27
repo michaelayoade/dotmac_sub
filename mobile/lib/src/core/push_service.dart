@@ -206,9 +206,10 @@ class PushService {
       final decoded = jsonDecode(payload);
       if (decoded is! Map) return;
       final data = decoded.map((k, v) => MapEntry(k.toString(), v));
-      // `_showForeground` stashes the display text under `_title`/`_body`;
-      // pass it through so a foreground tap classifies exactly like a
-      // background one (the queued-push path names no intent code).
+      // `_showForeground` stashes the display text under `_title`/`_body`.
+      // It is forwarded only so a foreground tap is handled identically to a
+      // background one; since PushIntentV1 the resolver never derives
+      // navigation from display text, so it cannot influence the route.
       _openRoute(routeForNotificationData(
         data,
         title: data['_title']?.toString(),
