@@ -1,5 +1,11 @@
 """Canonical credential-to-Party authentication projection owner.
 
+Mechanism and storage are separate vocabularies: a binding declares an open,
+owner-declared ``mechanism_code`` while a credential persists a coarse
+``AuthProvider``. ``authentication_mechanism_registry`` owns the one mapping
+between them, and both the write path and the convergence report below consume
+that same declaration rather than comparing the two names literally.
+
 Migration 527 is additive: legacy principal foreign keys remain authoritative
 for login until a later reader cutover. This service is the only runtime writer
 of the new projection. It binds a credential to a Person Party, one installed
@@ -28,8 +34,10 @@ from app.models.party import Party, PartyIdentityStatus, PartyType
 from app.services.audit_adapter import stage_audit_event
 from app.services.authentication_mechanism_registry import (
     UndeclaredAuthenticationMechanismError,
+    UnmappedAuthenticationMechanismStorageError,
     declared_authentication_mechanisms,
     require_declared_mechanism,
+    storage_provider_for_mechanism,
 )
 from app.services.domain_errors import DomainError
 from app.services.operator_tenant import operator_tenant, operator_tenant_id
@@ -101,6 +109,13 @@ def _required_text(value: str | None, field: str) -> str:
 
 
 def _provider_code(credential: UserCredential) -> str:
+    """The credential's persisted STORAGE value (``AuthProvider``), as a string.
+
+    This is not the mechanism code. The two vocabularies are related only by
+    the registry's declared mapping, never by string equality: a federated
+    credential is stored as ``sso`` while its binding declares ``oidc``.
+    """
+
     provider = credential.provider
     return str(provider.value if hasattr(provider, "value") else provider)
 
@@ -352,12 +367,28 @@ def _bind_credential_party(
     )
     binding = _locked_binding(db, command.authentication_binding_id)
     provider_code = _provider_code(credential)
-    if binding.mechanism_code != provider_code:
+    # Mechanism and storage are two vocabularies. Comparing them literally
+    # would refuse every correct federated projection (`oidc` != `sso`) and
+    # would accept a mechanism nobody has mapped simply because its code
+    # happens to spell a provider value. The registry states the relationship
+    # once; this reads it, and refuses when it has nothing to read.
+    try:
+        expected_provider = storage_provider_for_mechanism(binding.mechanism_code)
+    except UnmappedAuthenticationMechanismStorageError:
+        _error(
+            "unmapped_mechanism_storage",
+            "The authentication mechanism declares no credential storage "
+            "provider; an unmapped mechanism is refused rather than assumed to "
+            "be stored under its own name.",
+            mechanism_code=binding.mechanism_code,
+        )
+    if expected_provider != provider_code:
         _error(
             "mechanism_mismatch",
             "The authentication binding does not implement the credential provider.",
             credential_provider=provider_code,
             mechanism_code=binding.mechanism_code,
+            expected_provider=expected_provider,
         )
 
     projection = _projection_values(credential)
@@ -595,8 +626,20 @@ def credential_convergence_report(db: Session) -> CredentialConvergenceReport:
             )
             if mechanism_code not in declared:
                 undeclared += 1
-            if mechanism_code != provider_code:
+            # The SAME declaration the writer consumes. A report with its own
+            # notion of "matching" would either clear a cohort the writer
+            # refuses or block one it accepts; an unmapped mechanism counts as
+            # a mismatch because an unprovable projection is not a ready one.
+            try:
+                expected_provider = storage_provider_for_mechanism(mechanism_code)
+            except (
+                UndeclaredAuthenticationMechanismError,
+                UnmappedAuthenticationMechanismStorageError,
+            ):
                 mechanism_mismatches += 1
+            else:
+                if expected_provider != provider_code:
+                    mechanism_mismatches += 1
             if row[1] == PartyType.person.value and row[0] != row[2]:
                 person_mismatches += 1
 

@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
 from app.models.auth import AuthProvider
+from app.services import authentication_mechanism_registry as mechanism_registry
 from app.services.authentication_mechanism_registry import (
+    AUTHENTICATION_MECHANISM_STORAGE,
     UndeclaredAuthenticationMechanismError,
+    UnmappedAuthenticationMechanismStorageError,
     declared_authentication_mechanisms,
     owner_of,
     require_declared_mechanism,
+    storage_provider_for_mechanism,
 )
 from app.services.sot_registry import registry as registry_module
 from app.services.sot_registry.registry import (
@@ -79,3 +84,70 @@ def test_duplicate_mechanism_declaration_is_detected(
     errors = authentication_mechanism_declaration_errors()
 
     assert any("local" in error and "both" in error for error in errors)
+
+
+def test_the_registry_owns_the_one_mechanism_to_storage_mapping() -> None:
+    """Two vocabularies, one declaration of how they relate.
+
+    `mechanism_code` is the open owner-declared MECHANISM vocabulary;
+    `AuthProvider` is the coarse persisted STORAGE vocabulary. They are not the
+    same names — `oidc` is stored as `sso` — so the relationship is declared
+    here rather than inferred by comparing the two strings.
+    """
+
+    assert dict(AUTHENTICATION_MECHANISM_STORAGE) == {
+        "local": "local",
+        "radius": "radius",
+        "oidc": "sso",
+    }
+    providers = {item.value for item in AuthProvider}
+    assert set(AUTHENTICATION_MECHANISM_STORAGE.values()) <= providers
+    # The second vocabulary that must never exist: an `AuthProvider.oidc`
+    # member would make the enum a competing mechanism vocabulary, and a write
+    # could then name the mechanism in the storage column.
+    assert "oidc" not in providers
+
+
+def test_every_declared_mechanism_declares_exactly_one_storage_provider() -> None:
+    """A mechanism nobody mapped is unusable, not silently identity-mapped.
+
+    Both directions: a declared mechanism with no storage declaration cannot be
+    provisioned, and a storage declaration for an undeclared mechanism is a
+    mapping with no owner behind it.
+    """
+
+    assert set(AUTHENTICATION_MECHANISM_STORAGE) == declared_authentication_mechanisms()
+    for mechanism in declared_authentication_mechanisms():
+        assert (
+            storage_provider_for_mechanism(mechanism)
+            == (AUTHENTICATION_MECHANISM_STORAGE[mechanism])
+        )
+
+
+def test_an_unmapped_mechanism_is_refused_rather_than_passed_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sensitivity proof for the mapping itself.
+
+    The bug this replaced was an implicit identity mapping: the code compared
+    `mechanism_code` with the provider directly, so an unmapped mechanism whose
+    code happened to equal a provider value would have been accepted. Removing
+    a mapping must therefore RAISE, never return the mechanism code.
+    """
+
+    with pytest.raises(UndeclaredAuthenticationMechanismError):
+        storage_provider_for_mechanism("saml")
+
+    monkeypatch.setattr(
+        mechanism_registry,
+        "AUTHENTICATION_MECHANISM_STORAGE",
+        MappingProxyType({"local": "local", "radius": "radius"}),
+    )
+
+    with pytest.raises(UnmappedAuthenticationMechanismStorageError) as raised:
+        storage_provider_for_mechanism("oidc")
+
+    assert raised.value.mechanism_code == "oidc"
+    # There is deliberately no value to compare against: the old shape would
+    # have answered "oidc" here by implication, and refusing instead of
+    # answering is exactly the property under test.
