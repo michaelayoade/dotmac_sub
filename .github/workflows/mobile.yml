@@ -44,6 +44,8 @@ jobs:
               - '.github/workflows/mobile.yml'
             field_mobile:
               - 'field_mobile/**'
+              - 'deploy/links.dotmac.io/**'
+              - 'scripts/check_field_applinks.py'
               - '.github/workflows/mobile.yml'
 
   flutter:
@@ -151,6 +153,16 @@ jobs:
 
       - name: Analyze
         run: flutter analyze
+
+      # The verified redirect boundary (App Links / Universal Links) spans the
+      # Dart defaults, brand.json, the Android intent filter, the iOS
+      # entitlement and both association documents under deploy/. None of them
+      # can see the others at build time and drift between them fails SILENTLY
+      # on device, so it is checked here on every field_mobile change.
+      # Structural mode: the two unresolved identity placeholders are allowed on
+      # a PR and rejected by the release pipeline.
+      - name: Validate the verified redirect boundary
+        run: python3 ../scripts/check_field_applinks.py
 
       - name: Unit tests
         run: flutter test
