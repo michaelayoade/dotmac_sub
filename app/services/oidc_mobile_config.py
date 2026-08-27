@@ -130,11 +130,31 @@ def require_federation_config(db: Session) -> OidcMobileFederationConfig:
             details={"missing_settings": sorted(missing)},
         )
 
+    client_id = str(resolved["oidc_mobile_client_id"])
+    audience = str(resolved["oidc_mobile_audience"])
+    if audience != client_id:
+        # ADR-0069 binds the ID-token audience to the public application
+        # client. Keep the separately named setting for wire compatibility,
+        # but never let it widen the verifier to another resource audience.
+        raise OidcFederationConfigError(
+            code="auth.oidc_mobile_federation.configuration_incomplete",
+            message=(
+                "Field-mobile OIDC federation requires the ID-token audience "
+                "to equal the public application client id."
+            ),
+            details={
+                "mismatched_settings": [
+                    "oidc_mobile_audience",
+                    "oidc_mobile_client_id",
+                ]
+            },
+        )
+
     return OidcMobileFederationConfig(
         issuer=str(resolved["oidc_mobile_issuer"]),
-        client_id=str(resolved["oidc_mobile_client_id"]),
+        client_id=client_id,
         redirect_uri=str(resolved["oidc_mobile_redirect_uri"]),
-        audience=str(resolved["oidc_mobile_audience"]),
+        audience=audience,
         binding_key=str(resolved["oidc_mobile_binding_key"]),
         deployment_id=str(resolved["oidc_mobile_deployment_id"]),
         jwks_source=jwks_source,

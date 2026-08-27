@@ -413,21 +413,47 @@ def _issue_access_token(
         principal_type = principal_type_or_session_id
         resolved_session_id = session_id
 
-    now = _now()
+    return _encode_access_token(
+        principal_id=principal_id,
+        principal_type=principal_type,
+        session_id=resolved_session_id,
+        roles=roles,
+        permissions=permissions,
+        issued_at=_now(),
+        ttl_minutes=_access_ttl_minutes(db),
+        secret=_jwt_secret(db),
+        algorithm=_jwt_algorithm(db),
+    )
+
+
+def _encode_access_token(
+    *,
+    principal_id: str,
+    principal_type: str,
+    session_id: str,
+    issued_at: datetime,
+    ttl_minutes: int,
+    secret: str,
+    algorithm: str,
+    roles: list[str] | None = None,
+    permissions: list[str] | None = None,
+) -> str:
+    """Encode an access token from immutable values, with no persistence reads."""
+
     payload = {
         "sub": principal_id,
         "principal_id": principal_id,
         "principal_type": principal_type,
-        "session_id": resolved_session_id,
+        "session_id": session_id,
         "typ": "access",
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=_access_ttl_minutes(db))).timestamp()),
+        "iat": int(issued_at.timestamp()),
+        "exp": int((issued_at + timedelta(minutes=ttl_minutes)).timestamp()),
     }
     if roles:
         payload["roles"] = roles
     if permissions:
         payload["scopes"] = permissions
-    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+    return _jwt_encode_token(payload, secret, algorithm)
 
 
 def issue_impersonation_access_token(
@@ -1838,6 +1864,12 @@ class AuthFlow(ListResponseMixin):
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
+        # Resolve every signing input while this issuance transaction owns the
+        # session. Reading settings after commit would start an implicit caller
+        # transaction and make the next owner command fail its entry guard.
+        access_ttl_minutes = _access_ttl_minutes(db)
+        access_secret = _jwt_secret(db)
+        access_algorithm = _jwt_algorithm(db)
         device_id = _clean_device_id(active_request.headers.get("x-device-id"))
         session_kwargs = dict(
             status=SessionStatus.active,
@@ -1886,10 +1918,17 @@ class AuthFlow(ListResponseMixin):
         else:
             session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
         db.add(session)
+        db.flush()
+        session_id = str(session.id)
         db.commit()
-        db.refresh(session)
-        access_token = _issue_access_token(
-            db, str(principal_uuid), principal_type, str(session.id)
+        access_token = _encode_access_token(
+            principal_id=str(principal_uuid),
+            principal_type=principal_type,
+            session_id=session_id,
+            issued_at=now,
+            ttl_minutes=access_ttl_minutes,
+            secret=access_secret,
+            algorithm=access_algorithm,
         )
         return {"access_token": access_token, "refresh_token": refresh_token}
 

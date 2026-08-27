@@ -92,12 +92,11 @@ from app.metrics import (
     OIDC_MOBILE_REPLAY_REFUSED,
     OIDC_MOBILE_UNBOUND_SUBJECT,
 )
-from app.models.audit import AuditActorType
 from app.models.auth import AuthenticationBinding, AuthProvider, UserCredential
 from app.models.oidc_mobile import OidcCeremonyOutcome, OidcMobileCeremony
 from app.services import auth_flow as auth_flow_service
 from app.services import staff_party_authentication
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.authentication_mechanism_registry import require_declared_mechanism
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
@@ -335,7 +334,7 @@ def start_mobile_ceremony(
     digest = nonce_digest(nonce)
     device_id = auth_flow_service._clean_device_id(command.device_id)  # noqa: SLF001
 
-    def operation() -> tuple[OidcMobileCeremony, OidcMobileFederationConfig] | _Refused:
+    def operation() -> MobileCeremonyStarted | _Refused:
         if not federation_enabled(db):
             return _refuse("federation_disabled")
         if command.code_challenge_method != REQUIRED_CODE_CHALLENGE_METHOD:
@@ -396,7 +395,22 @@ def start_mobile_ceremony(
             },
             actor=command.context.actor,
         )
-        return ceremony, config
+        # Build the public value while the owner transaction is still open.
+        # Returning an ORM row here made the post-commit read below trigger
+        # SQLAlchemy's expire-on-commit refresh, silently opening a caller
+        # transaction that the immediately-following exchange must refuse.
+        return MobileCeremonyStarted(
+            ceremony_id=ceremony.id,
+            issuer=config.issuer,
+            client_id=config.client_id,
+            redirect_uri=config.redirect_uri,
+            audience=config.audience,
+            scope=CEREMONY_SCOPE,
+            nonce=nonce,
+            code_challenge_method=REQUIRED_CODE_CHALLENGE_METHOD,
+            expires_at=_as_utc(ceremony.expires_at) or now,
+            expires_in_seconds=config.ceremony_ttl_seconds,
+        )
 
     result = execute_owner_command(
         db,
@@ -406,30 +420,16 @@ def start_mobile_ceremony(
     )
     if isinstance(result, _Refused):
         raise _report(result.reason)
-    ceremony, config = result
 
     OIDC_MOBILE_CEREMONY_STARTED.inc()
     logger.info(
         "oidc_mobile_ceremony_started",
         extra={
             "event": "oidc_mobile_ceremony_started",
-            "ceremony_id": str(ceremony.id),
-            "binding_key": ceremony.binding_key,
+            "ceremony_id": str(result.ceremony_id),
         },
     )
-    expires_at = _as_utc(ceremony.expires_at) or _now()
-    return MobileCeremonyStarted(
-        ceremony_id=ceremony.id,
-        issuer=config.issuer,
-        client_id=config.client_id,
-        redirect_uri=config.redirect_uri,
-        audience=config.audience,
-        scope=CEREMONY_SCOPE,
-        nonce=nonce,
-        code_challenge_method=REQUIRED_CODE_CHALLENGE_METHOD,
-        expires_at=expires_at,
-        expires_in_seconds=config.ceremony_ttl_seconds,
-    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -683,9 +683,11 @@ def _admit(
         action="auth.oidc_mobile_assertion_admitted",
         entity_type="oidc_mobile_ceremony",
         entity_id=str(ceremony.id),
-        actor_type=AuditActorType.system,
-        actor_label=command.context.actor,
-        actor_party_id=credential.party_id,
+        actor=AuditActor.user(
+            str(principal.id),
+            label=command.context.actor,
+            party_id=credential.party_id,
+        ),
         metadata={
             "binding_key": ceremony.binding_key,
             "deployment_id": ceremony.deployment_id,
