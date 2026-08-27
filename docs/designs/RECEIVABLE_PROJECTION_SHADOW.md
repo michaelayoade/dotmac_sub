@@ -311,6 +311,41 @@ invoice writer may read `payment_terms_days` or call the effective-version
 resolver. That test must be replaced by positive resolver and aggregation
 tests in the authority-cutover change, not deleted in isolation.
 
+### 8.4 The sealed read-only readiness verdict
+
+`assess_receivable_cutover_readiness` answers the stronger question that
+`parity --strict` intentionally does not: *is this evidence complete enough to
+be eligible for an authority review?* It binds the cohort definition seal,
+membership digest and parity report fingerprint into one readiness fingerprint
+and fails closed when any of these is true:
+
+1. the report fingerprint no longer reproduces or the cohort, projection,
+   position and dimension counts do not account for one another;
+2. the compared cohort is empty (an empty query cannot prove parity);
+3. a candidate remains unresolved, ambiguous, unexpectedly unlinked,
+   duplicated or not expressible;
+4. a read-only projection plan would still insert or update a row, refuses a
+   watermark, or sees an orphan;
+5. any semantic dimension diverges or cannot be expressed; or
+6. the cohort carries a standing pinned contract blocker.
+
+The plan and comparison are separate reads. Their count invariants therefore
+also catch a projection row moving between those reads and fail closed instead
+of treating a mixed statement snapshot as sealed evidence.
+
+The verdict is a resolver owned by `billing.receivable_projection`; it writes
+nothing and has no `--apply` form. A passing verdict is not an authority flag,
+a migration-state change, a writer switch, permission to retire a fallback, or
+permission to deploy. It makes the sealed evidence eligible for the separately
+authorised review described by ADR 0007. On this tree it truthfully remains
+blocked by the Subscriptions treatment seam and incomplete obligation coverage.
+
+Commercial Agreements and the independently deployed Integrator remain external
+owners and are not imported or pinned by this product query. Vendor legal
+agreement lifecycle is not a Sub receivable input, and connector publication is
+not settlement evidence. Adding either as a runtime dependency would blur the
+application boundary without closing one readiness condition.
+
 ## 9. Persistence shape, and the absent tenant column
 
 `billing_receivable_projections` and `receivable_projection_runs` carry **no
@@ -357,6 +392,7 @@ poetry run python -m scripts.billing.receivable_projection backfill \
 poetry run python -m scripts.billing.receivable_projection reconcile    [same args]
 poetry run python -m scripts.billing.receivable_projection repair-drift [same args]
 poetry run python -m scripts.billing.receivable_projection parity       [same args]
+poetry run python -m scripts.billing.receivable_projection readiness    [same args]
 ```
 
 `--strict` exits non-zero on drift (`missing`, `stale_skipped`,
@@ -366,6 +402,12 @@ failure: it is a recorded, pinned limit, not a regression.
 
 `parity --apply` records the report as durable run evidence and still changes no
 projected row.
+
+`readiness` is always read-only and exits non-zero whenever its typed verdict is
+blocked. It first reproduces the report seal and aggregate accounting. Unlike
+`--strict`, it also treats every `not_expressible` count and every standing
+contract blocker as a failure, because those are lawful shadow evidence but
+incomplete authority evidence.
 
 ## 11. Run evidence
 

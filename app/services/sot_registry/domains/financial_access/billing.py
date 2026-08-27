@@ -1436,6 +1436,7 @@ SERVICES: tuple[SOTService, ...] = (
             "receivable projection version watermark",
             "receivable projection drift detection and idempotent repair",
             "receivable projection run evidence",
+            "receivable cutover readiness verdict",
         ),
         depends_on=(
             "financial.invoices",
@@ -1467,7 +1468,13 @@ SERVICES: tuple[SOTService, ...] = (
             "BillingContractVersion.source_version, which stays owned by "
             "billing.contracts and is carried here read-only as provenance. "
             "Every writing command defaults to dry run, and a dry run never "
-            "enters the owner-command boundary at all."
+            "enters the owner-command boundary at all. The read-only readiness "
+            "verdict fails closed on an empty comparison, unresolved cohort "
+            "members, an invalid evidence seal or internally inconsistent "
+            "aggregate, projection drift, semantic divergence, any "
+            "not-expressible dimension, or a standing pinned contract blocker. "
+            "It is evidence for a later authority review, never an authority "
+            "switch."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1514,6 +1521,18 @@ SERVICES: tuple[SOTService, ...] = (
                         "shadow obligation counterparty",
                     ),
                     canonical_writer="billing.receivable_projection",
+                ),
+                ConcernContract(
+                    name="receivable cutover readiness verdict",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "incumbent invoice receivable state",
+                        "incumbent settlement and allocation facts",
+                        "effective billing contract terms",
+                        "shadow obligation counterparty",
+                        "subscription service scope",
+                        "authoritative non-standard billing treatment",
+                    ),
                 ),
             ),
             authoritative_inputs=(
@@ -1691,11 +1710,16 @@ SERVICES: tuple[SOTService, ...] = (
                     "obligations, settlements, receivable amount, due-date "
                     "provenance and service scope — evaluated read-only over the "
                     "sealed cohort and recorded on the run row with its "
-                    "not_expressible counts and pinned blockers."
+                    "not_expressible counts and pinned blockers. A separate "
+                    "read-only readiness verdict binds the definition seal, "
+                    "membership digest and parity fingerprint and fails closed "
+                    "when that seal or its aggregate accounting does not "
+                    "reproduce, and on every incomplete evidence category."
                 ),
                 cutover_gate=(
-                    "No cutover is proposed by this slice and none is implied by "
-                    "it. Cadence parity is BLOCKED for complimentary and "
+                    "The sealed read-only readiness verdict must pass, but that "
+                    "pass is only eligibility for a separately authorised "
+                    "authority review. Cadence parity is BLOCKED for complimentary and "
                     "sponsored subscriptions because Sub's authoritative "
                     "subscription_billing_arrangements record has no expression "
                     "in the pinned Subscriptions contract; those positions are "
