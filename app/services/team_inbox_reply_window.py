@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.team_inbox import (
@@ -89,20 +90,23 @@ def latest_qualifying_inbound_at(
     """
 
     rows = (
-        db.query(InboxMessage.received_at, InboxMessage.created_at)
+        db.query(
+            InboxMessage.received_at,
+            InboxMessage.created_at,
+            InboxMessage.metadata_,
+        )
         .filter(InboxMessage.conversation_id == conversation_id)
         .filter(InboxMessage.direction == InboxMessageDirection.inbound.value)
-        .filter(
-            or_(
-                InboxMessage.metadata_["reply_window_qualifying"]
-                .as_boolean()
-                .isnot(False),
-                InboxMessage.metadata_["reply_window_qualifying"].is_(None),
-            )
-        )
         .all()
     )
-    timestamps = [_aware(received_at or created_at) for received_at, created_at in rows]
+    timestamps = []
+    for received_at, created_at, metadata in rows:
+        if (
+            isinstance(metadata, Mapping)
+            and metadata.get("reply_window_qualifying") is False
+        ):
+            continue
+        timestamps.append(_aware(received_at or created_at))
     return max((value for value in timestamps if value is not None), default=None)
 
 
