@@ -121,7 +121,7 @@ test-integration-shard: assert-full-test-host ## Run one duration-balanced Postg
 			--shard $(INTEGRATION_SHARD) --shards $(INTEGRATION_SHARDS) \
 			--durations-file "$(CI_INTEGRATION_DURATIONS_FILE)")"; \
 		test -n "$$paths"; \
-		poetry run pytest $$paths -v --tb=short -o "addopts=" \
+		PYTHONPATH="$(CURDIR)" poetry run pytest $$paths -v --tb=short -o "addopts=" \
 			-p scripts.ci.pytest_durations \
 			--ci-durations-output="$(CI_INTEGRATION_DURATIONS_OUTPUT)"
 
