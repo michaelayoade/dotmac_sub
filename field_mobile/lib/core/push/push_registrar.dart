@@ -94,10 +94,17 @@ final pushRegistrarProvider = Provider<PushRegistrar>(
 );
 
 void _refreshRealtimeState(Ref ref, PushMessage message) {
-  final workOrderId = message.data['work_order_id'];
+  final workOrderId = message.data['contract_version'] == 'PushIntentV1'
+      ? message.data['subject_id']
+      : message.data['work_order_id'];
   if (workOrderId == null || workOrderId.trim().isEmpty) return;
-  if (message.data['type'] == 'work_order_comment' ||
-      message.data['type'] == 'work_order_assigned') {
+  final intentCode = message.data['contract_version'] == 'PushIntentV1'
+      ? message.data['intent_code']
+      : message.data['type'];
+  if (intentCode == 'work_order.commented' ||
+      intentCode == 'work_order.assigned' ||
+      intentCode == 'work_order_comment' ||
+      intentCode == 'work_order_assigned') {
     ref
       ..invalidate(jobDetailProvider(workOrderId))
       ..invalidate(todayJobsProvider)
@@ -108,10 +115,10 @@ void _refreshRealtimeState(Ref ref, PushMessage message) {
 void _showForegroundPopup(PushMessage message, String? route) {
   final messenger = pushScaffoldMessengerKey.currentState;
   if (messenger == null) return;
-  final title = (message.title ?? message.data['title'] ?? '').trim();
-  final body =
-      (message.body ?? message.data['body'] ?? message.data['preview'] ?? '')
-          .trim();
+  // PushIntentV1 data is content-free. Display only the transport's generic
+  // notification text; never restore prose fields from the data map.
+  final title = (message.title ?? '').trim();
+  final body = (message.body ?? '').trim();
   final text = [
     if (title.isNotEmpty) title,
     if (body.isNotEmpty) body,
