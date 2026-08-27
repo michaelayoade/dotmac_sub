@@ -40,22 +40,29 @@ def test_clone_names_are_unique() -> None:
     assert len(names) == 500
 
 
-@pytest.mark.parametrize(
-    "name", [template_database_name(REVISION), clone_database_name()]
-)
-def test_generated_names_carry_the_run_token(name: str) -> None:
-    """A concurrent shard's databases must be distinguishable from this run's.
+# Parametrise over a FACTORY KEY, never over a generated name. `_RUN_TOKEN` and
+# the clone suffix are process-random, so calling the factories at collection
+# time gives every pytest-xdist worker a different test id -- and xdist aborts
+# the whole shard with "Different tests were collected between workers" rather
+# than failing one test. Generate inside the test body instead.
+NAME_FACTORIES = {
+    "template": lambda: template_database_name(REVISION),
+    "clone": clone_database_name,
+}
 
-    The sweep relies on this to avoid destroying a live run's work.
+
+@pytest.mark.parametrize("factory", sorted(NAME_FACTORIES))
+def test_generated_names_carry_the_run_token(factory: str) -> None:
+    """A concurrent run's databases must be distinguishable from this one's.
+
+    The maintenance command relies on this to leave a live run alone.
     """
 
-    assert f"_{_RUN_TOKEN}_" in name
+    assert f"_{_RUN_TOKEN}_" in NAME_FACTORIES[factory]()
 
 
-@pytest.mark.parametrize(
-    "name", [template_database_name(REVISION), clone_database_name()]
-)
-def test_generated_names_are_recognisably_disposable(name: str) -> None:
+@pytest.mark.parametrize("factory", sorted(NAME_FACTORIES))
+def test_generated_names_are_recognisably_disposable(factory: str) -> None:
     """The repository already has a rule for what a throwaway database is.
 
     `migrated_test_database.parse_test_database_target` refuses a
@@ -64,7 +71,7 @@ def test_generated_names_are_recognisably_disposable(name: str) -> None:
     be mistaken for -- or accepted as -- a real target.
     """
 
-    assert _DISPOSABLE_DATABASE_TOKEN.search(name)
+    assert _DISPOSABLE_DATABASE_TOKEN.search(NAME_FACTORIES[factory]())
 
 
 def test_prefixes_do_not_shadow_each_other() -> None:
