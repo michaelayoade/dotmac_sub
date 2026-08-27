@@ -280,6 +280,14 @@ def _observation(outcome: PaymentGatewayVerificationOutcome):
     )
 
 
+def _same_utc_instant(left: datetime | None, right: datetime) -> bool:
+    if left is None:
+        return False
+    if left.tzinfo is None:
+        left = left.replace(tzinfo=UTC)
+    return left == right
+
+
 @pytest.mark.parametrize(
     ("outcome", "status", "normalized"),
     (
@@ -302,14 +310,17 @@ def test_terminal_gateway_observation_releases_blocker_without_money(
     )
     db_session.add(intent)
     db_session.commit()
+    observed_at = datetime.now(UTC)
+    next_reconcile_at = observed_at + timedelta(hours=24)
 
     result = topup_intents.stage_gateway_topup_observation(
         db_session,
         topup_intents.RecordGatewayTopupObservationCommand(
             intent_id=intent.id,
             observation=_observation(outcome),
-            observed_at=datetime.now(UTC),
+            observed_at=observed_at,
             source=topup_intents.GatewayTopupObservationSource.gateway_reconciliation,
+            next_reconcile_at=next_reconcile_at,
         ),
         context=_context(topup_intents.GATEWAY_OBSERVATION_SCOPE),
     )
@@ -322,6 +333,11 @@ def test_terminal_gateway_observation_releases_blocker_without_money(
     assert projection.customer_retry_allowed is True
     assert projection.reason_code == _observation(outcome).reason_code.value
     assert projection.last_verification_at is not None
+    assert _same_utc_instant(intent.gateway_last_observed_at, observed_at)
+    assert intent.gateway_last_outcome == outcome.value
+    assert intent.gateway_last_reason_code == _observation(outcome).reason_code.value
+    assert _same_utc_instant(intent.gateway_next_reconcile_at, next_reconcile_at)
+    assert intent.gateway_observation_count == 1
     assert db_session.query(Payment).count() == 0
 
 
@@ -349,14 +365,17 @@ def test_nonterminal_or_ambiguous_observation_remains_blocking(
     )
     db_session.add(intent)
     db_session.commit()
+    observed_at = datetime.now(UTC)
+    next_reconcile_at = observed_at + timedelta(minutes=30)
 
     topup_intents.stage_gateway_topup_observation(
         db_session,
         topup_intents.RecordGatewayTopupObservationCommand(
             intent_id=intent.id,
             observation=_observation(outcome),
-            observed_at=datetime.now(UTC),
+            observed_at=observed_at,
             source=topup_intents.GatewayTopupObservationSource.gateway_reconciliation,
+            next_reconcile_at=next_reconcile_at,
         ),
         context=_context(topup_intents.GATEWAY_OBSERVATION_SCOPE),
     )
@@ -367,6 +386,9 @@ def test_nonterminal_or_ambiguous_observation_remains_blocking(
     assert projection.normalized_status.value == normalized
     assert projection.blocks_another_attempt is True
     assert projection.customer_retry_allowed is False
+    assert projection.last_verification_at == observed_at
+    assert _same_utc_instant(intent.gateway_next_reconcile_at, next_reconcile_at)
+    assert intent.gateway_observation_count == 1
 
 
 def test_ambiguous_observation_persists_expiry_and_releases_retry(

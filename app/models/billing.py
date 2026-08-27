@@ -1947,6 +1947,14 @@ class TopupIntent(Base):
         Index("ix_topup_intents_invoice_id", "invoice_id"),
         Index("uq_topup_intents_reference", "reference", unique=True),
         Index(
+            "ix_topup_intents_gateway_reconcile_due",
+            "provider_type",
+            "status",
+            "completed_payment_id",
+            "gateway_next_reconcile_at",
+            "created_at",
+        ),
+        Index(
             "uq_topup_intents_deposit_idempotency",
             "account_id",
             "purpose",
@@ -2010,6 +2018,17 @@ class TopupIntent(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    gateway_last_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    gateway_last_outcome: Mapped[str | None] = mapped_column(String(40))
+    gateway_last_reason_code: Mapped[str | None] = mapped_column(String(80))
+    gateway_next_reconcile_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    gateway_observation_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
 
     created_at: Mapped[datetime] = mapped_column(

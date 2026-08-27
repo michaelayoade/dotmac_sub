@@ -574,6 +574,9 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "The bounded sweep selects immutable candidates, releases its read "
             "transaction, and treats gateway verification as an external fact. "
+            "Pending unresolved intents are selected before terminal late-success "
+            "audit intents; terminal retries use typed cooldown progress and only "
+            "consume leftover batch capacity. "
             "Each consequence is a separate typed coordinator transaction that "
             "composes canonical financial participants."
         ),
@@ -584,7 +587,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical reconcilable top-up intent",
+                        "canonical reconcilable top-up intent and typed gateway progress",
                         "external gateway verification observation",
                         "canonical gateway observation lifecycle protocol",
                     ),
@@ -594,7 +597,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical reconcilable top-up intent",
+                        "canonical reconcilable top-up intent and typed gateway progress",
                         "external gateway verification observation",
                     ),
                 ),
@@ -614,7 +617,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "canonical top-up reconciliation policy",
-                        "canonical reconcilable top-up intent",
+                        "canonical reconcilable top-up intent and typed gateway progress",
                     ),
                 ),
             ),
@@ -624,8 +627,10 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="control.settings_spec",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "typed stale window, maximum age, and batch size settings "
-                        "with bounded defaults; intent expiry itself is canonical"
+                        "typed stale window, maximum age, batch size, pending "
+                        "retry, processing retry, unavailable retry, and terminal "
+                        "late-success retry settings with bounded defaults; intent "
+                        "expiry itself is canonical"
                     ),
                 ),
                 AuthorityInput(
@@ -635,7 +640,20 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "locked intent identity, account scope, provider, reference, "
                         "purpose, currency, invoice instruction, lifecycle status, "
-                        "expiry, normalized safe observation, and completion state"
+                        "expiry, normalized safe observation, typed gateway "
+                        "observation progress, next reconcile time, and completion "
+                        "state"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical reconcilable top-up intent and typed gateway progress",
+                    owner="financial.topup_intents",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked intent identity, account scope, provider, reference, "
+                        "lifecycle status, expiry, normalized safe observation, "
+                        "last observed outcome and reason, observation count, next "
+                        "reconcile time, and completion state"
                     ),
                 ),
                 AuthorityInput(
@@ -704,8 +722,10 @@ SERVICES: tuple[SOTService, ...] = (
                 retries=(
                     "Unavailable or unknown evidence fails closed until canonical "
                     "expiry; failed or abandoned evidence terminalizes immediately. "
+                    "Pending unresolved intents form the first candidate lane. "
                     "Failed, abandoned, and expired intents remain bounded late-success "
-                    "candidates. Each candidate "
+                    "candidates on a second cooldown lane that cannot starve pending "
+                    "work. Each candidate "
                     "is an independent transaction, so one rejection cannot roll back "
                     "or repeat another candidate's completed consequence."
                 ),
@@ -759,22 +779,25 @@ SERVICES: tuple[SOTService, ...] = (
                     writer="financial.payment_reconciliation",
                     freshness=(
                         "Recomputed on read at an explicit observation time "
-                        "from pending intent creation times and the effective "
-                        "stale and maximum-age policy."
+                        "from pending intent creation times, terminal recovery "
+                        "progress, and the effective stale, maximum-age, and retry "
+                        "policy."
                     ),
                     stale_behavior=(
-                        "Separates currently eligible intents from intents "
-                        "outside the automatic repair window; it never treats "
-                        "absence of a successful runner heartbeat as an empty "
+                        "Separates pending work from terminal late-success recovery, "
+                        "currently due work from cooldown work, and in-window work "
+                        "from intents outside the automatic repair window; it never "
+                        "treats absence of a successful runner heartbeat as an empty "
                         "backlog."
                     ),
                     drift_signal=(
-                        "Pending intent counts disagree with the bounded "
-                        "eligible and outside-window partition."
+                        "Pending or terminal recovery counts disagree with the "
+                        "bounded eligible, cooldown, and outside-window partitions."
                     ),
                     rebuild_operation=(
                         "Re-run topup_reconciliation_backlog from canonical "
-                        "pending intents and effective reconciliation policy."
+                        "gateway intents, typed progress columns, and effective "
+                        "reconciliation policy."
                     ),
                     repair_owner="financial.payment_reconciliation",
                 ),

@@ -500,6 +500,7 @@ class RecordGatewayTopupObservationCommand:
     observation: PaymentGatewayVerificationObservation
     observed_at: datetime
     source: GatewayTopupObservationSource
+    next_reconcile_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -658,15 +659,19 @@ def project_topup_intent_lifecycle(
     evidence = _gateway_observation_metadata(intent)
     terminal_evidence = _gateway_terminal_metadata(intent)
     raw_observed_at = evidence.get("observed_at")
-    last_verification_at: datetime | None = None
+    last_verification_at = _as_utc(intent.gateway_last_observed_at)
     if isinstance(raw_observed_at, str):
         try:
-            last_verification_at = _as_utc(
+            last_verification_at = last_verification_at or _as_utc(
                 datetime.fromisoformat(raw_observed_at.replace("Z", "+00:00"))
             )
         except ValueError:
-            last_verification_at = None
-    reason_code = str(evidence.get("reason_code") or "").strip() or None
+            pass
+    reason_code = (
+        str(intent.gateway_last_reason_code or "").strip()
+        or str(evidence.get("reason_code") or "").strip()
+        or None
+    )
 
     try:
         stored = TopupIntentStatus(intent.status)
@@ -1082,6 +1087,13 @@ def stage_gateway_topup_observation(
     metadata = dict(intent.metadata_ or {})
     original_metadata = dict(metadata)
     metadata["gateway_verification"] = evidence
+    next_reconcile_at = _as_utc(command.next_reconcile_at)
+    intent.gateway_last_observed_at = observed_at
+    intent.gateway_last_outcome = observation.outcome.value
+    intent.gateway_last_reason_code = observation.reason_code.value
+    intent.gateway_next_reconcile_at = next_reconcile_at
+    intent.gateway_observation_count = int(intent.gateway_observation_count or 0) + 1
+    progress_changed = True
 
     previous_status = intent.status
     status_changed = False
@@ -1107,7 +1119,7 @@ def stage_gateway_topup_observation(
     if evidence_changed:
         intent.metadata_ = metadata
 
-    if evidence_changed or status_changed:
+    if evidence_changed or status_changed or progress_changed:
         db.add(intent)
         emit_event(
             db,
@@ -1126,6 +1138,10 @@ def stage_gateway_topup_observation(
                 "provider_status": evidence["provider_status"],
                 "reason_code": observation.reason_code.value,
                 "observed_at": observed_at.isoformat(),
+                "next_reconcile_at": (
+                    next_reconcile_at.isoformat() if next_reconcile_at else None
+                ),
+                "observation_count": intent.gateway_observation_count,
                 "previous_status": previous_status,
                 "status": intent.status,
                 "source": command.source.value,
@@ -1141,7 +1157,7 @@ def stage_gateway_topup_observation(
         intent_id=intent.id,
         status=TopupIntentStatus(intent.status),
         payment_id=intent.completed_payment_id,
-        changed=evidence_changed or status_changed,
+        changed=evidence_changed or status_changed or progress_changed,
     )
 
 
@@ -1273,12 +1289,14 @@ def stage_topup_intent_completion(
             round_money(to_decimal(intent.actual_amount or 0)) != amount,
             _as_utc(intent.completed_at) != completed_at,
             intent.status != TopupIntentStatus.completed.value,
+            intent.gateway_next_reconcile_at is not None,
         )
     )
     intent.completed_payment_id = payment.id
     intent.external_id = payment_external_id
     intent.actual_amount = amount
     intent.completed_at = completed_at
+    intent.gateway_next_reconcile_at = None
     set_topup_intent_status(
         intent,
         TopupIntentStatus.completed,

@@ -266,8 +266,10 @@ SERVICES: tuple[SOTService, ...] = (
                         "submitted eligibility, exact proof-link uniqueness, "
                         "submitted-to-completed/canceled reviewed-proof resolution, "
                         "terminal versus non-terminal gateway semantics, effective "
-                        "expiry, blocker/retry policy, late-success recovery from "
-                        "failed, abandoned, canceled, or expired, and event vocabulary"
+                        "expiry, blocker/retry policy, typed gateway observation "
+                        "progress and next reconcile time, late-success recovery "
+                        "from failed, abandoned, canceled, or expired, and event "
+                        "vocabulary"
                     ),
                 ),
             ),
@@ -300,7 +302,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "evidence conflicts. Replaying the same succeeded Payment or "
                     "expired state performs no second field transition or event. "
                     "Repeated normalized gateway observations update only safe "
-                    "latest-check evidence and cannot repeat a terminal transition."
+                    "latest-check evidence, typed progress, and the next reconcile "
+                    "time; they cannot repeat a terminal transition."
                 ),
                 retries=(
                     "Only the caller retries after rollback. If cash was already "
