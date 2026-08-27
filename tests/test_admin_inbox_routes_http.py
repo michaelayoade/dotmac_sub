@@ -193,7 +193,7 @@ def test_email_conversation_fragment_renders_native_copy_control_without_cache(
     )
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Expires"] == "0"
-    assert '<details data-email-copy-recipients' in response.text
+    assert "<details data-email-copy-recipients" in response.text
     assert "Add CC/BCC" in response.text
     assert 'name="cc"' in response.text
     assert 'name="bcc"' in response.text
