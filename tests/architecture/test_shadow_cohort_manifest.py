@@ -15,7 +15,10 @@ rather than only over today's data.
 
 from __future__ import annotations
 
+import tomllib
 import typing
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -72,6 +75,51 @@ EXPECTED_OWNERS = frozenset(
 
 _SHA = "sha256:" + "a" * 64
 _OTHER_SHA = "sha256:" + "b" * 64
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedReleasedModule:
+    package: str
+    version: str
+    revision: str
+    wheel: str
+    digest: str
+
+    @property
+    def artifact_ref(self) -> str:
+        return f"registry.dotmac.io/dotmac/pypi/{self.wheel}@{self.digest}"
+
+
+EXPECTED_RELEASED_MODULES = {
+    "subscriptions": ExpectedReleasedModule(
+        package="dotmac-subscriptions",
+        version="0.1.0a3",
+        revision="ad6c5824086f6f550447caeabe820e860cdfe23c",
+        wheel="dotmac_subscriptions-0.1.0a3-py3-none-any.whl",
+        digest=(
+            "sha256:01fd4a2260a09e26a45cd105c474e1c90dd7f0aee23bd470790701c1677ac53d"
+        ),
+    ),
+    "billing": ExpectedReleasedModule(
+        package="dotmac-billing",
+        version="0.1.0a1",
+        revision="92a1626b16d7e068f92536d8cfcb2ef9b6f270c2",
+        wheel="dotmac_billing-0.1.0a1-py3-none-any.whl",
+        digest=(
+            "sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b"
+        ),
+    ),
+    "collections": ExpectedReleasedModule(
+        package="dotmac-collections",
+        version="0.1.0a1",
+        revision="6ecf518a6985b8bf4b163eccb3de2fef171ecccc",
+        wheel="dotmac_collections-0.1.0a1-py3-none-any.whl",
+        digest=(
+            "sha256:f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b"
+        ),
+    ),
+}
 
 
 def _release(digest: str = _SHA) -> ReleaseIdentity:
@@ -407,6 +455,127 @@ def test_a_module_holding_shadow_authority_must_displace_a_writer() -> None:
 
 def test_the_cohort_covers_exactly_the_declared_owners() -> None:
     assert {m.module for m in SHADOW_COHORT.modules} == EXPECTED_OWNERS
+
+
+def _commercial_release_state_errors(
+    modules: tuple[ModuleEntry, ...],
+) -> list[str]:
+    by_module = {module.module: module for module in modules}
+    errors: list[str] = []
+    for name, expected in EXPECTED_RELEASED_MODULES.items():
+        module = by_module[name]
+        if module.adoption_state is not AdoptionState.RELEASED_UNCOMPOSED:
+            errors.append(f"{name}:state")
+        if module.package != expected.package:
+            errors.append(f"{name}:package")
+        if module.contract_version != expected.version:
+            errors.append(f"{name}:version")
+        if module.source_revision != expected.revision:
+            errors.append(f"{name}:revision")
+        if module.release is None:
+            errors.append(f"{name}:release")
+            continue
+        if str(module.release.digest) != expected.digest:
+            errors.append(f"{name}:digest")
+        if module.release.artifact_ref != expected.artifact_ref:
+            errors.append(f"{name}:artifact-ref")
+
+    unexpected = {
+        module.module
+        for module in modules
+        if module.module not in EXPECTED_RELEASED_MODULES
+        and (
+            module.adoption_state is not AdoptionState.SOURCE_ONLY
+            or module.release is not None
+        )
+    }
+    errors.extend(f"{name}:unexpected-release" for name in sorted(unexpected))
+    return errors
+
+
+def test_only_the_three_published_commercial_modules_are_released_uncomposed() -> None:
+    assert _commercial_release_state_errors(SHADOW_COHORT.modules) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("adoption_state", AdoptionState.SOURCE_ONLY, "billing:state"),
+        ("adoption_state", AdoptionState.INSTALLED_SHADOW, "billing:state"),
+        ("source_revision", "f" * 40, "billing:revision"),
+        ("release", None, "billing:release"),
+    ],
+)
+def test_commercial_release_state_guard_is_sensitive(
+    field: str, value: object, error: str
+) -> None:
+    """A lowered, advanced or unpinned record must fail the real cohort sweep."""
+    modules = list(SHADOW_COHORT.modules)
+    index = next(i for i, module in enumerate(modules) if module.module == "billing")
+    modules[index] = modules[index].model_copy(update={field: value})
+    assert error in _commercial_release_state_errors(tuple(modules))
+
+
+def _lock_release_errors(lock_packages: list[dict[str, Any]]) -> list[str]:
+    by_name = {package["name"]: package for package in lock_packages}
+    errors: list[str] = []
+    for expected in EXPECTED_RELEASED_MODULES.values():
+        package = by_name[expected.package]
+        if package["version"] != expected.version:
+            errors.append(f"{expected.package}:version")
+        hashes = {item["file"]: item["hash"] for item in package["files"]}
+        if hashes.get(expected.wheel) != expected.digest:
+            errors.append(f"{expected.package}:wheel-digest")
+        if package["source"] != {
+            "type": "legacy",
+            "url": "https://registry.dotmac.io/api/packages/dotmac/pypi/simple",
+            "reference": "forgejo",
+        }:
+            errors.append(f"{expected.package}:source")
+    return errors
+
+
+def test_release_identities_are_the_exact_checked_in_lock_artifacts() -> None:
+    lock = tomllib.loads((ROOT / "poetry.lock").read_text(encoding="utf-8"))
+    assert _lock_release_errors(lock["package"]) == []
+
+
+def test_release_lock_guard_is_sensitive_to_a_changed_wheel_digest() -> None:
+    lock = tomllib.loads((ROOT / "poetry.lock").read_text(encoding="utf-8"))
+    packages = list(lock["package"])
+    index = next(
+        i for i, package in enumerate(packages) if package["name"] == "dotmac-billing"
+    )
+    changed = dict(packages[index])
+    changed["files"] = [
+        {**item, "hash": _OTHER_SHA} if item["file"].endswith(".whl") else item
+        for item in changed["files"]
+    ]
+    packages[index] = changed
+    assert "dotmac-billing:wheel-digest" in _lock_release_errors(packages)
+
+
+def test_released_commercial_modules_keep_all_cutover_gates_closed() -> None:
+    by_module = {module.module: module for module in SHADOW_COHORT.modules}
+    expected_blocks = {
+        "subscriptions": "vendor-cp-platform-adoption",
+        "billing": "vendor-cp-platform-adoption",
+        "collections": None,
+    }
+    for name, block in expected_blocks.items():
+        module = by_module[name]
+        assert module.authority_mode is AuthorityMode.NONE
+        assert module.comparison_gate.satisfied is False
+        assert module.comparison_gate.reconciliation_hash is None
+        assert (
+            module.blocking_prerequisite.code
+            if module.blocking_prerequisite is not None
+            else None
+        ) == block
+        assert all(
+            writer.ratchet.remaining == writer.ratchet.ceiling == 1
+            for writer in module.displaced_writers
+        )
 
 
 def test_no_cohort_module_claims_authority_it_has_not_earned() -> None:
