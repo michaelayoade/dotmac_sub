@@ -161,6 +161,17 @@ has no admitted runtime reader or mapping yet.
 `test_the_standing_blocker_carries_real_pin_coordinates` fails the build if the
 recorded blocker and adoption manifest ever disagree.
 
+The data cohort also has a distinct sealed read-only readiness verdict. Run the
+`readiness` subcommand from `scripts.billing.receivable_projection` with the
+same exact code revision, schema revision and observation window used for
+parity. It exits non-zero when the report seal or aggregate accounting does not
+reproduce, or on an empty comparison, unresolved classification, projection
+work still required, semantic divergence, any `not_expressible` result or a
+standing contract blocker. There is no `--apply` form. A zero exit makes the
+evidence eligible for a separately authorised authority review; it does not
+move a writer, select a commercial provider, retire a fallback or authorise
+deployment.
+
 The data cohort also runs against **live Sub**, not inside the shadow stack:
 it observes incumbent invoices and writes a rebuildable projection beside them.
 It moves no authority, creates no collections case, and every writing command

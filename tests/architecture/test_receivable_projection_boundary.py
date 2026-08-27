@@ -451,6 +451,26 @@ def test_every_writing_subcommand_accepts_apply() -> None:
         assert "--dry-run" not in options, f"{name} exposes a --dry-run flag"
 
 
+def test_readiness_is_an_always_read_only_fail_closed_gate() -> None:
+    from scripts.billing.receivable_projection import build_parser
+
+    parser = build_parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if isinstance(action, __import__("argparse")._SubParsersAction)
+    )
+    options = {
+        option
+        for action in subparsers.choices["readiness"]._actions
+        for option in action.option_strings
+    }
+    assert "--apply" not in options
+    assert "--dry-run" not in options
+    assert "--strict" not in options
+    assert {"--window-start", "--window-end", "--cutoff"} <= options
+
+
 def test_the_dry_run_path_never_enters_the_owner_boundary() -> None:
     """Dry run must not open the transaction at all, not merely not commit."""
     from app.services.billing import receivable_projection as owner
@@ -606,6 +626,7 @@ def test_the_owner_is_registered_with_a_complete_contract() -> None:
     )
     assert owner.module == "app.services.billing.receivable_projection"
     assert owner.contract is not None
+    assert "receivable cutover readiness verdict" in owner.owns
     assert contract_validation_errors(owner, service_names=names) == ()
 
 

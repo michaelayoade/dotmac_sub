@@ -30,11 +30,17 @@ Subcommands::
     poetry run python -m scripts.billing.receivable_projection reconcile   [same args]
     poetry run python -m scripts.billing.receivable_projection repair-drift [same args]
     poetry run python -m scripts.billing.receivable_projection parity      [same args]
+    poetry run python -m scripts.billing.receivable_projection readiness   [same args]
 
 `--strict` exits non-zero when a pass reports drift (missing, stale-skipped,
 ambiguous-watermark or orphaned rows) or when parity reports a divergence, so
 the same command is usable as a CI or runbook gate. A `not_expressible` count
 is NOT a strict failure: it is a recorded, pinned limit, not a regression.
+
+`readiness` is the stronger, always-read-only authority-review gate. It exits
+non-zero unless the compared cohort is non-empty, fully classified, converged,
+fully expressible, divergence-free, and carries no standing contract blocker.
+Passing it still does not move authority or retire a writer.
 """
 
 from __future__ import annotations
@@ -42,8 +48,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from uuid import uuid4
+
+from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.billing_receivable_projection import ReceivableProjectionRunKind
@@ -55,7 +64,10 @@ from app.services.billing.receivable_cohort import (
     definition_payload,
     definition_seal,
 )
-from app.services.billing.receivable_parity import evaluate_receivable_parity
+from app.services.billing.receivable_parity import (
+    assess_receivable_cutover_readiness,
+    evaluate_receivable_parity,
+)
 from app.services.billing.receivable_projection import (
     ProjectionMode,
     ReceivableProjectionError,
@@ -120,7 +132,7 @@ def _mode(args: argparse.Namespace) -> ProjectionMode:
     return ProjectionMode.APPLY if args.apply else ProjectionMode.DRY_RUN
 
 
-def _cmd_cohort(db: object, args: argparse.Namespace) -> int:
+def _cmd_cohort(_db: Session, args: argparse.Namespace) -> int:
     """Print the sealed cohort definition. Touches no table."""
     window = _window(args)
     _emit(
@@ -135,19 +147,22 @@ def _cmd_cohort(db: object, args: argparse.Namespace) -> int:
     return 0
 
 
-def _drift_total(payload: dict[str, object]) -> int:
-    return sum(
-        int(payload.get(key, 0) or 0)
-        for key in (
-            "missing_count",
-            "stale_skipped_count",
-            "ambiguous_watermark_count",
-            "orphaned_count",
-        )
-    )
+def _drift_total(payload: Mapping[str, object]) -> int:
+    total = 0
+    for key in (
+        "missing_count",
+        "stale_skipped_count",
+        "ambiguous_watermark_count",
+        "orphaned_count",
+    ):
+        value = payload.get(key, 0)
+        if not isinstance(value, int):
+            raise TypeError(f"{key} must be an integer count")
+        total += value
+    return total
 
 
-def _cmd_project(db: object, args: argparse.Namespace, *, subcommand: str) -> int:
+def _cmd_project(db: Session, args: argparse.Namespace, *, subcommand: str) -> int:
     command = ReconcileReceivableProjectionCommand(
         context=_context(args, scope=subcommand),
         window=_window(args),
@@ -191,7 +206,7 @@ def _cmd_project(db: object, args: argparse.Namespace, *, subcommand: str) -> in
     return 0
 
 
-def _cmd_parity(db: object, args: argparse.Namespace) -> int:
+def _cmd_parity(db: Session, args: argparse.Namespace) -> int:
     window = _window(args)
     context = _context(args, scope="parity")
     report = evaluate_receivable_parity(
@@ -238,6 +253,37 @@ def _cmd_parity(db: object, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_readiness(db: Session, args: argparse.Namespace) -> int:
+    """Emit the sealed read-only authority-review gate and never write."""
+    report = evaluate_receivable_parity(
+        db,
+        window=_window(args),
+        context=_context(args, scope="receivable-readiness"),
+        code_version=args.code_version,
+        database_schema_version=args.schema_version,
+    )
+    readiness = assess_receivable_cutover_readiness(report)
+    _emit(
+        {
+            "subcommand": "readiness",
+            "ready": readiness.ready,
+            "cohort_definition_seal": readiness.cohort_definition_seal,
+            "membership_digest": readiness.membership_digest,
+            "report_fingerprint": readiness.report_fingerprint,
+            "readiness_fingerprint": readiness.readiness_fingerprint,
+            "blockers": [
+                {
+                    "code": blocker.code.value,
+                    "count": blocker.count,
+                    "detail": blocker.detail,
+                }
+                for blocker in readiness.blockers
+            ],
+        }
+    )
+    return 0 if readiness.ready else 1
+
+
 def _add_window_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--window-start", required=True)
     parser.add_argument("--window-end", required=True)
@@ -262,6 +308,13 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_readiness_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_window_arguments(parser)
+    parser.add_argument("--code-version", required=True)
+    parser.add_argument("--schema-version", required=True)
+    parser.add_argument("--reason")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="receivable_projection", description=__doc__)
     sub = parser.add_subparsers(dest="subcommand", required=True)
@@ -271,6 +324,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name in ("backfill", "reconcile", "repair-drift", "parity"):
         _add_run_arguments(sub.add_parser(name))
+    _add_readiness_arguments(
+        sub.add_parser(
+            "readiness",
+            help="read-only sealed authority-review gate",
+        )
+    )
     return parser
 
 
@@ -281,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_cohort(db, args)
         if args.subcommand == "parity":
             return _cmd_parity(db, args)
+        if args.subcommand == "readiness":
+            return _cmd_readiness(db, args)
         return _cmd_project(db, args, subcommand=args.subcommand)
 
 
