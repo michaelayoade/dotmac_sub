@@ -282,6 +282,8 @@ def test_customer_bulk_actions_use_server_contract_and_explicit_selection_scope(
     assert "customer_ids: this.selectedIds" not in page
     assert "customers in the current filtered result" not in page
     assert "customer_bulk_action_contract.selection_enabled" in table
+    assert "can_send_customer_messages" in route
+    assert "can_send_customer_messages" in table
     assert ":disabled=\"selectionMode === 'filtered'\"" in table
 
 

@@ -4,7 +4,7 @@ The dispatch *behaviour* (flag-off no-op, actor requirement, persisted debounce,
 audit rows) is covered in test_outage_notifications.py; the route only previews
 and, on an explicit confirm POST, delegates to that hard-gated service. These
 tests pin the wiring that makes the route safe: it exists, the confirm POST is
-behind ``monitoring:write`` (preview behind ``monitoring:read``), the template
+behind ``monitoring:outage_notify:send`` (preview behind ``monitoring:read`` or send), the template
 renders, and the audit read returns what the console shows.
 """
 
@@ -24,17 +24,27 @@ def _find(method: str, path: str):
     return None
 
 
-def _perm_key_of(route) -> str | None:
-    """The require_permission key gating a route (from the closure), if any."""
+def _perm_keys_of(route) -> set[str]:
+    """The permission keys gating a route, from dependency closures."""
+    keys: set[str] = set()
+
+    def collect(value) -> None:
+        if isinstance(value, str) and ":" in value:
+            keys.add(value)
+        elif isinstance(value, (tuple, list, set, frozenset)):
+            for item in value:
+                collect(item)
+
     for dep in route.dependant.dependencies:
         call = getattr(dep, "call", None)
-        if call is None or getattr(call, "__name__", "") != "_require_permission":
+        if call is None or getattr(call, "__name__", "") not in {
+            "_require_permission",
+            "_require_any_permission",
+        }:
             continue
         for cell in call.__closure__ or ():
-            val = cell.cell_contents
-            if isinstance(val, str) and ":" in val:
-                return val
-    return None
+            collect(cell.cell_contents)
+    return keys
 
 
 def test_notify_routes_registered():
@@ -42,17 +52,18 @@ def test_notify_routes_registered():
     assert _find("POST", "/network/detected-outages/notify") is not None
 
 
-def test_notify_preview_requires_monitoring_read():
-    assert _perm_key_of(_find("GET", "/network/detected-outages/notify")) == (
-        "monitoring:read"
-    )
+def test_notify_preview_requires_monitoring_read_or_outage_send():
+    assert _perm_keys_of(_find("GET", "/network/detected-outages/notify")) == {
+        "monitoring:read",
+        "monitoring:outage_notify:send",
+    }
 
 
-def test_notify_confirm_requires_monitoring_write():
-    # The only dispatch path must be gated on write, not read.
-    assert _perm_key_of(_find("POST", "/network/detected-outages/notify")) == (
-        "monitoring:write"
-    )
+def test_notify_confirm_requires_outage_notification_send():
+    # The only dispatch path must be gated on send, not monitoring read/write.
+    assert _perm_keys_of(_find("POST", "/network/detected-outages/notify")) == {
+        "monitoring:outage_notify:send"
+    }
 
 
 def test_notify_template_compiles():
