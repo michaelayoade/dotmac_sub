@@ -169,6 +169,9 @@ def handle_smtp_message(
                             mime_type=str(item["mime_type"])
                             if item.get("mime_type")
                             else None,
+                            content_base64=str(item["content_base64"])
+                            if item.get("content_base64")
+                            else None,
                             file_size=int(item["file_size"])
                             if item.get("file_size") is not None
                             else None,

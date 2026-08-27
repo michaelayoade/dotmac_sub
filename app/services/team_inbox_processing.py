@@ -60,6 +60,9 @@ def _attachment_observation(
             str(item["provider_media_id"]) if item.get("provider_media_id") else None
         ),
         source_url=str(item["source_url"]) if item.get("source_url") else None,
+        content_base64=(
+            str(item["content_base64"]) if item.get("content_base64") else None
+        ),
         caption=str(item["caption"]) if item.get("caption") else None,
         file_size=(
             int(str(item["file_size"])) if item.get("file_size") is not None else None
@@ -81,6 +84,7 @@ def _attachment_metadata(
         "id": item.provider_media_id,
         "url": item.source_url,
         "source_url": item.source_url,
+        "content_base64": item.content_base64,
         "caption": item.caption,
         "file_size": item.file_size,
         "download_status": item.download_status,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -11,7 +13,12 @@ from sqlalchemy.orm import Session
 
 from app.models.stored_file import StoredFile
 from app.models.team_inbox import InboxMediaAsset, InboxMessage
-from app.services.file_storage import ObjectNotFoundError, StreamResult, file_uploads
+from app.services.file_storage import (
+    FileValidationError,
+    ObjectNotFoundError,
+    StreamResult,
+    file_uploads,
+)
 
 REMOTE_MEDIA_PROVIDERS = frozenset(
     {
@@ -93,6 +100,55 @@ def media_content_url(asset_id: object) -> str:
     return f"/admin/inbox/media/{asset_id}/content"
 
 
+def _content_base64(raw: dict[str, Any]) -> str | None:
+    return _text(raw.get("content_base64"))
+
+
+def _stored_file_metadata(raw: dict[str, Any], *, stored_file: StoredFile) -> dict:
+    metadata = dict(raw)
+    metadata.pop("content_base64", None)
+    metadata["stored_file_id"] = str(stored_file.id)
+    metadata["download_status"] = "stored"
+    return metadata
+
+
+def _metadata_without_inline_content(raw: dict[str, Any]) -> dict:
+    metadata = dict(raw)
+    metadata.pop("content_base64", None)
+    return metadata
+
+
+def _stage_inline_attachment_content(
+    db: Session,
+    *,
+    message: InboxMessage,
+    raw: dict[str, Any],
+) -> StoredFile | None:
+    content_base64 = _content_base64(raw)
+    if not content_base64:
+        return None
+    file_name = _file_name(raw) or "attachment"
+    try:
+        data = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raw["download_error"] = "Attachment content could not be decoded."
+        return None
+    try:
+        return file_uploads.stage_upload(
+            db=db,
+            domain="attachments",
+            entity_type="inbox_message",
+            entity_id=str(message.id),
+            original_filename=file_name,
+            content_type=_text(raw.get("mime_type") or raw.get("mime"), max_length=160),
+            data=data,
+            uploaded_by=None,
+        )
+    except FileValidationError as exc:
+        raw["download_error"] = str(exc)
+        return None
+
+
 def _existing_asset(
     db: Session,
     *,
@@ -147,6 +203,17 @@ def promote_message_attachments(
         if existing is not None:
             assets.append(existing)
             continue
+        stored_file = _stage_inline_attachment_content(db, message=message, raw=raw)
+        if stored_file is not None:
+            raw = _stored_file_metadata(raw, stored_file=stored_file)
+            raw["storage_url"] = stored_file.storage_key_or_relative_path
+            raw["file_name"] = stored_file.original_filename
+            raw["filename"] = stored_file.original_filename
+            raw["mime_type"] = stored_file.content_type
+            raw["file_size"] = stored_file.file_size
+            raw["checksum_sha256"] = stored_file.checksum
+        else:
+            raw = _metadata_without_inline_content(raw)
         asset = InboxMediaAsset(
             conversation_id=message.conversation_id,
             message_id=message.id,
@@ -168,6 +235,14 @@ def promote_message_attachments(
         )
         db.add(asset)
         assets.append(asset)
+    message_metadata = dict(message.metadata_ or {})
+    raw_attachments = message_metadata.get("attachments")
+    if isinstance(raw_attachments, list):
+        message_metadata["attachments"] = [
+            _metadata_without_inline_content(item) if isinstance(item, dict) else item
+            for item in raw_attachments
+        ]
+        message.metadata_ = message_metadata
     db.flush()
     return assets
 
@@ -218,6 +293,18 @@ def can_stream_remote_media(asset: InboxMediaAsset) -> bool:
     return (
         parsed.scheme == "https" and provider in REMOTE_MEDIA_PROVIDERS and allowed_host
     )
+
+
+def asset_content_available(asset: InboxMediaAsset) -> bool:
+    if _stored_file_id(asset) is not None:
+        return True
+    if (
+        asset.channel_type == "whatsapp"
+        and asset.direction == "inbound"
+        and bool(asset.provider_media_id)
+    ):
+        return True
+    return bool(asset.source_url and can_stream_remote_media(asset))
 
 
 def _graph_version(config: Mapping[str, Any]) -> str:
