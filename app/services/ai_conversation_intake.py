@@ -2327,6 +2327,64 @@ def _process_one_session(
             )
             if delivery.kind == "queued":
                 session.state = "collecting_intent"
+                inbound_metadata = (
+                    dict(inbound.metadata_ or {})
+                    if isinstance(inbound.metadata_, Mapping)
+                    else {}
+                )
+                saved_follow_up_required = str(
+                    inbound_metadata.get("ai_intake_status") or ""
+                ) == AiIntakeStatus.awaiting_follow_up.value and bool(
+                    inbound_metadata.get("ai_intake_requires_follow_up")
+                )
+                if saved_follow_up_required:
+                    saved_question = " ".join(
+                        str(
+                            inbound_metadata.get("ai_intake_follow_up_question") or ""
+                        ).split()
+                    )
+                    if not saved_question:
+                        saved_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
+                    follow_up_delivery = team_inbox_outbound.send_ai_intake_follow_up(
+                        db,
+                        conversation=conversation,
+                        payload=team_inbox_outbound.AiIntakeFollowUpPayload(
+                            question=saved_question,
+                            inbound_message_id=inbound.id,
+                            config_id=session.legacy_config_id,
+                            follow_up_count=session.turn_count,
+                            session_id=session.id,
+                            policy_id=session.policy_id,
+                            policy_version_id=session.policy_version_id,
+                            display_name=session.display_name,
+                        ),
+                    )
+                    logger.info(
+                        "ai intake saved follow-up delivery resolved",
+                        extra={
+                            "event": "ai_intake_saved_follow_up_delivery_resolved",
+                            "conversation_id": str(conversation.id),
+                            "session_id": str(session.id),
+                            "inbound_message_id": str(inbound.id),
+                            "delivery_kind": follow_up_delivery.kind,
+                            "delivery_reason": follow_up_delivery.reason,
+                            "outbound_message_id": follow_up_delivery.message_id,
+                        },
+                    )
+                    if follow_up_delivery.kind == "queued":
+                        session.state = "awaiting_customer"
+                        session_metadata = dict(session.metadata_ or {})
+                        session_metadata[f"processed_inbound:{inbound.id}"] = True
+                        session.metadata_ = session_metadata
+                        transition_conversation_status(
+                            db,
+                            conversation=conversation,
+                            status=InboxConversationStatus.pending,
+                            reason=(
+                                team_inbox_status.InboxStatusReason.ai_awaiting_clarification
+                            ),
+                            source_id=f"ai-intake-follow-up:{session.id}:{inbound.id}",
+                        )
                 mark_conversation_ai_metadata(
                     conversation, session=session, active=True
                 )
