@@ -2473,6 +2473,69 @@ def _process_one_session(
     session_metadata[processed_key] = True
     session_metadata["last_generation_attempt_id"] = str(generation.id)
     session.metadata_ = session_metadata
+    if outcome.status == AiIntakeStatus.awaiting_follow_up:
+        delivery_question = " ".join(
+            str(
+                metadata.get("ai_intake_follow_up_question")
+                or (
+                    outcome.classification.follow_up_question
+                    if outcome.classification is not None
+                    else ""
+                )
+            ).split()
+        )
+        if not delivery_question:
+            delivery_question = DEFAULT_CLARIFICATION_QUESTIONS[0]
+        metadata["ai_intake_follow_up_question"] = delivery_question
+        inbound.metadata_ = metadata
+        delivery = team_inbox_outbound.send_ai_intake_follow_up(
+            db,
+            conversation=conversation,
+            payload=team_inbox_outbound.AiIntakeFollowUpPayload(
+                question=delivery_question,
+                inbound_message_id=inbound.id,
+                config_id=outcome.config_id,
+                follow_up_count=outcome.follow_up_count,
+                session_id=session.id,
+                policy_id=session.policy_id,
+                policy_version_id=session.policy_version_id,
+                display_name=session.display_name,
+            ),
+        )
+        logger.info(
+            "ai intake follow-up delivery resolved",
+            extra={
+                "event": "ai_intake_follow_up_delivery_resolved",
+                "conversation_id": str(conversation.id),
+                "session_id": str(session.id),
+                "inbound_message_id": str(inbound.id),
+                "delivery_kind": delivery.kind,
+                "delivery_reason": delivery.reason,
+                "outbound_message_id": delivery.message_id,
+                "notification_id": str(delivery.notification_id)
+                if delivery.notification_id is not None
+                else None,
+            },
+        )
+        generation.outbound_message_id = (
+            UUID(delivery.message_id) if delivery.message_id else None
+        )
+        conversation_metadata = dict(conversation.metadata_ or {})
+        intake_metadata = dict(conversation_metadata.get("ai_intake") or {})
+        intake_metadata["follow_up_delivery_status"] = delivery.kind
+        intake_metadata["follow_up_delivery_reason"] = delivery.reason
+        conversation_metadata["ai_intake"] = intake_metadata
+        conversation.metadata_ = conversation_metadata
+        session.state = "awaiting_customer"
+        transition_conversation_status(
+            db,
+            conversation=conversation,
+            status=InboxConversationStatus.pending,
+            reason=team_inbox_status.InboxStatusReason.ai_awaiting_clarification,
+            source_id=f"ai-intake-awaiting-clarification:{session.id}:{inbound.id}",
+        )
+        mark_conversation_ai_metadata(conversation, session=session, active=True)
+        return True
 
     engine_forced_handoff = False
     engine_handoff_state: ai_intake_conversation_engine.ConversationalState | None = (
