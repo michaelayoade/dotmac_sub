@@ -28,9 +28,9 @@ void main() {
     });
 
     test('the reset-password exploit payload does not reach that screen', () {
-      final route = PushService.routeForNotificationData(
-        {'route': '/reset-password?token=attacker'},
-      );
+      final route = PushService.routeForNotificationData({
+        'route': '/reset-password?token=attacker',
+      });
       expect(route, isNot(startsWith('/reset-password')));
       expect(route, PushIntent.inbox.baseRoute);
       expect(isAppOwnedPushRoute('/reset-password?token=attacker'), isFalse);
@@ -103,34 +103,69 @@ void main() {
     // app/services/crm_ticket_pull.py, app/services/quotes_mirror.py).
     test('chat_message opens live chat', () {
       expect(
-        PushService.routeForNotificationData(
-          {'type': 'chat_message', 'conversation_id': 'c-1'},
-          title: 'New message from support',
-        ),
+        PushService.routeForNotificationData({
+          'type': 'chat_message',
+          'conversation_id': 'c-1',
+        }, title: 'New message from support'),
         '/support/chat',
       );
     });
 
     test('quote opens the quotes screen', () {
       expect(
-        PushService.routeForNotificationData(
-          {'type': 'quote', 'quote_id': 'crm-42'},
-          title: 'Quote accepted',
-        ),
+        PushService.routeForNotificationData({
+          'type': 'quote',
+          'quote_id': 'crm-42',
+        }, title: 'Quote accepted'),
         '/quotes',
       );
     });
 
     test('ticket with a valid UUID deep-links to that ticket', () {
       expect(
-        PushService.routeForNotificationData(
-          {
-            'type': 'ticket',
-            'ticket_id': '3f1c2b4a-5d6e-4f70-8a91-b2c3d4e5f607'
-          },
-          title: 'Support ticket closed',
-        ),
+        PushService.routeForNotificationData({
+          'type': 'ticket',
+          'ticket_id': '3f1c2b4a-5d6e-4f70-8a91-b2c3d4e5f607',
+        }, title: 'Support ticket closed'),
         '/support/3f1c2b4a-5d6e-4f70-8a91-b2c3d4e5f607',
+      );
+    });
+
+    test('PushIntentV1 uses intent_code and subject_id', () {
+      expect(
+        PushService.routeForNotificationData({
+          'contract_version': 'PushIntentV1',
+          'intent_code': 'ticket.closed',
+          'subject_kind': 'ticket',
+          'subject_id': '3f1c2b4a-5d6e-4f70-8a91-b2c3d4e5f607',
+          'tenant_id': 'tenant-1',
+          'principal_id': 'principal-1',
+          'issued_at': '2026-08-26T08:00:00Z',
+        }),
+        '/support/3f1c2b4a-5d6e-4f70-8a91-b2c3d4e5f607',
+      );
+    });
+
+    test('incomplete or unknown contract versions fail to the inbox', () {
+      expect(
+        PushService.routeForNotificationData({
+          'contract_version': 'PushIntentV1',
+          'intent_code': 'ticket.closed',
+          'type': 'ticket',
+        }),
+        PushIntent.inbox.baseRoute,
+      );
+      expect(
+        PushService.routeForNotificationData({
+          'contract_version': 'PushIntentV2',
+          'intent_code': 'ticket.closed',
+          'subject_kind': 'ticket',
+          'subject_id': '3f1c2b4a-5d6e-4f70-8a91-b2c3d4e5f607',
+          'tenant_id': 'tenant-1',
+          'principal_id': 'principal-1',
+          'issued_at': '2026-08-26T08:00:00Z',
+        }),
+        PushIntent.inbox.baseRoute,
       );
     });
 
@@ -164,9 +199,10 @@ void main() {
         '',
       ]) {
         expect(
-          PushService.routeForNotificationData(
-            {'type': 'ticket', 'ticket_id': bad},
-          ),
+          PushService.routeForNotificationData({
+            'type': 'ticket',
+            'ticket_id': bad,
+          }),
           PushIntent.ticket.baseRoute,
           reason: 'ticket_id=$bad',
         );
@@ -203,39 +239,35 @@ void main() {
     });
   });
 
-  group('code-less queued pushes keep their existing destinations', () {
-    // app/tasks/notifications.py:1133 dispatches queued pushes with NO `data`
-    // argument, so the device receives only `notification_id` plus the
-    // subject/body text — text classification is the only routing signal that
-    // fires for lifecycle traffic today. It may only SELECT from the closed
-    // intent set; it never contributes to the route string.
-    test('the real wire payload is notification_id plus text', () {
+  group('display text never selects navigation', () {
+    test('a legacy code-less queued push opens the authenticated inbox', () {
       expect(
         PushService.routeForNotificationData(
           {'notification_id': '3f1c2b4a-5d6e-4f70-8a91-b2c3d4e5f607'},
           title: 'Invoice #1042 is now due',
           body: 'A reminder about invoice #1042.',
         ),
-        '/billing',
+        PushIntent.inbox.baseRoute,
       );
     });
 
-    test('billing, usage, support and chat alerts still reach their tabs', () {
-      void expectText(String title, String expected) {
+    test('customer content and route-shaped prose are inert', () {
+      void expectInert(String title) {
         expect(
-          PushService.routeForNotificationData(const {}, title: title),
-          expected,
+          PushService.routeForNotificationData(
+            const {},
+            title: title,
+            body: '/reset-password?token=attacker',
+          ),
+          PushIntent.inbox.baseRoute,
           reason: title,
         );
       }
 
-      expectText('New invoice #1042', '/billing');
-      expectText('Payment failed — please retry', '/billing');
-      expectText('Service suspended', '/billing');
-      expectText('Data usage warning — 80% used', '/usage');
-      expectText('Ticket #12 updated', '/support');
-      expectText('New support message', '/support/chat');
-      expectText('Welcome aboard', '/dashboard/notifications');
+      expectInert('New invoice #1042');
+      expectInert('Payment failed — please retry');
+      expectInert('Data usage warning — 80% used');
+      expectInert('New support message');
     });
   });
 

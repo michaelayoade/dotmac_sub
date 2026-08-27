@@ -632,6 +632,10 @@ from app.models.offer_availability import (  # noqa: F401
     OfferLocationAvailability,
     OfferResellerAvailability,
 )
+from app.models.oidc_mobile import (  # noqa: F401
+    OidcCeremonyOutcome,
+    OidcMobileCeremony,
+)
 from app.models.ont_assignment_constraint_authorization import (  # noqa: F401
     OntAssignmentConstraintAuthorizationRequest,
     OntAssignmentConstraintAuthorizationReview,

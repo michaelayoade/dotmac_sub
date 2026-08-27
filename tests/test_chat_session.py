@@ -396,8 +396,10 @@ def test_chat_webhook_valid_signature_sends_push(db_session):
     assert resp["status"] == "ok"
     send.assert_called_once()
     assert send.call_args.args[1] == "sub-7"
-    assert send.call_args.kwargs["data"]["conversation_id"] == "conv-7"
-    assert send.call_args.kwargs["data"]["type"] == "chat_message"
+    intent = send.call_args.kwargs["intent"]
+    assert intent.intent_code == "chat.message"
+    assert intent.subject_kind == "conversation"
+    assert intent.subject_id == "conv-7"
 
 
 def test_chat_webhook_reads_event_envelope(db_session):
@@ -417,7 +419,10 @@ def test_chat_webhook_reads_event_envelope(db_session):
     assert resp["status"] == "ok"
     send.assert_called_once()
     assert send.call_args.args[1] == "sub-9"
-    assert send.call_args.kwargs["data"]["conversation_id"] == "conv-9"
+    intent = send.call_args.kwargs["intent"]
+    assert intent.intent_code == "chat.message"
+    assert intent.subject_kind == "conversation"
+    assert intent.subject_id == "conv-9"
 
 
 def test_chat_webhook_bad_signature_rejected(db_session):

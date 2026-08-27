@@ -4,6 +4,12 @@
 	<dict>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
+		<!-- Route an incoming Universal Link's path+query into the Flutter
+		     router (and from there to OidcCallbackCoordinator) instead of
+		     Swift's own NSUserActivity handler. Deliberately NOT accompanied by
+		     a CFBundleURLTypes entry: this app declares no custom scheme. -->
+		<key>FlutterDeepLinkingEnabled</key>
+		<true/>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>

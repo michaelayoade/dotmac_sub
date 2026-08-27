@@ -4,6 +4,10 @@
 
   "API_BASE_URL": "https://selfcare.dotmac.io",
 
+  "_oidc_note": "The verified redirect boundary (App Link / Universal Link) the OIDC ceremony comes back through. Fleet-owned and deliberately NOT the API host and NOT a tenant host: the association documents at deploy/links.dotmac.io/ pin ONE application identity, so this origin has to outlive any single deployment or tenant. Changing either value is a five-file change - this file, field_mobile/lib/core/deeplink/oidc_redirect.dart, the Android intent filter, the iOS Associated Domains entitlement, and both association documents - because the OS validates the NATIVE declarations against the documents, not against this string. scripts/check_field_applinks.py fails CI when the five disagree.",
+  "OIDC_CALLBACK_ORIGIN": "https://links.dotmac.io",
+  "OIDC_CALLBACK_PATH": "/oidc/field/callback",
+
   "BRAND_PRIMARY_COLOR": "#206a07",
   "BRAND_SECONDARY_COLOR": "#06b6d4",
   "BRAND_SEMANTIC_POSITIVE_COLOR": "#15803d",

@@ -48,6 +48,7 @@ dependencies = [
     "dotmac-integration-client",
     "langgraph==0.6.6",
     "defusedxml==0.7.1",
+    "dotmac-auth-oidc==0.1.0a2",
     "dotmac-kernel==0.1.0a94",
     "dotmac-billing==0.1.0a1",
     "dotmac-collections==0.1.0a1",
@@ -69,6 +70,12 @@ requires-poetry = "2.4.1"
 # enforced by tests/architecture/test_kernel_compatibility.py).
 [tool.poetry.dependencies]
 dotmac-integration-client = { git = "https://github.com/michaelayoade/dotmac-integration-client.git", tag = "v0.2.0" }
+# The server-side OIDC protocol adapter. Sub is its first native-client
+# consumer: `NativeIDTokenVerifier` replaced Sub's local JWKS cache and
+# ID-token verification wholesale, so this pin is a SECURITY pin — an
+# unrelated lock refresh must never move the code that decides which key
+# verified a field technician's assertion.
+dotmac-auth-oidc = { version = "0.1.0a2", source = "forgejo" }
 dotmac-kernel = { version = "0.1.0a94", source = "forgejo" }
 # Dual-plane commercial owners selected TENANT-only for migration and shadow
 # preparation. Sub's incumbent money and collections writers remain active.
