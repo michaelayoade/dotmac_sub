@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import configparser
 import tomllib
-from importlib import import_module
+from importlib import import_module, util
 from pathlib import Path
 
 import pytest
@@ -61,6 +61,28 @@ def _distribution_for(import_name: str) -> str:
     return import_name.replace("_", "-")
 
 
+def _import_name_for(distribution: str) -> str:
+    return distribution.replace("-", "_")
+
+
+def _ships_a_lineage(distribution: str) -> bool:
+    """Whether the INSTALLED distribution actually provides migrations.
+
+    This is what turns "stateless adapter" from an assertion into a measured
+    premise. A package with no ``<pkg>.migrations`` has no lineage to compose,
+    so it cannot be the silent failure this module exists to catch - and if it
+    ever grows one, the exemption stops applying by itself rather than
+    outliving the reason it was written.
+    """
+
+    try:
+        return (
+            util.find_spec(f"{_import_name_for(distribution)}.migrations") is not None
+        )
+    except (ImportError, ValueError, AttributeError):
+        return False
+
+
 def test_every_composed_lineage_is_pinned() -> None:
     """The silent failure: a lineage nothing installs, or a pin nothing runs."""
 
@@ -85,17 +107,48 @@ def test_every_pinned_dotmac_module_composes_its_lineage() -> None:
     adopting kernel MIGRATIONS, and `dotmac-ui` ships no lineage at all.
     """
 
-    exempt = {"dotmac-kernel", "dotmac-ui", "dotmac-integration-client"}
+    # Sub composes kernel MODELS without adopting kernel MIGRATIONS. The kernel
+    # does ship a lineage, so this one cannot be derived - it is a deliberate
+    # decision and has to be stated.
+    declared_exempt = {"dotmac-kernel"}
     composed = {_distribution_for(name) for name in _declared_lineages()}
     missing = sorted(
         name
         for name in _pinned_distributions()
-        if name.startswith("dotmac-") and name not in exempt and name not in composed
+        if name.startswith("dotmac-")
+        and name not in declared_exempt
+        and name not in composed
+        # Everything else earns its exemption by measurement: no lineage
+        # shipped, nothing that `alembic upgrade heads` could silently skip.
+        and _ships_a_lineage(name)
     )
     assert not missing, (
         "these modules are pinned and their lineages are not composed in "
         "alembic.ini, so `alembic upgrade heads` would report success without "
         "creating their schemas:\n  " + "\n  ".join(missing)
+    )
+
+
+def test_the_lineage_probe_is_load_bearing() -> None:
+    """The derived exemption must not exempt everything.
+
+    `_ships_a_lineage` returning False for every distribution - packages absent
+    from the environment, a renamed submodule - would make the check above pass
+    by exempting its entire input. Prove the probe still says yes to something
+    that genuinely ships a lineage, and no to something that genuinely does
+    not, so a green run means the guard looked rather than shrugged.
+    """
+
+    composed = [_distribution_for(name) for name in _declared_lineages()]
+    assert composed, "no lineages composed; this suite would be vacuous"
+    assert all(_ships_a_lineage(name) for name in composed), (
+        "a composed lineage is not visible to the probe, so every stateless "
+        "exemption above is unproven: "
+        + ", ".join(name for name in composed if not _ships_a_lineage(name))
+    )
+    assert not _ships_a_lineage("dotmac-auth-oidc"), (
+        "dotmac-auth-oidc now ships migrations; it is no longer a stateless "
+        "protocol adapter and must compose its lineage in alembic.ini"
     )
 
 
