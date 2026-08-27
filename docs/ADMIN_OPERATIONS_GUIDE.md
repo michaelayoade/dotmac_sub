@@ -1101,6 +1101,8 @@ Permission format: `resource:action`
 | `network:write` | Configure network |
 | `monitoring:read` | View monitoring dashboard |
 | `monitoring:write` | Create alert rules |
+| `monitoring:outage_notify:send` | Send outage notifications to affected customers |
+| `communications:customer:send` | Send customer messages to selected customer scopes |
 | `system:read` | View system settings |
 | `system:write` | Modify system settings |
 | `system:settings:read` | View settings hub |

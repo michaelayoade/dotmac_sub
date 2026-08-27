@@ -229,8 +229,15 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert "data-reply-composer" in conversation
     assert "idempotency_key" in conversation
     assert "Add CC/BCC" in conversation
+    assert "<details data-email-copy-recipients" in conversation
+    assert "copyRecipientsOpen" not in conversation
     assert 'name="cc"' in conversation
     assert 'name="bcc"' in conversation
+    assert (
+        'hx-get="/admin/inbox/{{ row.id }}?view=20260827a"'
+        in Path("templates/admin/inbox/_queue_macros.html").read_text()
+    )
+    assert 'const INBOX_FRAGMENT_VERSION = "20260827a"' in javascript
     assert "import message_bubble with context" in conversation
     triage = Path("templates/components/ui/triage.html").read_text()
     assert "att.mime_type.startswith('video/')" in triage

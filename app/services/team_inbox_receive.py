@@ -34,6 +34,11 @@ from app.services.owner_commands import CommandContext
 from app.services.realtime_platform import EventType
 
 _MESSAGE_ID_RE = re.compile(r"<[^<>]+>")
+_MAX_EMAIL_REFERENCE_IDS = 32
+_MAX_EMAIL_REFERENCES_LENGTH = 3500
+_SUCCESSFUL_OUTBOUND_EMAIL_STATUSES = frozenset(
+    {"accepted", "sent", "delivered", "read"}
+)
 _AUTO_ASSIGN_METADATA_KEYS = (
     "inbox_auto_assign_to_agent",
     "auto_assign_to_online_agent",
@@ -76,6 +81,50 @@ class InboundEmailReceiveResult:
 class EmailThreadResolution:
     active_conversation: InboxConversation | None
     continued_from_conversation_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class EmailThreadHeaders:
+    """Canonical RFC message identity for one outbound Inbox email."""
+
+    message_id: str
+    in_reply_to: str | None = None
+    references: tuple[str, ...] = ()
+
+    def as_metadata(self) -> dict[str, str | list[str] | None]:
+        return {
+            "message_id": self.message_id,
+            "in_reply_to": self.in_reply_to,
+            "references": list(self.references),
+        }
+
+    @classmethod
+    def from_metadata(cls, value: object) -> EmailThreadHeaders | None:
+        if not isinstance(value, dict):
+            return None
+        raw_message_id = value.get("message_id")
+        message_id = _normalize_message_id(
+            raw_message_id if isinstance(raw_message_id, str) else None
+        )
+        if message_id is None:
+            return None
+        raw_in_reply_to = value.get("in_reply_to")
+        in_reply_to = _normalize_message_id(
+            raw_in_reply_to if isinstance(raw_in_reply_to, str) else None
+        )
+        raw_references = value.get("references")
+        reference_values = (
+            tuple(item for item in raw_references if isinstance(item, str))
+            if isinstance(raw_references, (list, tuple))
+            else (raw_references,)
+            if isinstance(raw_references, str)
+            else ()
+        )
+        return cls(
+            message_id=message_id,
+            in_reply_to=in_reply_to,
+            references=_bounded_message_ids(_extract_message_ids(*reference_values)),
+        )
 
 
 def receive_fiber_inquiry(
@@ -292,6 +341,94 @@ def _extract_message_ids(*headers: str | None) -> list[str]:
                 seen.add(normalized)
                 values.append(normalized)
     return values
+
+
+def _bounded_message_ids(values: list[str]) -> tuple[str, ...]:
+    """Keep the newest exact identifiers within a bounded RFC header."""
+
+    bounded: list[str] = []
+    for value in values:
+        normalized = _normalize_message_id(value)
+        if normalized and normalized not in bounded:
+            bounded.append(normalized)
+    while (
+        len(bounded) > _MAX_EMAIL_REFERENCE_IDS
+        or len(" ".join(bounded)) > _MAX_EMAIL_REFERENCES_LENGTH
+    ):
+        bounded.pop(0)
+    return tuple(bounded)
+
+
+def outbound_email_message_id(message_id: UUID) -> str:
+    """Return the stable locally-owned RFC identity for an Inbox message."""
+
+    return f"<team-inbox-{message_id}@sub.local>"
+
+
+def build_outbound_email_thread_headers(
+    db: Session,
+    *,
+    conversation_id: UUID,
+    outbound_message_id: UUID,
+) -> EmailThreadHeaders:
+    """Derive exact reply headers from authoritative email chronology.
+
+    Inbound messages are always eligible reference targets. Outbound messages
+    are eligible only after provider acceptance, so a failed or merely queued
+    attempt cannot become a thread anchor the customer never received.
+    """
+
+    candidates = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.conversation_id == conversation_id)
+        .filter(InboxMessage.channel_type == InboxChannelType.email.value)
+        .filter(InboxMessage.external_message_id.isnot(None))
+        .order_by(InboxMessage.created_at.desc(), InboxMessage.id.desc())
+        .all()
+    )
+    target: InboxMessage | None = None
+    for candidate in candidates:
+        if candidate.direction == InboxMessageDirection.inbound.value:
+            target = candidate
+            break
+        delivery_status = str(
+            (candidate.metadata_ or {}).get("delivery_status") or ""
+        ).strip()
+        if (
+            candidate.direction == InboxMessageDirection.outbound.value
+            and delivery_status in _SUCCESSFUL_OUTBOUND_EMAIL_STATUSES
+        ):
+            target = candidate
+            break
+
+    message_id = outbound_email_message_id(outbound_message_id)
+    if target is None or not target.external_message_id:
+        return EmailThreadHeaders(message_id=message_id)
+
+    target_message_id = _normalize_message_id(target.external_message_id)
+    if target_message_id is None:
+        return EmailThreadHeaders(message_id=message_id)
+
+    metadata = dict(target.metadata_ or {})
+    stored_headers = EmailThreadHeaders.from_metadata(metadata.get("email_thread"))
+    reference_values: list[str] = []
+    if stored_headers is not None:
+        reference_values.extend(stored_headers.references)
+        if stored_headers.in_reply_to:
+            reference_values.append(stored_headers.in_reply_to)
+    else:
+        raw_references = metadata.get("references")
+        if isinstance(raw_references, str):
+            reference_values.extend(_extract_message_ids(raw_references))
+        raw_in_reply_to = metadata.get("in_reply_to")
+        if isinstance(raw_in_reply_to, str):
+            reference_values.extend(_extract_message_ids(raw_in_reply_to))
+    reference_values.append(target_message_id)
+    return EmailThreadHeaders(
+        message_id=message_id,
+        in_reply_to=target_message_id,
+        references=_bounded_message_ids(reference_values),
+    )
 
 
 def _find_duplicate_message(

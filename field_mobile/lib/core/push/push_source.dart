@@ -68,14 +68,40 @@ class FakePushSource implements PushSource {
   Stream<PushMessage> get messages => messageController.stream;
 }
 
+final RegExp _safeRouteSegment = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$');
+
 /// Deep-link resolution for backend push payloads.
 /// Work-order assignment/comment pushes both open the job detail route.
 String? routeForMessage(Map<String, String> data) {
-  final workOrderId = data['work_order_id'];
-  if (workOrderId == null || workOrderId.trim().isEmpty) return null;
-  if (data['type'] == 'work_order_assigned' ||
-      data['type'] == 'work_order_comment') {
-    return '/jobs/$workOrderId';
+  final version = data['contract_version']?.trim();
+  if (version != null && version != 'PushIntentV1') return null;
+  if (version == 'PushIntentV1') {
+    for (final key in const [
+      'intent_code',
+      'subject_kind',
+      'subject_id',
+      'tenant_id',
+      'principal_id',
+      'issued_at',
+    ]) {
+      if (data[key]?.trim().isEmpty ?? true) return null;
+    }
+    if (DateTime.tryParse(data['issued_at']!)?.isUtc != true) return null;
+  }
+  final workOrderId = version == 'PushIntentV1'
+      ? data['subject_id']
+      : data['work_order_id'];
+  if (workOrderId == null || !_safeRouteSegment.hasMatch(workOrderId.trim())) {
+    return null;
+  }
+  final intentCode = version == 'PushIntentV1'
+      ? data['intent_code']
+      : data['type'];
+  if (intentCode == 'work_order.assigned' ||
+      intentCode == 'work_order.commented' ||
+      intentCode == 'work_order_assigned' ||
+      intentCode == 'work_order_comment') {
+    return '/jobs/${workOrderId.trim()}';
   }
   return null;
 }

@@ -108,7 +108,10 @@ def test_unit_shards_partition_all_unit_test_files_once(tmp_path: Path) -> None:
 
 def test_integration_shards_partition_every_file_once() -> None:
     module = _load_module("select_integration_shard", INTEGRATION_SHARD_SCRIPT)
-    expected = set((ROOT / "tests/integration").glob("test_*.py"))
+    # Recursive: the selector used a flat glob, so the first subdirectory added
+    # under tests/integration/ would have been dropped from every shard with no
+    # error and no skip. Kept in sync with the selector's own discovery.
+    expected = set((ROOT / "tests/integration").rglob("test_*.py"))
     groups = [
         set(module.select_integration_shard(shard=shard, shards=4))
         for shard in range(1, 5)
@@ -119,18 +122,39 @@ def test_integration_shards_partition_every_file_once() -> None:
 
 
 def test_postgresql_classifier_is_narrow_and_fails_closed() -> None:
+    """Exemptions stay narrow, and everything else triggers the lane.
+
+    CONTRACT CHANGE: a root-level `tests/*.py` module used to be exempt. It is
+    not, because the integration suite imports helpers from exactly there --
+    `tests.staff_identity_fixtures`, `tests.referral_program_testkit`,
+    `tests.prepaid_funding_helpers`, `tests.test_crm_ticket_pull` and
+    `tests.test_integration_whatsapp_capability` today, with nothing stopping
+    the next one. Editing such a module changed what the PostgreSQL lane
+    executes while telling CI it could skip that lane.
+
+    The surviving exemptions are proven rather than assumed: see
+    `test_postgresql_lane_isolation.py`, which walks the lane's transitive
+    import closure and fails if it ever reaches an exempt test package or any
+    request/render entry point.
+    """
+
     module = _load_module("classify_postgresql_changes", POSTGRESQL_CLASSIFIER_SCRIPT)
 
     assert not module.classify_postgresql_changes(
         ("templates/admin/inbox/index.html", "static/js/inbox.js")
     ).required
-    assert not module.classify_postgresql_changes(("tests/test_inbox_ui.py",)).required
+    assert not module.classify_postgresql_changes(
+        ("tests/architecture/test_ci_pipeline.py",)
+    ).required
+    assert module.classify_postgresql_changes(("tests/test_inbox_ui.py",)).required
+    assert module.classify_postgresql_changes(("tests/conftest.py",)).required
     assert module.classify_postgresql_changes(
         ("tests/integration/test_inbox.py",)
     ).required
     assert module.classify_postgresql_changes(
         ("app/services/team_inbox_read.py",)
     ).required
+    assert module.classify_postgresql_changes(("scripts/ci/anything.py",)).required
     assert module.classify_postgresql_changes(()).required
 
 
@@ -384,10 +408,14 @@ def test_ci_change_classifier_does_not_resolve_a_base_from_shallow_roots() -> No
     zero_sha_guard = '[ "$base" = "0000000000000000000000000000000000000000" ]'
     assert zero_sha_guard in executed
 
-    # The no-base branch must short-circuit to application before any git
-    # command consumes "$base"; running everything is the safe default.
+    # The no-base branch must short-circuit to the complete matrix before any
+    # git command consumes "$base"; running everything is the safe default.
+    #
+    # The evidence used to be the `application=true` output, which was removed
+    # because no job ever consumed it. `postgresql-required=true` is the
+    # surviving proof that this branch runs everything.
     tail = executed[executed.index(zero_sha_guard) :]
-    assert tail.index("application=true") < tail.index('git cat-file -e "$base')
+    assert tail.index("postgresql-required=true") < tail.index('git cat-file -e "$base')
 
 
 def test_production_dependency_group_excludes_ci_tools() -> None:

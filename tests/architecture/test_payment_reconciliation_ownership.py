@@ -104,6 +104,11 @@ def test_sweep_separates_candidates_transport_and_consequence_transactions() -> 
     assert "record_reconciled_gateway_observation" in sweep_calls
     assert "SUPPORTED_PROVIDER_TYPES" in source
     assert "topup_reconciliation_batch_size" in ast.unparse(candidates)
+    assert "topup_reconciliation_terminal_retry_hours" in source
+    assert "checked_pending" in source
+    assert "checked_terminal" in source
+    assert "_TERMINAL_RECOVERY_STATUSES" in ast.unparse(candidates)
+    assert "remaining = batch_size - len(pending_rows)" in ast.unparse(candidates)
     assert "_GATEWAY_PROVIDERS" not in source
     assert "_NOT_FOUND_STATUSES" not in source
 

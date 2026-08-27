@@ -111,6 +111,10 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.catalog", "router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
+    # Pre-authentication continuation, same class as `POST /auth/login`, so the
+    # router-level mode is "none". The gate is the `auth.oidc_mobile_federation`
+    # control, which the owning service reads first and which fails closed.
+    ("app.api.oidc_mobile", "router", "api", "none"),
     ("app.api.ticket_confirm", "router", "api", "none"),
     # Customer self-care: self-scoped reads, auth-only (no staff permission).
     ("app.api.me", "router", "api", "user"),
@@ -369,6 +373,31 @@ def _assert_required_schema() -> None:
         db.close()
 
 
+def _assert_oidc_federation_configured() -> None:
+    """A deployment that has ENABLED federated field sign-in must have
+    configured it.
+
+    Off is the shipped state and this is then a no-op, so no deployment is made
+    to configure an issuer it will never use. On, the check is fatal: a ceremony
+    built from a missing redirect URI or a missing issuer would send technicians
+    to an endpoint that does not exist, and would do it silently at the first
+    request instead of loudly at the boot the operator is watching.
+
+    The refusal names EVERY missing key at once — an operator bringing this up
+    should see the whole list in one pass rather than rediscover it one restart
+    at a time.
+    """
+
+    from app.services.oidc_mobile_config import verify_startup_configuration
+
+    db = SessionLocal()
+    try:
+        verify_startup_configuration(db)
+    finally:
+        db.rollback()
+        db.close()
+
+
 def _check_test_environment_leakage() -> None:
     """Warn if test environment variables are set in production.
 
@@ -560,6 +589,8 @@ def _startup_preflight() -> None:
             extra={"event": "credential_encryption_enforced"},
         )
     _assert_required_schema()
+    # AFTER the schema assertion, because the control and its settings are rows.
+    _assert_oidc_federation_configured()
 
 
 def _prewarm_admin_dashboard() -> None:

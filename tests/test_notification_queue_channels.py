@@ -8,6 +8,7 @@ from app.models.notification import (
     NotificationChannel,
     NotificationStatus,
 )
+from app.services import email as email_service
 from app.services.branding_config import get_brand
 from app.services.communication_attachments import CommunicationAttachmentError
 from app.tasks.notifications import (
@@ -66,10 +67,10 @@ def test_inbound_smtp_probe_uses_delivery_gate_and_fixed_payload(
     )
     assert captured["activity"] == "observability_smtp_probe"
     assert captured["track"] is False
-    assert captured["headers"] == {
-        "Message-ID": "<probe-1@sub.local>",
-        "X-Dotmac-Probe": "team_inbox_smtp_e2e",
-    }
+    assert captured["headers"] == email_service.EmailTransportHeaders(
+        message_id="<probe-1@sub.local>",
+        x_dotmac_probe="team_inbox_smtp_e2e",
+    )
 
 
 def test_inbound_smtp_probe_respects_all_scope_suppression(db_session, monkeypatch):
@@ -314,8 +315,10 @@ def test_deliver_notification_queue_processes_push_channel(
     db_session.add(push)
     db_session.commit()
 
+    calls = []
     monkeypatch.setattr(
-        "app.tasks.notifications.push_service.send_push", lambda **_: True
+        "app.tasks.notifications.push_service.send_push",
+        lambda **kwargs: calls.append(kwargs) or True,
     )
 
     delivered = _deliver_notification_queue(db_session, batch_size=10)
@@ -323,6 +326,8 @@ def test_deliver_notification_queue_processes_push_channel(
     db_session.refresh(push)
     assert delivered == 1
     assert push.status == NotificationStatus.delivered
+    assert calls[0]["intent"].intent_code == "notification.open"
+    assert calls[0]["intent"].subject_id == str(push.id)
 
 
 def test_push_delivery_fails_closed_without_subscriber_identity(

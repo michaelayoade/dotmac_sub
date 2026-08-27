@@ -90,7 +90,7 @@ def test_message_metadata_attachments_promote_to_timeline_assets(db_session):
                     "id": "media-1",
                     "filename": "drop.jpg",
                     "mime_type": "image/jpeg",
-                    "url": "https://example.test/drop.jpg",
+                    "url": "https://lookaside.fbsbx.com/media/drop.jpg",
                     "caption": "Drop point",
                 }
             ]

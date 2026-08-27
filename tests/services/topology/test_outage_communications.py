@@ -673,25 +673,38 @@ def _route(method: str, path: str):
     return None
 
 
-def _permission_of(route) -> str | None:
+def _permissions_of(route) -> set[str]:
+    keys: set[str] = set()
+
+    def collect(value) -> None:
+        if isinstance(value, str) and ":" in value:
+            keys.add(value)
+        elif isinstance(value, (tuple, list, set, frozenset)):
+            for item in value:
+                collect(item)
+
     for dep in route.dependant.dependencies:
         call = getattr(dep, "call", None)
-        if call is None or getattr(call, "__name__", "") != "_require_permission":
+        if call is None or getattr(call, "__name__", "") not in {
+            "_require_permission",
+            "_require_any_permission",
+        }:
             continue
         for cell in call.__closure__ or ():
-            value = cell.cell_contents
-            if isinstance(value, str) and ":" in value:
-                return value
-    return None
+            collect(cell.cell_contents)
+    return keys
 
 
 def test_console_routes_are_registered_and_gated():
     preview = _route("GET", "/network/outage-communications")
     send = _route("POST", "/network/outage-communications")
     assert preview is not None and send is not None
-    assert _permission_of(preview) == "monitoring:read"
-    # The only send path must be gated on write, not read.
-    assert _permission_of(send) == "monitoring:write"
+    assert _permissions_of(preview) == {
+        "monitoring:read",
+        "monitoring:outage_notify:send",
+    }
+    # The only send path must be gated on send, not monitoring read/write.
+    assert _permissions_of(send) == {"monitoring:outage_notify:send"}
 
 
 def test_console_template_compiles():

@@ -44,6 +44,16 @@
         <button class="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Apply</button>
     </form>
 
+    <nav id="workqueue-section-nav"
+         class="sticky top-0 z-20 flex flex-wrap gap-1.5 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/95"
+         aria-label="Workqueue sections">
+        <a href="#workqueue-right-now" class="workqueue-section-link is-active" aria-current="location">Right now</a>
+        <a href="#workqueue-section-conversation" class="workqueue-section-link">Inbox</a>
+        <a href="#workqueue-section-ticket" class="workqueue-section-link">Tickets</a>
+        <a href="#workqueue-section-project" class="workqueue-section-link">Projects</a>
+        <a href="#workqueue-section-work_order" class="workqueue-section-link">Work orders</a>
+    </nav>
+
     <div id="workqueue-right-now"
          hx-get="/admin/workqueue/_right-now?audience={{ projection.audience.value }}{% if projection.selected_team_id %}&service_team_id={{ projection.selected_team_id }}{% endif %}{% if projection.include_snoozed %}&include_snoozed=true{% endif %}"
          hx-trigger="every 30s, workqueue-refresh from:body"
@@ -65,6 +75,88 @@
 
 <script nonce="{{ csp_nonce }}">
 (() => {
+    const nav = document.getElementById("workqueue-section-nav");
+    const links = Array.from(nav?.querySelectorAll('a[href^="#"]') || []);
+    let programmaticScroll = false;
+    let scrollSettleTimer;
+
+    const setActiveLink = (activeLink) => {
+        links.forEach((link) => {
+            const isActive = link === activeLink;
+            link.classList.toggle("is-active", isActive);
+            if (isActive) link.setAttribute("aria-current", "location");
+            else link.removeAttribute("aria-current");
+        });
+    };
+
+    const syncScrollOffset = () => {
+        if (!nav) return;
+        document.documentElement.style.setProperty(
+            "--workqueue-nav-offset",
+            `${nav.offsetHeight + 16}px`,
+        );
+    };
+
+    if (nav) {
+        syncScrollOffset();
+        if (typeof ResizeObserver === "function") {
+            new ResizeObserver(syncScrollOffset).observe(nav);
+        } else {
+            window.addEventListener("resize", syncScrollOffset, { passive: true });
+        }
+
+        links.forEach((link) => {
+            link.addEventListener("click", (event) => {
+                const target = document.querySelector(link.hash);
+                if (!target) return;
+                event.preventDefault();
+                programmaticScroll = true;
+                window.clearTimeout(scrollSettleTimer);
+                syncScrollOffset();
+                setActiveLink(link);
+                target.scrollIntoView({ behavior: "smooth", block: "start" });
+                scrollSettleTimer = window.setTimeout(() => {
+                    programmaticScroll = false;
+                }, 1200);
+                history.replaceState(null, "", link.hash);
+            });
+        });
+
+        const hashLink = links.find((link) => link.hash === window.location.hash);
+        if (hashLink) setActiveLink(hashLink);
+
+        if (typeof IntersectionObserver === "function") {
+            const observer = new IntersectionObserver((entries) => {
+                if (programmaticScroll) return;
+                const visible = entries
+                    .filter((entry) => entry.isIntersecting)
+                    .sort(
+                        (left, right) =>
+                            Math.abs(left.boundingClientRect.top) -
+                            Math.abs(right.boundingClientRect.top),
+                    )[0];
+                if (!visible) return;
+                const link = links.find(
+                    (candidate) => candidate.hash === `#${visible.target.id}`,
+                );
+                if (link) setActiveLink(link);
+            }, { rootMargin: "-15% 0px -70% 0px", threshold: 0 });
+
+            links.forEach((link) => {
+                const section = document.querySelector(link.hash);
+                if (section) observer.observe(section);
+            });
+        }
+
+        window.addEventListener("scroll", () => {
+            if (!programmaticScroll) return;
+            window.clearTimeout(scrollSettleTimer);
+            scrollSettleTimer = window.setTimeout(() => {
+                programmaticScroll = false;
+            }, 180);
+        }, { passive: true, capture: true });
+    }
+
     if (!window.EventSource) return;
     const source = new EventSource("/api/v1/workqueue/events?audience={{ projection.audience.value }}");
     source.addEventListener("workqueue_changed", () => {
@@ -73,4 +165,42 @@
     window.addEventListener("beforeunload", () => source.close(), { once: true });
 })();
 </script>
+
+<style nonce="{{ csp_nonce }}">
+    html { scroll-behavior: smooth; }
+    #workqueue-right-now,
+    [id^="workqueue-section-"] {
+        scroll-margin-top: var(--workqueue-nav-offset, 4.5rem);
+    }
+    .workqueue-section-link {
+        display: inline-flex;
+        min-height: 2.25rem;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid transparent;
+        border-radius: 0.5rem;
+        padding: 0.4rem 0.75rem;
+        color: var(--text-tertiary);
+        font-size: 0.8rem;
+        font-weight: 600;
+        line-height: 1rem;
+        text-decoration: none;
+    }
+    .workqueue-section-link:hover {
+        border-color: var(--border-default);
+        background: var(--surface-tertiary);
+        color: var(--text-primary);
+    }
+    .workqueue-section-link.is-active,
+    .workqueue-section-link.is-active:hover {
+        border-color: var(--color-primary-500);
+        background: var(--color-primary-600);
+        color: white;
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary-600) 20%, transparent);
+    }
+    .workqueue-section-link:focus-visible {
+        outline: 2px solid var(--color-primary-500);
+        outline-offset: 2px;
+    }
+</style>
 {% endblock %}

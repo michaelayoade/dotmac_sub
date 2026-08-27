@@ -14,6 +14,12 @@ on:
   # in this file must therefore be reachable from `merge_group`.
   merge_group:
   workflow_dispatch:
+  # A complete matrix on a fixed cadence. Change classification narrows pull
+  # requests only, so without a scheduled complete run there is no periodic
+  # execution that is unconditionally whole -- and a classifier defect could sit
+  # undetected for as long as no one happened to touch a requiring path.
+  schedule:
+    - cron: "17 2 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
-      application: ${{ steps.classify.outputs.application }}
       postgresql-required: ${{ steps.classify.outputs.postgresql-required }}
     steps:
       - uses: actions/checkout@v4
@@ -50,27 +55,41 @@ jobs:
         id: classify
         env:
           EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
           BEFORE_SHA: ${{ github.event.before }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          # Classification narrows PULL REQUESTS and nothing else. Every branch
+          # tip, every queued merge, every manual invocation and the nightly
+          # cadence run the complete matrix, so the selective path can only ever
+          # shorten feedback on a proposal -- never the evidence behind a commit
+          # that lands, ships, or gets promoted.
+          #
+          # `integration/**` and `consolidate/**` pull requests are complete too.
+          # They carry a whole batch's migrations and, exactly as the migration
+          # sequence gate already argues, are the runs least safe to narrow.
+          complete=false
+          case "$EVENT_NAME" in
+            pull_request) ;;
+            *) complete=true ;;
+          esac
+          case "$HEAD_REF" in
+            integration/*|consolidate/*) complete=true ;;
+          esac
+
+          if [ "$complete" = "true" ]; then
+            echo "::notice::Complete matrix: $EVENT_NAME runs are never narrowed by classification."
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
             echo "postgresql-required=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          base="$BEFORE_SHA"
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            base="$PR_BASE_SHA"
-          elif [ "$EVENT_NAME" = "merge_group" ]; then
-            base="$MERGE_BASE_SHA"
-          fi
+          base="$PR_BASE_SHA"
 
           # No usable base: branch creation reports an all-zero "before", and a
           # tag or manual ref push may report none at all. There is nothing to
-          # diff against, so classify as application rather than guessing.
+          # diff against, so run everything rather than guessing.
           #
           # The previous fallback here was `git rev-list --max-parents=0 HEAD`,
           # which breaks when HEAD is a merge commit: under fetch-depth 2 the
@@ -79,9 +98,8 @@ jobs:
           # and the job died with "fatal: invalid refspec". That is exactly what
           # happened creating a branch whose tip was a promotion merge commit.
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            echo "No base commit to diff against; classifying as application." >&2
+            echo "No base commit to diff against; running the complete matrix." >&2
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
             echo "postgresql-required=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -97,15 +115,15 @@ jobs:
           git diff --name-only "$base" HEAD > "$RUNNER_TEMP/changed-paths"
           if [ ! -s "$RUNNER_TEMP/changed-paths" ]; then
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
           elif grep -Ev '^(docs/|.*\.md$)' "$RUNNER_TEMP/changed-paths" >/dev/null; then
             echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "application=true" >> "$GITHUB_OUTPUT"
           else
             echo "docs-only=true" >> "$GITHUB_OUTPUT"
-            echo "application=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # Fails closed on an unknown path, an unreadable file, or its own
+          # crash: a non-zero exit fails this job, and every downstream gate
+          # keys on `needs.changes.result == 'success'`.
           python -m scripts.ci.classify_postgresql_changes \
             --paths-file "$RUNNER_TEMP/changed-paths" \
             --github-output "$GITHUB_OUTPUT"
@@ -531,11 +549,44 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # Restore ONLY from `dev`. Scheduling history is shared state: a pull
+      # request that seeded it could reshape every other run's shards, and a
+      # slow or broken branch would poison the balance for everyone. Reads are
+      # therefore taken from the trusted branch, and the matching save step
+      # below refuses to run anywhere else.
+      #
+      # A cache miss is not a failure. The selector falls back to a
+      # conservative per-file estimate and still partitions every file exactly
+      # once -- balance degrades, coverage does not.
+      - name: Restore integration-test durations from dev
+        uses: actions/cache/restore@v4
+        with:
+          path: .ci-cache/integration-test-durations.json
+          key: integration-test-durations-v2-dev-${{ github.run_id }}
+          restore-keys: |
+            integration-test-durations-v2-dev-
+
       - name: Run integration-test shard
         env:
           INTEGRATION_SHARD: ${{ matrix.shard }}
           INTEGRATION_SHARDS: 4
-        run: make test-integration-shard
+        # Kept on ONE line on purpose. `test_migrated_database_test_contract.py`
+        # and `test_validation_command_alignment.py` both assert the literal
+        # `run: make test-integration-shard`, which is how they prove CI
+        # delegates to the Makefile owner instead of inlining pytest or alembic.
+        # A folded `run: >-` block satisfies the intent and breaks the check;
+        # bending two guards I did not write to suit my line length is the
+        # wrong trade.
+        run: make test-integration-shard CI_INTEGRATION_DURATIONS_OUTPUT=".ci-cache/integration-current-${{ matrix.shard }}.json"
+
+      - name: Upload integration-test duration data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-durations-${{ matrix.shard }}
+          path: .ci-cache/integration-current-${{ matrix.shard }}.json
+          include-hidden-files: true
+          retention-days: 1
 
   integration-run:
     name: PostgreSQL Gate
@@ -552,6 +603,53 @@ jobs:
         env:
           INTEGRATION_RESULT: ${{ needs.integration-shards.result }}
         run: test "$INTEGRATION_RESULT" = "success"
+
+      # Publishing is gated on the TRUSTED BRANCH, not merely on the event
+      # type: only a green push to `dev` may rewrite the shared scheduling
+      # history. A pull request measures itself and throws the numbers away.
+      # This step is inside the existing gate job rather than a new one so it
+      # cannot run before every shard has passed.
+      - name: Checkout
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        uses: actions/checkout@v4
+
+      - name: Download integration-test duration data
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: integration-durations-*
+          path: ${{ runner.temp }}/integration-durations
+          merge-multiple: true
+
+      - name: Merge integration-test durations
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        run: >-
+          python3 scripts/ci/merge_test_durations.py
+          --input-dir "$RUNNER_TEMP/integration-durations"
+          --output .ci-cache/integration-test-durations.json
+
+      - name: Publish integration-test durations for later runs
+        if: >-
+          needs.changes.outputs.postgresql-required == 'true'
+          && needs.integration-shards.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/heads/dev'
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-cache/integration-test-durations.json
+          key: integration-test-durations-v2-dev-${{ github.run_id }}
 
   integration-test:
     name: Integration Tests (PostgreSQL)

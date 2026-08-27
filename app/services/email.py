@@ -52,6 +52,38 @@ class EmailAttachment:
     content: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class EmailTransportHeaders:
+    """Allowlisted operational headers at the SMTP adapter boundary."""
+
+    message_id: str | None = None
+    in_reply_to: str | None = None
+    references: tuple[str, ...] = ()
+    x_dotmac_probe: str | None = None
+
+    def __post_init__(self) -> None:
+        values = (
+            self.message_id,
+            self.in_reply_to,
+            *self.references,
+            self.x_dotmac_probe,
+        )
+        if any("\r" in value or "\n" in value for value in values if value):
+            raise ValueError("Email transport header values cannot contain newlines")
+
+    def as_items(self) -> tuple[tuple[str, str], ...]:
+        items: list[tuple[str, str]] = []
+        if self.message_id:
+            items.append(("Message-ID", self.message_id))
+        if self.in_reply_to:
+            items.append(("In-Reply-To", self.in_reply_to))
+        if self.references:
+            items.append(("References", " ".join(self.references)))
+        if self.x_dotmac_probe:
+            items.append(("X-Dotmac-Probe", self.x_dotmac_probe))
+        return tuple(items)
+
+
 @dataclass(frozen=True)
 class SmtpSenderOption:
     """Non-secret SMTP profile identity exposed to configuration UIs."""
@@ -1050,7 +1082,7 @@ def send_email(
     sender_key: str | None = None,
     activity: str | None = None,
     notification_id: str | None = None,
-    headers: dict[str, str] | None = None,
+    headers: EmailTransportHeaders | None = None,
     sensitive_content: bool = False,
     cc_addresses: list[str] | tuple[str, ...] | None = None,
     bcc_addresses: list[str] | tuple[str, ...] | None = None,
@@ -1066,8 +1098,7 @@ def send_email(
         body_html: HTML body content
         body_text: Plain text body (optional, derived from HTML if not provided)
         track: Whether to create a Notification record for tracking
-        headers: Optional transport headers; From, To, Cc, Bcc, and Subject are
-            reserved
+        headers: Optional allowlisted operational transport headers
 
     Returns:
         True if email was sent successfully, False otherwise
@@ -1165,11 +1196,8 @@ def send_email(
         cc_recipients=cc_recipients,
         attachments=attachments,
     )
-    for name, value in (headers or {}).items():
-        normalized_name = str(name).strip()
-        if normalized_name.lower() in {"from", "to", "cc", "bcc", "subject"}:
-            raise ValueError(f"Reserved email header cannot be overridden: {name}")
-        msg[normalized_name] = str(value)
+    for name, value in headers.as_items() if headers is not None else ():
+        msg[name] = value
 
     notification = None
     if db is not None and (notification_id or track):

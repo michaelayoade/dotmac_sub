@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC
+from types import MappingProxyType
 
 import pytest
 
@@ -15,6 +16,7 @@ from app.models.auth import (
 from app.models.party import PartyType
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
+from app.services import authentication_mechanism_registry as mechanism_registry
 from app.services import party as party_service
 from app.services.credential_party_binding import (
     CredentialBindingError,
@@ -317,3 +319,169 @@ def test_second_local_credential_for_same_party_is_refused(db_session):
         )
 
     assert raised.value.code.endswith(".projection_collision")
+
+
+# ---------------------------------------------------------------------------
+# Mechanism vocabulary vs storage vocabulary
+# ---------------------------------------------------------------------------
+
+
+def _federated_staff_credential(db_session):
+    """A staff credential stored as `sso` behind a binding declaring `oidc`.
+
+    This is the shape an operator provisions for a federated field technician,
+    and it is exactly the shape a literal `mechanism_code == provider`
+    comparison can never accept.
+    """
+
+    provision_operator_tenant(db_session)
+    party = party_service.create_party(
+        db_session,
+        party_type=PartyType.person,
+        display_name="Field Technician",
+    )
+    staff = SystemUser(
+        first_name="Field",
+        last_name="Technician",
+        email=f"tech-{uuid.uuid4().hex}@example.test",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(staff)
+    db_session.flush()
+    party_service.bind_system_user_principal(
+        db_session,
+        system_user_id=staff.id,
+        person_party_id=party.id,
+        source="reviewed_staff_worklist",
+        reason="reviewed staff identity",
+    )
+    credential = UserCredential(
+        system_user_id=staff.id,
+        provider=AuthProvider.sso,
+        username=f"idp-subject-{uuid.uuid4().hex}",
+        is_active=True,
+    )
+    binding = _binding(db_session, binding_key="oidc.field.test", mechanism_code="oidc")
+    db_session.add(credential)
+    db_session.flush()
+    identifiers = (credential.id, staff.id, party.id, binding.id)
+    db_session.commit()
+    return identifiers
+
+
+def test_a_federated_credential_projects_through_the_declared_storage_mapping(
+    db_session,
+):
+    """The provisioning path that was impossible before the mapping existed.
+
+    The binding declares `oidc`; the credential is persisted as `sso`. Those
+    two strings differ, and comparing them literally refused every federated
+    technician an operator could ever install — the seam worked only where no
+    operator command ran.
+    """
+
+    credential_id, staff_id, party_id, binding_id = _federated_staff_credential(
+        db_session
+    )
+
+    outcome = bind_credential_party(
+        db_session, _command(credential_id, staff_id, party_id, binding_id)
+    )
+
+    assert outcome.replayed is False
+    credential = db_session.get(UserCredential, credential_id)
+    binding = db_session.get(AuthenticationBinding, binding_id)
+    assert credential is not None and binding is not None
+    assert credential.provider is AuthProvider.sso
+    assert binding.mechanism_code == "oidc"
+    assert credential.party_id == party_id
+    assert credential.authentication_binding_id == binding_id
+
+
+def test_a_provider_that_is_not_the_mechanisms_declared_storage_is_refused(db_session):
+    """The other half: the mapping must still REFUSE the wrong storage.
+
+    A mapping that only ever admits is indistinguishable from no check at all,
+    so a local-password credential behind an OIDC binding — `oidc` maps to
+    `sso`, not to `local` — has to be refused for that exact reason.
+    """
+
+    credential_id, staff_id, party_id, _ = _staff_credential(db_session)
+    oidc = _binding(db_session, binding_key="oidc.mismatch", mechanism_code="oidc")
+    oidc_id = oidc.id
+    db_session.commit()
+
+    with pytest.raises(CredentialBindingError) as raised:
+        bind_credential_party(
+            db_session, _command(credential_id, staff_id, party_id, oidc_id)
+        )
+
+    assert raised.value.code.endswith(".mechanism_mismatch")
+    assert raised.value.details["credential_provider"] == "local"
+    assert raised.value.details["expected_provider"] == "sso"
+
+
+def test_a_mechanism_with_no_declared_storage_is_refused_by_the_writer(
+    db_session, monkeypatch
+):
+    """Fail closed: an unmapped mechanism is refused, never identity-mapped.
+
+    The declaration is what makes the projection provable. Without it the
+    writer has nothing to compare the provider against, and the old shape's
+    implicit answer — "the mechanism code IS the provider" — is precisely the
+    assumption that must not come back.
+    """
+
+    credential_id, staff_id, party_id, binding_id = _federated_staff_credential(
+        db_session
+    )
+    monkeypatch.setattr(
+        mechanism_registry,
+        "AUTHENTICATION_MECHANISM_STORAGE",
+        MappingProxyType({"local": "local", "radius": "radius"}),
+    )
+
+    with pytest.raises(CredentialBindingError) as raised:
+        bind_credential_party(
+            db_session, _command(credential_id, staff_id, party_id, binding_id)
+        )
+
+    assert raised.value.code.endswith(".unmapped_mechanism_storage")
+    assert raised.value.details == {"mechanism_code": "oidc"}
+    credential = db_session.get(UserCredential, credential_id)
+    assert credential is not None
+    assert credential.party_id is None
+
+
+def test_the_convergence_report_reads_the_writers_storage_declaration(
+    db_session, monkeypatch
+):
+    """Two consumers, one declaration.
+
+    If the report kept its own notion of "the mechanism matches the provider",
+    it would report a federated deployment as permanently unconvergent while
+    the writer happily projected it. Removing the declaration has to move both.
+    """
+
+    credential_id, staff_id, party_id, binding_id = _federated_staff_credential(
+        db_session
+    )
+    bind_credential_party(
+        db_session, _command(credential_id, staff_id, party_id, binding_id)
+    )
+
+    mapped = credential_convergence_report(db_session)
+    assert mapped.projection.projected == 1
+    assert mapped.projection.mechanism_mismatches == 0
+    assert mapped.projection.is_ready_for_enforcement is True
+
+    monkeypatch.setattr(
+        mechanism_registry,
+        "AUTHENTICATION_MECHANISM_STORAGE",
+        MappingProxyType({"local": "local", "radius": "radius"}),
+    )
+
+    unmapped = credential_convergence_report(db_session)
+    assert unmapped.projection.mechanism_mismatches == 1
+    assert unmapped.projection.is_ready_for_enforcement is False

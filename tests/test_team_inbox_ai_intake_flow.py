@@ -1713,13 +1713,13 @@ def test_whatsapp_facebook_and_instagram_use_the_same_classifier(
     _config(
         db_session,
         mappings=[_mapping("technical_support", technical, "technical")],
-        scope_key="meta_social:page-fb",
+        scope_key="meta.social:page-fb",
         channel_type=InboxChannelType.facebook_messenger.value,
     )
     _config(
         db_session,
         mappings=[_mapping("technical_support", technical, "technical")],
-        scope_key="meta_social:page-ig",
+        scope_key="meta.social:page-ig",
         channel_type=InboxChannelType.instagram_dm.value,
     )
     gateway = _Gateway()

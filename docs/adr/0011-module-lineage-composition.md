@@ -511,3 +511,33 @@ mismatches at the evaluation instant and across an approved temporal horizon on
 sealed representative data, exact Billing-input parity, a real monotonic source
 version, policy/case/consequence parity and explicit retirement of incumbent
 writers and jobs.
+
+## Amendment — 2026-08-27: receivable parity gets a sealed readiness verdict
+
+`billing.receivable_projection` now owns one additional read-only resolver:
+the receivable cutover readiness verdict. It binds the existing cohort
+definition seal, membership digest and semantic-parity fingerprint and refuses
+an invalid evidence seal or internally inconsistent aggregate, an empty
+compared cohort, unresolved or inexpressible classification, projection work
+still required, orphan or watermark refusal, semantic divergence, any
+`not_expressible` dimension, and every standing pinned contract blocker. The
+count invariants also make a row moving between the read-only plan and parity
+reads a blocker rather than a clean comparison. This closes the earlier gap
+where `parity --strict` was a useful regression check but intentionally allowed
+a recorded comparison ceiling.
+
+The distinction remains load-bearing. A `not_expressible` result is lawful and
+honest shadow evidence, so it is not retrospectively reclassified as a parity
+regression. It is nevertheless incomplete authority evidence and therefore
+blocks the stronger readiness verdict. The readiness command is always
+read-only and has no `--apply` or optional strict mode; blocked is its default
+state on this tree because the Subscriptions billing-treatment seam and
+obligation coverage remain open.
+
+A passing verdict makes one sealed evidence set eligible for a separately
+authorised authority review. It does not change `commercial_provider`, module
+adoption state, a database writer, a route or job, and does not authorise
+fallback retirement or deployment. Commercial Agreements remains Vendor legal
+agreement authority, and the independently deployed Integrator remains the
+external connector control plane; neither becomes a Sub runtime dependency or
+a substitute for local settlement evidence through this amendment.

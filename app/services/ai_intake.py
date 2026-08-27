@@ -604,12 +604,22 @@ def _normalize_key(value: object) -> str:
     return "_".join(str(value or "").strip().lower().replace("-", "_").split())
 
 
+_PROVIDER_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "meta.social": ("meta.social", "meta_social"),
+    "meta_social": ("meta.social", "meta_social"),
+}
+
+
 def _scope_candidates(request: AiIntakeRequest) -> tuple[str, ...]:
     provider = _normalize_key(request.provider) or "default"
     channel = _normalize_key(request.channel_type)
     scope = str(request.account_scope or "default").strip()[:160] or "default"
+    provider_scopes = tuple(
+        f"{provider_candidate}:{scope}"
+        for provider_candidate in _PROVIDER_SCOPE_ALIASES.get(provider, (provider,))
+    )
     values = (
-        f"{provider}:{scope}",
+        *provider_scopes,
         f"{channel}:{scope}",
         scope,
         "default",

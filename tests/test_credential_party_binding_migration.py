@@ -33,13 +33,18 @@ def test_revision_is_linear_additive_and_adoption_aware() -> None:
     assert "UPDATE user_credentials" not in source
 
 
-def test_seed_matches_declared_runtime_mechanisms_and_is_deterministic() -> None:
+def test_historical_seed_is_a_declared_deterministic_subset() -> None:
     migration = _load_migration()
     from app.services.authentication_mechanism_registry import (
         declared_authentication_mechanisms,
     )
 
-    assert {row[2] for row in migration._SEED} == declared_authentication_mechanisms()
+    seeded_mechanisms = {row[2] for row in migration._SEED}
+    # Migration 527 is history: it installed the mechanisms that existed when
+    # it shipped. Later runtime declarations are installed through their
+    # canonical owner command, never back-edited into deployed DDL.
+    assert seeded_mechanisms == {"local", "radius"}
+    assert seeded_mechanisms < declared_authentication_mechanisms()
     assert {row[1] for row in migration._SEED} == {"local.default", "radius.default"}
     assert len({row[0] for row in migration._SEED}) == len(migration._SEED)
     assert "sso" not in {row[2] for row in migration._SEED}

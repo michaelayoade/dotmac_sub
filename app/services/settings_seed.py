@@ -1730,6 +1730,10 @@ def seed_billing_settings(db: Session) -> None:
         "topup_reconciliation_stale_minutes",
         "topup_reconciliation_max_age_days",
         "topup_reconciliation_batch_size",
+        "topup_reconciliation_pending_retry_minutes",
+        "topup_reconciliation_terminal_retry_hours",
+        "topup_reconciliation_processing_retry_minutes",
+        "topup_reconciliation_unavailable_retry_minutes",
     ):
         reconciliation_spec = get_spec(SettingDomain.billing, reconciliation_key)
         if reconciliation_spec is None or reconciliation_spec.env_var is None:

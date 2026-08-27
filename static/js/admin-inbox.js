@@ -13,6 +13,7 @@
     soundEnabled: "dotmac.inbox.soundEnabled",
     draftPrefix: "dotmac.inbox.draft.",
   };
+  const INBOX_FRAGMENT_VERSION = "20260827a";
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const parseStoredBoolean = (key, fallback) => {
     const value = localStorage.getItem(key);
@@ -1669,10 +1670,14 @@
           options.intent || "background",
           Boolean(options.blocking),
         );
-        window.htmx.ajax("GET", `/admin/inbox/${conversationId}`, {
-          target: "#triage-detail",
-          swap: "innerHTML",
-        });
+        window.htmx.ajax(
+          "GET",
+          `/admin/inbox/${conversationId}?view=${INBOX_FRAGMENT_VERSION}`,
+          {
+            target: "#triage-detail",
+            swap: "innerHTML",
+          },
+        );
       },
 
       scheduleThreadRefresh(conversationId, intent = "realtime") {
@@ -2151,7 +2156,6 @@
       replyLifecycleCleanup: null,
       idempotencyKey: "",
       replyTo: null,
-      copyRecipientsOpen: false,
       ccRecipients: "",
       bccRecipients: "",
       scheduled: false,
@@ -2531,9 +2535,11 @@
         this.draft = "";
         this.files = [];
         this.replyTo = null;
-        this.copyRecipientsOpen = false;
         this.ccRecipients = "";
         this.bccRecipients = "";
+        this.$root
+          .querySelector("[data-email-copy-recipients]")
+          ?.removeAttribute("open");
         this.scheduled = false;
         this.scheduledAt = "";
         this.macroId = "";

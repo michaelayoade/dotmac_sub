@@ -69,6 +69,35 @@ def test_workqueue_cards_use_responsive_three_column_grids():
     assert "lg:grid-cols-[" not in row
 
 
+def test_workqueue_cards_use_open_as_the_only_source_link():
+    row = Path("templates/admin/workqueue/_row.html").read_text(encoding="utf-8")
+
+    assert '<a href="{{ row.url }}" class="mt-2' not in row
+    assert '<div class="mt-2 truncate text-sm font-semibold' in row
+    assert row.count('href="{{ row.url }}"') == 1
+    assert ">Open</a>" in row
+
+
+def test_workqueue_section_navigation_has_stable_smooth_scroll_behavior():
+    index = Path("templates/admin/workqueue/index.html").read_text(encoding="utf-8")
+
+    for target in (
+        "#workqueue-right-now",
+        "#workqueue-section-conversation",
+        "#workqueue-section-ticket",
+        "#workqueue-section-project",
+        "#workqueue-section-work_order",
+    ):
+        assert f'href="{target}"' in index
+    assert 'aria-label="Workqueue sections"' in index
+    assert 'target.scrollIntoView({ behavior: "smooth", block: "start" })' in index
+    assert "programmaticScroll = true" in index
+    assert "if (programmaticScroll) return" in index
+    assert "--workqueue-nav-offset" in index
+    assert "nav.offsetHeight + 16" in index
+    assert "scroll-margin-top: var(--workqueue-nav-offset" in index
+
+
 def test_web_projection_exposes_identity_state_urgency_owner_hint_and_next_action(
     db_session,
 ):

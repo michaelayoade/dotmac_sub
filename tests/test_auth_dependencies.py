@@ -22,7 +22,12 @@ from app.services import session_manager as session_manager_service
 from app.services import staff_party_authentication
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_audit_auth, require_user_auth
-from app.services.auth_flow import AuthFlow, hash_password, hash_session_token
+from app.services.auth_flow import (
+    AuthFlow,
+    hash_password,
+    hash_session_token,
+    issue_session_tokens,
+)
 from app.web.auth.dependencies import (
     AuthenticationRequired,
     require_web_auth,
@@ -100,6 +105,23 @@ def test_require_user_auth_accepts_valid_token(db_session, person, monkeypatch):
     )
     assert auth["subscriber_id"] == str(person.id)
     assert auth["session_id"]
+
+
+def test_public_session_issuance_returns_without_an_implicit_transaction(
+    db_session, person, monkeypatch
+):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    tokens = issue_session_tokens(
+        db_session,
+        principal_type="subscriber",
+        principal_id=str(person.id),
+        request=_make_request(),
+    )
+
+    assert tokens["access_token"]
+    assert tokens["refresh_token"]
+    assert not db_session.in_transaction()
 
 
 def test_require_user_auth_rejects_expired_session(db_session, person, monkeypatch):

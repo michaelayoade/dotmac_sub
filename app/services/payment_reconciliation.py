@@ -18,6 +18,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.billing import Payment, PaymentProviderType, PaymentStatus, TopupIntent
 from app.models.domain_settings import SettingDomain
@@ -79,6 +80,11 @@ logger = logging.getLogger(__name__)
 RECONCILIATION_SCOPE = "topup-payment:reconcile"
 VERIFIED_SETTLEMENT_SCOPE = "topup-payment:reconcile-verified"
 GATEWAY_OBSERVATION_SCOPE = "topup-payment:reconcile-observation"
+_TERMINAL_RECOVERY_STATUSES = (
+    TopupIntentStatus.failed,
+    TopupIntentStatus.abandoned,
+    TopupIntentStatus.expired,
+)
 
 _VERIFIED_SETTLEMENT_COMMAND = OwnerCommandDefinition(
     owner="financial.payment_reconciliation",
@@ -119,6 +125,7 @@ class TopupReconciliationCandidate:
     intent_id: UUID
     provider_type: PaymentProviderType
     reference: str
+    status: TopupIntentStatus = TopupIntentStatus.pending
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +153,8 @@ class ReconciledTopupResult:
 @dataclass(frozen=True, slots=True)
 class TopupReconciliationSummary:
     checked: int = 0
+    checked_pending: int = 0
+    checked_terminal: int = 0
     recovered: int = 0
     linked: int = 0
     expired: int = 0
@@ -158,6 +167,8 @@ class TopupReconciliationSummary:
 
         return {
             "checked": self.checked,
+            "checked_pending": self.checked_pending,
+            "checked_terminal": self.checked_terminal,
             "recovered": self.recovered,
             "linked": self.linked,
             "expired": self.expired,
@@ -169,7 +180,7 @@ class TopupReconciliationSummary:
 
 @dataclass(frozen=True, slots=True)
 class TopupReconciliationBacklog:
-    """Read-only projection of pending intents against reconciliation policy."""
+    """Read-only projection of gateway intents against reconciliation policy."""
 
     pending: int
     eligible: int
@@ -177,6 +188,14 @@ class TopupReconciliationBacklog:
     oldest_pending_at: datetime | None
     stale_before: datetime
     oldest_eligible_at: datetime
+    pending_total: int = 0
+    pending_eligible: int = 0
+    pending_outside_window: int = 0
+    terminal_recovery_total: int = 0
+    terminal_recovery_due: int = 0
+    terminal_recovery_outside_window: int = 0
+    terminal_recovery_cooling_down: int = 0
+    oldest_due_terminal_at: datetime | None = None
 
 
 def _error(
@@ -215,6 +234,62 @@ def _resolve_reconciliation_int_setting(db: Session, key: str) -> int:
     if spec.max_value is not None:
         parsed = min(int(spec.max_value), parsed)
     return parsed
+
+
+def _gateway_reconcile_due(observed_at: datetime) -> ColumnElement[bool]:
+    return (TopupIntent.gateway_next_reconcile_at.is_(None)) | (
+        TopupIntent.gateway_next_reconcile_at <= observed_at
+    )
+
+
+def _next_gateway_reconcile_at(
+    db: Session,
+    *,
+    intent: TopupIntent,
+    observation: PaymentGatewayVerificationObservation,
+    observed_at: datetime,
+) -> datetime:
+    terminal_retry_hours = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_terminal_retry_hours",
+    )
+    pending_retry_minutes = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_pending_retry_minutes",
+    )
+    processing_retry_minutes = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_processing_retry_minutes",
+    )
+    unavailable_retry_minutes = _resolve_reconciliation_int_setting(
+        db,
+        "topup_reconciliation_unavailable_retry_minutes",
+    )
+
+    status = TopupIntentStatus(intent.status)
+    expires_at = _as_utc(intent.expires_at) if intent.expires_at is not None else None
+    if (
+        status in _TERMINAL_RECOVERY_STATUSES
+        or observation.outcome
+        in {
+            PaymentGatewayVerificationOutcome.failed,
+            PaymentGatewayVerificationOutcome.abandoned,
+        }
+        or (
+            status is TopupIntentStatus.pending
+            and expires_at is not None
+            and observed_at >= expires_at
+        )
+    ):
+        return observed_at + timedelta(hours=terminal_retry_hours)
+    if observation.outcome is PaymentGatewayVerificationOutcome.processing:
+        return observed_at + timedelta(minutes=processing_retry_minutes)
+    if observation.outcome in {
+        PaymentGatewayVerificationOutcome.unavailable,
+        PaymentGatewayVerificationOutcome.unknown,
+    }:
+        return observed_at + timedelta(minutes=unavailable_retry_minutes)
+    return observed_at + timedelta(minutes=pending_retry_minutes)
 
 
 def _target_invoice_id(intent: TopupIntent) -> UUID | None:
@@ -533,14 +608,22 @@ def _stage_gateway_observation(
     intent = lock_topup_intent_scope(db, command.candidate.intent_id)
     _validate_candidate(intent, command.candidate)
     previous_status = intent.status
+    observed_at = _as_utc(command.observed_at)
+    next_reconcile_at = _next_gateway_reconcile_at(
+        db,
+        intent=intent,
+        observation=command.observation,
+        observed_at=observed_at,
+    )
     try:
         result = stage_gateway_topup_observation(
             db,
             RecordGatewayTopupObservationCommand(
                 intent_id=intent.id,
                 observation=command.observation,
-                observed_at=_as_utc(command.observed_at),
+                observed_at=observed_at,
                 source=command.source,
+                next_reconcile_at=next_reconcile_at,
             ),
             context=_participant_context(
                 context,
@@ -630,33 +713,80 @@ def _reconciliation_candidates(
     stale_before = observed_at - timedelta(minutes=stale_minutes)
     oldest = observed_at - timedelta(days=max_age_days)
     supported_values = tuple(item.value for item in SUPPORTED_PROVIDER_TYPES)
-    rows = db.execute(
-        select(TopupIntent.id, TopupIntent.provider_type, TopupIntent.reference)
-        .where(
-            TopupIntent.status.in_(
-                (
-                    TopupIntentStatus.pending.value,
-                    TopupIntentStatus.failed.value,
-                    TopupIntentStatus.abandoned.value,
-                    TopupIntentStatus.expired.value,
-                )
-            )
+    common_filters = (
+        TopupIntent.completed_payment_id.is_(None),
+        TopupIntent.provider_type.in_(supported_values),
+        TopupIntent.created_at > oldest,
+        _gateway_reconcile_due(observed_at),
+    )
+    pending_rows = db.execute(
+        select(
+            TopupIntent.id,
+            TopupIntent.provider_type,
+            TopupIntent.reference,
+            TopupIntent.status,
         )
-        .where(TopupIntent.completed_payment_id.is_(None))
-        .where(TopupIntent.provider_type.in_(supported_values))
+        .where(TopupIntent.status == TopupIntentStatus.pending.value)
+        .where(*common_filters)
         .where(TopupIntent.created_at < stale_before)
-        .where(TopupIntent.created_at > oldest)
-        .order_by(TopupIntent.created_at.asc(), TopupIntent.id.asc())
+        .order_by(
+            func.coalesce(
+                TopupIntent.gateway_next_reconcile_at, TopupIntent.created_at
+            ),
+            TopupIntent.created_at.asc(),
+            TopupIntent.id.asc(),
+        )
         .limit(batch_size)
     ).all()
+    remaining = batch_size - len(pending_rows)
+    rows = list(pending_rows)
+    if remaining > 0:
+        rows.extend(
+            db.execute(
+                select(
+                    TopupIntent.id,
+                    TopupIntent.provider_type,
+                    TopupIntent.reference,
+                    TopupIntent.status,
+                )
+                .where(
+                    TopupIntent.status.in_(
+                        tuple(status.value for status in _TERMINAL_RECOVERY_STATUSES)
+                    )
+                )
+                .where(*common_filters)
+                .order_by(
+                    func.coalesce(
+                        TopupIntent.gateway_next_reconcile_at, TopupIntent.created_at
+                    ),
+                    TopupIntent.created_at.asc(),
+                    TopupIntent.id.asc(),
+                )
+                .limit(remaining)
+            ).all()
+        )
     return tuple(
         TopupReconciliationCandidate(
             intent_id=row.id,
             provider_type=parse_supported_provider_type(row.provider_type),
             reference=row.reference,
+            status=TopupIntentStatus(row.status),
         )
         for row in rows
     )
+
+
+def _count_reconcilable(
+    db: Session,
+    *,
+    filters: tuple[ColumnElement[bool], ...],
+) -> tuple[int, datetime | None]:
+    count, oldest_at = db.execute(
+        select(func.count(TopupIntent.id), func.min(TopupIntent.created_at)).where(
+            *filters
+        )
+    ).one()
+    return int(count or 0), oldest_at
 
 
 def topup_reconciliation_backlog(
@@ -664,7 +794,7 @@ def topup_reconciliation_backlog(
     *,
     observed_at: datetime,
 ) -> TopupReconciliationBacklog:
-    """Project pending gateway intents without deciding a money consequence."""
+    """Project gateway reconciliation work without deciding money consequences."""
 
     observed_at = _as_utc(observed_at)
     stale_minutes = _resolve_reconciliation_int_setting(
@@ -678,34 +808,84 @@ def topup_reconciliation_backlog(
     stale_before = observed_at - timedelta(minutes=stale_minutes)
     oldest_eligible_at = observed_at - timedelta(days=max_age_days)
     supported_values = tuple(item.value for item in SUPPORTED_PROVIDER_TYPES)
-    base = (
-        TopupIntent.status == TopupIntentStatus.pending.value,
+    common = (
         TopupIntent.completed_payment_id.is_(None),
         TopupIntent.provider_type.in_(supported_values),
     )
-    pending, oldest_pending_at = db.execute(
-        select(func.count(TopupIntent.id), func.min(TopupIntent.created_at)).where(
-            *base
+    pending_base = (
+        TopupIntent.status == TopupIntentStatus.pending.value,
+        *common,
+    )
+    terminal_base = (
+        TopupIntent.status.in_(
+            tuple(status.value for status in _TERMINAL_RECOVERY_STATUSES)
+        ),
+        *common,
+    )
+    pending, oldest_pending_at = _count_reconcilable(db, filters=pending_base)
+    pending_eligible, _oldest_pending_eligible_at = _count_reconcilable(
+        db,
+        filters=(
+            *pending_base,
+            TopupIntent.created_at < stale_before,
+            TopupIntent.created_at > oldest_eligible_at,
+            _gateway_reconcile_due(observed_at),
+        ),
+    )
+    pending_outside_window, _ = _count_reconcilable(
+        db,
+        filters=(
+            *pending_base,
+            TopupIntent.created_at <= oldest_eligible_at,
+        ),
+    )
+    terminal_recovery_total, _ = _count_reconcilable(
+        db,
+        filters=(
+            *terminal_base,
+            TopupIntent.created_at > oldest_eligible_at,
+        ),
+    )
+    terminal_recovery_due, oldest_due_terminal_at = _count_reconcilable(
+        db,
+        filters=(
+            *terminal_base,
+            TopupIntent.created_at > oldest_eligible_at,
+            _gateway_reconcile_due(observed_at),
+        ),
+    )
+    terminal_recovery_outside_window, _ = _count_reconcilable(
+        db,
+        filters=(
+            *terminal_base,
+            TopupIntent.created_at <= oldest_eligible_at,
+        ),
+    )
+    terminal_recovery_cooling_down = db.scalar(
+        select(func.count(TopupIntent.id)).where(
+            *terminal_base,
+            TopupIntent.created_at > oldest_eligible_at,
+            TopupIntent.gateway_next_reconcile_at.is_not(None),
+            TopupIntent.gateway_next_reconcile_at > observed_at,
         )
-    ).one()
-    eligible = db.scalar(
-        select(func.count(TopupIntent.id))
-        .where(*base)
-        .where(TopupIntent.created_at < stale_before)
-        .where(TopupIntent.created_at > oldest_eligible_at)
     )
-    outside_window = db.scalar(
-        select(func.count(TopupIntent.id))
-        .where(*base)
-        .where(TopupIntent.created_at <= oldest_eligible_at)
-    )
+    eligible = pending_eligible + terminal_recovery_due
+    outside_window = pending_outside_window + int(terminal_recovery_outside_window or 0)
     return TopupReconciliationBacklog(
         pending=int(pending or 0),
-        eligible=int(eligible or 0),
-        outside_window=int(outside_window or 0),
+        eligible=eligible,
+        outside_window=outside_window,
         oldest_pending_at=oldest_pending_at,
         stale_before=stale_before,
         oldest_eligible_at=oldest_eligible_at,
+        pending_total=int(pending or 0),
+        pending_eligible=pending_eligible,
+        pending_outside_window=pending_outside_window,
+        terminal_recovery_total=terminal_recovery_total,
+        terminal_recovery_due=terminal_recovery_due,
+        terminal_recovery_outside_window=terminal_recovery_outside_window,
+        terminal_recovery_cooling_down=int(terminal_recovery_cooling_down or 0),
+        oldest_due_terminal_at=oldest_due_terminal_at,
     )
 
 
@@ -721,6 +901,10 @@ def reconcile_pending_topups(
     candidates = _reconciliation_candidates(db, observed_at=observed_at)
     db_session_adapter.release_read_transaction(db)
 
+    checked_pending = sum(
+        1 for candidate in candidates if candidate.status is TopupIntentStatus.pending
+    )
+    checked_terminal = len(candidates) - checked_pending
     recovered = linked = expired = failed = abandoned = errors = 0
     for candidate in candidates:
         try:
@@ -800,6 +984,8 @@ def reconcile_pending_topups(
 
     summary = TopupReconciliationSummary(
         checked=len(candidates),
+        checked_pending=checked_pending,
+        checked_terminal=checked_terminal,
         recovered=recovered,
         linked=linked,
         expired=expired,
@@ -808,9 +994,12 @@ def reconcile_pending_topups(
         errors=errors,
     )
     logger.info(
-        "Top-up reconciliation completed: checked=%d recovered=%d linked=%d "
-        "expired=%d failed=%d abandoned=%d errors=%d",
+        "Top-up reconciliation completed: checked=%d checked_pending=%d "
+        "checked_terminal=%d recovered=%d linked=%d expired=%d failed=%d "
+        "abandoned=%d errors=%d",
         summary.checked,
+        summary.checked_pending,
+        summary.checked_terminal,
         summary.recovered,
         summary.linked,
         summary.expired,

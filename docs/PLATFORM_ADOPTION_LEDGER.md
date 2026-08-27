@@ -184,6 +184,19 @@ only `ModulePlane.TENANT` for each module: the tenant table catalogues are
 installed under `mod_billing` and `mod_coll`, while both platform catalogues
 remain absent.
 
+The annotated release tags are immutable source oracles:
+`dotmac-billing-v0.1.0a1` peels to
+`92a1626b16d7e068f92536d8cfcb2ef9b6f270c2`, and
+`dotmac-collections-v0.1.0a1` peels to
+`6ecf518a6985b8bf4b163eccb3de2fef171ecccc`. The checked-in lock pins the
+corresponding wheels by SHA256:
+`ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b`
+for Billing and
+`f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b`
+for Collections. These release coordinates advance the Thin Shadow adoption
+manifest only to `released_uncomposed`: its pinned baseline image still
+contains neither wheel.
+
 The fresh and relay-provider-predecessor PostgreSQL canaries prove the exact
 selected catalogues, ENABLE + FORCE RLS, effective two-tenant visibility as
 `app_user`, preservation of a seeded module-event row, and repeat-upgrade
@@ -252,6 +265,36 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-08-27 — adopted `dotmac-auth-oidc==0.1.0a2`.** The first adoption that
+adds a new Sub runtime import from the platform rather than moving an existing
+supply pin. Sub's field-mobile OIDC exchange now verifies the Keycloak ID token
+through `dotmac_auth_oidc.native.NativeIDTokenVerifier` and Sub's own
+JWKS/crypto resolver (`app/services/oidc_mobile_jwks.py`, 216 lines) is
+deleted, so there is one implementation of ID-token admissibility rather than
+two that can drift.
+
+The annotated tag `dotmac-auth-oidc-v0.1.0a2` peels to
+`388750be62ab5185d88a59a9cfbe72805bde999c`, published by Starter release run
+`33061852492` through the protected `registry-release` environment. That tag
+is the oracle Governance ADR 0013 requires; the version appearing in Starter's
+`pyproject.toml` never was.
+
+The exact lock records wheel SHA256
+`d9d20562e1f149673301fbcfee520bf621f6416907516d5efa1618ecae0ab3ab`
+and sdist SHA256
+`5f4891353209420baf5820f233066442bf4d74836f2133ff5cb71dad6494883a`.
+It also adds `pyjwt[crypto] >=2.13,<3.0` as the package's declared dependency.
+No unrelated locked package moved.
+
+**This adoption is NOT a precedent for `dotmac_kernel.external_identity`,
+which stays off the `app/` allowlist.** The distinction is the one recorded
+below and it is about signatures, not availability: `dotmac-auth-oidc` ends at
+a verified external subject and names no identity model, so Sub keeps its own
+Party authority. `finalize_external_login` resolves a kernel `Party` through a
+kernel `ExternalIdentityBinding`, which would install a second identity
+authority inside Sub. A shared capability is adoptable when its public
+signature reaches no other system's authoritative identity models.
 
 **2026-08-25 — `0.1.0a91` → `0.1.0a94`.** Forced by the exact tagged-and-locked
 `dotmac-subscriptions==0.1.0a3` dependency, whose package metadata requires
@@ -997,7 +1040,24 @@ Hosted overlaps and non-competing names worth recording: kernel `tenants`,
 `tenant_entitlement_grants` do not collide with a Sub model. Kernel revision
 0024's `external_identity_bindings` (a81) joins that non-colliding list — Sub
 has no table or model of that name, and `dotmac_kernel.external_identity`
-stays off the `app/` allowlist. The first two are
+stays off the `app/` allowlist.
+
+That exclusion was TESTED rather than theoretical when field-mobile OIDC
+federation landed (`docs/designs/OIDC_MOBILE_FEDERATION.md`). The obvious
+implementation calls `dotmac_kernel.external_identity.finalize_external_login`,
+and it is the wrong one here for two independent reasons, either of which
+alone would settle it. First, that function resolves a kernel `Party` through
+a kernel `ExternalIdentityBinding` — both are kernel identity, which this
+ledger prohibits and which Sub does not host: adopting it would mean either a
+second identity table or a second Party authority. Second, Sub already has the
+shape: ADR-0019's `AuthenticationBinding` names the installed verifier, and
+`user_credentials.authentication_binding_id` is the credential against it, so
+the external subject is a credential rather than a new record type. The
+federation owner therefore reproduces the kernel function's SEMANTICS —
+`SELECT … FOR UPDATE` on the binding, re-check under the lock, no
+just-in-time provisioning, no match-by-email, refuse rather than distinguish —
+against Sub's own rows, and delegates identity resolution to
+`party.staff_authentication_reader`. No kernel identity import was added. The first two are
 intentionally hosted through the admitted kernel models. Kernel a40 renamed the
 inbox tables to `idempotency_records` / `platform_idempotency_records`; those
 names do not collide with a Sub model and migration 554 now deliberately hosts

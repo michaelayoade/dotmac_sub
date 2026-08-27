@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.quote_mirror import QuoteMirror, QuoteSyncState
 from app.models.subscriber import Subscriber
+from app.schemas.notification import PushIntent
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
@@ -410,7 +411,11 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
                 str(subscriber.id),
                 title="Quote accepted",
                 body="Your installation is being scheduled.",
-                data={"type": "quote", "quote_id": crm_quote_id},
+                intent=PushIntent(
+                    intent_code="quote.accepted",
+                    subject_kind="quote",
+                    subject_id=crm_quote_id,
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - notification is advisory
             logger.warning("quote_push_failed quote_id=%s: %s", crm_quote_id, exc)

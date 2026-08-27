@@ -145,6 +145,7 @@ class InboundAttachmentObservation:
     mime_type: str | None = None
     provider_media_id: str | None = None
     source_url: str | None = None
+    content_base64: str | None = None
     caption: str | None = None
     file_size: int | None = None
     download_status: str | None = None

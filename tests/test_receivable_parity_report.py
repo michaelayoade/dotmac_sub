@@ -10,6 +10,7 @@ Two things are being proved here, and the second matters more than the first:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -26,12 +27,17 @@ from app.models.subscription_billing_treatment import (
     SubscriptionBillingTreatment,
 )
 from app.services.billing.receivable_cohort import (
+    CohortClassification,
     NotExpressibleReason,
     ParityDimension,
     ParityOutcome,
     ReceivableCohortWindow,
 )
-from app.services.billing.receivable_parity import evaluate_receivable_parity
+from app.services.billing.receivable_parity import (
+    ReceivableReadinessBlockerCode,
+    assess_receivable_cutover_readiness,
+    evaluate_receivable_parity,
+)
 from app.services.billing.receivable_projection import (
     ProjectionMode,
     ReconcileReceivableProjectionCommand,
@@ -343,3 +349,141 @@ def test_the_run_evidence_is_typed_not_a_loose_mapping(
     assert isinstance(evidence.matched_count, int)
     assert isinstance(evidence.not_expressible_count, int)
     assert "dimensions" in evidence.by_dimension
+
+
+def test_readiness_refuses_an_unprojected_or_vacuous_comparison(
+    db_session, subscriber, subscription
+):
+    _seed_invoice(db_session, subscriber=subscriber, subscription=subscription)
+    db_session.commit()
+
+    readiness = assess_receivable_cutover_readiness(_report(db_session))
+    codes = {item.code for item in readiness.blockers}
+
+    assert readiness.ready is False
+    assert ReceivableReadinessBlockerCode.EMPTY_COMPARED_COHORT in codes
+    assert ReceivableReadinessBlockerCode.PROJECTION_NOT_CONVERGED in codes
+    assert ReceivableReadinessBlockerCode.STANDING_CONTRACT_BLOCKER in codes
+
+
+def test_readiness_counts_not_expressible_as_a_cutover_blocker(
+    db_session, subscriber, subscription
+):
+    _seed_invoice(db_session, subscriber=subscriber, subscription=subscription)
+    db_session.commit()
+    _project(db_session)
+
+    report = _report(db_session)
+    readiness = assess_receivable_cutover_readiness(report)
+    blockers = {item.code: item for item in readiness.blockers}
+
+    assert readiness.ready is False
+    assert blockers[ReceivableReadinessBlockerCode.PARITY_NOT_EXPRESSIBLE].count == (
+        report.not_expressible_count
+    )
+    assert ReceivableReadinessBlockerCode.STANDING_CONTRACT_BLOCKER in blockers
+    assert len(readiness.readiness_fingerprint) == 64
+
+
+def test_readiness_refuses_a_report_changed_after_its_seal(
+    db_session, subscriber, subscription
+):
+    _seed_invoice(db_session, subscriber=subscriber, subscription=subscription)
+    db_session.commit()
+    _project(db_session)
+    report = _report(db_session)
+
+    tampered = replace(report, blockers=())
+    readiness = assess_receivable_cutover_readiness(tampered)
+    blockers = {item.code: item for item in readiness.blockers}
+
+    assert readiness.ready is False
+    assert ReceivableReadinessBlockerCode.EVIDENCE_INCONSISTENT in blockers
+    assert (
+        "report_fingerprint"
+        in blockers[ReceivableReadinessBlockerCode.EVIDENCE_INCONSISTENT].detail
+    )
+
+
+def test_readiness_refuses_inconsistent_counts_even_when_resealed(
+    db_session, subscriber, subscription
+):
+    _seed_invoice(db_session, subscriber=subscriber, subscription=subscription)
+    db_session.commit()
+    _project(db_session)
+    report = _report(db_session)
+    classification_counts = dict(report.classification_counts)
+    classification_counts[CohortClassification.COVERED.value] += 1
+    inconsistent = replace(report, classification_counts=classification_counts)
+    inconsistent = replace(
+        inconsistent,
+        report_fingerprint=inconsistent.compute_fingerprint(),
+    )
+
+    readiness = assess_receivable_cutover_readiness(inconsistent)
+    blockers = {item.code: item for item in readiness.blockers}
+
+    assert readiness.ready is False
+    evidence = blockers[ReceivableReadinessBlockerCode.EVIDENCE_INCONSISTENT]
+    assert "cohort_classification_total" in evidence.detail
+    assert "member_projection_total" in evidence.detail
+
+
+def test_readiness_has_a_non_vacuous_positive_sensitivity_case(
+    db_session, subscriber, subscription
+):
+    """The gate can pass after every input category is truthfully clean.
+
+    This is a sensitivity proof, not a claim about the current tree: the real
+    report still carries the pinned Subscriptions treatment blocker and missing
+    obligation counterparty. Replacing those aggregate fields models the later
+    slice that retires both with its own behavior evidence.
+    """
+    _seed_invoice(db_session, subscriber=subscriber, subscription=subscription)
+    db_session.commit()
+    _project(db_session)
+    report = _report(db_session)
+    matched_positions = tuple(
+        replace(
+            position,
+            verdicts=tuple(
+                replace(verdict, outcome=ParityOutcome.MATCHED, reason=None)
+                for verdict in position.verdicts
+            ),
+        )
+        for position in report.positions
+    )
+    matched_dimensions = {
+        dimension.value: {
+            outcome.value: (
+                report.evaluated_count if outcome is ParityOutcome.MATCHED else 0
+            )
+            for outcome in ParityOutcome
+        }
+        for dimension in ParityDimension
+    }
+    clean = replace(
+        report,
+        classification_counts={
+            classification.value: (
+                report.evaluated_count
+                if classification is CohortClassification.COVERED
+                else 0
+            )
+            for classification in CohortClassification
+        },
+        matched_count=report.evaluated_count * len(ParityDimension),
+        diverged_count=0,
+        not_expressible_count=0,
+        by_dimension=matched_dimensions,
+        not_expressible_reasons={},
+        positions=matched_positions,
+        blockers=(),
+    )
+    clean = replace(clean, report_fingerprint=clean.compute_fingerprint())
+
+    readiness = assess_receivable_cutover_readiness(clean)
+
+    assert readiness.ready is True
+    assert readiness.blockers == ()
+    assert clean.consistency_errors() == ()
