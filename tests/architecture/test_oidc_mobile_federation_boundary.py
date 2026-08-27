@@ -16,7 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SERVICE = PROJECT_ROOT / "app" / "services" / "oidc_mobile_federation.py"
 CONFIG = PROJECT_ROOT / "app" / "services" / "oidc_mobile_config.py"
-JWKS = PROJECT_ROOT / "app" / "services" / "oidc_mobile_jwks.py"
+VERIFIER = PROJECT_ROOT / "app" / "services" / "oidc_mobile_verifier.py"
 ADAPTER = PROJECT_ROOT / "app" / "api" / "oidc_mobile.py"
 SCHEMAS = PROJECT_ROOT / "app" / "schemas" / "oidc_mobile.py"
 MODEL = PROJECT_ROOT / "app" / "models" / "oidc_mobile.py"
@@ -104,7 +104,7 @@ def test_no_identity_material_reaches_a_log_metric_or_event() -> None:
         "refresh_token",
         "kid",
     )
-    for path in (SERVICE, JWKS, CONFIG):
+    for path in (SERVICE, VERIFIER, CONFIG):
         tree = ast.parse(_source(path), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -150,6 +150,8 @@ def test_both_request_models_forbid_extra_fields() -> None:
 def test_the_algorithm_and_pkce_allowlists_are_code_rather_than_settings() -> None:
     """A configurable algorithm list is how `alg: none` reaches production."""
 
+    from dotmac_auth_oidc.native import NATIVE_ID_TOKEN_ALGORITHMS
+
     from app.services.oidc_mobile_config import (
         ALLOWED_ID_TOKEN_ALGORITHMS,
         REQUIRED_CODE_CHALLENGE_METHOD,
@@ -157,6 +159,11 @@ def test_the_algorithm_and_pkce_allowlists_are_code_rather_than_settings() -> No
 
     assert ALLOWED_ID_TOKEN_ALGORITHMS == frozenset({"RS256"})
     assert REQUIRED_CODE_CHALLENGE_METHOD == "S256"
+    # BOUND, not merely equal today. The verifier applies its own allowlist and
+    # Sub applies none, so a Sub-side copy that agreed at the time it was
+    # written and drifted afterwards would describe a guarantee nothing
+    # enforces — in either direction.
+    assert ALLOWED_ID_TOKEN_ALGORITHMS is NATIVE_ID_TOKEN_ALGORITHMS
 
     from app.services.settings_spec import SETTINGS_SPECS
 
@@ -223,20 +230,76 @@ def test_the_boot_gate_refuses_an_enabled_but_unconfigured_deployment() -> None:
     assert "verify_startup_configuration" in main_source
 
 
-def test_the_jwks_refresh_is_bounded_in_the_source_as_well_as_in_behaviour() -> None:
-    """The behaviour test counts calls; this pins the mechanism that bounds them.
+def test_sub_holds_no_id_token_verification_or_key_fetch_of_its_own() -> None:
+    """The deletion is the guarantee, and it has to stay deleted.
 
-    Stamping the attempt BEFORE the fetch is the load-bearing line: stamping on
-    success instead would leave a permanently failing identity provider polled
-    by every request, and no single-request test would notice.
+    `app/services/oidc_mobile_jwks.py` was Sub's own JWKS cache and outbound
+    fetch, and `oidc_mobile_federation._verified_claims` was its own signature
+    and claim validation. Both are gone: `dotmac-auth-oidc` owns them. A
+    reintroduced local copy would not fail a behaviour test — it would verify
+    tokens perfectly well — while re-creating the second implementation that
+    diverges from the package on the next fix, and a second outbound surface
+    that no longer counts against the connector baseline anyone reviews.
     """
 
-    source = _source(JWKS)
-    stamp = source.index("entry.last_attempt_at = time.monotonic()")
-    first_fetch = source.index("_jwks_uri(config", stamp)
-    assert stamp < first_fetch, "the attempt stamp must precede the fetch"
-    assert "jwks_min_refresh_seconds" in source
-    assert "while " not in source, "a retry loop is not a bound"
+    assert not (PROJECT_ROOT / "app" / "services" / "oidc_mobile_jwks.py").exists()
+
+    for path in (SERVICE, VERIFIER, CONFIG):
+        source = _source(path)
+        for forbidden in (
+            "import httpx",
+            "import requests",
+            "from jose",
+            "jwt.decode(",
+            "get_unverified_header(",
+        ):
+            assert forbidden not in source, (
+                f"{path.name} contains {forbidden!r}; ID-token verification and "
+                "every key fetch belong to dotmac_auth_oidc"
+            )
+
+
+def test_the_refresh_bound_is_the_setting_the_operator_configured() -> None:
+    """The behaviour test counts calls; this pins where the bound comes from.
+
+    The package enforces the floor between two forced key-set refetches, but it
+    only enforces the number Sub hands it. A verifier built without
+    `jwks_min_refetch` would silently fall back to the package default, so a
+    deployment that widened `oidc_mobile_jwks_min_refresh_seconds` would be
+    running a bound it never chose — and every single-request test would pass.
+    """
+
+    source = _source(VERIFIER)
+    assert "jwks_min_refetch=float(config.jwks_min_refresh_seconds)" in source
+    assert "timeout=float(config.jwks_timeout_seconds)" in source
+
+
+def test_the_verifier_is_held_for_the_process_rather_than_per_request() -> None:
+    """A per-request verifier has an empty cache, so every exchange fetches.
+
+    That is the amplification the bound exists to prevent, and it would be
+    invisible to any test that makes one call: the request would succeed, just
+    with an outbound fetch behind it. The cache is what makes it observable.
+    """
+
+    source = _source(VERIFIER)
+    assert "_verifiers: dict[_RegistrationKey, NativeIDTokenVerifier] = {}" in source
+    assert source.count("NativeIDTokenVerifier(") == 1, (
+        "a second construction site is a second cache; the registry owns it"
+    )
+    assert "_verifiers[key] = built" in source
+
+
+def test_a_discovery_source_and_a_static_jwks_uri_cannot_both_be_configured() -> None:
+    """The package's two overrides are exclusive; Sub must refuse, not prefer.
+
+    Sub used to resolve this combination in discovery's favour, silently, so a
+    deployment could carry a `jwks_uri` an operator believed was in force while
+    every key came from the well-known document.
+    """
+
+    source = _source(CONFIG)
+    assert "jwks_source == JWKS_SOURCE_DISCOVERY and jwks_uri is not None" in source
 
 
 def test_the_owner_is_registered_with_a_complete_typed_contract() -> None:
