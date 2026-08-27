@@ -253,6 +253,36 @@ per-table cutover decisions.
 
 ## Pin history
 
+**2026-08-27 — adopted `dotmac-auth-oidc==0.1.0a2`.** The first adoption that
+adds a new Sub runtime import from the platform rather than moving an existing
+supply pin. Sub's field-mobile OIDC exchange now verifies the Keycloak ID token
+through `dotmac_auth_oidc.native.NativeIDTokenVerifier` and Sub's own
+JWKS/crypto resolver (`app/services/oidc_mobile_jwks.py`, 216 lines) is
+deleted, so there is one implementation of ID-token admissibility rather than
+two that can drift.
+
+The annotated tag `dotmac-auth-oidc-v0.1.0a2` peels to
+`388750be62ab5185d88a59a9cfbe72805bde999c`, published by Starter release run
+`33061852492` through the protected `registry-release` environment. That tag
+is the oracle Governance ADR 0013 requires; the version appearing in Starter's
+`pyproject.toml` never was.
+
+The exact lock records wheel SHA256
+`d9d20562e1f149673301fbcfee520bf621f6416907516d5efa1618ecae0ab3ab`
+and sdist SHA256
+`5f4891353209420baf5820f233066442bf4d74836f2133ff5cb71dad6494883a`.
+It also adds `pyjwt[crypto] >=2.13,<3.0` as the package's declared dependency.
+No unrelated locked package moved.
+
+**This adoption is NOT a precedent for `dotmac_kernel.external_identity`,
+which stays off the `app/` allowlist.** The distinction is the one recorded
+below and it is about signatures, not availability: `dotmac-auth-oidc` ends at
+a verified external subject and names no identity model, so Sub keeps its own
+Party authority. `finalize_external_login` resolves a kernel `Party` through a
+kernel `ExternalIdentityBinding`, which would install a second identity
+authority inside Sub. A shared capability is adoptable when its public
+signature reaches no other system's authoritative identity models.
+
 **2026-08-25 — `0.1.0a91` → `0.1.0a94`.** Forced by the exact tagged-and-locked
 `dotmac-subscriptions==0.1.0a3` dependency, whose package metadata requires
 `dotmac-kernel >=0.1.0a94`. Kernel a94 is an exact supply pin for the module's
