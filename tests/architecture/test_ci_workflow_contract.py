@@ -313,3 +313,104 @@ def test_the_changes_job_exposes_no_unconsumed_output(
         name for name in declared if body.count(f"needs.changes.outputs.{name}") == 0
     }
     assert not unconsumed, f"changes declares outputs no job consumes: {unconsumed}"
+
+
+# --------------------------------------------------------------------------
+# Integration-shard scheduling history is shared state
+# --------------------------------------------------------------------------
+
+DURATIONS_CACHE_PREFIX = "integration-test-durations-v2-dev-"
+
+
+def _steps(workflow: dict[str, Any], job: str) -> list[dict[str, Any]]:
+    return workflow["jobs"][job]["steps"]
+
+
+def _cache_steps(workflow: dict[str, Any], action: str) -> list[dict[str, Any]]:
+    found = []
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            uses = str(step.get("uses", ""))
+            if uses.startswith(
+                f"actions/cache/{action}@"
+            ) and DURATIONS_CACHE_PREFIX in str(step.get("with", {})):
+                found.append(step)
+    return found
+
+
+def test_integration_durations_are_restored_only_from_dev(
+    workflow: dict[str, Any],
+) -> None:
+    """Reading someone else's branch timings would import their imbalance."""
+
+    restores = _cache_steps(workflow, "restore")
+    assert len(restores) == 1, "expected exactly one duration restore step"
+    keys = str(restores[0]["with"]["restore-keys"]).split()
+    assert keys, "the restore step declares no restore-keys"
+    for key in keys:
+        assert key.startswith(DURATIONS_CACHE_PREFIX), (
+            f"restore key {key!r} can match history from outside dev"
+        )
+
+
+def test_only_a_push_to_dev_may_publish_integration_durations(
+    workflow: dict[str, Any],
+) -> None:
+    """A pull request must measure itself and throw the numbers away.
+
+    Scheduling history is shared: if any branch could write it, one slow or
+    broken pull request would reshape every future run's shards, and nothing
+    downstream would report that it had happened.
+    """
+
+    saves = _cache_steps(workflow, "save")
+    assert len(saves) == 1, "expected exactly one duration publish step"
+    condition = str(saves[0]["if"])
+    assert "github.ref == 'refs/heads/dev'" in condition, condition
+    assert "github.event_name == 'push'" in condition, condition
+    assert "needs.integration-shards.result == 'success'" in condition, condition
+
+
+def test_the_publish_step_lives_behind_the_shard_gate(
+    workflow: dict[str, Any],
+) -> None:
+    """History must never be written from a run whose shards did not all pass."""
+
+    owning = [
+        name
+        for name, job in workflow["jobs"].items()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("actions/cache/save@")
+        and DURATIONS_CACHE_PREFIX in str(step.get("with", {}))
+    ]
+    assert owning == ["integration-run"], owning
+    assert "integration-shards" in workflow["jobs"]["integration-run"]["needs"]
+
+
+def test_every_shard_publishes_its_measurements_even_when_it_fails(
+    workflow: dict[str, Any],
+) -> None:
+    """A failing shard still measured real work; discarding it skews the next
+    partition toward whatever happened to pass."""
+
+    uploads = [
+        step
+        for step in _steps(workflow, "integration-shards")
+        if str(step.get("uses", "")).startswith("actions/upload-artifact@")
+    ]
+    assert len(uploads) == 1
+    assert str(uploads[0].get("if")) == "always()"
+
+
+def test_the_shard_job_passes_a_durations_output_path(
+    workflow: dict[str, Any],
+) -> None:
+    """Without it the shard measures nothing and history never refreshes."""
+
+    runs = [
+        str(step.get("run", ""))
+        for step in _steps(workflow, "integration-shards")
+        if "test-integration-shard" in str(step.get("run", ""))
+    ]
+    assert len(runs) == 1
+    assert "CI_INTEGRATION_DURATIONS_OUTPUT" in runs[0]
